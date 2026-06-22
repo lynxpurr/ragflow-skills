@@ -96,6 +96,7 @@ class KbDataset:
 @dataclass(frozen=True)
 class KbDocumentEntry:
     document_id: str
+    source_path: str | None = None
     markdown_path: str | None = None
     status: str | None = None
     chunk_count: int | None = None
@@ -108,6 +109,7 @@ class KbDocumentEntry:
             raise ManifestError("kb_document.chunk_count must be an integer when provided")
         return cls(
             document_id=_require_str(data, "document_id"),
+            source_path=data.get("source_path"),
             markdown_path=data.get("markdown_path"),
             status=data.get("status"),
             chunk_count=chunk_count,

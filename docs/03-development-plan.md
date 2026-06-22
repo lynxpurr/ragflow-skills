@@ -123,24 +123,24 @@ Goal: provide public Markdown-to-RAGFlow build, inspect, and validation commands
 
 Tasks:
 
-- [ ] Create `skills/ragflow-kb-build/SKILL.md`.
-- [ ] Create `scripts/build.py`.
-- [ ] Create `scripts/validate.py`.
-- [ ] Create `scripts/inspect.py`.
-- [ ] Add default profile templates.
-- [ ] Implement profile linting in `ragflow_skill_runtime/profiles.py`.
-- [ ] Implement dataset create/update in `ragflow_skill_runtime/ragflow_client.py`.
-- [ ] Implement document upload and parse trigger.
-- [ ] Implement parse status polling.
-- [ ] Write `kb_manifest.json`.
-- [ ] Implement `validate --level smoke`.
-- [ ] Define placeholders for `regression` and `benchmark` levels.
+- [x] Create `skills/ragflow-kb-build/SKILL.md`.
+- [x] Create `scripts/build.py`.
+- [x] Create `scripts/validate.py`.
+- [x] Create `scripts/inspect_kb.py`.
+- [x] Add default profile templates.
+- [x] Implement profile linting in `ragflow_skill_runtime/profiles.py`.
+- [x] Implement dataset creation in `ragflow_skill_runtime/ragflow_client.py`.
+- [x] Implement document upload and parse trigger.
+- [x] Implement parse status polling.
+- [x] Write `kb_manifest.json`.
+- [x] Implement `validate --level smoke`.
+- [x] Define placeholders for `regression` and `benchmark` levels.
 
 Validation:
 
-- [ ] Build command validates input before touching RAGFlow.
-- [ ] Smoke validation checks KB exists and at least one query returns chunks.
-- [ ] Inspect command summarizes dataset and document parse status.
+- [x] Build command validates input before touching RAGFlow.
+- [x] Smoke validation checks KB exists and at least one query returns chunks.
+- [x] Inspect command summarizes dataset and document parse status.
 
 Exit criteria:
 

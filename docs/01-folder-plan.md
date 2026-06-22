@@ -113,9 +113,9 @@ Output:
 Primary commands:
 
 ```bash
-python scripts/build.py --input ./handoff/doc_manifest.json --kb-name kb:project-docs
+python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project-docs --profile ./templates/default-en-768.json
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level smoke
-python scripts/inspect.py --kb-manifest ./run/kb_manifest.json
+python scripts/inspect_kb.py --kb-manifest ./run/kb_manifest.json
 ```
 
 ### `ragflow-query`

@@ -67,24 +67,33 @@ def build_release(dist_dir: Path = DIST_DIR) -> list[Path]:
 def run_release_check(dist_dir: Path = DIST_DIR) -> int:
     build_release(dist_dir)
 
-    smoke_script = dist_dir / "ragflow-query" / "scripts" / "bootstrap_smoke.py"
-    if not smoke_script.exists():
-        print(f"missing smoke script in release artifact: {smoke_script}", file=sys.stderr)
-        return 2
-
-    result = subprocess.run(
-        [sys.executable, str(smoke_script)],
-        cwd=dist_dir,
-        text=True,
-        capture_output=True,
-        check=False,
-        env={"PATH": str(Path("/usr/bin")) + ":" + str(Path("/bin")), "PYTHONNOUSERSITE": "1"},
-    )
-    if result.stdout:
-        print(result.stdout, end="")
-    if result.stderr:
-        print(result.stderr, file=sys.stderr, end="")
-    return result.returncode
+    checks = [
+        [sys.executable, str(dist_dir / "ragflow-query" / "scripts" / "bootstrap_smoke.py")],
+        [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "build.py"), "--help"],
+        [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "inspect_kb.py"), "--help"],
+        [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "validate.py"), "--help"],
+    ]
+    env = {
+        "PATH": str(Path("/usr/bin")) + ":" + str(Path("/bin")),
+        "PYTHONNOUSERSITE": "1",
+    }
+    for command in checks:
+        result = subprocess.run(
+            command,
+            cwd=dist_dir,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+        )
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, file=sys.stderr, end="")
+        if result.returncode != 0:
+            print(f"release check failed: {' '.join(command)}", file=sys.stderr)
+            return result.returncode
+    return 0
 
 
 def main() -> int:

@@ -20,6 +20,7 @@ class ReleaseBuildTests(unittest.TestCase):
                 self.assertTrue((skill_root / "SKILL.md").exists())
                 self.assertTrue((skill_root / "scripts" / "_vendor" / "ragflow_skill_runtime" / "__init__.py").exists())
 
+            self.assertTrue((dist_dir / "ragflow-kb-build" / "scripts" / "inspect_kb.py").exists())
             copied = sorted(p.name for p in dist_dir.iterdir())
             self.assertEqual(copied, sorted(PUBLIC_SKILLS))
 

@@ -1,0 +1,12 @@
+{
+  "profile_id": "default-en-768",
+  "chunk_method": "naive",
+  "chunk_size": 768,
+  "chunk_overlap": 96,
+  "parser_config": {
+    "chunk_token_num": 768,
+    "auto_keywords": 0,
+    "auto_questions": 0,
+    "__language__": "English"
+  }
+}

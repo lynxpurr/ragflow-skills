@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+import mimetypes
+import uuid
 from typing import Any, Mapping
 from urllib.parse import quote
 
@@ -32,6 +35,9 @@ class RAGFlowClient:
     def delete(self, path: str, payload: Mapping[str, Any] | None = None) -> Any:
         return self.http.request_json("DELETE", self._url(path), json_body=payload or {}).data
 
+    def put(self, path: str, payload: Mapping[str, Any] | None = None) -> Any:
+        return self.http.request_json("PUT", self._url(path), json_body=payload or {}).data
+
     def retrieve(
         self,
         *,
@@ -61,3 +67,46 @@ class RAGFlowClient:
         if name:
             path += f"&name={quote(name)}"
         return self.get(path)
+
+    def create_dataset(self, name: str, *, profile: Mapping[str, Any] | None = None) -> Any:
+        """Create a RAGFlow dataset with an optional normalized profile payload."""
+
+        payload: dict[str, Any] = {"name": name}
+        if profile:
+            payload.update({k: v for k, v in profile.items() if v is not None})
+        return self.post("/datasets", payload)
+
+    def trigger_parse(self, dataset_id: str, document_ids: list[str]) -> Any:
+        """Trigger parsing for uploaded documents."""
+
+        return self.post(f"/datasets/{dataset_id}/documents/parse", {"document_ids": document_ids})
+
+    def list_documents(self, dataset_id: str, *, page: int = 1, page_size: int = 200) -> Any:
+        """List documents in a dataset."""
+
+        return self.get(f"/datasets/{dataset_id}/documents?page={page}&page_size={page_size}")
+
+    def upload_document(self, dataset_id: str, file_path: str | Path) -> Any:
+        """Upload one file with multipart/form-data using only the standard library."""
+
+        path = Path(file_path)
+        boundary = f"----ragflow-skill-runtime-{uuid.uuid4().hex}"
+        mime = mimetypes.guess_type(path.name)[0] or "text/markdown"
+        content = path.read_bytes()
+        body = b"".join(
+            [
+                f"--{boundary}\r\n".encode(),
+                f'Content-Disposition: form-data; name="file"; filename="{path.name}"\r\n'.encode(),
+                f"Content-Type: {mime}\r\n\r\n".encode(),
+                content,
+                b"\r\n",
+                f"--{boundary}--\r\n".encode(),
+            ]
+        )
+        headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+        return self.http.request_bytes(
+            "POST",
+            self._url(f"/datasets/{dataset_id}/documents"),
+            body=body,
+            headers=headers,
+        ).data

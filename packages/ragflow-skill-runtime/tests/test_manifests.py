@@ -53,6 +53,7 @@ class ManifestTests(unittest.TestCase):
                         "documents": [
                             {
                                 "document_id": "doc-id",
+                                "source_path": "source.pdf",
                                 "markdown_path": "documents/a.md",
                                 "status": "parsed",
                                 "chunk_count": 3,
@@ -64,6 +65,7 @@ class ManifestTests(unittest.TestCase):
             )
             manifest = load_kb_manifest(path)
         self.assertEqual(manifest.dataset.id, "dataset-id")
+        self.assertEqual(manifest.documents[0].source_path, "source.pdf")
         self.assertEqual(manifest.documents[0].chunk_count, 3)
 
     def test_kb_manifest_requires_dataset(self) -> None:
