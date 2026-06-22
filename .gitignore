@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local environments
+.venv/
+venv/
+.env
+.env.*
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Local config and secrets
+.ragflow/
+auth.json
+vault.json
+*.local.json
+*.local.yaml
+*.local.yml
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
