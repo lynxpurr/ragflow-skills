@@ -1,6 +1,6 @@
 # RAGFlow Skills Phased Development Plan
 
-Status: draft
+Status: active roadmap
 Date: 2026-06-22
 
 ## Objective
@@ -13,6 +13,30 @@ Implement a cross-platform public RAGFlow skill suite in the current workspace:
 - shared `ragflow-skill-runtime`
 
 The suite must be self-contained at release time and usable from Hermes, OpenClaw, Claude Code, and SaaS agent code sandboxes.
+
+## Current Snapshot
+
+Completed foundations:
+
+- Phase 0 architecture skeleton
+- Phase 1 runtime foundation
+- Phase 2 release vendoring
+- Phase 4 `ragflow-kb-build` MVP
+- Phase 5 `ragflow-doc-to-md` MVP
+- Phase 6 validation command consolidation
+
+Partially completed:
+
+- Phase 3 `ragflow-query`
+  - Direct retrieval CLI exists.
+  - `--mode auto` currently falls back conservatively to direct mode.
+  - Host-assisted evidence return exists.
+  - V1 scope is CLI-only; `serve` and script-owned agentic planning/synthesis are deferred.
+
+Near-term priority correction:
+
+- The next public-suite milestone is not private dedao bridging.
+- The next milestone is query completion plus cross-platform smoke for external release readiness.
 
 ## Phase 0: Architecture Skeleton
 
@@ -40,18 +64,18 @@ Goal: build the portable runtime foundation and prove vendor loading works.
 
 Tasks:
 
-- [ ] Add `packages/ragflow-skill-runtime/pyproject.toml`.
-- [ ] Add `ragflow_skill_runtime/__init__.py`.
-- [ ] Add `ragflow_skill_runtime/bootstrap.py`.
-- [ ] Add `ragflow_skill_runtime/config.py`.
-- [ ] Add `ragflow_skill_runtime/auth.py`.
-- [ ] Add `ragflow_skill_runtime/paths.py`.
-- [ ] Add `ragflow_skill_runtime/http.py`.
-- [ ] Add `ragflow_skill_runtime/ragflow_client.py`.
-- [ ] Add `ragflow_skill_runtime/manifests.py`.
-- [ ] Add tests for env/config loading.
-- [ ] Add tests for manifest validation.
-- [ ] Add a tiny script that imports `ragflow_skill_runtime` through vendor bootstrap.
+- [x] Add `packages/ragflow-skill-runtime/pyproject.toml`.
+- [x] Add `ragflow_skill_runtime/__init__.py`.
+- [x] Add `ragflow_skill_runtime/bootstrap.py`.
+- [x] Add `ragflow_skill_runtime/config.py`.
+- [x] Add `ragflow_skill_runtime/auth.py`.
+- [x] Add `ragflow_skill_runtime/paths.py`.
+- [x] Add `ragflow_skill_runtime/http.py`.
+- [x] Add `ragflow_skill_runtime/ragflow_client.py`.
+- [x] Add `ragflow_skill_runtime/manifests.py`.
+- [x] Add tests for env/config loading.
+- [x] Add tests for manifest validation.
+- [x] Add a tiny script that imports `ragflow_skill_runtime` through vendor bootstrap.
 
 Constraints:
 
@@ -73,12 +97,12 @@ Goal: make self-contained skill artifacts repeatable.
 
 Tasks:
 
-- [ ] Implement `tools/build_release.py`.
-- [ ] Copy each public skill into `dist/`.
-- [ ] Vendor `ragflow_skill_runtime` into each skill's `scripts/_vendor/ragflow_skill_runtime`.
-- [ ] Exclude caches, virtualenvs, private config, `.git`, and dedao folders.
-- [ ] Add `--check` mode that verifies every public script can bootstrap core.
-- [ ] Add release smoke test using a clean temp directory.
+- [x] Implement `tools/build_release.py`.
+- [x] Copy each public skill into `dist/`.
+- [x] Vendor `ragflow_skill_runtime` into each skill's `scripts/_vendor/ragflow_skill_runtime`.
+- [x] Exclude caches, virtualenvs, private config, `.git`, and dedao folders.
+- [x] Add `--check` mode that verifies every public script can bootstrap core.
+- [x] Add release smoke test using a clean temp directory.
 
 Exit criteria:
 
@@ -92,30 +116,30 @@ Goal: consolidate smart-query and agentic-rag into one portable public query ski
 
 Tasks:
 
-- [ ] Create `skills/ragflow-query/SKILL.md`.
-- [ ] Create `skills/ragflow-query/scripts/query.py`.
-- [ ] Add bootstrap code to `query.py`.
-- [ ] Implement `ask --mode direct`.
-- [ ] Implement normalized JSON output.
-- [ ] Implement `--kb`, `--kb-manifest`, and `--top-k`.
-- [ ] Move direct retrieval logic into `ragflow_skill_runtime/retrieval.py`.
-- [ ] Add `--mode auto` classification placeholder with conservative direct fallback.
-- [ ] Add `--host-assisted` response shape for SaaS agent synthesis.
+- [x] Create `skills/ragflow-query/SKILL.md`.
+- [x] Create `skills/ragflow-query/scripts/query.py`.
+- [x] Add bootstrap code to `query.py`.
+- [x] Implement `ask --mode direct`.
+- [x] Implement normalized JSON output.
+- [x] Implement `--kb`, `--kb-manifest`, and `--top-k`.
+- [x] Move direct retrieval logic into `ragflow_skill_runtime/retrieval.py`.
+- [x] Add `--mode auto` classification placeholder with conservative direct fallback.
+- [x] Add `--host-assisted` response shape for SaaS agent synthesis.
 - [ ] Add optional `serve` subcommand for local/OpenClaw use.
 - [ ] Port agentic retrieval after direct mode is stable.
 
 Validation:
 
-- [ ] Import smoke in vendor mode.
-- [ ] CLI help renders.
-- [ ] Direct query works against a configured RAGFlow endpoint.
-- [ ] Missing auth fails with a clear message.
-- [ ] Host-assisted mode returns chunks/evidence without requiring an LLM key.
+- [x] Import smoke in vendor mode.
+- [x] Release-style direct query smoke runs in a clean artifact with fake or reachable endpoint.
+- [x] CLI help renders in release or installed-package mode.
+- [x] Missing dataset or missing KB inputs fail with a clear message before network work.
+- [x] Host-assisted mode returns chunks/evidence in a tested release-path smoke.
 
 Exit criteria:
 
 - One command can perform direct retrieval from a configured RAGFlow endpoint.
-- `--mode auto|direct|agentic` command surface is stable, even if agentic is initially marked experimental.
+- `--mode auto|direct|agentic` command surface is stable, with current gaps explicitly documented.
 
 ## Phase 4: `ragflow-kb-build` MVP
 
@@ -195,25 +219,72 @@ Exit criteria:
 - Heavy evaluation remains available but opt-in.
 - Existing quality lessons are preserved without 70+ scripts in the main public scripts directory.
 
-## Phase 7: Cross-Platform Smoke Matrix
+## Phase 7: Query Completion and Release Readiness
 
-Goal: prove the suite can run across target platforms.
+Goal: close the remaining public-suite gaps in `ragflow-query` before platform-wide smoke.
+
+Tasks:
+
+- [x] Add release-style smoke that runs `ragflow-query ask` from a vendored artifact.
+- [x] Add tested host-assisted evidence output example and fixture path.
+- [x] Decide whether `serve` is part of v1; implement it or explicitly defer it from v1 scope.
+- [x] Decide whether v1 agentic mode means host-assisted-only or script-owned synthesis.
+- [x] Align `SKILL.md`, architecture docs, and CLI help with the chosen query v1 scope.
+- [x] Add one example config or invocation pattern for direct query from a clean checkout.
+
+Clean checkout invocation:
+
+```bash
+RAGFLOW_SKILL_RUNTIME_PATH=./packages/ragflow-skill-runtime/src \
+  python skills/ragflow-query/scripts/query.py \
+  --base-url https://ragflow.example.test \
+  --api-key "$RAGFLOW_API_KEY" \
+  ask "Question" --dataset-id ds-example --mode direct --json
+```
+
+Exit criteria:
+
+- `ragflow-query` has an honest, tested v1 surface.
+- Release artifact can perform direct retrieval smoke through the real CLI entrypoint.
+- Agentic and `serve` status are no longer ambiguous.
+
+## Phase 8: Cross-Platform Smoke Matrix
+
+Goal: prove the suite can run across target platforms with the finalized v1 surface.
 
 Tasks:
 
 - [ ] Hermes local smoke: installed core and vendor mode.
-- [ ] OpenClaw smoke: HTTP serve mode.
 - [ ] Claude Code smoke: CLI mode with vendored core.
 - [ ] SaaS sandbox simulation: no pip install, no daemon, HTTPS-style base URL config.
 - [ ] Manus-like artifact smoke: CLI produces files in a declared output directory.
+- [ ] OpenClaw smoke if `serve` remains in scope for v1; otherwise document CLI-only usage.
+- [ ] Document failure modes and workarounds for config, auth, and network reachability.
 
 Exit criteria:
 
 - Each target has a documented invocation pattern.
 - Failure modes are clear and actionable.
-- Release artifacts pass vendor import checks.
+- Release artifacts pass vendor and command smoke, not just import smoke.
 
-## Phase 8: Private Dedao Bridge
+## Phase 9: Release Hardening
+
+Goal: turn the public suite from an internally tested repo into a publishable external artifact.
+
+Tasks:
+
+- [ ] Produce a release checklist for private/public hygiene.
+- [ ] Add deterministic packaging notes for per-skill artifact export.
+- [ ] Add sample query-set and handoff examples where they materially reduce onboarding friction.
+- [ ] Decide whether to add `agents/openai.yaml` metadata for the three public skills.
+- [ ] Add a small compatibility note for runtime loading in installed-package vs vendored mode.
+
+Exit criteria:
+
+- A private repo clone can produce a clean external release bundle repeatably.
+- Public examples and artifacts are sufficient for first external users.
+
+## Deferred: Private Dedao Bridge
 
 Goal: let private dedao workflows feed public skills without making public skills depend on dedao.
 
@@ -242,12 +313,12 @@ Exit criteria:
 
 The public suite is ready for first external use when:
 
-- [ ] Three public skills have concise `SKILL.md` files.
-- [ ] `ragflow-skill-runtime` contains no private environment assumptions.
-- [ ] Release artifacts vendor `ragflow_skill_runtime`.
-- [ ] `ragflow-query ask --mode direct` works from a clean release artifact.
-- [ ] `ragflow-kb-build build` produces `kb_manifest.json`.
-- [ ] `ragflow-kb-build validate --level smoke` works.
-- [ ] `ragflow-doc-to-md --mode passthrough` produces `doc_manifest.json`.
+- [x] Three public skills have concise `SKILL.md` files.
+- [x] `ragflow-skill-runtime` contains no private environment assumptions.
+- [x] Release artifacts vendor `ragflow_skill_runtime`.
+- [x] `ragflow-query ask --mode direct` works from a clean release artifact.
+- [x] `ragflow-kb-build build` produces `kb_manifest.json`.
+- [x] `ragflow-kb-build validate --level smoke` works.
+- [x] `ragflow-doc-to-md --mode passthrough` produces `doc_manifest.json`.
 - [ ] SaaS sandbox simulation works without daemon or editable install.
-- [ ] Dedao skills remain private and untouched.
+- [x] Dedao skills remain private and untouched.

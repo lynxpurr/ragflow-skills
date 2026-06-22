@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +23,25 @@ def load_query_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+class FakeQueryClient:
+    def __init__(self, config):
+        self.config = config
+
+    def retrieve(self, *, question, dataset_ids, top_k=5, similarity_threshold=None):
+        return {
+            "data": {
+                "chunks": [
+                    {
+                        "content_with_weight": f"answer for {question}",
+                        "docnm_kwd": "source.md",
+                        "similarity": 0.88,
+                        "kb_id": dataset_ids[0],
+                    }
+                ]
+            }
+        }
 
 
 class QueryCliTests(unittest.TestCase):
@@ -93,6 +114,53 @@ class QueryCliTests(unittest.TestCase):
                 ]
             )
         self.assertEqual(code, 2)
+
+    def test_direct_mode_can_succeed_with_fake_client(self) -> None:
+        module = load_query_module()
+        module.RAGFlowClient = FakeQueryClient
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = module.main(
+                [
+                    "--base-url",
+                    "https://ragflow.example.test",
+                    "--api-key",
+                    "test-key",
+                    "ask",
+                    "question",
+                    "--mode",
+                    "direct",
+                    "--dataset-id",
+                    "ds-1",
+                    "--json",
+                ]
+            )
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertIn('"ok": true', stdout.getvalue().lower())
+
+    def test_host_assisted_mode_can_succeed_with_fake_client(self) -> None:
+        module = load_query_module()
+        module.RAGFlowClient = FakeQueryClient
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = module.main(
+                [
+                    "--base-url",
+                    "https://ragflow.example.test",
+                    "--api-key",
+                    "test-key",
+                    "ask",
+                    "question",
+                    "--mode",
+                    "agentic",
+                    "--host-assisted",
+                    "--dataset-id",
+                    "ds-1",
+                    "--json",
+                ]
+            )
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertIn('"host_assisted": true', stdout.getvalue().lower())
 
 
 if __name__ == "__main__":

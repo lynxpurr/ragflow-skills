@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -64,11 +67,82 @@ def build_release(dist_dir: Path = DIST_DIR) -> list[Path]:
     return built
 
 
+def _run_query_release_smoke(dist_dir: Path, env: dict[str, str]) -> int:
+    query_script = dist_dir / "ragflow-query" / "scripts" / "query.py"
+    with tempfile.TemporaryDirectory(prefix="ragflow-query-release-smoke-") as tmp:
+        runner = Path(tmp) / "query_release_smoke.py"
+        runner.write_text(
+            f"""\
+import importlib.util
+import json
+from pathlib import Path
+
+script = Path({str(query_script)!r})
+spec = importlib.util.spec_from_file_location("release_query_cli", script)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+class FakeClient:
+    def __init__(self, config):
+        self.config = config
+    def retrieve(self, *, question, dataset_ids, top_k=5, similarity_threshold=None):
+        return {{
+            "data": {{
+                "chunks": [
+                    {{
+                        "content_with_weight": "release smoke chunk for " + str(question),
+                        "docnm_kwd": "release-smoke.md",
+                        "similarity": 0.99,
+                        "kb_id": dataset_ids[0] if dataset_ids else "ds-smoke",
+                    }}
+                ]
+            }}
+        }}
+
+module.RAGFlowClient = FakeClient
+payloads = []
+for argv in [
+    ["--base-url", "https://ragflow.example.test", "--api-key", "test-key", "ask", "release smoke", "--dataset-id", "ds-smoke", "--mode", "direct", "--json"],
+    ["--base-url", "https://ragflow.example.test", "--api-key", "test-key", "ask", "release smoke", "--dataset-id", "ds-smoke", "--mode", "agentic", "--host-assisted", "--json"],
+]:
+    from io import StringIO
+    import contextlib
+    stdout = StringIO()
+    with contextlib.redirect_stdout(stdout):
+        code = module.main(argv)
+    if code != 0:
+        raise SystemExit(code)
+    payload = json.loads(stdout.getvalue())
+    if not payload.get("ok") or not payload.get("chunks"):
+        raise SystemExit(2)
+    payloads.append(payload)
+print(json.dumps({{"ok": True, "payloads": payloads}}, ensure_ascii=False))
+""",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [sys.executable, str(runner)],
+            cwd=dist_dir,
+            text=True,
+            capture_output=True,
+            check=False,
+            env={**env, "PYTHONNOUSERSITE": "1", "RAGFLOW_SKILL_RUNTIME_PATH": ""},
+        )
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, file=sys.stderr, end="")
+        if result.returncode != 0:
+            print("query release smoke failed", file=sys.stderr)
+        return result.returncode
+
+
 def run_release_check(dist_dir: Path = DIST_DIR) -> int:
     build_release(dist_dir)
 
     checks = [
         [sys.executable, str(dist_dir / "ragflow-query" / "scripts" / "bootstrap_smoke.py")],
+        [sys.executable, str(dist_dir / "ragflow-query" / "scripts" / "query.py"), "--help"],
         [sys.executable, str(dist_dir / "ragflow-doc-to-md" / "scripts" / "convert.py"), "--help"],
         [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "build.py"), "--help"],
         [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "inspect_kb.py"), "--help"],
@@ -94,7 +168,7 @@ def run_release_check(dist_dir: Path = DIST_DIR) -> int:
         if result.returncode != 0:
             print(f"release check failed: {' '.join(command)}", file=sys.stderr)
             return result.returncode
-    return 0
+    return _run_query_release_smoke(dist_dir, env)
 
 
 def main() -> int:

@@ -7,6 +7,19 @@ description: Unified direct and agentic RAGFlow retrieval for portable agent pla
 
 Use scripts in this skill to run `--mode auto|direct|agentic` retrieval against RAGFlow.
 
-- Prefer CLI mode for Claude Code and SaaS sandboxes.
-- Use host-assisted mode when the host agent should synthesize the final answer.
-- Treat `serve` as optional local deployment support, not the default interface.
+Commands:
+
+```bash
+python scripts/query.py --base-url https://ragflow.example.test --api-key "$RAGFLOW_API_KEY" ask "Question" --kb-manifest ./kb_manifest.json --mode direct --json
+python scripts/query.py ask "Question" --kb-manifest ./kb_manifest.json --mode agentic --host-assisted --json
+```
+
+Notes:
+
+- CLI mode is the v1 interface for Claude Code and SaaS sandboxes.
+- `--mode auto` currently falls back to direct retrieval.
+- `--mode agentic --host-assisted` returns evidence for the host agent to synthesize.
+- Release artifacts are smoke-tested against a fake RAGFlow endpoint for both direct and host-assisted query paths.
+- For v1, agentic mode means host-assisted evidence return only.
+- Script-owned agentic planning/synthesis is deferred.
+- `serve` is deferred; use CLI mode for v1.

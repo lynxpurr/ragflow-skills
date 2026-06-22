@@ -1,6 +1,6 @@
 # Cross-Platform RAGFlow Skills Architecture
 
-Status: design draft
+Status: implementation snapshot
 Date: 2026-06-22
 
 ## Decision Summary
@@ -99,8 +99,10 @@ ragflow_skill_runtime/
   profiles.py
   ragflow_client.py
   retrieval.py
-  routing.py
+  doc_convert.py
+  kb_build.py
   validation.py
+  routing.py
   llm.py
 ```
 
@@ -116,6 +118,30 @@ Allowed content:
 - Query routing helpers.
 - Common validation primitives.
 
+Implemented modules as of this snapshot:
+
+```text
+auth.py
+bootstrap.py
+config.py
+doc_convert.py
+http.py
+kb_build.py
+manifests.py
+paths.py
+profiles.py
+ragflow_client.py
+retrieval.py
+validation.py
+```
+
+Future modules:
+
+```text
+routing.py
+llm.py
+```
+
 Forbidden content:
 
 - Dedao code, names, IDs, cookies, or CLI assumptions.
@@ -129,12 +155,12 @@ Forbidden content:
 
 Every public script starts by bootstrapping `ragflow-skill-runtime`.
 
-Import priority:
+Runtime resolution:
 
-1. Already installed `ragflow_skill_runtime`.
-2. `RAGFLOW_SKILL_RUNTIME_PATH`.
-3. Skill-local `scripts/_vendor/ragflow_skill_runtime`.
-4. Optional adjacent bundle-level `_shared/ragflow_skill_runtime`.
+1. `RAGFLOW_SKILL_RUNTIME_PATH` when explicitly set.
+2. Skill-local `scripts/_vendor/ragflow_skill_runtime`.
+3. Optional adjacent bundle-level `_shared/ragflow_skill_runtime`.
+4. Normal Python import paths, including an installed `ragflow_skill_runtime` package.
 
 Minimal bootstrap pattern:
 
@@ -197,7 +223,7 @@ Minimum fields:
 {
   "version": "0.1",
   "created_at": "2026-06-22T00:00:00Z",
-  "source_root": "./input",
+  "source_root": ".",
   "documents": [
     {
       "source_path": "docs/example.pdf",
@@ -233,6 +259,7 @@ Minimum fields:
   "documents": [
     {
       "document_id": "doc-id",
+      "source_path": "docs/example.pdf",
       "markdown_path": "documents/example.md",
       "status": "parsed",
       "chunk_count": 12
@@ -250,15 +277,15 @@ Validation remains a product feature of `ragflow-kb-build`, but entry points are
 | Level | Default | Purpose |
 |---|---|---|
 | `smoke` | Yes after build | Fast check: KB exists, docs parsed, query returns chunks. |
-| `regression` | No | Runs a user-provided query set or generated representative set. |
-| `benchmark` | No | Slower quality benchmark with metrics and reports. |
+| `regression` | No | Runs a user-provided query set with lightweight pass/fail metrics. |
+| `benchmark` | No | Uses the same stable query-set surface initially; heavier benchmark runners remain opt-in backlog. |
 
 Example:
 
 ```bash
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level smoke
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level regression --queries ./queries.json
-python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level benchmark --suite ./benchmark.json
+python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level benchmark --queries ./queries.json --report-md ./report.md
 ```
 
 ## Query Modes
@@ -267,21 +294,33 @@ python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level benchmar
 
 | Mode | Behavior |
 |---|---|
-| `direct` | Retrieve chunks from one or more KBs and return normalized chunks. |
-| `agentic` | Plan, retrieve, reflect if configured, and synthesize. |
-| `auto` | Classify the question and select direct or agentic. |
+| `direct` | Implemented: retrieve chunks from one or more KBs and return normalized chunks. |
+| `agentic` | Partial: host-assisted evidence return is supported; script-owned planning/synthesis is future work. |
+| `auto` | Implemented conservatively: currently falls back to direct mode. |
 
 SaaS fallback:
 
 - If no LLM key is available, `agentic` can run in `--host-assisted` mode.
 - In host-assisted mode, the script returns plan/chunks/evidence and lets the host agent synthesize the final answer.
 
+Current gap:
+
+- `serve` is not implemented yet.
+- Script-owned LLM synthesis is not implemented yet.
+- Agentic planning/reflection is not implemented yet.
+
+V1 scope decision:
+
+- Public v1 is CLI-first.
+- `serve` is deferred to a later local/OpenClaw phase.
+- `agentic` v1 means `--host-assisted` evidence return; script-owned planning and synthesis are deferred.
+
 ## Platform Compatibility
 
 | Platform | Core loading | RAGFlow access | Recommended interface |
 |---|---|---|---|
-| Hermes local | Installed package or vendor | Localhost or LAN | CLI plus optional `serve`. |
-| OpenClaw | Installed package or vendor | LAN or HTTPS gateway | HTTP `serve` or CLI. |
+| Hermes local | Installed package or vendor | Localhost or LAN | CLI. |
+| OpenClaw | Installed package or vendor | LAN or HTTPS gateway | CLI for v1; `serve` deferred. |
 | Claude Code | Vendor preferred | HTTPS or reachable LAN endpoint | CLI. |
 | SaaS sandbox | Vendor required | HTTPS gateway | CLI, no daemon. |
 | Manus-like app | Vendor required | HTTPS gateway | CLI plus artifacts. |
@@ -296,7 +335,7 @@ The most restrictive target is the SaaS sandbox. Design defaults should satisfy 
 2. Copy `packages/ragflow-skill-runtime/src/ragflow_skill_runtime` into each skill's `scripts/_vendor/ragflow_skill_runtime`.
 3. Exclude private skills and local caches.
 4. Optionally run import smoke tests inside a clean temp directory.
-5. Produce one folder or zip per public skill.
+5. Produce one folder per public skill; zip packaging is future release hardening.
 
 Release artifacts must not contain:
 
@@ -313,9 +352,10 @@ Do not move existing production skills in the first phase. Build the public suit
 Order:
 
 1. `ragflow-skill-runtime` bootstrap and config/auth/client primitives.
-2. `ragflow-query` direct mode, then agentic mode.
-3. `ragflow-kb-build` build and smoke validation.
-4. `ragflow-doc-to-md` passthrough and local conversion adapters.
-5. Release vendoring and sandbox smoke.
+2. `ragflow-query` direct mode and host-assisted evidence mode.
+3. `ragflow-kb-build` build, inspect, and layered validation.
+4. `ragflow-doc-to-md` passthrough, text/HTML conversion, local/remote backend hooks.
+5. Cross-platform smoke matrix and release hardening.
+6. Optional query `serve`, script-owned synthesis, and agentic planning.
 
 This keeps current dedao and local RAGFlow workflows intact while the public suite matures.
