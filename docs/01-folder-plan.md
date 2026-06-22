@@ -92,7 +92,7 @@ Primary commands:
 
 ```bash
 python scripts/convert.py --input ./docs --output ./handoff
-python scripts/convert.py --input ./docs --output ./handoff --backend remote
+python scripts/convert.py --input ./docs --output ./handoff --backend remote --remote-url https://converter.example/api/convert
 python scripts/convert.py --input ./markdown --output ./handoff --mode passthrough
 ```
 

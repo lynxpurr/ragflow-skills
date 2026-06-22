@@ -154,21 +154,21 @@ Goal: produce Markdown handoff directories without requiring local-only tools.
 
 Tasks:
 
-- [ ] Create `skills/ragflow-doc-to-md/SKILL.md`.
-- [ ] Create `scripts/convert.py`.
-- [ ] Implement passthrough mode for existing Markdown.
-- [ ] Implement basic text/HTML to Markdown conversion.
-- [ ] Add local backend adapter for installed tools where available.
-- [ ] Add remote backend adapter interface.
-- [ ] Write `doc_manifest.json`.
-- [ ] Record source sha256 and conversion warnings.
-- [ ] Add templates for manifest examples.
+- [x] Create `skills/ragflow-doc-to-md/SKILL.md`.
+- [x] Create `scripts/convert.py`.
+- [x] Implement passthrough mode for existing Markdown.
+- [x] Implement basic text/HTML to Markdown conversion.
+- [x] Add local backend adapter for installed tools where available.
+- [x] Add remote backend adapter interface.
+- [x] Write `doc_manifest.json`.
+- [x] Record source sha256 and conversion warnings.
+- [x] Add templates for manifest examples.
 
 Validation:
 
-- [ ] Passthrough mode works in a clean SaaS-like environment.
-- [ ] Missing optional converters produce clear warnings.
-- [ ] `doc_manifest.json` can be consumed by `ragflow-kb-build`.
+- [x] Passthrough mode works in a clean SaaS-like environment.
+- [x] Missing optional converters produce clear warnings.
+- [x] `doc_manifest.json` can be consumed by `ragflow-kb-build`.
 
 Exit criteria:
 

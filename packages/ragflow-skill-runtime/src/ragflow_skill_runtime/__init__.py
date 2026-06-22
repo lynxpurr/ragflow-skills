@@ -2,6 +2,19 @@
 
 from .auth import AuthError, load_api_key
 from .config import ConfigError, RagflowConfig, load_config
+from .doc_convert import (
+    ConvertedDocument,
+    DocConvertError,
+    SourceDocument,
+    convert_source_to_markdown,
+    discover_source_documents,
+    extract_markdown_title,
+    html_to_markdown,
+    make_doc_manifest_payload,
+    safe_markdown_name,
+    sha256_file,
+    text_to_markdown,
+)
 from .manifests import (
     DocManifest,
     DocumentEntry,
@@ -35,6 +48,8 @@ __all__ = [
     "AuthError",
     "ConfigError",
     "DocManifest",
+    "ConvertedDocument",
+    "DocConvertError",
     "DocumentEntry",
     "KbDataset",
     "KbDocumentEntry",
@@ -44,14 +59,20 @@ __all__ = [
     "ProfileError",
     "RAGFlowClient",
     "RagflowConfig",
+    "SourceDocument",
     "BuildDocument",
     "BuildError",
     "NormalizedChunk",
     "QueryResult",
     "RetrievalError",
+    "convert_source_to_markdown",
     "discover_markdown_documents",
+    "discover_source_documents",
+    "extract_markdown_title",
     "extract_document_states",
+    "html_to_markdown",
     "make_kb_manifest_payload",
+    "make_doc_manifest_payload",
     "load_api_key",
     "load_config",
     "load_doc_manifest",
@@ -60,6 +81,9 @@ __all__ = [
     "normalize_retrieval_response",
     "normalize_document_state",
     "resolve_dataset_ids",
+    "safe_markdown_name",
+    "sha256_file",
+    "text_to_markdown",
     "wait_for_document_states",
 ]
 
