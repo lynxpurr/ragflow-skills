@@ -285,16 +285,19 @@ Goal: turn the public suite from an internally tested repo into a publishable ex
 Tasks:
 
 - [x] Add Phase 8 matrix to the required release command list.
-- [ ] Produce a release checklist for private/public hygiene.
-- [ ] Add deterministic packaging notes for per-skill artifact export.
-- [ ] Add sample query-set and handoff examples where they materially reduce onboarding friction.
-- [ ] Decide whether to add `agents/openai.yaml` metadata for the three public skills.
-- [ ] Add a small compatibility note for runtime loading in installed-package vs vendored mode.
+- [x] Produce a release checklist for private/public hygiene.
+- [x] Add `tools/release_hygiene_check.py`.
+- [x] Add deterministic packaging notes for per-skill artifact export.
+- [x] Add sample query-set and handoff examples where they materially reduce onboarding friction.
+- [x] Decide whether to add `agents/openai.yaml` metadata for the three public skills.
+- [x] Add a small compatibility note for runtime loading in installed-package vs vendored mode.
+- [ ] Add archive creation automation if manual tar commands become repetitive.
 
 Exit criteria:
 
-- A private repo clone can produce a clean external release bundle repeatably.
-- Public examples and artifacts are sufficient for first external users.
+- [x] A private repo clone can produce a clean external release bundle repeatably.
+- [x] Public examples and artifacts are sufficient for first external users.
+- [ ] Archive creation is fully automated.
 
 ## Deferred: Private Dedao Bridge
 
@@ -333,4 +336,5 @@ The public suite is ready for first external use when:
 - [x] `ragflow-kb-build validate --level smoke` works.
 - [x] `ragflow-doc-to-md --mode passthrough` produces `doc_manifest.json`.
 - [x] SaaS sandbox simulation works without daemon or editable install.
+- [x] Release hygiene check blocks private paths, private workflow references, and missing vendored runtime.
 - [x] Dedao skills remain private and untouched.

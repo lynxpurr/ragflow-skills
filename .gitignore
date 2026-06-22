@@ -16,6 +16,7 @@ venv/
 # Build artifacts
 dist/
 build/
+release-artifacts/
 *.egg-info/
 
 # Local config and secrets

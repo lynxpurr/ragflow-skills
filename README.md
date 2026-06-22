@@ -10,6 +10,7 @@ skills/ragflow-doc-to-md/         # raw documents -> Markdown handoff
 skills/ragflow-kb-build/          # Markdown -> RAGFlow KB + validation
 skills/ragflow-query/             # direct/agentic query CLI
 tools/build_release.py            # self-contained release artifact builder
+tools/release_hygiene_check.py    # public/private release hygiene gate
 docs/                             # architecture and development plans
 ```
 
@@ -38,6 +39,7 @@ PYTHONPATH=packages/ragflow-skill-runtime/src:tools \
 python3 tools/build_release.py --check
 python3 tools/vendor_import_smoke.py
 python3 tools/platform_smoke_matrix.py
+python3 tools/release_hygiene_check.py
 ```
 
 ## Scope

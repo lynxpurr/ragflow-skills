@@ -335,7 +335,7 @@ The most restrictive target is the SaaS sandbox. Design defaults should satisfy 
 2. Copy `packages/ragflow-skill-runtime/src/ragflow_skill_runtime` into each skill's `scripts/_vendor/ragflow_skill_runtime`.
 3. Exclude private skills and local caches.
 4. Optionally run import smoke tests inside a clean temp directory.
-5. Produce one folder per public skill; zip packaging is future release hardening.
+5. Produce one folder per public skill; deterministic per-skill tar export is documented in `docs/06-release-hardening.md`.
 
 Release artifacts must not contain:
 

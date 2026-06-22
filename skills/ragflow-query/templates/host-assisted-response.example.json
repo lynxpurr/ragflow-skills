@@ -1,0 +1,29 @@
+{
+  "ok": true,
+  "question": "What does this knowledge base say about the project?",
+  "mode": "agentic",
+  "dataset_ids": [
+    "dataset-id"
+  ],
+  "chunks": [
+    {
+      "content": "A concise evidence chunk returned by RAGFlow.",
+      "similarity": 0.92,
+      "document_name": "source.md",
+      "document_id": "document-id",
+      "dataset_id": "dataset-id",
+      "chunk_id": "chunk-id",
+      "important_keywords": [
+        "project"
+      ]
+    }
+  ],
+  "answer": null,
+  "host_assisted": true,
+  "metadata": {
+    "requested_mode": "agentic",
+    "top_k": 5,
+    "chunk_count": 1,
+    "synthesis": "host-assisted"
+  }
+}

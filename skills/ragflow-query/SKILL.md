@@ -1,6 +1,6 @@
 ---
 name: ragflow-query
-description: Unified direct and agentic RAGFlow retrieval for portable agent platforms. Use when Codex needs to query one or more RAGFlow knowledge bases, choose between direct and agentic retrieval, return chunks or synthesized answers, or expose an optional local HTTP query service.
+description: Unified direct and host-assisted agentic RAGFlow retrieval for portable agent platforms. Use when Codex needs to query one or more RAGFlow knowledge bases, choose direct retrieval, return evidence chunks, or produce host-assisted evidence for an outer agent to synthesize.
 ---
 
 # RAGFlow Query
@@ -19,6 +19,7 @@ Notes:
 - CLI mode is the v1 interface for Claude Code and SaaS sandboxes.
 - `--mode auto` currently falls back to direct retrieval.
 - `--mode agentic --host-assisted` returns evidence for the host agent to synthesize.
+- See `templates/host-assisted-response.example.json` for the expected evidence payload shape.
 - Release artifacts are smoke-tested against a fake RAGFlow endpoint for both direct and host-assisted query paths.
 - For v1, agentic mode means host-assisted evidence return only.
 - Script-owned agentic planning/synthesis is deferred.
