@@ -336,7 +336,7 @@ Tasks:
 - [x] Generate release archives and checksum manifest.
 - [x] Complete fresh-agent forward test from release artifacts.
 - [x] Run live integration against a reachable test RAGFlow endpoint, or record explicit skip.
-- [x] Tag `v0.1.0-rc1` after RC docs and forward-test results are committed.
+- [ ] Tag `v0.1.0-rc1` after RC docs and forward-test results are committed.
 
 Exit criteria:
 
