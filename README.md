@@ -37,6 +37,7 @@ PYTHONPATH=packages/ragflow-skill-runtime/src:tools \
 
 python3 tools/build_release.py --check
 python3 tools/vendor_import_smoke.py
+python3 tools/platform_smoke_matrix.py
 ```
 
 ## Scope

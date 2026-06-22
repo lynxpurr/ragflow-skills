@@ -1,0 +1,585 @@
+#!/usr/bin/env python3
+"""Run cross-platform smoke checks for public RAGFlow skill artifacts."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from build_release import build_release
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DIST_DIR = ROOT / "dist"
+RUNTIME_SRC = ROOT / "packages" / "ragflow-skill-runtime" / "src"
+PROFILE_PATH = ROOT / "skills" / "ragflow-kb-build" / "templates" / "default-en-768.json"
+
+
+@dataclass(frozen=True)
+class PlatformProfile:
+    id: str
+    platform: str
+    runtime_mode: str
+    config_mode: str
+    notes: str
+
+
+PLATFORM_PROFILES: tuple[PlatformProfile, ...] = (
+    PlatformProfile(
+        id="hermes-local-source",
+        platform="Hermes local",
+        runtime_mode="source-pythonpath",
+        config_mode="cli",
+        notes="Development-style smoke using the source runtime on PYTHONPATH.",
+    ),
+    PlatformProfile(
+        id="hermes-local-vendor",
+        platform="Hermes local",
+        runtime_mode="vendored-release",
+        config_mode="cli",
+        notes="Release artifact smoke using skill-local _vendor runtime.",
+    ),
+    PlatformProfile(
+        id="claude-code-cli",
+        platform="Claude Code",
+        runtime_mode="vendored-release",
+        config_mode="cli",
+        notes="CLI-only smoke with no editable install.",
+    ),
+    PlatformProfile(
+        id="saas-sandbox-https",
+        platform="SaaS sandbox",
+        runtime_mode="vendored-release",
+        config_mode="env",
+        notes="No daemon, no pip install, HTTPS-style RAGFLOW_BASE_URL from environment.",
+    ),
+    PlatformProfile(
+        id="manus-artifact-cli",
+        platform="Manus-like artifact runner",
+        runtime_mode="vendored-release",
+        config_mode="env",
+        notes="CLI smoke writes handoff, evidence, and validation report artifacts.",
+    ),
+    PlatformProfile(
+        id="openclaw-cli-v1",
+        platform="OpenClaw",
+        runtime_mode="vendored-release",
+        config_mode="cli",
+        notes="V1 CLI path; long-running serve mode is intentionally deferred.",
+    ),
+)
+
+
+def _minimal_env(profile: PlatformProfile) -> dict[str, str]:
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "PYTHONNOUSERSITE": "1",
+    }
+    if profile.runtime_mode == "source-pythonpath":
+        env["PYTHONPATH"] = str(RUNTIME_SRC)
+    if profile.config_mode == "env":
+        env["RAGFLOW_BASE_URL"] = "https://ragflow.example.test"
+        env["RAGFLOW_API_KEY"] = "test-key"
+    return env
+
+
+def _scripts_root(profile: PlatformProfile, dist_dir: Path) -> Path:
+    if profile.runtime_mode == "source-pythonpath":
+        return ROOT / "skills"
+    return dist_dir
+
+
+def _run_command(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout: float = 30.0,
+) -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "command": command,
+            "returncode": 124,
+            "stdout": exc.stdout or "",
+            "stderr": f"timed out after {timeout} seconds",
+            "ok": False,
+        }
+    return {
+        "command": command,
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "ok": result.returncode == 0,
+    }
+
+
+def _record_command_check(
+    checks: list[dict[str, Any]],
+    name: str,
+    result: dict[str, Any],
+    *,
+    required_stdout: str | None = None,
+) -> bool:
+    ok = bool(result["ok"])
+    error = ""
+    if ok and required_stdout and required_stdout not in result["stdout"]:
+        ok = False
+        error = f"stdout did not contain {required_stdout!r}"
+    elif not ok:
+        error = result["stderr"] or result["stdout"] or f"exit {result['returncode']}"
+    checks.append(
+        {
+            "name": name,
+            "ok": ok,
+            "returncode": result["returncode"],
+            "error": error,
+        }
+    )
+    return ok
+
+
+def _write_input_doc(workspace: Path) -> Path:
+    input_dir = workspace / "input"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    (input_dir / "platform-smoke.md").write_text(
+        "# Platform Smoke\n\nThis document contains a known term for portable validation.\n",
+        encoding="utf-8",
+    )
+    return input_dir
+
+
+def _write_fake_kb_manifest(workspace: Path, artifacts_dir: Path) -> Path:
+    manifest_path = artifacts_dir / "kb_manifest.json"
+    payload = {
+        "version": "0.1",
+        "ragflow_base_url": "https://ragflow.example.test/api/v1",
+        "dataset": {"id": "ds-platform-smoke", "name": "kb:platform-smoke"},
+        "profile": {"id": "platform-smoke"},
+        "documents": [
+            {
+                "document_id": "doc-platform-smoke",
+                "source_path": str(workspace / "input" / "platform-smoke.md"),
+                "markdown_path": str(workspace / "handoff" / "documents" / "platform-smoke.md"),
+                "status": "smoke",
+                "chunk_count": 1,
+            }
+        ],
+    }
+    manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return manifest_path
+
+
+def _write_query_set(artifacts_dir: Path) -> Path:
+    queries_path = artifacts_dir / "validation_queries.json"
+    queries_path.write_text(
+        json.dumps(
+            {
+                "queries": [
+                    {
+                        "id": "q1",
+                        "question": "Where is the known term?",
+                        "expected_terms": ["known term"],
+                        "expected_documents": ["platform-smoke.md"],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return queries_path
+
+
+def _runtime_args(profile: PlatformProfile) -> list[str]:
+    if profile.config_mode == "env":
+        return []
+    return ["--base-url", "https://ragflow.example.test", "--api-key", "test-key"]
+
+
+def _write_query_runner(
+    *,
+    runner_path: Path,
+    query_script: Path,
+    kb_manifest: Path,
+    artifacts_dir: Path,
+    profile: PlatformProfile,
+) -> None:
+    runtime_args = _runtime_args(profile)
+    runner_path.write_text(
+        f"""\
+from __future__ import annotations
+
+import contextlib
+import importlib.util
+import json
+from io import StringIO
+from pathlib import Path
+
+script = Path({str(query_script)!r})
+kb_manifest = Path({str(kb_manifest)!r})
+artifacts_dir = Path({str(artifacts_dir)!r})
+runtime_args = {runtime_args!r}
+
+spec = importlib.util.spec_from_file_location("platform_query_cli", script)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+
+class FakeClient:
+    def __init__(self, config):
+        self.config = config
+
+    def retrieve(self, *, question, dataset_ids, top_k=5, similarity_threshold=None):
+        return {{
+            "data": {{
+                "chunks": [
+                    {{
+                        "content_with_weight": "portable validation chunk with known term",
+                        "docnm_kwd": "platform-smoke.md",
+                        "similarity": 0.98,
+                        "kb_id": dataset_ids[0],
+                    }}
+                ]
+            }}
+        }}
+
+
+module.RAGFlowClient = FakeClient
+payloads = []
+for mode, extra, output_name in [
+    ("direct", ["--json"], "query_direct.json"),
+    ("agentic", ["--host-assisted", "--json"], "query_host_assisted.json"),
+]:
+    argv = (
+        runtime_args
+        + [
+            "ask",
+            "Where is the known term?",
+            "--kb-manifest",
+            str(kb_manifest),
+            "--mode",
+            mode,
+        ]
+        + extra
+    )
+    stdout = StringIO()
+    with contextlib.redirect_stdout(stdout):
+        code = module.main(argv)
+    if code != 0:
+        raise SystemExit(code)
+    payload = json.loads(stdout.getvalue())
+    if not payload.get("ok") or not payload.get("chunks"):
+        raise SystemExit(3)
+    (artifacts_dir / output_name).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\\n",
+        encoding="utf-8",
+    )
+    payloads.append({{"mode": mode, "chunk_count": len(payload.get("chunks", []))}})
+
+print(json.dumps({{"ok": True, "payloads": payloads}}, ensure_ascii=False))
+""",
+        encoding="utf-8",
+    )
+
+
+def _write_validate_runner(
+    *,
+    runner_path: Path,
+    validate_script: Path,
+    kb_manifest: Path,
+    queries_path: Path,
+    artifacts_dir: Path,
+    profile: PlatformProfile,
+) -> None:
+    runtime_args = _runtime_args(profile)
+    report_json = artifacts_dir / "validation_report.json"
+    report_md = artifacts_dir / "validation_report.md"
+    runner_path.write_text(
+        f"""\
+from __future__ import annotations
+
+import contextlib
+import importlib.util
+import json
+from io import StringIO
+from pathlib import Path
+
+script = Path({str(validate_script)!r})
+kb_manifest = Path({str(kb_manifest)!r})
+queries_path = Path({str(queries_path)!r})
+report_json = Path({str(report_json)!r})
+report_md = Path({str(report_md)!r})
+runtime_args = {runtime_args!r}
+
+spec = importlib.util.spec_from_file_location("platform_validate_cli", script)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+
+class FakeClient:
+    def __init__(self, config):
+        self.config = config
+
+    def retrieve(self, *, question, dataset_ids, top_k=3):
+        return {{
+            "data": {{
+                "chunks": [
+                    {{
+                        "content_with_weight": "portable validation chunk with known term",
+                        "docnm_kwd": "platform-smoke.md",
+                        "similarity": 0.98,
+                    }}
+                ]
+            }}
+        }}
+
+
+module.RAGFlowClient = FakeClient
+argv = runtime_args + [
+    "--kb-manifest",
+    str(kb_manifest),
+    "--level",
+    "regression",
+    "--queries",
+    str(queries_path),
+    "--report-json",
+    str(report_json),
+    "--report-md",
+    str(report_md),
+]
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    code = module.main(argv)
+if code != 0:
+    raise SystemExit(code)
+payload = json.loads(stdout.getvalue())
+if not payload.get("ok") or not report_json.exists() or not report_md.exists():
+    raise SystemExit(4)
+print(json.dumps({{"ok": True, "report_json": str(report_json), "report_md": str(report_md)}}, ensure_ascii=False))
+""",
+        encoding="utf-8",
+    )
+
+
+def _run_imported_cli_check(
+    *,
+    name: str,
+    runner_path: Path,
+    checks: list[dict[str, Any]],
+    cwd: Path,
+    env: dict[str, str],
+) -> bool:
+    result = _run_command([sys.executable, str(runner_path)], cwd=cwd, env=env)
+    return _record_command_check(checks, name, result, required_stdout='"ok": true')
+
+
+def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) -> dict[str, Any]:
+    workspace = work_root / profile.id
+    if workspace.exists():
+        shutil.rmtree(workspace)
+    workspace.mkdir(parents=True)
+    artifacts_dir = workspace / "artifacts"
+    artifacts_dir.mkdir()
+
+    env = _minimal_env(profile)
+    script_root = _scripts_root(profile, dist_dir)
+    input_dir = _write_input_doc(workspace)
+    checks: list[dict[str, Any]] = []
+
+    convert_script = script_root / "ragflow-doc-to-md" / "scripts" / "convert.py"
+    handoff_dir = workspace / "handoff"
+    convert_result = _run_command(
+        [
+            sys.executable,
+            str(convert_script),
+            "--input",
+            str(input_dir),
+            "--output",
+            str(handoff_dir),
+            "--mode",
+            "passthrough",
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(checks, "doc-to-md passthrough", convert_result, required_stdout='"ok": true')
+    doc_manifest = handoff_dir / "doc_manifest.json"
+    checks.append(
+        {
+            "name": "doc_manifest produced",
+            "ok": doc_manifest.exists(),
+            "returncode": 0 if doc_manifest.exists() else 1,
+            "error": "" if doc_manifest.exists() else f"missing {doc_manifest}",
+        }
+    )
+
+    build_script = script_root / "ragflow-kb-build" / "scripts" / "build.py"
+    build_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "--doc-manifest",
+            str(doc_manifest),
+            "--kb-name",
+            "kb:platform-smoke",
+            "--profile",
+            str(PROFILE_PATH),
+            "--dry-run",
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(checks, "kb-build dry-run", build_result, required_stdout='"dry_run": true')
+
+    kb_manifest = _write_fake_kb_manifest(workspace, artifacts_dir)
+    queries_path = _write_query_set(artifacts_dir)
+
+    query_script = script_root / "ragflow-query" / "scripts" / "query.py"
+    query_runner = workspace / "query_runner.py"
+    _write_query_runner(
+        runner_path=query_runner,
+        query_script=query_script,
+        kb_manifest=kb_manifest,
+        artifacts_dir=artifacts_dir,
+        profile=profile,
+    )
+    _run_imported_cli_check(
+        name="query direct and host-assisted",
+        runner_path=query_runner,
+        checks=checks,
+        cwd=workspace,
+        env=env,
+    )
+
+    validate_script = script_root / "ragflow-kb-build" / "scripts" / "validate.py"
+    validate_runner = workspace / "validate_runner.py"
+    _write_validate_runner(
+        runner_path=validate_runner,
+        validate_script=validate_script,
+        kb_manifest=kb_manifest,
+        queries_path=queries_path,
+        artifacts_dir=artifacts_dir,
+        profile=profile,
+    )
+    _run_imported_cli_check(
+        name="kb validation regression report",
+        runner_path=validate_runner,
+        checks=checks,
+        cwd=workspace,
+        env=env,
+    )
+
+    artifact_files = [
+        doc_manifest,
+        kb_manifest,
+        artifacts_dir / "query_direct.json",
+        artifacts_dir / "query_host_assisted.json",
+        artifacts_dir / "validation_report.json",
+        artifacts_dir / "validation_report.md",
+    ]
+    ok = all(check["ok"] for check in checks)
+    return {
+        "id": profile.id,
+        "platform": profile.platform,
+        "runtime_mode": profile.runtime_mode,
+        "config_mode": profile.config_mode,
+        "notes": profile.notes,
+        "ok": ok,
+        "workspace": str(workspace),
+        "checks": checks,
+        "artifacts": [str(path) for path in artifact_files if path.exists()],
+    }
+
+
+def selected_profiles(ids: list[str] | None = None) -> list[PlatformProfile]:
+    if not ids:
+        return list(PLATFORM_PROFILES)
+    known = {profile.id: profile for profile in PLATFORM_PROFILES}
+    missing = [profile_id for profile_id in ids if profile_id not in known]
+    if missing:
+        raise SystemExit(f"unknown platform profile(s): {', '.join(missing)}")
+    return [known[profile_id] for profile_id in ids]
+
+
+def run_smoke_matrix(
+    *,
+    dist_dir: Path = DIST_DIR,
+    work_root: Path,
+    profile_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    built = build_release(dist_dir)
+    profiles = selected_profiles(profile_ids)
+    results = [
+        run_profile(profile, dist_dir=dist_dir, work_root=work_root)
+        for profile in profiles
+    ]
+    return {
+        "ok": all(result["ok"] for result in results),
+        "dist": str(dist_dir),
+        "work_root": str(work_root),
+        "built_skills": [path.name for path in built],
+        "profiles": results,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run cross-platform RAGFlow skill smoke matrix")
+    parser.add_argument("--dist", default=str(DIST_DIR), help="Release artifact output directory")
+    parser.add_argument("--work-dir", help="Directory for smoke workspaces and artifacts")
+    parser.add_argument("--profile", action="append", help="Run one profile ID; repeatable")
+    parser.add_argument("--list-profiles", action="store_true", help="List platform profile IDs")
+    args = parser.parse_args(argv)
+
+    if args.list_profiles:
+        for profile in PLATFORM_PROFILES:
+            print(f"{profile.id}\t{profile.platform}\t{profile.runtime_mode}")
+        return 0
+
+    dist_dir = Path(args.dist).resolve()
+    if args.work_dir:
+        work_root = Path(args.work_dir).resolve()
+        work_root.mkdir(parents=True, exist_ok=True)
+        payload = run_smoke_matrix(
+            dist_dir=dist_dir,
+            work_root=work_root,
+            profile_ids=args.profile,
+        )
+    else:
+        with tempfile.TemporaryDirectory(prefix="ragflow-platform-smoke-") as tmp:
+            payload = run_smoke_matrix(
+                dist_dir=dist_dir,
+                work_root=Path(tmp),
+                profile_ids=args.profile,
+            )
+            payload["artifacts_retained"] = False
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0 if payload["ok"] else 1
+
+    payload["artifacts_retained"] = True
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if payload["ok"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

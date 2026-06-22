@@ -24,6 +24,7 @@ Completed foundations:
 - Phase 4 `ragflow-kb-build` MVP
 - Phase 5 `ragflow-doc-to-md` MVP
 - Phase 6 validation command consolidation
+- Phase 8 cross-platform smoke matrix
 
 Partially completed:
 
@@ -36,7 +37,7 @@ Partially completed:
 Near-term priority correction:
 
 - The next public-suite milestone is not private dedao bridging.
-- The next milestone is query completion plus cross-platform smoke for external release readiness.
+- The next milestone is release hardening after the cross-platform smoke matrix is green.
 
 ## Phase 0: Architecture Skeleton
 
@@ -254,18 +255,28 @@ Goal: prove the suite can run across target platforms with the finalized v1 surf
 
 Tasks:
 
-- [ ] Hermes local smoke: installed core and vendor mode.
-- [ ] Claude Code smoke: CLI mode with vendored core.
-- [ ] SaaS sandbox simulation: no pip install, no daemon, HTTPS-style base URL config.
-- [ ] Manus-like artifact smoke: CLI produces files in a declared output directory.
-- [ ] OpenClaw smoke if `serve` remains in scope for v1; otherwise document CLI-only usage.
-- [ ] Document failure modes and workarounds for config, auth, and network reachability.
+- [x] Add `tools/platform_smoke_matrix.py`.
+- [x] Hermes local smoke: source-runtime and vendor mode.
+- [x] Claude Code smoke: CLI mode with vendored core.
+- [x] SaaS sandbox simulation: no pip install, no daemon, HTTPS-style base URL config.
+- [x] Manus-like artifact smoke: CLI produces files in a declared output directory.
+- [x] OpenClaw v1 smoke: document and test CLI-only usage while `serve` is deferred.
+- [x] Document failure modes and workarounds for config, auth, and network reachability.
+
+Invocation:
+
+```bash
+python3 tools/platform_smoke_matrix.py
+python3 tools/platform_smoke_matrix.py --work-dir /tmp/ragflow-platform-smoke
+python3 tools/platform_smoke_matrix.py --profile saas-sandbox-https
+```
 
 Exit criteria:
 
-- Each target has a documented invocation pattern.
-- Failure modes are clear and actionable.
-- Release artifacts pass vendor and command smoke, not just import smoke.
+- [x] Each target has a documented invocation pattern.
+- [x] Failure modes are clear and actionable.
+- [x] Release artifacts pass vendor and command smoke, not just import smoke.
+- [x] Full matrix is included in the regular pre-release checklist.
 
 ## Phase 9: Release Hardening
 
@@ -273,6 +284,7 @@ Goal: turn the public suite from an internally tested repo into a publishable ex
 
 Tasks:
 
+- [x] Add Phase 8 matrix to the required release command list.
 - [ ] Produce a release checklist for private/public hygiene.
 - [ ] Add deterministic packaging notes for per-skill artifact export.
 - [ ] Add sample query-set and handoff examples where they materially reduce onboarding friction.
@@ -320,5 +332,5 @@ The public suite is ready for first external use when:
 - [x] `ragflow-kb-build build` produces `kb_manifest.json`.
 - [x] `ragflow-kb-build validate --level smoke` works.
 - [x] `ragflow-doc-to-md --mode passthrough` produces `doc_manifest.json`.
-- [ ] SaaS sandbox simulation works without daemon or editable install.
+- [x] SaaS sandbox simulation works without daemon or editable install.
 - [x] Dedao skills remain private and untouched.
