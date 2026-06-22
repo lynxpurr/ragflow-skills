@@ -25,6 +25,7 @@ Completed foundations:
 - Phase 5 `ragflow-doc-to-md` MVP
 - Phase 6 validation command consolidation
 - Phase 8 cross-platform smoke matrix
+- Phase 9 release hardening
 
 Partially completed:
 
@@ -324,6 +325,24 @@ Exit criteria:
 - [ ] LLM provider abstraction beyond OpenAI-compatible APIs.
 - [ ] Reranker provider abstraction.
 - [ ] Optional web UI or hosted API wrapper.
+
+## Phase 10: First Release Candidate Validation
+
+Goal: validate a first external release candidate before promotion to `main`.
+
+Tasks:
+
+- [x] Add `docs/07-first-release.md`.
+- [x] Generate release archives and checksum manifest.
+- [x] Complete fresh-agent forward test from release artifacts.
+- [x] Run live integration against a reachable test RAGFlow endpoint, or record explicit skip.
+- [ ] Tag `v0.1.0-rc1` after RC docs and forward-test results are committed.
+
+Exit criteria:
+
+- Release artifacts can be used without repository context.
+- Live endpoint status is explicit.
+- RC findings are either fixed or tracked before stable release.
 
 ## Definition of Done
 

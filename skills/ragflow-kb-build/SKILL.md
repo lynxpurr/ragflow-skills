@@ -18,6 +18,7 @@ Commands:
 ```bash
 python scripts/build.py --input ./markdown --kb-name kb:project --profile ./templates/default-en-768.json --output ./run/kb_manifest.json
 python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-zh-512.json
+python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-en-768.json --dry-run --json
 python scripts/inspect_kb.py --kb-manifest ./run/kb_manifest.json
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level smoke
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level regression --queries ./templates/validation-queries.example.json --report-md ./run/validation.md
@@ -26,7 +27,7 @@ python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level regressi
 Notes:
 
 - `build.py` creates the dataset, uploads Markdown, triggers parse, waits for parse completion by default, and emits `kb_manifest.json`.
-- Use `--dry-run` to validate local inputs without touching RAGFlow.
+- Use `--dry-run` to validate local inputs without touching RAGFlow; dry-run prints JSON and does not write `kb_manifest.json`.
 - Use `--no-wait` only when the host platform should continue while RAGFlow parses asynchronously.
 - `validate.py` supports `smoke`, `regression`, and `benchmark`; regression/benchmark require a user-provided query set.
 - Query sets are small JSON files with `question`, optional `min_chunks`, `expected_terms`, and `expected_documents`.

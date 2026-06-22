@@ -11,14 +11,14 @@ Commands:
 
 ```bash
 python scripts/query.py --base-url https://ragflow.example.test --api-key "$RAGFLOW_API_KEY" ask "Question" --kb-manifest ./kb_manifest.json --mode direct --json
-python scripts/query.py ask "Question" --kb-manifest ./kb_manifest.json --mode agentic --host-assisted --json
+python scripts/query.py --base-url https://ragflow.example.test --api-key "$RAGFLOW_API_KEY" ask "Question" --kb-manifest ./kb_manifest.json --mode agentic --host-assisted --json
 ```
 
 Notes:
 
 - CLI mode is the v1 interface for Claude Code and SaaS sandboxes.
 - `--mode auto` currently falls back to direct retrieval.
-- `--mode agentic --host-assisted` returns evidence for the host agent to synthesize.
+- `--mode agentic --host-assisted` still retrieves from RAGFlow; the host agent performs final synthesis from returned evidence.
 - See `templates/host-assisted-response.example.json` for the expected evidence payload shape.
 - Release artifacts are smoke-tested against a fake RAGFlow endpoint for both direct and host-assisted query paths.
 - For v1, agentic mode means host-assisted evidence return only.
