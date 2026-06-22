@@ -19,24 +19,25 @@ ragflow-skills/
   skills/
     ragflow-doc-to-md/
       SKILL.md
-      agents/
       scripts/
       references/
       templates/
     ragflow-kb-build/
       SKILL.md
-      agents/
       scripts/
       references/
       templates/
     ragflow-query/
       SKILL.md
-      agents/
       scripts/
       references/
       templates/
   tools/
     build_release.py
+    export_release_archives.py
+    live_integration_check.py
+    platform_smoke_matrix.py
+    release_hygiene_check.py
 ```
 
 ## Directory Responsibilities
@@ -46,8 +47,12 @@ ragflow-skills/
 | `packages/ragflow-skill-runtime/` | Shared Python runtime used by all public skills. Source-of-truth during development. |
 | `skills/ragflow-doc-to-md/` | Convert PDF, Office, HTML, TXT, and existing Markdown inputs into a Markdown handoff directory. |
 | `skills/ragflow-kb-build/` | Upload Markdown into RAGFlow, apply profiles, wait for parsing, inspect KB health, and validate retrieval quality. |
-| `skills/ragflow-query/` | Unified direct and agentic retrieval interface with `--mode auto|direct|agentic`. |
+| `skills/ragflow-query/` | Unified direct and host-assisted agentic retrieval interface with `--mode auto|direct|agentic`. |
 | `tools/build_release.py` | Build self-contained release artifacts by vendoring `ragflow_skill_runtime` into each skill. |
+| `tools/export_release_archives.py` | Export deterministic per-skill `.tar.gz` archives and checksums. |
+| `tools/live_integration_check.py` | Run an opt-in live retrieval check when a real RAGFlow endpoint is configured. |
+| `tools/platform_smoke_matrix.py` | Smoke-test source and vendored artifacts across target platform profiles. |
+| `tools/release_hygiene_check.py` | Gate release artifacts and public source against private or non-portable references. |
 | `docs/` | Architecture and implementation planning documents for this public suite. |
 
 ## Source vs Release Layout
@@ -124,18 +129,17 @@ Input:
 
 - User question.
 - KB name, KB manifest, or retrieval config.
-- Optional LLM key for script-owned synthesis.
+- Optional host-assisted mode for an outer agent to synthesize from evidence.
 
 Output:
 
-- JSON result with chunks, answer, citations, mode, and trace summary.
+- JSON result with chunks, mode, dataset IDs, and host-assisted metadata.
 
 Primary commands:
 
 ```bash
 python scripts/query.py ask "What does the policy say?" --mode auto --json
 python scripts/query.py ask "Compare A and B" --mode agentic --host-assisted --json
-python scripts/query.py serve --host 0.0.0.0 --port 8086
 ```
 
 ## Private Skills Kept Outside This Suite
@@ -150,10 +154,4 @@ Private dedao workflows may produce Markdown handoff directories consumed by the
 
 ## Folder Creation Status
 
-The initial folder skeleton has been created under:
-
-```text
-/home/zenz/.hermes/skills/research/ragflow-skills/
-```
-
-Implementation files are intentionally deferred to the phased development plan.
+The initial folder skeleton has been created. Implementation status is tracked in `docs/03-development-plan.md`.

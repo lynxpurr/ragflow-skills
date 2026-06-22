@@ -10,7 +10,7 @@ Build a public RAGFlow skill suite with three skills and one shared runtime pack
 ```text
 ragflow-doc-to-md      raw documents -> Markdown handoff
 ragflow-kb-build      Markdown -> RAGFlow KB + validation
-ragflow-query         direct and agentic retrieval
+ragflow-query         direct and host-assisted agentic retrieval
 ragflow-skill-runtime          shared runtime, vendored into release artifacts
 ```
 
@@ -69,17 +69,17 @@ Does not own:
 Owns:
 
 - Direct retrieval.
-- Agentic retrieval.
+- Host-assisted agentic evidence retrieval.
 - `--mode auto|direct|agentic` dispatch.
-- Optional LLM synthesis.
 - Host-assisted fallback for SaaS platforms where the host agent does final answer generation.
-- Optional HTTP service mode for Hermes/OpenClaw.
 
 Does not own:
 
 - KB creation.
 - Markdown conversion.
 - Dedao-specific routing examples.
+- Script-owned planning/synthesis in v1.
+- Long-lived HTTP service mode in v1.
 
 ## `ragflow-skill-runtime` Runtime Boundary
 
@@ -335,7 +335,7 @@ The most restrictive target is the SaaS sandbox. Design defaults should satisfy 
 2. Copy `packages/ragflow-skill-runtime/src/ragflow_skill_runtime` into each skill's `scripts/_vendor/ragflow_skill_runtime`.
 3. Exclude private skills and local caches.
 4. Optionally run import smoke tests inside a clean temp directory.
-5. Produce one folder per public skill; deterministic per-skill tar export is documented in `docs/06-release-hardening.md`.
+5. Produce one folder per public skill; `tools/export_release_archives.py` creates deterministic per-skill archives.
 
 Release artifacts must not contain:
 

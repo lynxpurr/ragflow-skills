@@ -1,6 +1,6 @@
 # RAGFlow Skills
 
-Portable public skills for document-to-Markdown conversion, RAGFlow knowledge-base builds, and direct or agentic RAGFlow querying.
+Portable public skills for document-to-Markdown conversion, RAGFlow knowledge-base builds, and direct or host-assisted agentic RAGFlow querying.
 
 ## Layout
 
@@ -8,8 +8,11 @@ Portable public skills for document-to-Markdown conversion, RAGFlow knowledge-ba
 packages/ragflow-skill-runtime/   # shared portable runtime
 skills/ragflow-doc-to-md/         # raw documents -> Markdown handoff
 skills/ragflow-kb-build/          # Markdown -> RAGFlow KB + validation
-skills/ragflow-query/             # direct/agentic query CLI
+skills/ragflow-query/             # direct and host-assisted agentic query CLI
 tools/build_release.py            # self-contained release artifact builder
+tools/export_release_archives.py  # deterministic per-skill archive exporter
+tools/live_integration_check.py   # opt-in live RAGFlow retrieval check
+tools/platform_smoke_matrix.py    # cross-platform no-network smoke matrix
 tools/release_hygiene_check.py    # public/private release hygiene gate
 docs/                             # architecture and development plans
 ```
@@ -40,6 +43,8 @@ python3 tools/build_release.py --check
 python3 tools/vendor_import_smoke.py
 python3 tools/platform_smoke_matrix.py
 python3 tools/release_hygiene_check.py
+python3 tools/export_release_archives.py
+python3 tools/live_integration_check.py
 ```
 
 ## Scope

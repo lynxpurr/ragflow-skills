@@ -291,13 +291,14 @@ Tasks:
 - [x] Add sample query-set and handoff examples where they materially reduce onboarding friction.
 - [x] Decide whether to add `agents/openai.yaml` metadata for the three public skills.
 - [x] Add a small compatibility note for runtime loading in installed-package vs vendored mode.
-- [ ] Add archive creation automation if manual tar commands become repetitive.
+- [x] Add archive creation automation with per-skill checksums.
+- [x] Add opt-in live integration check for reachable RAGFlow endpoints.
 
 Exit criteria:
 
 - [x] A private repo clone can produce a clean external release bundle repeatably.
 - [x] Public examples and artifacts are sufficient for first external users.
-- [ ] Archive creation is fully automated.
+- [x] Archive creation is fully automated.
 
 ## Deferred: Private Dedao Bridge
 
@@ -337,4 +338,5 @@ The public suite is ready for first external use when:
 - [x] `ragflow-doc-to-md --mode passthrough` produces `doc_manifest.json`.
 - [x] SaaS sandbox simulation works without daemon or editable install.
 - [x] Release hygiene check blocks private paths, private workflow references, and missing vendored runtime.
+- [x] Release archive export produces deterministic per-skill archives and checksum manifest.
 - [x] Dedao skills remain private and untouched.

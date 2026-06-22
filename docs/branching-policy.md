@@ -28,6 +28,8 @@ python3 tools/build_release.py --check
 python3 tools/vendor_import_smoke.py
 python3 tools/platform_smoke_matrix.py
 python3 tools/release_hygiene_check.py
+python3 tools/export_release_archives.py
+python3 tools/live_integration_check.py
 ```
 
 5. Promote to `main` only when `develop` is ready for a stable release snapshot.

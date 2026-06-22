@@ -15,7 +15,11 @@ python3 tools/build_release.py --check
 python3 tools/vendor_import_smoke.py
 python3 tools/platform_smoke_matrix.py
 python3 tools/release_hygiene_check.py
+python3 tools/export_release_archives.py
+python3 tools/live_integration_check.py
 ```
+
+Run these commands sequentially. Several release tools rebuild `dist/`, so parallel execution can corrupt an in-progress check.
 
 The hygiene check rebuilds `dist/` and verifies:
 
@@ -27,25 +31,34 @@ The hygiene check rebuilds `dist/` and verifies:
 
 ## Artifact Export
 
-Build the self-contained skill folders:
+Export deterministic per-skill archives:
 
 ```bash
-python3 tools/build_release.py --dist dist
+python3 tools/export_release_archives.py
 ```
 
-Export one archive per skill from the `dist/` directory:
+The exporter rebuilds `dist/`, runs the hygiene gate, writes one archive per public skill, and emits `release-artifacts/release-manifest.json` with SHA-256 checksums.
+
+Use custom paths when needed:
 
 ```bash
-mkdir -p release-artifacts
-tar --sort=name --mtime='UTC 2026-01-01' --owner=0 --group=0 --numeric-owner \
-  -C dist -czf release-artifacts/ragflow-doc-to-md.tar.gz ragflow-doc-to-md
-tar --sort=name --mtime='UTC 2026-01-01' --owner=0 --group=0 --numeric-owner \
-  -C dist -czf release-artifacts/ragflow-kb-build.tar.gz ragflow-kb-build
-tar --sort=name --mtime='UTC 2026-01-01' --owner=0 --group=0 --numeric-owner \
-  -C dist -czf release-artifacts/ragflow-query.tar.gz ragflow-query
+python3 tools/export_release_archives.py --dist dist --output-dir release-artifacts
 ```
 
 Do not commit `dist/` or `release-artifacts/`.
+
+## Live Integration
+
+`tools/live_integration_check.py` is opt-in. It exits successfully with `skipped: true` unless all required settings are present:
+
+```bash
+RAGFLOW_BASE_URL=https://ragflow.example.test \
+RAGFLOW_API_KEY=... \
+RAGFLOW_DATASET_ID=... \
+python3 tools/live_integration_check.py
+```
+
+Use it before a public release when a reachable RAGFlow endpoint is available.
 
 ## Runtime Compatibility
 
