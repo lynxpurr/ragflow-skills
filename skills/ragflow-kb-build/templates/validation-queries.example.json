@@ -1,0 +1,18 @@
+{
+  "queries": [
+    {
+      "id": "q-overview",
+      "question": "What is this knowledge base about?",
+      "min_chunks": 1,
+      "expected_terms": [],
+      "expected_documents": []
+    },
+    {
+      "id": "q-known-topic",
+      "question": "Ask a question that should hit a known document.",
+      "min_chunks": 1,
+      "expected_terms": ["known term"],
+      "expected_documents": ["source.md"]
+    }
+  ]
+}

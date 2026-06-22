@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import contextlib
+import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -21,6 +24,32 @@ def _env() -> dict[str, str]:
     env = os.environ.copy()
     env["RAGFLOW_SKILL_RUNTIME_PATH"] = str(RUNTIME_SRC)
     return env
+
+
+def load_validate_module():
+    spec = importlib.util.spec_from_file_location("ragflow_kb_validate_cli", VALIDATE_SCRIPT)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class FakeValidationClient:
+    def __init__(self, config):
+        self.config = config
+
+    def retrieve(self, *, question, dataset_ids, top_k=3):
+        return {
+            "data": {
+                "chunks": [
+                    {
+                        "content_with_weight": f"{question} includes known term",
+                        "docnm_kwd": "source.md",
+                        "similarity": 0.91,
+                    }
+                ]
+            }
+        }
 
 
 class KbBuildCliTests(unittest.TestCase):
@@ -141,7 +170,7 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["dataset"]["id"], "ds-1")
         self.assertEqual(payload["document_count"], 1)
 
-    def test_validate_regression_reports_mvp_gap_without_network(self) -> None:
+    def test_validate_regression_requires_queries_without_network(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manifest = Path(tmp) / "kb_manifest.json"
             manifest.write_text(
@@ -172,7 +201,64 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout)
         payload = json.loads(result.stdout)
         self.assertFalse(payload["ok"])
-        self.assertEqual(payload["implemented_levels"], ["smoke"])
+        self.assertIn("requires --queries", payload["error"])
+
+    def test_validate_regression_with_query_set_via_fake_client(self) -> None:
+        module = load_validate_module()
+        module.RAGFlowClient = FakeValidationClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "kb_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-1", "name": "kb:test"},
+                        "documents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            queries = root / "queries.json"
+            queries.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {
+                                "id": "q1",
+                                "question": "Known",
+                                "expected_terms": ["known term"],
+                                "expected_documents": ["source.md"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report_md = root / "report.md"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--kb-manifest",
+                        str(manifest),
+                        "--level",
+                        "regression",
+                        "--queries",
+                        str(queries),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--report-md",
+                        str(report_md),
+                    ]
+                )
+            report_text = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        payload = json.loads(stdout.getvalue())
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["metrics"]["pass_rate"], 1.0)
+        self.assertIn("q1", report_text)
 
 
 if __name__ == "__main__":

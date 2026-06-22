@@ -29,10 +29,14 @@ from ragflow_skill_runtime import (  # noqa: E402
     RAGFlowClient,
     load_config,
     load_kb_manifest,
-    normalize_retrieval_response,
+    load_validation_queries,
+    render_markdown_report,
+    run_retrieval_validation,
+    smoke_query,
 )
 from ragflow_skill_runtime.config import ConfigError  # noqa: E402
 from ragflow_skill_runtime.manifests import ManifestError  # noqa: E402
+from ragflow_skill_runtime.validation import ValidationError  # noqa: E402
 
 
 def _dump_json(data: Any) -> None:
@@ -48,37 +52,41 @@ def _load_config(args: argparse.Namespace):
     return load_config(config_file=args.config, overrides=overrides)
 
 
+def _write_text(path: str | None, text: str) -> None:
+    if not path:
+        return
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(text, encoding="utf-8")
+
+
 def _run(args: argparse.Namespace) -> int:
     try:
         manifest = load_kb_manifest(args.kb_manifest)
-        if args.level != "smoke":
-            _dump_json(
-                {
-                    "ok": False,
-                    "error": f"{args.level} validation is not implemented in this MVP",
-                    "implemented_levels": ["smoke"],
-                }
-            )
-            return 2
+        if args.level == "smoke":
+            queries = [smoke_query(args.query, dataset_name=manifest.dataset.name)]
+        else:
+            if not args.queries:
+                raise ValidationError(f"{args.level} validation requires --queries")
+            queries = load_validation_queries(args.queries)
 
         config = _load_config(args)
         client = RAGFlowClient(config)
-        query = args.query or f"Summarize {manifest.dataset.name}"
-        raw = client.retrieve(question=query, dataset_ids=[manifest.dataset.id], top_k=args.top_k)
-        chunks = normalize_retrieval_response(raw)
-        ok = len(chunks) > 0
-        _dump_json(
-            {
-                "ok": ok,
-                "level": args.level,
-                "dataset": {"id": manifest.dataset.id, "name": manifest.dataset.name},
-                "query": query,
-                "chunk_count": len(chunks),
-                "top_chunks": [chunk.to_dict() for chunk in chunks[: min(3, len(chunks))]],
-            }
+        report = run_retrieval_validation(
+            client,
+            level=args.level,
+            dataset_id=manifest.dataset.id,
+            dataset_name=manifest.dataset.name,
+            queries=queries,
+            top_k=args.top_k,
         )
-        return 0 if ok else 1
-    except (ConfigError, ManifestError, OSError, RuntimeError) as exc:
+        payload = report.to_dict(max_chunks=args.max_report_chunks)
+        rendered_json = json.dumps(payload, ensure_ascii=False, indent=2)
+        _write_text(args.report_json, rendered_json + "\n")
+        _write_text(args.report_md, render_markdown_report(report))
+        print(rendered_json)
+        return 0 if report.ok else 1
+    except (ConfigError, ManifestError, ValidationError, OSError, RuntimeError) as exc:
         _dump_json({"ok": False, "error": str(exc)})
         return 2
 
@@ -88,7 +96,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--kb-manifest", required=True)
     parser.add_argument("--level", choices=["smoke", "regression", "benchmark"], default="smoke")
     parser.add_argument("--query", help="Smoke-test query")
+    parser.add_argument("--queries", help="JSON query set for regression or benchmark validation")
     parser.add_argument("--top-k", type=int, default=3)
+    parser.add_argument("--max-report-chunks", type=int, default=3)
+    parser.add_argument("--report-json", help="Optional JSON report output path")
+    parser.add_argument("--report-md", help="Optional Markdown report output path")
     parser.add_argument("--config", help="Runtime config file")
     parser.add_argument("--base-url", help="RAGFlow base URL")
     parser.add_argument("--api-key", help="RAGFlow API key")

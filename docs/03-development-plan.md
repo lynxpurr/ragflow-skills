@@ -181,13 +181,13 @@ Goal: keep quality engineering as a product feature without preserving script sp
 
 Tasks:
 
-- [ ] Inventory existing benchmark and regression scripts.
-- [ ] Classify each as `smoke`, `regression`, `benchmark`, `legacy`, or `private`.
-- [ ] Move reusable metrics into `ragflow_skill_runtime/validation.py`.
-- [ ] Expose a stable `validate` command surface.
-- [ ] Support user-provided query sets.
-- [ ] Generate compact JSON and Markdown reports.
-- [ ] Keep heavy benchmark datasets out of default release unless explicitly included.
+- [x] Inventory existing benchmark and regression scripts.
+- [x] Classify each as `smoke`, `regression`, `benchmark`, `legacy`, or `private`.
+- [x] Move reusable metrics into `ragflow_skill_runtime/validation.py`.
+- [x] Expose a stable `validate` command surface.
+- [x] Support user-provided query sets.
+- [x] Generate compact JSON and Markdown reports.
+- [x] Keep heavy benchmark datasets out of default release unless explicitly included.
 
 Exit criteria:
 
