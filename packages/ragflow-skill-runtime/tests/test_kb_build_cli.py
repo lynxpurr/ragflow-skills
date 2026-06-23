@@ -579,6 +579,85 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["metrics"]["pass_rate"], 1.0)
         self.assertIn("q1", report_text)
 
+    def test_validate_benchmark_with_qrels_and_gate_via_fake_client(self) -> None:
+        module = load_validate_module()
+        module.RAGFlowClient = FakeValidationClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "kb_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-1", "name": "kb:test"},
+                        "documents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            queries = root / "queries.json"
+            queries.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {
+                                "id": "q1",
+                                "question": "Known",
+                                "expected_terms": ["known term"],
+                                "expected_documents": ["source.md"],
+                                "metadata": {"type": "fact"},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            qrels = root / "qrels.json"
+            qrels.write_text(json.dumps({"q1": {"source.md": 1}}), encoding="utf-8")
+            gate = root / "gate.json"
+            gate.write_text(
+                json.dumps({"thresholds": {"min_hit_rate": 1.0, "min_mrr": 1.0}}),
+                encoding="utf-8",
+            )
+            baseline = root / "baseline.json"
+            baseline.write_text(
+                json.dumps({"benchmark": {"metrics": {"mrr": 0.5, "hit_rate": 1.0}}}),
+                encoding="utf-8",
+            )
+            report_md = root / "benchmark.md"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--kb-manifest",
+                        str(manifest),
+                        "--level",
+                        "benchmark",
+                        "--queries",
+                        str(queries),
+                        "--qrels",
+                        str(qrels),
+                        "--gate-config",
+                        str(gate),
+                        "--baseline-report",
+                        str(baseline),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--report-md",
+                        str(report_md),
+                    ]
+                )
+            report_text = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        payload = json.loads(stdout.getvalue())
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["benchmark"]["metrics"]["hit_rate"], 1.0)
+        self.assertEqual(payload["benchmark"]["query_type_breakdown"]["fact"]["query_count"], 1)
+        self.assertTrue(payload["benchmark"]["gate"]["ok"])
+        self.assertEqual(payload["benchmark"]["baseline"]["delta"]["mrr"], 0.5)
+        self.assertIn("## Benchmark", report_text)
+
 
 if __name__ == "__main__":
     unittest.main()

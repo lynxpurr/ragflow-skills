@@ -392,6 +392,98 @@ def _run_no_network_checks(
     )
     _record_command_check(checks, "kb-build dry-run", build_result, required_output='"dry_run": true')
 
+    validate_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "validate.py")
+    benchmark_manifest = work_root / "benchmark_kb_manifest.json"
+    benchmark_queries = work_root / "benchmark_queries.json"
+    benchmark_qrels = work_root / "benchmark_qrels.json"
+    benchmark_gate = work_root / "benchmark_gate.json"
+    benchmark_report_json = work_root / "benchmark_report.json"
+    benchmark_report_md = work_root / "benchmark_report.md"
+    benchmark_manifest.write_text(
+        json.dumps(
+            {
+                "version": "0.1",
+                "dataset": {"id": "ds-consumer-acceptance", "name": "kb:consumer-acceptance"},
+                "documents": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    benchmark_queries.write_text(
+        json.dumps(
+            {
+                "queries": [
+                    {
+                        "id": "q1",
+                        "question": "What can run without repository source context?",
+                        "min_chunks": 1,
+                        "metadata": {"type": "fact"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    benchmark_qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+    benchmark_gate.write_text(
+        json.dumps({"thresholds": {"min_hit_rate": 1.0, "min_mrr": 1.0}}),
+        encoding="utf-8",
+    )
+    benchmark_runner = work_root / "run_benchmark_validate.py"
+    benchmark_runner.write_text(
+        f"""\
+import importlib.util
+import json
+from pathlib import Path
+
+script = Path({str(validate_script)!r})
+spec = importlib.util.spec_from_file_location("consumer_validate_cli", script)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+class FakeClient:
+    def __init__(self, config):
+        self.config = config
+    def retrieve(self, *, question, dataset_ids, top_k=3):
+        return {{
+            "data": {{
+                "chunks": [
+                    {{
+                        "content_with_weight": "Consumer Acceptance can run without repository source context.",
+                        "docnm_kwd": "sample.md",
+                        "similarity": 0.99,
+                        "kb_id": dataset_ids[0],
+                    }}
+                ]
+            }}
+        }}
+
+module.RAGFlowClient = FakeClient
+code = module.main([
+    "--kb-manifest", {str(benchmark_manifest)!r},
+    "--level", "benchmark",
+    "--queries", {str(benchmark_queries)!r},
+    "--qrels", {str(benchmark_qrels)!r},
+    "--gate-config", {str(benchmark_gate)!r},
+    "--base-url", "https://ragflow.example.test",
+    "--report-json", {str(benchmark_report_json)!r},
+    "--report-md", {str(benchmark_report_md)!r},
+])
+raise SystemExit(code)
+""",
+        encoding="utf-8",
+    )
+    benchmark_result = _run_command([python_executable, str(benchmark_runner)], cwd=work_root, env=env)
+    _record_command_check(
+        checks,
+        "kb-build benchmark validation",
+        benchmark_result,
+        required_output='"benchmark"',
+    )
+    for path in (benchmark_report_json, benchmark_report_md):
+        if path.exists():
+            produced.append(path)
+
     append_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "append.py")
     append_help = _run_command([python_executable, str(append_script), "--help"], cwd=work_root, env=env)
     _record_command_check(

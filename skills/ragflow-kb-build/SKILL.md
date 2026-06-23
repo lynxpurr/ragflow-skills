@@ -31,6 +31,7 @@ python scripts/diagnose.py --kb-manifest ./run/kb_manifest.json --live --report-
 python scripts/inspect_kb.py --kb-manifest ./run/kb_manifest.json
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level smoke
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level regression --queries ./templates/validation-queries.example.json --report-md ./run/validation.md
+python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level benchmark --queries ./templates/benchmark-queries.example.json --qrels ./templates/qrels.example.json --gate-config ./templates/benchmark-gate.example.json --report-md ./run/benchmark.md
 ```
 
 Use `templates/ragflow-config.example.yaml` as the shared config template. Put the real config in a stable host-agent config path, such as Hermes or OpenClaw config storage, and point scripts to it with `RAGFLOW_CONFIG` or `--config`. Do not put real keys in the skill folder.
@@ -47,5 +48,6 @@ Notes:
 - Use `cleanup.py` without `--execute` first; deletion requires `--execute`, an exact `--confirm-dataset-id`, and the matching `--confirm-kb-name` when the name is known.
 - Use `probe.py` to check safe RAGFlow API compatibility before live build operations.
 - Use `diagnose.py` to explain manifest, parse-state, duplicate-name, short-ID, and zero-chunk symptoms without private database access.
-- `validate.py` supports `smoke`, `regression`, and `benchmark`; regression/benchmark require a user-provided query set.
+- `validate.py` supports `smoke`, `regression`, and `benchmark`; regression requires a query set, and benchmark requires both a query set and qrels.
 - Query sets are small JSON files with `question`, optional `min_chunks`, `expected_terms`, and `expected_documents`.
+- Benchmark qrels are small JSON files mapping query IDs to relevant documents/chunks. Benchmark reports include hit rate, MRR, precision@k, recall@k, nDCG@k, MAP@k, empty-result rate, query-type breakdown, optional gate checks, and optional baseline deltas.

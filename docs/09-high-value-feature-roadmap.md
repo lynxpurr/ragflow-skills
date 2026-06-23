@@ -504,19 +504,23 @@ Goal: promote validation from smoke checks to measurable retrieval quality gates
 
 Tasks:
 
-- [ ] Port qrels metric primitives into `ragflow_skill_runtime/validation.py` or a new metrics module.
-- [ ] Define public `queries.json` and `qrels.json` examples.
-- [ ] Add `validate --level benchmark`.
-- [ ] Add gate config support.
-- [ ] Add Markdown and JSON benchmark reports.
-- [ ] Add baseline comparison support.
-- [ ] Add query type breakdown.
-- [ ] Add public sanitized sample benchmark fixtures.
-- [ ] Keep benchmark data small enough for release artifacts or ship larger examples only as source docs.
+- [x] Port qrels metric primitives into `ragflow_skill_runtime/validation.py`.
+- [x] Define public `queries.json` and `qrels.json` examples.
+- [x] Add `validate --level benchmark`.
+- [x] Add gate config support.
+- [x] Add Markdown and JSON benchmark reports.
+- [x] Add baseline comparison support.
+- [x] Add query type breakdown.
+- [x] Add public sanitized sample benchmark fixtures.
+- [x] Keep benchmark data small enough for release artifacts or ship larger examples only as source docs.
 
 Exit criteria:
 
 - A user can run a public benchmark gate and see ranking metrics, failures, and recommended next checks.
+
+Implementation note:
+
+- The current MVP is deterministic and retrieval-only: qrels load from compact public JSON, reports include hit rate, MRR, precision@k, recall@k, nDCG@k, MAP@k, empty-result rate, supporting-document coverage, query-type breakdown, optional gate checks, and optional baseline deltas. LLM-judged or RAGAS-style suites remain opt-in backlog.
 
 ### Phase 16: Profile Engineering
 

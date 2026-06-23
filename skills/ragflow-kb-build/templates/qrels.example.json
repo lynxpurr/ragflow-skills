@@ -1,0 +1,14 @@
+{
+  "qrels": [
+    {
+      "query_id": "q-overview",
+      "document": "source.md",
+      "relevance": 1
+    },
+    {
+      "query_id": "q-known-topic",
+      "document": "source.md",
+      "relevance": 2
+    }
+  ]
+}

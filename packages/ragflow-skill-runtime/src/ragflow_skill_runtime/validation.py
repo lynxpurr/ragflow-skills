@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -14,6 +15,18 @@ class ValidationError(RuntimeError):
     """Raised when validation inputs are invalid."""
 
 
+METRIC_KEYS = (
+    "hit_rate",
+    "mrr",
+    "precision_at_k",
+    "recall_at_k",
+    "ndcg_at_k",
+    "map_at_k",
+    "empty_result_rate",
+    "supporting_document_coverage",
+)
+
+
 def _string_list(value: Any, *, field_name: str) -> list[str]:
     if value is None:
         return []
@@ -22,6 +35,22 @@ def _string_list(value: Any, *, field_name: str) -> list[str]:
     if isinstance(value, list) and all(isinstance(item, str) for item in value):
         return [item for item in value if item]
     raise ValidationError(f"{field_name} must be a string or list of strings")
+
+
+def _as_metric(value: Any, *, field_name: str) -> float:
+    try:
+        metric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(f"{field_name} must be a number") from exc
+    if metric < 0:
+        raise ValidationError(f"{field_name} must be non-negative")
+    return metric
+
+
+def _metric_or_none(value: Any, *, field_name: str) -> float | None:
+    if value is None:
+        return None
+    return _as_metric(value, field_name=field_name)
 
 
 @dataclass(frozen=True)
@@ -79,6 +108,156 @@ class ValidationQuery:
 
 
 @dataclass(frozen=True)
+class BenchmarkQrel:
+    query_id: str
+    target: str
+    relevance: float = 1.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+    field: str = "document"
+
+    @property
+    def key(self) -> str:
+        return f"{self.field}:{self.target}".lower()
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any], *, index: int) -> "BenchmarkQrel":
+        query_id = data.get("query_id") or data.get("id") or data.get("query")
+        if not isinstance(query_id, str) or not query_id.strip():
+            raise ValidationError(f"qrel[{index}].query_id is required")
+
+        field_name = str(data.get("field") or "document")
+        target = data.get("target")
+        if target is None:
+            if data.get("chunk_id") is not None:
+                field_name = "chunk_id"
+                target = data.get("chunk_id")
+            elif data.get("document_id") is not None:
+                field_name = "document_id"
+                target = data.get("document_id")
+            else:
+                target = (
+                    data.get("document")
+                    or data.get("document_name")
+                    or data.get("doc")
+                    or data.get("doc_name")
+                )
+        if not isinstance(target, str) or not target.strip():
+            raise ValidationError(f"qrel[{index}].target or document is required")
+
+        allowed_fields = {"document", "document_name", "document_id", "chunk_id", "content"}
+        if field_name not in allowed_fields:
+            raise ValidationError(
+                f"qrel[{index}].field must be one of {', '.join(sorted(allowed_fields))}"
+            )
+
+        metadata = data.get("metadata", {})
+        if not isinstance(metadata, dict):
+            raise ValidationError(f"qrel[{index}].metadata must be an object")
+
+        return cls(
+            query_id=query_id.strip(),
+            target=target.strip(),
+            relevance=_as_metric(data.get("relevance", 1.0), field_name=f"qrel[{index}].relevance"),
+            field=field_name,
+            metadata=dict(metadata),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "query_id": self.query_id,
+            "target": self.target,
+            "relevance": self.relevance,
+            "field": self.field,
+            "metadata": self.metadata,
+        }
+
+
+@dataclass(frozen=True)
+class BenchmarkGate:
+    min_hit_rate: float | None = None
+    min_mrr: float | None = None
+    min_precision_at_k: float | None = None
+    min_recall_at_k: float | None = None
+    min_ndcg_at_k: float | None = None
+    min_map_at_k: float | None = None
+    max_empty_result_rate: float | None = None
+    max_hit_rate_drop: float | None = None
+    max_mrr_drop: float | None = None
+    max_ndcg_drop: float | None = None
+    max_map_drop: float | None = None
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "BenchmarkGate":
+        raw = data.get("thresholds", data)
+        if not isinstance(raw, Mapping):
+            raise ValidationError("gate config must be an object")
+        return cls(
+            min_hit_rate=_metric_or_none(raw.get("min_hit_rate"), field_name="min_hit_rate"),
+            min_mrr=_metric_or_none(raw.get("min_mrr"), field_name="min_mrr"),
+            min_precision_at_k=_metric_or_none(
+                raw.get("min_precision_at_k"), field_name="min_precision_at_k"
+            ),
+            min_recall_at_k=_metric_or_none(raw.get("min_recall_at_k"), field_name="min_recall_at_k"),
+            min_ndcg_at_k=_metric_or_none(raw.get("min_ndcg_at_k"), field_name="min_ndcg_at_k"),
+            min_map_at_k=_metric_or_none(raw.get("min_map_at_k"), field_name="min_map_at_k"),
+            max_empty_result_rate=_metric_or_none(
+                raw.get("max_empty_result_rate"), field_name="max_empty_result_rate"
+            ),
+            max_hit_rate_drop=_metric_or_none(raw.get("max_hit_rate_drop"), field_name="max_hit_rate_drop"),
+            max_mrr_drop=_metric_or_none(raw.get("max_mrr_drop"), field_name="max_mrr_drop"),
+            max_ndcg_drop=_metric_or_none(raw.get("max_ndcg_drop"), field_name="max_ndcg_drop"),
+            max_map_drop=_metric_or_none(raw.get("max_map_drop"), field_name="max_map_drop"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in {
+                "min_hit_rate": self.min_hit_rate,
+                "min_mrr": self.min_mrr,
+                "min_precision_at_k": self.min_precision_at_k,
+                "min_recall_at_k": self.min_recall_at_k,
+                "min_ndcg_at_k": self.min_ndcg_at_k,
+                "min_map_at_k": self.min_map_at_k,
+                "max_empty_result_rate": self.max_empty_result_rate,
+                "max_hit_rate_drop": self.max_hit_rate_drop,
+                "max_mrr_drop": self.max_mrr_drop,
+                "max_ndcg_drop": self.max_ndcg_drop,
+                "max_map_drop": self.max_map_drop,
+            }.items()
+            if value is not None
+        }
+
+
+@dataclass(frozen=True)
+class BenchmarkEvaluation:
+    cutoff: int
+    metrics: dict[str, float | int]
+    per_query: list[dict[str, Any]]
+    query_type_breakdown: dict[str, dict[str, float | int]] = field(default_factory=dict)
+    gate: dict[str, Any] | None = None
+    baseline: dict[str, Any] | None = None
+
+    @property
+    def ok(self) -> bool:
+        return bool(self.gate.get("ok", True)) if self.gate else True
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "schema": "ragflow_benchmark_report_v1",
+            "cutoff": self.cutoff,
+            "metrics": self.metrics,
+            "per_query": self.per_query,
+            "query_type_breakdown": self.query_type_breakdown,
+        }
+        if self.gate is not None:
+            payload["gate"] = self.gate
+        if self.baseline is not None:
+            payload["baseline"] = self.baseline
+        return payload
+
+
+@dataclass(frozen=True)
 class ValidationCaseResult:
     query: ValidationQuery
     passed: bool
@@ -112,10 +291,13 @@ class ValidationReport:
     dataset_id: str
     dataset_name: str
     cases: list[ValidationCaseResult]
+    benchmark: BenchmarkEvaluation | None = None
 
     @property
     def ok(self) -> bool:
-        return all(case.passed for case in self.cases)
+        return all(case.passed for case in self.cases) and (
+            self.benchmark.ok if self.benchmark else True
+        )
 
     def metrics(self) -> dict[str, Any]:
         total = len(self.cases)
@@ -143,6 +325,7 @@ class ValidationReport:
             "dataset": {"id": self.dataset_id, "name": self.dataset_name},
             "metrics": self.metrics(),
             "cases": [case.to_dict(max_chunks=max_chunks) for case in self.cases],
+            **({"benchmark": self.benchmark.to_dict()} if self.benchmark else {}),
         }
 
 
@@ -166,6 +349,120 @@ def load_validation_queries(path: str | Path) -> list[ValidationQuery]:
             raise ValidationError(f"query[{index}] must be an object")
         queries.append(ValidationQuery.from_dict(item, index=index))
     return queries
+
+
+def load_benchmark_qrels(path: str | Path) -> dict[str, list[BenchmarkQrel]]:
+    """Load qrels for benchmark validation from a compact JSON file."""
+
+    qrels_path = Path(path)
+    try:
+        data = json.loads(qrels_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValidationError(f"qrels not found: {qrels_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValidationError(f"qrels are not valid JSON: {qrels_path}") from exc
+
+    raw_qrels: list[Mapping[str, Any]] = []
+    if isinstance(data, Mapping) and isinstance(data.get("qrels"), list):
+        for item in data["qrels"]:
+            if not isinstance(item, Mapping):
+                raise ValidationError("qrels entries must be objects")
+            raw_qrels.append(item)
+    elif isinstance(data, Mapping):
+        index = 0
+        for query_id, value in data.items():
+            if query_id in {"version", "schema", "metadata"}:
+                continue
+            if isinstance(value, Mapping):
+                for target, relevance in value.items():
+                    raw_qrels.append(
+                        {
+                            "query_id": str(query_id),
+                            "target": str(target),
+                            "relevance": relevance,
+                            "field": "document",
+                        }
+                    )
+                    index += 1
+            elif isinstance(value, list):
+                for target in value:
+                    raw_qrels.append(
+                        {
+                            "query_id": str(query_id),
+                            "target": str(target),
+                            "relevance": 1,
+                            "field": "document",
+                        }
+                    )
+                    index += 1
+            else:
+                raise ValidationError(f"qrels[{query_id}] must be an object or list")
+    elif isinstance(data, list):
+        for item in data:
+            if not isinstance(item, Mapping):
+                raise ValidationError("qrels entries must be objects")
+            raw_qrels.append(item)
+    else:
+        raise ValidationError("qrels must be an object or list")
+
+    if not raw_qrels:
+        raise ValidationError("qrels must contain at least one judged target")
+
+    grouped: dict[str, list[BenchmarkQrel]] = {}
+    for index, raw in enumerate(raw_qrels):
+        qrel = BenchmarkQrel.from_dict(raw, index=index)
+        if qrel.relevance > 0:
+            grouped.setdefault(qrel.query_id, []).append(qrel)
+    if not grouped:
+        raise ValidationError("qrels must contain at least one positive relevance judgment")
+    return grouped
+
+
+def load_benchmark_gate(path: str | Path) -> BenchmarkGate:
+    """Load benchmark threshold config."""
+
+    gate_path = Path(path)
+    try:
+        data = json.loads(gate_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValidationError(f"gate config not found: {gate_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValidationError(f"gate config is not valid JSON: {gate_path}") from exc
+    if not isinstance(data, Mapping):
+        raise ValidationError("gate config must be a JSON object")
+    return BenchmarkGate.from_dict(data)
+
+
+def load_benchmark_baseline(path: str | Path) -> dict[str, float]:
+    """Load benchmark metrics from a previous validation report JSON."""
+
+    baseline_path = Path(path)
+    try:
+        data = json.loads(baseline_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValidationError(f"baseline report not found: {baseline_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValidationError(f"baseline report is not valid JSON: {baseline_path}") from exc
+    if not isinstance(data, Mapping):
+        raise ValidationError("baseline report must be a JSON object")
+
+    raw_metrics: Any = None
+    benchmark = data.get("benchmark")
+    if isinstance(benchmark, Mapping):
+        raw_metrics = benchmark.get("metrics")
+    if raw_metrics is None:
+        raw_metrics = data.get("metrics")
+    if not isinstance(raw_metrics, Mapping):
+        raise ValidationError("baseline report does not contain benchmark metrics")
+
+    metrics: dict[str, float] = {}
+    for key in METRIC_KEYS:
+        value = raw_metrics.get(key)
+        if isinstance(value, (int, float)):
+            metrics[key] = float(value)
+    if not metrics:
+        raise ValidationError("baseline report does not contain supported benchmark metrics")
+    return metrics
 
 
 def smoke_query(question: str | None, *, dataset_name: str) -> ValidationQuery:
@@ -224,6 +521,294 @@ def evaluate_query_result(query: ValidationQuery, chunks: list[NormalizedChunk])
         document_hits=document_hits,
         missing_documents=missing_documents,
         chunks=chunks,
+    )
+
+
+def _normalize_match_text(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _target_matches(candidate: str | None, target: str) -> bool:
+    candidate_norm = _normalize_match_text(candidate)
+    target_norm = _normalize_match_text(target)
+    return bool(candidate_norm and target_norm and (candidate_norm == target_norm or target_norm in candidate_norm))
+
+
+def _qrel_matches_chunk(qrel: BenchmarkQrel, chunk: NormalizedChunk) -> bool:
+    if qrel.field == "chunk_id":
+        return _target_matches(chunk.chunk_id, qrel.target)
+    if qrel.field == "document_id":
+        return _target_matches(chunk.document_id, qrel.target)
+    if qrel.field == "document_name":
+        return _target_matches(chunk.document_name, qrel.target)
+    if qrel.field == "content":
+        return _target_matches(chunk.content, qrel.target)
+    return (
+        _target_matches(chunk.document_name, qrel.target)
+        or _target_matches(chunk.document_id, qrel.target)
+        or _target_matches(chunk.chunk_id, qrel.target)
+    )
+
+
+def _best_matching_qrel(
+    chunk: NormalizedChunk,
+    qrels: list[BenchmarkQrel],
+) -> BenchmarkQrel | None:
+    matches = [qrel for qrel in qrels if qrel.relevance > 0 and _qrel_matches_chunk(qrel, chunk)]
+    if not matches:
+        return None
+    return max(matches, key=lambda qrel: qrel.relevance)
+
+
+def _dcg(relevances: list[float]) -> float:
+    return sum((2**relevance - 1) / math.log2(rank + 2) for rank, relevance in enumerate(relevances))
+
+
+def _average(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def _query_type(query: ValidationQuery) -> str:
+    value = query.metadata.get("type") or query.metadata.get("query_type") or "default"
+    return str(value) if str(value).strip() else "default"
+
+
+def _query_benchmark_metrics(
+    case: ValidationCaseResult,
+    qrels: list[BenchmarkQrel],
+    *,
+    cutoff: int,
+) -> dict[str, Any]:
+    if cutoff <= 0:
+        raise ValidationError("benchmark cutoff must be positive")
+    positive_qrels = [qrel for qrel in qrels if qrel.relevance > 0]
+    relevant_keys = {qrel.key for qrel in positive_qrels}
+    if not relevant_keys:
+        raise ValidationError(f"query {case.query.id!r} has no positive qrels")
+
+    ranked_chunks = case.chunks[:cutoff]
+    rel_by_rank: list[float] = []
+    matched_targets: list[str | None] = []
+    for chunk in ranked_chunks:
+        match = _best_matching_qrel(chunk, positive_qrels)
+        rel_by_rank.append(match.relevance if match else 0.0)
+        matched_targets.append(match.key if match else None)
+
+    relevant_retrieved = sum(1 for relevance in rel_by_rank if relevance > 0)
+    first_relevant_rank = next(
+        (index + 1 for index, relevance in enumerate(rel_by_rank) if relevance > 0),
+        None,
+    )
+
+    unique_hits: set[str] = set()
+    precision_sum = 0.0
+    unique_hits_so_far = 0
+    for index, target in enumerate(matched_targets, start=1):
+        if target is None or target in unique_hits:
+            continue
+        unique_hits.add(target)
+        unique_hits_so_far += 1
+        precision_sum += unique_hits_so_far / index
+
+    ideal_relevances = sorted((qrel.relevance for qrel in positive_qrels), reverse=True)[:cutoff]
+    dcg = _dcg(rel_by_rank)
+    idcg = _dcg(ideal_relevances)
+    recall = len(unique_hits) / len(relevant_keys)
+
+    return {
+        "id": case.query.id,
+        "query_type": _query_type(case.query),
+        "hit_rate": 1.0 if first_relevant_rank else 0.0,
+        "mrr": 1.0 / first_relevant_rank if first_relevant_rank else 0.0,
+        "precision_at_k": relevant_retrieved / cutoff,
+        "recall_at_k": recall,
+        "ndcg_at_k": dcg / idcg if idcg else 0.0,
+        "map_at_k": precision_sum / len(relevant_keys),
+        "empty_result_rate": 1.0 if not case.chunks else 0.0,
+        "supporting_document_coverage": recall,
+        "relevant_targets": len(relevant_keys),
+        "matched_targets": len(unique_hits),
+        "first_relevant_rank": first_relevant_rank,
+    }
+
+
+def _aggregate_query_metrics(per_query: list[dict[str, Any]]) -> dict[str, float | int]:
+    metrics: dict[str, float | int] = {"query_count": len(per_query)}
+    for key in METRIC_KEYS:
+        metrics[key] = _average([float(item[key]) for item in per_query])
+    return metrics
+
+
+def _breakdown_by_query_type(per_query: list[dict[str, Any]]) -> dict[str, dict[str, float | int]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in per_query:
+        grouped.setdefault(str(item["query_type"]), []).append(item)
+    return {
+        key: _aggregate_query_metrics(items)
+        for key, items in sorted(grouped.items(), key=lambda pair: pair[0])
+    }
+
+
+def _gate_check(
+    checks: list[dict[str, Any]],
+    *,
+    metric: str,
+    operator: str,
+    actual: float | None,
+    threshold: float | None,
+) -> None:
+    if threshold is None or actual is None:
+        return
+    if operator == ">=":
+        passed = actual >= threshold
+    elif operator == "<=":
+        passed = actual <= threshold
+    else:
+        raise ValidationError(f"unsupported gate operator: {operator}")
+    checks.append(
+        {
+            "metric": metric,
+            "operator": operator,
+            "actual": actual,
+            "threshold": threshold,
+            "passed": passed,
+        }
+    )
+
+
+def evaluate_benchmark_gate(
+    metrics: Mapping[str, float | int],
+    *,
+    gate: BenchmarkGate | None,
+    baseline_delta: Mapping[str, float] | None = None,
+) -> dict[str, Any] | None:
+    """Evaluate benchmark metrics against optional threshold config."""
+
+    if gate is None:
+        return None
+    checks: list[dict[str, Any]] = []
+    _gate_check(checks, metric="hit_rate", operator=">=", actual=float(metrics["hit_rate"]), threshold=gate.min_hit_rate)
+    _gate_check(checks, metric="mrr", operator=">=", actual=float(metrics["mrr"]), threshold=gate.min_mrr)
+    _gate_check(
+        checks,
+        metric="precision_at_k",
+        operator=">=",
+        actual=float(metrics["precision_at_k"]),
+        threshold=gate.min_precision_at_k,
+    )
+    _gate_check(
+        checks,
+        metric="recall_at_k",
+        operator=">=",
+        actual=float(metrics["recall_at_k"]),
+        threshold=gate.min_recall_at_k,
+    )
+    _gate_check(
+        checks,
+        metric="ndcg_at_k",
+        operator=">=",
+        actual=float(metrics["ndcg_at_k"]),
+        threshold=gate.min_ndcg_at_k,
+    )
+    _gate_check(
+        checks,
+        metric="map_at_k",
+        operator=">=",
+        actual=float(metrics["map_at_k"]),
+        threshold=gate.min_map_at_k,
+    )
+    _gate_check(
+        checks,
+        metric="empty_result_rate",
+        operator="<=",
+        actual=float(metrics["empty_result_rate"]),
+        threshold=gate.max_empty_result_rate,
+    )
+
+    deltas = baseline_delta or {}
+    _gate_check(
+        checks,
+        metric="hit_rate_delta",
+        operator=">=",
+        actual=deltas.get("hit_rate"),
+        threshold=-gate.max_hit_rate_drop if gate.max_hit_rate_drop is not None else None,
+    )
+    _gate_check(
+        checks,
+        metric="mrr_delta",
+        operator=">=",
+        actual=deltas.get("mrr"),
+        threshold=-gate.max_mrr_drop if gate.max_mrr_drop is not None else None,
+    )
+    _gate_check(
+        checks,
+        metric="ndcg_at_k_delta",
+        operator=">=",
+        actual=deltas.get("ndcg_at_k"),
+        threshold=-gate.max_ndcg_drop if gate.max_ndcg_drop is not None else None,
+    )
+    _gate_check(
+        checks,
+        metric="map_at_k_delta",
+        operator=">=",
+        actual=deltas.get("map_at_k"),
+        threshold=-gate.max_map_drop if gate.max_map_drop is not None else None,
+    )
+    return {
+        "ok": all(check["passed"] for check in checks),
+        "thresholds": gate.to_dict(),
+        "checks": checks,
+    }
+
+
+def attach_benchmark_evaluation(
+    report: ValidationReport,
+    *,
+    qrels: dict[str, list[BenchmarkQrel]],
+    cutoff: int,
+    gate: BenchmarkGate | None = None,
+    baseline_metrics: Mapping[str, float] | None = None,
+    baseline_path: str | None = None,
+) -> ValidationReport:
+    """Attach qrels-based ranking metrics to a validation report."""
+
+    missing = [case.query.id for case in report.cases if case.query.id not in qrels]
+    if missing:
+        raise ValidationError(f"benchmark qrels missing query id(s): {', '.join(missing)}")
+
+    per_query = [
+        _query_benchmark_metrics(case, qrels[case.query.id], cutoff=cutoff)
+        for case in report.cases
+    ]
+    metrics = _aggregate_query_metrics(per_query)
+    baseline: dict[str, Any] | None = None
+    baseline_delta: dict[str, float] | None = None
+    if baseline_metrics:
+        baseline_delta = {
+            key: float(metrics[key]) - float(value)
+            for key, value in baseline_metrics.items()
+            if key in metrics and isinstance(metrics[key], (int, float))
+        }
+        baseline = {
+            "path": baseline_path,
+            "metrics": dict(baseline_metrics),
+            "delta": baseline_delta,
+        }
+
+    benchmark = BenchmarkEvaluation(
+        cutoff=cutoff,
+        metrics=metrics,
+        per_query=per_query,
+        query_type_breakdown=_breakdown_by_query_type(per_query),
+        gate=evaluate_benchmark_gate(metrics, gate=gate, baseline_delta=baseline_delta),
+        baseline=baseline,
+    )
+    return ValidationReport(
+        level=report.level,
+        dataset_id=report.dataset_id,
+        dataset_name=report.dataset_name,
+        cases=report.cases,
+        benchmark=benchmark,
     )
 
 
@@ -287,5 +872,42 @@ def render_markdown_report(report: ValidationReport) -> str:
         lines.append(
             f"| `{case.query.id}` | {status} | {case.chunk_count} | {missing_terms} | {missing_docs} |"
         )
+    if report.benchmark:
+        benchmark = report.benchmark
+        lines.extend(
+            [
+                "",
+                "## Benchmark",
+                "",
+                f"- Cutoff: `{benchmark.cutoff}`",
+                f"- Hit rate: `{float(benchmark.metrics['hit_rate']):.2%}`",
+                f"- MRR: `{float(benchmark.metrics['mrr']):.4f}`",
+                f"- Precision@k: `{float(benchmark.metrics['precision_at_k']):.4f}`",
+                f"- Recall@k: `{float(benchmark.metrics['recall_at_k']):.4f}`",
+                f"- nDCG@k: `{float(benchmark.metrics['ndcg_at_k']):.4f}`",
+                f"- MAP@k: `{float(benchmark.metrics['map_at_k']):.4f}`",
+                f"- Empty result rate: `{float(benchmark.metrics['empty_result_rate']):.2%}`",
+                "",
+                "| id | type | hit | mrr | precision@k | recall@k | ndcg@k | map@k |",
+                "|---|---|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for item in benchmark.per_query:
+            lines.append(
+                "| `{id}` | {query_type} | {hit_rate:.0%} | {mrr:.4f} | "
+                "{precision_at_k:.4f} | {recall_at_k:.4f} | {ndcg_at_k:.4f} | {map_at_k:.4f} |".format(
+                    **item
+                )
+            )
+        if benchmark.gate:
+            lines.extend(["", "## Gate", ""])
+            lines.append(f"- Status: `{'passed' if benchmark.gate['ok'] else 'failed'}`")
+            lines.extend(["", "| metric | actual | operator | threshold | status |", "|---|---:|---|---:|---|"])
+            for check in benchmark.gate["checks"]:
+                lines.append(
+                    f"| `{check['metric']}` | `{check['actual']:.4f}` | "
+                    f"`{check['operator']}` | `{check['threshold']:.4f}` | "
+                    f"{'passed' if check['passed'] else 'failed'} |"
+                )
     lines.append("")
     return "\n".join(lines)

@@ -27,6 +27,10 @@ bootstrap_runtime()
 
 from ragflow_skill_runtime import (  # noqa: E402
     RAGFlowClient,
+    attach_benchmark_evaluation,
+    load_benchmark_baseline,
+    load_benchmark_gate,
+    load_benchmark_qrels,
     load_config,
     load_kb_manifest,
     load_validation_queries,
@@ -68,6 +72,8 @@ def _run(args: argparse.Namespace) -> int:
         else:
             if not args.queries:
                 raise ValidationError(f"{args.level} validation requires --queries")
+            if args.level == "benchmark" and not args.qrels:
+                raise ValidationError("benchmark validation requires --qrels")
             queries = load_validation_queries(args.queries)
 
         config = _load_config(args)
@@ -80,6 +86,18 @@ def _run(args: argparse.Namespace) -> int:
             queries=queries,
             top_k=args.top_k,
         )
+        if args.level == "benchmark":
+            qrels = load_benchmark_qrels(args.qrels)
+            gate = load_benchmark_gate(args.gate_config) if args.gate_config else None
+            baseline = load_benchmark_baseline(args.baseline_report) if args.baseline_report else None
+            report = attach_benchmark_evaluation(
+                report,
+                qrels=qrels,
+                cutoff=args.metric_cutoff or args.top_k,
+                gate=gate,
+                baseline_metrics=baseline,
+                baseline_path=args.baseline_report,
+            )
         payload = report.to_dict(max_chunks=args.max_report_chunks)
         rendered_json = json.dumps(payload, ensure_ascii=False, indent=2)
         _write_text(args.report_json, rendered_json + "\n")
@@ -97,6 +115,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--level", choices=["smoke", "regression", "benchmark"], default="smoke")
     parser.add_argument("--query", help="Smoke-test query")
     parser.add_argument("--queries", help="JSON query set for regression or benchmark validation")
+    parser.add_argument("--qrels", help="JSON relevance judgments for benchmark validation")
+    parser.add_argument("--gate-config", help="Optional benchmark gate threshold JSON")
+    parser.add_argument("--baseline-report", help="Optional previous benchmark report JSON")
+    parser.add_argument("--metric-cutoff", type=int, help="Metric cutoff for benchmark reports")
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--max-report-chunks", type=int, default=3)
     parser.add_argument("--report-json", help="Optional JSON report output path")

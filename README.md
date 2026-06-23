@@ -80,6 +80,23 @@ On `develop`, `ragflow-kb-build` includes read-only diagnostics: `scripts/probe.
 
 `scripts/cleanup.py` also defaults to a non-mutating plan. Dataset deletion requires `--execute` plus exact dataset ID and KB name confirmation.
 
+## Benchmark Validation
+
+On `develop`, `ragflow-kb-build/scripts/validate.py --level benchmark` supports small public qrels, ranking metrics, threshold gates, baseline deltas, and query-type breakdowns:
+
+```bash
+python skills/ragflow-kb-build/scripts/validate.py \
+  --kb-manifest ./run/kb_manifest.json \
+  --level benchmark \
+  --queries skills/ragflow-kb-build/templates/benchmark-queries.example.json \
+  --qrels skills/ragflow-kb-build/templates/qrels.example.json \
+  --gate-config skills/ragflow-kb-build/templates/benchmark-gate.example.json \
+  --report-json ./run/benchmark.json \
+  --report-md ./run/benchmark.md
+```
+
+The benchmark layer is deterministic and retrieval-only. It does not require an LLM key or private benchmark corpus.
+
 ## Validation
 
 ```bash

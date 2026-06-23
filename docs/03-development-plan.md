@@ -540,6 +540,27 @@ Exit criteria:
 - `append.py` does not mutate RAGFlow unless `--execute` is explicit.
 - `cleanup.py` does not delete a dataset unless `--execute` and exact confirmation flags are provided.
 
+## Phase 18: Benchmark Validation MVP
+
+Goal: promote `ragflow-kb-build validate` from smoke/regression checks to deterministic retrieval-quality gates.
+
+Tasks:
+
+- [x] Add qrels loading for explicit lists and compact query-to-document mappings.
+- [x] Add benchmark ranking metrics: hit rate, MRR, precision@k, recall@k, nDCG@k, MAP@k, empty-result rate, and supporting-document coverage.
+- [x] Add query-type breakdown via query `metadata.type`.
+- [x] Add `validate --level benchmark --queries ... --qrels ...`.
+- [x] Add optional `--gate-config` threshold checks.
+- [x] Add optional `--baseline-report` metric delta comparison.
+- [x] Add benchmark JSON and Markdown report sections.
+- [x] Add public example templates for benchmark queries, qrels, and gates.
+- [x] Add unit and CLI coverage with fake retrieval clients.
+
+Exit criteria:
+
+- A user can run a public benchmark gate without an LLM key and see ranking metrics, failed thresholds, query-type breakdowns, and baseline deltas.
+- Existing smoke and regression validation behavior remains backward-compatible.
+
 ## Definition of Done
 
 The public suite is ready for first external use when:

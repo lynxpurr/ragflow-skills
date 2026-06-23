@@ -336,15 +336,17 @@ Validation remains a product feature of `ragflow-kb-build`, but entry points are
 |---|---|---|
 | `smoke` | Yes after build | Fast check: KB exists, docs parsed, query returns chunks. |
 | `regression` | No | Runs a user-provided query set with lightweight pass/fail metrics. |
-| `benchmark` | No | Uses the same stable query-set surface initially; heavier benchmark runners remain opt-in backlog. |
+| `benchmark` | No | Runs qrels-based ranking metrics, optional gates, baseline deltas, and query-type breakdowns. |
 
 Example:
 
 ```bash
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level smoke
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level regression --queries ./queries.json
-python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level benchmark --queries ./queries.json --report-md ./report.md
+python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level benchmark --queries ./queries.json --qrels ./qrels.json --gate-config ./gate.json --report-md ./report.md
 ```
+
+Benchmark remains deterministic and retrieval-only. RAGAS-style or LLM-judged suites stay optional backlog until a public user needs them.
 
 ## Query Modes
 

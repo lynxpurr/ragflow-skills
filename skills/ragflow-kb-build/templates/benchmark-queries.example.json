@@ -1,0 +1,20 @@
+{
+  "queries": [
+    {
+      "id": "q-overview",
+      "question": "What is this sample knowledge base about?",
+      "min_chunks": 1,
+      "metadata": {
+        "type": "overview"
+      }
+    },
+    {
+      "id": "q-known-topic",
+      "question": "Which document contains the known sample topic?",
+      "min_chunks": 1,
+      "metadata": {
+        "type": "fact"
+      }
+    }
+  ]
+}
