@@ -28,6 +28,8 @@ EXCLUDE_NAMES = {
     ".ruff_cache",
 }
 
+OPTIONAL_RESOURCE_DIRS = {"agents", "references"}
+
 
 def ignore_filter(_dir: str, names: list[str]) -> set[str]:
     ignored = set()
@@ -59,12 +61,22 @@ def build_release(dist_dir: Path = DIST_DIR) -> list[Path]:
         src = SKILLS_DIR / skill_name
         dst = dist_dir / skill_name
         shutil.copytree(src, dst, ignore=ignore_filter)
+        remove_empty_optional_dirs(dst)
 
         vendor_parent = dst / "scripts" / "_vendor"
         vendor_parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(RUNTIME_SRC, vendor_parent / "ragflow_skill_runtime", ignore=ignore_filter)
         built.append(dst)
     return built
+
+
+def remove_empty_optional_dirs(skill_root: Path) -> None:
+    """Drop optional resource folders when they contain no shipped resources."""
+
+    for name in OPTIONAL_RESOURCE_DIRS:
+        path = skill_root / name
+        if path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
 
 
 def _run_query_release_smoke(dist_dir: Path, env: dict[str, str]) -> int:

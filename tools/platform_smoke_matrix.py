@@ -10,7 +10,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -176,6 +178,87 @@ def _write_input_doc(workspace: Path) -> Path:
         encoding="utf-8",
     )
     return input_dir
+
+
+def _run_remote_converter_env_check(
+    *,
+    profile: PlatformProfile,
+    convert_script: Path,
+    workspace: Path,
+    checks: list[dict[str, Any]],
+    env: dict[str, str],
+) -> Path | None:
+    if profile.config_mode != "env":
+        return None
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            body = json.dumps(
+                {"markdown": "# Remote Converter Smoke\n\nConverted through env config.\n"}
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *args: object) -> None:
+            return
+
+    remote_input = workspace / "remote-input"
+    remote_output = workspace / "remote-handoff"
+    remote_input.mkdir(parents=True, exist_ok=True)
+    (remote_input / "remote.pdf").write_bytes(b"%PDF remote converter smoke")
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        remote_env = {
+            **env,
+            "DOC_TO_MD_BACKEND": "remote",
+            "DOC_TO_MD_REMOTE_URL": f"http://127.0.0.1:{server.server_port}/convert",
+            "DOC_TO_MD_REMOTE_API_KEY": "smoke-key",
+            "DOC_TO_MD_TIMEOUT": "5",
+        }
+        result = _run_command(
+            [
+                sys.executable,
+                str(convert_script),
+                "--input",
+                str(remote_input),
+                "--output",
+                str(remote_output),
+                "--json",
+            ],
+            cwd=workspace,
+            env=remote_env,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    _record_command_check(
+        checks,
+        "doc-to-md remote env backend",
+        result,
+        required_stdout='"ok": true',
+    )
+    markdown_path = remote_output / "documents" / "remote.md"
+    ok = markdown_path.exists() and "Remote Converter Smoke" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+    checks.append(
+        {
+            "name": "remote converter markdown produced",
+            "ok": ok,
+            "returncode": 0 if ok else 1,
+            "error": "" if ok else f"missing or invalid {markdown_path}",
+        }
+    )
+    manifest_path = remote_output / "doc_manifest.json"
+    return manifest_path if manifest_path.exists() else None
 
 
 def _write_fake_kb_manifest(workspace: Path, artifacts_dir: Path) -> Path:
@@ -436,6 +519,13 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     )
     _record_command_check(checks, "doc-to-md passthrough", convert_result, required_stdout='"ok": true')
     doc_manifest = handoff_dir / "doc_manifest.json"
+    remote_doc_manifest = _run_remote_converter_env_check(
+        profile=profile,
+        convert_script=convert_script,
+        workspace=workspace,
+        checks=checks,
+        env=env,
+    )
     checks.append(
         {
             "name": "doc_manifest produced",
@@ -504,6 +594,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
 
     artifact_files = [
         doc_manifest,
+        remote_doc_manifest,
         kb_manifest,
         artifacts_dir / "query_direct.json",
         artifacts_dir / "query_host_assisted.json",
@@ -520,7 +611,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         "ok": ok,
         "workspace": str(workspace),
         "checks": checks,
-        "artifacts": [str(path) for path in artifact_files if path.exists()],
+        "artifacts": [str(path) for path in artifact_files if path and path.exists()],
     }
 
 

@@ -37,6 +37,9 @@ from ragflow_skill_runtime import (  # noqa: E402
 )
 
 
+BACKEND_CHOICES = {"auto", "builtin", "pandoc", "remote"}
+
+
 def _dump_json(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
@@ -53,8 +56,38 @@ def _remote_api_key(args: argparse.Namespace) -> str | None:
     return args.remote_api_key or os.environ.get("DOC_TO_MD_REMOTE_API_KEY")
 
 
+def _remote_url(args: argparse.Namespace) -> str | None:
+    return args.remote_url or os.environ.get("DOC_TO_MD_REMOTE_URL")
+
+
+def _backend(args: argparse.Namespace) -> str:
+    backend = args.backend or os.environ.get("DOC_TO_MD_BACKEND") or "auto"
+    if backend not in BACKEND_CHOICES:
+        allowed = ", ".join(sorted(BACKEND_CHOICES))
+        raise DocConvertError(f"DOC_TO_MD_BACKEND must be one of: {allowed}")
+    return backend
+
+
+def _remote_timeout(args: argparse.Namespace) -> float:
+    value = args.remote_timeout
+    if value is None:
+        value = os.environ.get("DOC_TO_MD_TIMEOUT")
+    if value in (None, ""):
+        return 120.0
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError) as exc:
+        raise DocConvertError("DOC_TO_MD_TIMEOUT must be a number of seconds") from exc
+    if timeout <= 0:
+        raise DocConvertError("DOC_TO_MD_TIMEOUT must be greater than zero")
+    return timeout
+
+
 def _run(args: argparse.Namespace) -> int:
     try:
+        backend = _backend(args)
+        remote_url = _remote_url(args)
+        remote_timeout = _remote_timeout(args)
         output_root = Path(args.output).expanduser().resolve()
         sources = discover_source_documents(args.input, recursive=not args.no_recursive)
         sources = [
@@ -78,9 +111,10 @@ def _run(args: argparse.Namespace) -> int:
                 markdown, warnings = convert_source_to_markdown(
                     source,
                     mode=args.mode,
-                    backend=args.backend,
-                    remote_url=args.remote_url,
+                    backend=backend,
+                    remote_url=remote_url,
                     remote_api_key=_remote_api_key(args),
+                    remote_timeout=remote_timeout,
                 )
             except (UnicodeDecodeError, OSError, DocConvertError) as exc:
                 if args.strict:
@@ -124,9 +158,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", required=True, help="Input file or directory")
     parser.add_argument("--output", required=True, help="Output handoff directory")
     parser.add_argument("--mode", choices=["auto", "passthrough", "convert"], default="auto")
-    parser.add_argument("--backend", choices=["auto", "builtin", "pandoc", "remote"], default="auto")
-    parser.add_argument("--remote-url", help="Remote conversion endpoint for unsupported files")
-    parser.add_argument("--remote-api-key", help="Remote conversion bearer token")
+    parser.add_argument("--backend", choices=sorted(BACKEND_CHOICES), help="Conversion backend; defaults to DOC_TO_MD_BACKEND or auto")
+    parser.add_argument("--remote-url", help="Remote conversion endpoint; defaults to DOC_TO_MD_REMOTE_URL")
+    parser.add_argument("--remote-api-key", help="Remote conversion bearer token; defaults to DOC_TO_MD_REMOTE_API_KEY")
+    parser.add_argument("--remote-timeout", type=float, help="Remote conversion timeout in seconds; defaults to DOC_TO_MD_TIMEOUT or 120")
     parser.add_argument("--manifest-name", default="doc_manifest.json")
     parser.add_argument("--no-recursive", action="store_true", help="Do not recurse into input directories")
     parser.add_argument("--strict", action="store_true", help="Fail on the first skipped file")

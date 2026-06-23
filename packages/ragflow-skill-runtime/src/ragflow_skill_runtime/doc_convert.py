@@ -303,6 +303,7 @@ def convert_source_to_markdown(
     backend: str = "auto",
     remote_url: str | None = None,
     remote_api_key: str | None = None,
+    remote_timeout: float = 120.0,
 ) -> tuple[str, list[str]]:
     """Convert one source document to Markdown and return warnings."""
 
@@ -329,7 +330,12 @@ def convert_source_to_markdown(
             warnings.append(str(exc))
 
     if backend in {"auto", "remote"} and remote_url:
-        return remote_convert(source, remote_url=remote_url, api_key=remote_api_key), warnings
+        return remote_convert(
+            source,
+            remote_url=remote_url,
+            api_key=remote_api_key,
+            timeout=remote_timeout,
+        ), warnings
     if backend == "remote" and not remote_url:
         raise DocConvertError("remote backend requires --remote-url")
 

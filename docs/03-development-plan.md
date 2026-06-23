@@ -29,6 +29,7 @@ Completed foundations:
 - Phase 8 cross-platform smoke matrix
 - Phase 9 release hardening
 - Phase 10 first release candidate validation and GitHub prerelease publication
+- Phase 12 documentation started for CLI agent integration
 
 Partially completed:
 
@@ -41,7 +42,7 @@ Partially completed:
 Near-term priority correction:
 
 - The next public-suite milestone is not private dedao bridging.
-- The next milestone is stable release promotion after RC1 external artifact validation.
+- The next milestone is CLI agent integration polish and RC2 after RC1 target-scope changes.
 - Platform work should stay focused on Hermes, OpenClaw, Claude Code, opencode, and CLI-style runners.
 
 ## Phase 0: Architecture Skeleton
@@ -360,9 +361,10 @@ Tasks:
 - [x] Run no-network consumer acceptance from local RC1 artifacts.
 - [x] Run one external install trial from GitHub Release artifacts on a clean agent workspace.
 - [x] Add opt-in `--live-build` gate for disposable KB build, smoke validation, and direct/host-assisted query.
+- [ ] Cut `v0.1.0-rc2` from updated `develop`; RC1 predates the final CLI-agent target refocus.
 - [ ] Run the stronger live RAGFlow endpoint check against a disposable test KB, or record an explicit stable-release waiver.
 - [ ] Fix or document any RC1 findings on `develop`.
-- [ ] Decide whether stable `v0.1.0` can reuse the RC1 source commit or needs a new release commit.
+- [x] Decide whether stable `v0.1.0` can reuse the RC1 source commit or needs a new release commit. It needs a new release commit and RC2.
 - [ ] Promote the chosen release commit to `main`.
 - [ ] Tag and publish stable `v0.1.0` with refreshed artifacts.
 
@@ -371,6 +373,29 @@ Exit criteria:
 - Stable artifacts are downloadable from GitHub Release without repository context.
 - At least one real external consumer path has been exercised.
 - `main` represents the latest stable public skill suite.
+
+## Phase 12: CLI Agent Integration Polish
+
+Goal: make the public suite feel native in Hermes, OpenClaw, Claude Code, opencode, and similar configurable CLI agent environments.
+
+Tasks:
+
+- [x] Add `docs/08-cli-agent-integration.md`.
+- [x] Remove remaining SaaS target wording from public `SKILL.md` files.
+- [x] Add environment-variable configuration for `ragflow-doc-to-md` remote conversion.
+- [x] Support `DOC_TO_MD_BACKEND`, `DOC_TO_MD_REMOTE_URL`, `DOC_TO_MD_REMOTE_API_KEY`, and `DOC_TO_MD_TIMEOUT`.
+- [x] Add fake remote converter tests for CLI-agent doc conversion.
+- [x] Add a platform smoke profile or check that exercises remote converter configuration without external network dependency.
+- [ ] Decide whether MinerU remains a generic remote converter contract in v1 or gets a named `mineru` adapter in v0.2.
+- [x] Clean empty release artifact directories such as unused `agents/` or `references/`.
+- [ ] Regenerate release archives and publish `v0.1.0-rc2`.
+
+Exit criteria:
+
+- All public examples use Hermes/OpenClaw/Claude Code/opencode wording.
+- Raw-document conversion can be configured through environment variables, matching RAGFlow config ergonomics.
+- The no-network smoke suite covers the remote conversion path.
+- RC2 artifacts represent the final v1 target scope.
 
 ## Definition of Done
 

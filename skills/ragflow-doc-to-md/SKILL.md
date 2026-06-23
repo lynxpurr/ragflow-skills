@@ -21,6 +21,15 @@ python scripts/convert.py --input ./raw --output ./handoff --backend builtin
 python scripts/convert.py --input ./raw --output ./handoff --backend remote --remote-url https://converter.example/api/convert
 ```
 
+Remote conversion can also be configured through the host agent environment:
+
+```bash
+DOC_TO_MD_BACKEND=remote
+DOC_TO_MD_REMOTE_URL=https://converter.example/api/convert
+DOC_TO_MD_REMOTE_API_KEY=...
+DOC_TO_MD_TIMEOUT=120
+```
+
 Notes:
 
 - The output directory contains `documents/*.md` plus `doc_manifest.json`.

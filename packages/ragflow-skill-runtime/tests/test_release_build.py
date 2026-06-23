@@ -19,6 +19,8 @@ class ReleaseBuildTests(unittest.TestCase):
                 skill_root = dist_dir / skill_name
                 self.assertTrue((skill_root / "SKILL.md").exists())
                 self.assertTrue((skill_root / "scripts" / "_vendor" / "ragflow_skill_runtime" / "__init__.py").exists())
+                self.assertFalse((skill_root / "agents").exists())
+                self.assertFalse((skill_root / "references").exists())
 
             self.assertTrue((dist_dir / "ragflow-doc-to-md" / "scripts" / "convert.py").exists())
             self.assertTrue((dist_dir / "ragflow-kb-build" / "scripts" / "inspect_kb.py").exists())

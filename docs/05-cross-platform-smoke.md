@@ -41,8 +41,8 @@ python3 tools/platform_smoke_matrix.py --list-profiles
 | `hermes-local-vendor` | Hermes local release artifact | `scripts/_vendor/ragflow_skill_runtime` | CLI flags | Release artifacts bootstrap from vendor. |
 | `claude-code-cli` | Claude Code | `scripts/_vendor/ragflow_skill_runtime` | CLI flags | CLI-only use works without editable installs. |
 | `opencode-cli` | opencode | `scripts/_vendor/ragflow_skill_runtime` | CLI flags | CLI-only use works for opencode-style programming agents. |
-| `strict-vendor-env` | Strict vendor/env runner | `scripts/_vendor/ragflow_skill_runtime` | `RAGFLOW_BASE_URL` and `RAGFLOW_API_KEY` | Compatibility stress profile with env-provided config. |
-| `artifact-runner-cli` | Artifact-oriented CLI runner | `scripts/_vendor/ragflow_skill_runtime` | environment | Handoff, query evidence, and validation reports are written as artifacts. |
+| `strict-vendor-env` | Strict vendor/env runner | `scripts/_vendor/ragflow_skill_runtime` | `RAGFLOW_*` and `DOC_TO_MD_*` environment variables | Compatibility stress profile with env-provided RAGFlow and remote converter config. |
+| `artifact-runner-cli` | Artifact-oriented CLI runner | `scripts/_vendor/ragflow_skill_runtime` | environment | Handoff, remote conversion, query evidence, and validation reports are written as artifacts. |
 | `openclaw-cli-v1` | OpenClaw | `scripts/_vendor/ragflow_skill_runtime` | CLI flags | V1 CLI path works while `serve` remains deferred. |
 
 Legacy aliases are accepted for older docs and scripts:
@@ -56,10 +56,11 @@ Each profile performs the same no-network smoke:
 
 1. Build release artifacts into `dist/`.
 2. Run `ragflow-doc-to-md/scripts/convert.py` in passthrough mode and verify `doc_manifest.json`.
-3. Run `ragflow-kb-build/scripts/build.py --dry-run` against the handoff manifest.
-4. Create a fake `kb_manifest.json` for no-network query and validation smoke.
-5. Import `ragflow-query/scripts/query.py`, inject a fake `RAGFlowClient`, and run direct plus host-assisted query paths.
-6. Import `ragflow-kb-build/scripts/validate.py`, inject a fake `RAGFlowClient`, and produce JSON plus Markdown validation reports.
+3. For environment-config profiles, run `ragflow-doc-to-md` against a fake local remote converter using `DOC_TO_MD_*` variables.
+4. Run `ragflow-kb-build/scripts/build.py --dry-run` against the handoff manifest.
+5. Create a fake `kb_manifest.json` for no-network query and validation smoke.
+6. Import `ragflow-query/scripts/query.py`, inject a fake `RAGFlowClient`, and run direct plus host-assisted query paths.
+7. Import `ragflow-kb-build/scripts/validate.py`, inject a fake `RAGFlowClient`, and produce JSON plus Markdown validation reports.
 
 The fake client is intentional. The matrix should verify packaging and CLI behavior rather than live RAGFlow service availability. Localhost, LAN, VPN, and HTTPS RAGFlow endpoints are all valid in real CLI-agent use when explicitly configured.
 
@@ -69,6 +70,7 @@ The fake client is intentional. The matrix should verify packaging and CLI behav
 |---|---|---|
 | `No module named ragflow_skill_runtime` | Vendor directory missing or source path not set | Run `python3 tools/build_release.py --check`; verify `scripts/_vendor/ragflow_skill_runtime`. |
 | `RAGFlow base URL is required` | Platform did not provide CLI flags or `RAGFLOW_BASE_URL` | Set `--base-url` or export `RAGFLOW_BASE_URL`. |
+| `remote backend requires --remote-url` | Remote conversion was selected without `--remote-url` or `DOC_TO_MD_REMOTE_URL` | Pass `--remote-url` or export `DOC_TO_MD_REMOTE_URL`. |
 | `manifest not found` | Handoff artifact path not preserved between steps | Pass absolute artifact paths or keep all steps in one workspace. |
 | `agentic mode is not implemented` | Script-owned synthesis requested in v1 | Use `--mode agentic --host-assisted`; host agent performs synthesis. |
 | Network or DNS errors in real use | RAGFlow endpoint is not reachable from the runner | Use a reachable localhost, LAN, VPN, or HTTPS endpoint and provide `RAGFLOW_API_KEY`. |

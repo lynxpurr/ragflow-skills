@@ -34,13 +34,15 @@ scripts/_vendor/ragflow_skill_runtime/
 
 This keeps development DRY while allowing Hermes, OpenClaw, Claude Code, opencode, and similar programming-agent CLI tools to run the skills without editable installs or local machine paths.
 
-## Current Release Candidate
+## Release Candidate
 
 `v0.1.0-rc1` is available as a GitHub prerelease:
 
 https://github.com/lynxpurr/ragflow-skills/releases/tag/v0.1.0-rc1
 
 Download the per-skill `.tar.gz` archive for the target platform and verify checksums against `release-manifest.json`.
+
+The `develop` branch now contains post-RC1 target-scope updates that refocus the public skills on Hermes, OpenClaw, Claude Code, opencode, and similar CLI agent tools. Cut `v0.1.0-rc2` from the current `develop` branch before promoting a stable release.
 
 ## Validation
 
@@ -62,3 +64,5 @@ python3 tools/live_integration_check.py
 This repository contains only the public, portable RAGFlow skill suite. Private dedao-specific workflows are intentionally excluded.
 
 Commercial SaaS agent sandboxes are not a v1 target. The intended public targets are programming-agent CLI environments the user controls or can configure, especially Hermes, OpenClaw, Claude Code, and opencode. A first-party SaaS platform should integrate document parsing, RAGFlow, and retrieval as native backend tools rather than by running these portable skill scripts inside a sandbox.
+
+See `docs/08-cli-agent-integration.md` for CLI agent configuration and invocation patterns.

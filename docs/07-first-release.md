@@ -106,6 +106,12 @@ Attached assets:
 
 The release manifest records `source_commit: 082ccec`.
 
+## Post-RC1 Scope Update
+
+After RC1, `develop` was refocused on Hermes, OpenClaw, Claude Code, opencode, and similar programming-agent CLI tools. Commercial SaaS agent sandboxes are no longer an active public-skill target.
+
+Do not promote RC1 directly to stable. Cut `v0.1.0-rc2` from the updated `develop` branch, regenerate all three skill archives, and rerun consumer acceptance before stable `v0.1.0`.
+
 ## RC1 GitHub Consumer Acceptance
 
 The GitHub Release artifact path passed on 2026-06-23:

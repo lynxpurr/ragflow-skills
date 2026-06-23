@@ -5,7 +5,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from ragflow_skill_runtime.kb_build import discover_markdown_documents
@@ -121,6 +123,70 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("# Alpha", markdown)
 
+    def test_convert_remote_backend_from_environment(self) -> None:
+        captured: dict[str, object] = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0"))
+                captured["auth"] = self.headers.get("Authorization")
+                captured["payload"] = json.loads(self.rfile.read(length).decode("utf-8"))
+                body = json.dumps({"markdown": "# Remote\n\nConverted by fake service.\n"}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                input_dir = root / "input"
+                output_dir = root / "handoff"
+                input_dir.mkdir()
+                (input_dir / "paper.pdf").write_bytes(b"%PDF fake")
+                env = _env()
+                env.update(
+                    {
+                        "DOC_TO_MD_BACKEND": "remote",
+                        "DOC_TO_MD_REMOTE_URL": f"http://127.0.0.1:{server.server_port}/convert",
+                        "DOC_TO_MD_REMOTE_API_KEY": "secret",
+                        "DOC_TO_MD_TIMEOUT": "5",
+                    }
+                )
+
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(CONVERT_SCRIPT),
+                        "--input",
+                        str(input_dir),
+                        "--output",
+                        str(output_dir),
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    env=env,
+                )
+
+                markdown = (output_dir / "documents" / "paper.md").read_text(encoding="utf-8")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("# Remote", markdown)
+        self.assertEqual(captured["auth"], "Bearer secret")
+        self.assertEqual(captured["payload"]["filename"], "paper.pdf")
+
     def test_convert_skips_unsupported_file_in_non_strict_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -160,6 +226,7 @@ class DocConvertCliTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--remote-url", result.stdout)
+        self.assertIn("--remote-timeout", result.stdout)
         self.assertIn("--strict", result.stdout)
 
 

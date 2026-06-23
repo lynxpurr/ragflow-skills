@@ -26,6 +26,7 @@ The hygiene check rebuilds `dist/` and verifies:
 - only the three public skills are present in the release artifact;
 - each skill has `SKILL.md` with only `name` and `description` frontmatter;
 - each skill vendors `scripts/_vendor/ragflow_skill_runtime`;
+- unused optional resource directories such as empty `agents/` and `references/` are omitted from release artifacts;
 - no local config, cache, bytecode, secret-like, dedao, OPC, personal path, or localhost-only RAGFlow defaults are present in release artifacts;
 - public source directories under `skills/`, `packages/ragflow-skill-runtime/src/`, and `tools/` do not contain private or non-portable references.
 

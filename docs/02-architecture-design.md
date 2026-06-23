@@ -334,6 +334,8 @@ The primary targets are programming-agent CLI tools. Strict sandbox-style behavi
 
 This means the strict profile is an engineering guardrail, not a product promise. It checks that release artifacts remain self-contained, do not depend on `/home/zenz`, and can read endpoint credentials from environment variables. It does not imply support for arbitrary commercial SaaS agent platforms.
 
+Operational setup for each CLI agent target is documented in `docs/08-cli-agent-integration.md`.
+
 ## Release Build
 
 `tools/build_release.py` will:

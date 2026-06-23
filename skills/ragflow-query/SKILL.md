@@ -16,7 +16,7 @@ python scripts/query.py --base-url https://ragflow.example.test --api-key "$RAGF
 
 Notes:
 
-- CLI mode is the v1 interface for Claude Code and SaaS sandboxes.
+- CLI mode is the v1 interface for Hermes, OpenClaw, Claude Code, opencode, and similar programming-agent tools.
 - `--mode auto` currently falls back to direct retrieval.
 - `--mode agentic --host-assisted` still retrieves from RAGFlow; the host agent performs final synthesis from returned evidence.
 - See `templates/host-assisted-response.example.json` for the expected evidence payload shape.
