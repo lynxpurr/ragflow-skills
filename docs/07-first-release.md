@@ -1,6 +1,6 @@
 # First Release Candidate
 
-Status: rc3 candidate in progress
+Status: rc3 published
 Date: 2026-06-23
 
 ## RC Goal
@@ -71,10 +71,16 @@ To exercise the GitHub Release download path through `gh`, use:
 python3 tools/consumer_acceptance.py --github-release v0.1.0-rc1 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-github --overwrite
 ```
 
-For the current RC2 release, use:
+For RC2, use:
 
 ```bash
 python3 tools/consumer_acceptance.py --github-release v0.1.0-rc2 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-rc2-github --overwrite --download-timeout 90
+```
+
+For the current RC3 release, use:
+
+```bash
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc3 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-rc3-github --overwrite --download-timeout 90
 ```
 
 For private repositories, run `gh auth login` first or set `GH_TOKEN`/`GITHUB_TOKEN`. The harness preserves GitHub CLI auth environment only for the release download step, disables interactive `gh` prompts, and accepts `--download-timeout` for slow networks. GitHub assets download to a separate temporary directory by default so `--overwrite` can safely clean the consumer work directory. The unpacked skill checks still run with a minimal consumer environment.
@@ -199,6 +205,47 @@ python3 tools/consumer_acceptance.py --github-release v0.1.0-rc3 --repo lynxpurr
 ```
 
 The Tongyi overdue-payment parse failure is an infrastructure issue. Do not treat it as a code failure, but do require either a successful disposable live E2E after the provider is usable or an explicit stable-release waiver.
+
+## RC3 GitHub Release
+
+`v0.1.0-rc3` is published as a GitHub prerelease:
+
+https://github.com/lynxpurr/ragflow-skills/releases/tag/v0.1.0-rc3
+
+RC3 source commit: `ce19e32`.
+
+Attached assets:
+
+- `ragflow-doc-to-md.tar.gz` - 24965 bytes - sha256 `679526f9285c617c63e29a5a5cee80a191d94f9e339fa3d095253b224b3313cb`
+- `ragflow-kb-build.tar.gz` - 25022 bytes - sha256 `e4a091a45f82c600f1e333c8d0c025545ba8bcb7023ff9aada9b0b68d425fdc9`
+- `ragflow-query.tar.gz` - 23941 bytes - sha256 `f34dd2aa431af2f6b79d76132e737d4ee002d091e222d517963f4dd132dee707`
+- `release-manifest.json` - 1129 bytes - asset sha256 `e5f676a87f5a587c8c5ba62eb1aa96b84a9fab8bcef3e621f913d321fd0f7c9e`
+
+## RC3 Validation Result
+
+RC3 local artifact consumer acceptance passed on 2026-06-23:
+
+```bash
+python3 tools/consumer_acceptance.py --artifacts-dir release-artifacts --work-dir /tmp/ragflow-consumer-acceptance-rc3-final-local --overwrite
+```
+
+RC3 GitHub Release consumer acceptance also passed on 2026-06-23:
+
+```bash
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc3 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-rc3-github --overwrite --download-timeout 90
+```
+
+Observed result:
+
+- `ok: true`
+- source type: `github-release`
+- artifacts downloaded from `v0.1.0-rc3`
+- vendored runtime was present
+- `ragflow-doc-to-md` produced `doc_manifest.json`
+- default profile API payload filtering check passed and removed `__language__` from `parser_config`
+- `ragflow-kb-build --dry-run` still preserved `__language__` in manifest-facing profile output
+- `ragflow-query` exposed direct and host-assisted query interfaces
+- missing RAGFlow config failed before network work with the expected base URL error
 
 ## RC1 GitHub Consumer Acceptance
 

@@ -446,8 +446,8 @@ Tasks:
 - [x] Commit and push the fix on `develop`.
 - [x] Export refreshed per-skill archives and `release-manifest.json` from the fix commit.
 - [x] Run clean consumer acceptance from local refreshed artifacts.
-- [ ] Publish `v0.1.0-rc3` as a GitHub prerelease.
-- [ ] Run consumer acceptance against the GitHub `v0.1.0-rc3` assets.
+- [x] Publish `v0.1.0-rc3` as a GitHub prerelease.
+- [x] Run consumer acceptance against the GitHub `v0.1.0-rc3` assets.
 - [ ] Re-run Hermes live E2E after the embedding provider is usable, or record an explicit stable-release waiver for infrastructure billing.
 
 Exit criteria:
