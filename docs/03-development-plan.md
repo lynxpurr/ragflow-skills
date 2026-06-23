@@ -469,6 +469,8 @@ Tasks:
 - [x] Record the prompt as a public release example in `docs/06-release-hardening.md`.
 - [x] Forward-test the prompt with Hermes and record the MinerU protocol distinction found during onboarding.
 - [x] Clarify that the built-in `mineru` backend expects MinerU Agent API, while local synchronous `/parse` services need a compatible gateway or the generic `remote` backend.
+- [x] Forward-test the prompt with OpenClaw and tighten guidance so incompatible MinerU services do not get persisted as `doc_to_md.backend: mineru`.
+- [x] Clarify that host agents must not patch release-artifact `scripts/_vendor`; source runtime changes must be made in `packages/ragflow-skill-runtime` and re-vendored.
 
 Exit criteria:
 
@@ -477,6 +479,7 @@ Exit criteria:
 - The prompt instructs host agents to keep secrets out of skill folders, repositories, release artifacts, and reports.
 - The prompt guides host agents through no-network smoke, optional MinerU conversion, and disposable RAGFlow live E2E.
 - MinerU onboarding does not imply that every MinerU-named HTTP service is compatible with `--backend mineru`.
+- Config templates default to `doc_to_md.backend: auto`; `mineru` is opt-in after protocol compatibility is confirmed.
 
 ## Definition of Done
 

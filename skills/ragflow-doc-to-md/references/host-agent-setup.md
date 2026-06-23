@@ -12,6 +12,8 @@ For a copy-paste prompt that end users can give to their own host agent, use `us
 - Put real config in a stable host-agent path and point scripts to it with `RAGFLOW_CONFIG` or `--config`.
 - Treat RAGFlow and MinerU as external services. Do not start or supervise them from these skills.
 - Distinguish MinerU service protocols before testing conversion. The `mineru` backend supports the MinerU Agent API shape: create a parse task with `/parse/file`, upload to the returned URL, poll `/parse/{task_id}`, then download Markdown. Local synchronous multipart APIs such as `/parse` require a compatible gateway or the generic `remote` backend.
+- Do not set `doc_to_md.backend: mineru` for a non-Agent-API MinerU service. Keep `auto`, `builtin`, or `pandoc`, or use `remote` only when a compatible adapter endpoint is configured.
+- Do not patch `scripts/_vendor` inside release artifacts. New backend support must be implemented in the source runtime package and then re-vendored by the release builder.
 - Keep all E2E artifacts in a temporary or user-approved workspace, and report paths at the end.
 
 ## Config Locations
@@ -37,7 +39,8 @@ ragflow:
   verify_ssl: true
 
 doc_to_md:
-  backend: mineru
+  # Use `mineru` only with MinerU Agent API or a compatible gateway.
+  backend: auto
 
 mineru:
   # `backend: mineru` expects the MinerU Agent API protocol.
@@ -146,7 +149,7 @@ python ragflow-query/scripts/query.py \
   --json
 ```
 
-For PDF/Office E2E, use `ragflow-doc-to-md --backend mineru` with a small test file before the KB build step only when the service implements the MinerU Agent API or a compatible gateway. If the available service is a local synchronous multipart API, report the protocol mismatch and use a configured `--backend remote` adapter instead.
+For PDF/Office E2E, use `ragflow-doc-to-md --backend mineru` with a small test file before the KB build step only when the service implements the MinerU Agent API or a compatible gateway. If the available service is a local synchronous multipart API, report the protocol mismatch. Do not change persistent config to `doc_to_md.backend: mineru` for that service; use a configured `--backend remote` adapter or skip the MinerU test.
 
 ## GitHub Release E2E
 

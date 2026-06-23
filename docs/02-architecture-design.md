@@ -219,9 +219,11 @@ ragflow:
   verify_ssl: true
 
 doc_to_md:
-  backend: mineru
+  # Keep auto unless MinerU Agent API or a compatible gateway is configured.
+  backend: auto
 
 mineru:
+  # `doc_to_md.backend: mineru` expects the MinerU Agent API protocol.
   base_url: https://mineru.net/api/v1/agent
   api_key: ${MINERU_API_KEY}
   timeout: 300

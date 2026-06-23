@@ -27,7 +27,7 @@ Use `templates/ragflow-config.example.yaml` as the shared config template. Put t
 
 When a host agent should prepare config, run smoke checks, or perform end-to-end validation for the user, read `references/host-agent-setup.md` first. When an end user needs a copy-paste prompt to give their own host agent, use `references/user-onboarding-prompt.md`.
 
-MinerU service conversion can be configured through the host agent environment:
+MinerU service conversion can be configured through the host agent environment only when the service implements the MinerU Agent API or a compatible gateway:
 
 ```bash
 DOC_TO_MD_BACKEND=mineru
@@ -51,5 +51,5 @@ Notes:
 - The output directory contains `documents/*.md` plus `doc_manifest.json`.
 - `doc_manifest.json` uses `source_root: "."`, so downstream `ragflow-kb-build` can consume it after the handoff directory moves.
 - Use `--strict` when skipped files should fail the run.
-- The MinerU backend uses the Agent parsing API shape: create parse task, upload to signed URL, poll task, then download Markdown.
+- The MinerU backend uses the Agent parsing API shape: create parse task at `/parse/file`, upload to signed URL, poll `/parse/{task_id}`, then download Markdown. Local synchronous multipart `/parse` services require a compatible gateway or `--backend remote`.
 - The remote backend expects JSON with `filename` and base64 `content_base64`, and returns `markdown` or `content`.

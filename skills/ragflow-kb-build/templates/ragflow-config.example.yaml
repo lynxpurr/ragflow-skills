@@ -13,7 +13,8 @@ ragflow:
   verify_ssl: true
 
 doc_to_md:
-  backend: mineru
+  # Keep auto unless MinerU Agent API or a compatible gateway is configured.
+  backend: auto
 
 mineru:
   # `doc_to_md.backend: mineru` expects the MinerU Agent API protocol.
