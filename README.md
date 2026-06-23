@@ -34,15 +34,35 @@ scripts/_vendor/ragflow_skill_runtime/
 
 This keeps development DRY while allowing Hermes, OpenClaw, Claude Code, opencode, and similar programming-agent CLI tools to run the skills without editable installs or local machine paths.
 
-## Release Candidate
+## Stable Release
 
-`v0.1.0-rc1` is available as a GitHub prerelease:
+`v0.1.0` is available as the first stable GitHub release:
 
-https://github.com/lynxpurr/ragflow-skills/releases/tag/v0.1.0-rc1
+https://github.com/lynxpurr/ragflow-skills/releases/tag/v0.1.0
 
 Download the per-skill `.tar.gz` archive for the target platform and verify checksums against `release-manifest.json`.
 
-The `develop` branch now contains post-RC1 target-scope updates that refocus the public skills on Hermes, OpenClaw, Claude Code, opencode, and similar CLI agent tools. Cut `v0.1.0-rc2` from the current `develop` branch before promoting a stable release.
+The `develop` branch may contain post-release changes. Use release tags for stable distribution artifacts.
+
+## Host Agent Onboarding
+
+Each public skill includes the same copy-paste onboarding prompt at:
+
+```text
+references/user-onboarding-prompt.md
+```
+
+Use it when giving the skills to another user. They can paste the prompt into Hermes, OpenClaw, Claude Code, opencode, or a similar controllable CLI agent. The host agent will then read the skill docs, ask only for missing RAGFlow or MinerU service settings, create a safe local config, run no-network smoke checks, and optionally run a disposable live RAGFlow E2E after user approval.
+
+The prompt is duplicated intentionally so each skill archive is self-contained. The canonical source copies are:
+
+```text
+skills/ragflow-doc-to-md/references/user-onboarding-prompt.md
+skills/ragflow-kb-build/references/user-onboarding-prompt.md
+skills/ragflow-query/references/user-onboarding-prompt.md
+```
+
+Keep secrets out of the skill folders, repository, release artifacts, and reports. Use host-agent secret stores, environment variables, or private config files such as `~/.hermes/ragflow/config.local.yaml` or `~/.config/ragflow-skills/config.local.yaml`.
 
 ## Validation
 
