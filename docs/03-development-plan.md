@@ -355,6 +355,7 @@ Tasks:
 - [x] Add `tools/consumer_acceptance.py` for clean-consumer artifact validation.
 - [x] Run no-network consumer acceptance from local RC1 artifacts.
 - [x] Run one external install trial from GitHub Release artifacts on a clean agent workspace.
+- [x] Add opt-in `--live-build` gate for disposable KB build, smoke validation, and direct/host-assisted query.
 - [ ] Run the stronger live RAGFlow endpoint check against a disposable test KB, or record an explicit stable-release waiver.
 - [ ] Fix or document any RC1 findings on `develop`.
 - [ ] Decide whether stable `v0.1.0` can reuse the RC1 source commit or needs a new release commit.

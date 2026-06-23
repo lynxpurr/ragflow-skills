@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -373,17 +374,151 @@ def _run_live_check(
     return checks, produced
 
 
+def _run_live_build_check(
+    *,
+    extract_dir: Path,
+    work_root: Path,
+    python_executable: str,
+    env_map: Mapping[str, str],
+    question: str,
+    top_k: int,
+    kb_name: str | None,
+    parse_timeout: float,
+    poll_interval: float,
+) -> tuple[list[dict[str, Any]], list[Path]]:
+    checks: list[dict[str, Any]] = []
+    produced: list[Path] = []
+    required = ("RAGFLOW_BASE_URL", "RAGFLOW_API_KEY")
+    missing = [name for name in required if not env_map.get(name)]
+    if missing:
+        checks.append(
+            {
+                "name": "live build skipped",
+                "ok": True,
+                "skipped": True,
+                "missing": missing,
+                "error": "",
+            }
+        )
+        return checks, produced
+
+    live_dir = work_root / "live"
+    live_dir.mkdir(parents=True, exist_ok=True)
+    live_env = _minimal_env(
+        {
+            "RAGFLOW_BASE_URL": env_map["RAGFLOW_BASE_URL"],
+            "RAGFLOW_API_KEY": env_map["RAGFLOW_API_KEY"],
+        }
+    )
+    live_kb_name = kb_name or f"kb:consumer-acceptance-{uuid.uuid4().hex[:8]}"
+    doc_manifest = work_root / "handoff" / "doc_manifest.json"
+    kb_manifest = live_dir / "kb_manifest.json"
+    build_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "build.py")
+    validate_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "validate.py")
+    query_script = _skill_path(extract_dir, "ragflow-query", "scripts", "query.py")
+    profile = _skill_path(extract_dir, "ragflow-kb-build", "templates", "default-en-768.json")
+
+    build_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "--doc-manifest",
+            str(doc_manifest),
+            "--kb-name",
+            live_kb_name,
+            "--profile",
+            str(profile),
+            "--output",
+            str(kb_manifest),
+            "--parse-timeout",
+            str(parse_timeout),
+            "--poll-interval",
+            str(poll_interval),
+            "--json",
+        ],
+        cwd=work_root,
+        env=live_env,
+        timeout=parse_timeout + 120.0,
+    )
+    build_ok = _record_command_check(checks, "live build disposable kb", build_result, required_output='"ok": true')
+    _record_file_check(checks, "live kb_manifest produced", kb_manifest)
+    if not build_ok or not kb_manifest.exists():
+        return checks, produced
+    produced.append(kb_manifest)
+
+    report_json = live_dir / "validation_report.json"
+    report_md = live_dir / "validation_report.md"
+    validate_result = _run_command(
+        [
+            python_executable,
+            str(validate_script),
+            "--kb-manifest",
+            str(kb_manifest),
+            "--level",
+            "smoke",
+            "--query",
+            question,
+            "--top-k",
+            str(top_k),
+            "--report-json",
+            str(report_json),
+            "--report-md",
+            str(report_md),
+        ],
+        cwd=work_root,
+        env=live_env,
+        timeout=120.0,
+    )
+    validate_ok = _record_command_check(checks, "live validate smoke", validate_result, required_output='"ok": true')
+    if validate_ok:
+        produced.extend(path for path in (report_json, report_md) if path.exists())
+
+    for mode, extra, output_name in (
+        ("direct", ["--json"], "live-query-direct.json"),
+        ("agentic", ["--host-assisted", "--json"], "live-query-host-assisted.json"),
+    ):
+        output_path = live_dir / output_name
+        query_result = _run_command(
+            [
+                python_executable,
+                str(query_script),
+                "ask",
+                question,
+                "--kb-manifest",
+                str(kb_manifest),
+                "--mode",
+                mode,
+                "--top-k",
+                str(top_k),
+                *extra,
+            ],
+            cwd=work_root,
+            env=live_env,
+            timeout=120.0,
+        )
+        query_ok = _record_command_check(checks, f"live query {mode}", query_result, required_output='"ok": true')
+        if query_ok:
+            output_path.write_text(query_result["stdout"], encoding="utf-8")
+            produced.append(output_path)
+
+    return checks, produced
+
+
 def run_consumer_acceptance(
     *,
     artifacts_dir: Path,
     work_root: Path,
     overwrite: bool = False,
     live: bool = False,
+    live_build: bool = False,
     env: Mapping[str, str] | None = None,
     source: Mapping[str, Any] | None = None,
     python_executable: str = sys.executable,
     live_question: str = "Summarize this knowledge base.",
     live_top_k: int = 3,
+    live_kb_name: str | None = None,
+    live_parse_timeout: float = 300.0,
+    live_poll_interval: float = 2.0,
 ) -> dict[str, Any]:
     if overwrite and _is_relative_to(artifacts_dir.resolve(), work_root.resolve()):
         raise RuntimeError("artifacts directory must not be inside an overwritten work directory")
@@ -411,6 +546,21 @@ def run_consumer_acceptance(
         )
         checks.extend(live_checks)
         produced.extend(live_produced)
+
+    if live_build:
+        live_build_checks, live_build_produced = _run_live_build_check(
+            extract_dir=extract_dir,
+            work_root=work_root,
+            python_executable=python_executable,
+            env_map=os.environ if env is None else env,
+            question=live_question,
+            top_k=live_top_k,
+            kb_name=live_kb_name,
+            parse_timeout=live_parse_timeout,
+            poll_interval=live_poll_interval,
+        )
+        checks.extend(live_build_checks)
+        produced.extend(live_build_produced)
 
     payload = {
         "ok": all(check["ok"] for check in checks),
@@ -467,9 +617,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--download-timeout", type=float, default=60.0, help="Seconds to wait for gh release download")
     parser.add_argument("--work-dir", help="Acceptance workspace; defaults to a temporary directory")
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing work directory")
-    parser.add_argument("--live", action="store_true", help="Also run a live query when RAGFlow env vars are present")
+    parser.add_argument("--live", action="store_true", help="Also query an existing live dataset when RAGFlow env vars are present")
+    parser.add_argument("--live-build", action="store_true", help="Also build and validate a disposable live KB when RAGFlow env vars are present")
     parser.add_argument("--live-question", default="Summarize this knowledge base.")
     parser.add_argument("--live-top-k", type=int, default=3)
+    parser.add_argument("--live-kb-name", help="Override the disposable live KB name")
+    parser.add_argument("--live-parse-timeout", type=float, default=300.0)
+    parser.add_argument("--live-poll-interval", type=float, default=2.0)
     args = parser.parse_args(argv)
 
     try:
@@ -504,9 +658,13 @@ def main(argv: list[str] | None = None) -> int:
                 work_root=work_root,
                 overwrite=args.overwrite,
                 live=args.live,
+                live_build=args.live_build,
                 source=source,
                 live_question=args.live_question,
                 live_top_k=args.live_top_k,
+                live_kb_name=args.live_kb_name,
+                live_parse_timeout=args.live_parse_timeout,
+                live_poll_interval=args.live_poll_interval,
             )
             payload["artifacts_retained"] = True
         else:
@@ -515,9 +673,13 @@ def main(argv: list[str] | None = None) -> int:
                     artifacts_dir=artifacts_dir,
                     work_root=Path(tmp),
                     live=args.live,
+                    live_build=args.live_build,
                     source=source,
                     live_question=args.live_question,
                     live_top_k=args.live_top_k,
+                    live_kb_name=args.live_kb_name,
+                    live_parse_timeout=args.live_parse_timeout,
+                    live_poll_interval=args.live_poll_interval,
                 )
                 payload["artifacts_retained"] = False
 

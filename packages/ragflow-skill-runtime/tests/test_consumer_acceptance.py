@@ -62,6 +62,8 @@ class ConsumerAcceptanceTests(unittest.TestCase):
             payload = run_consumer_acceptance(
                 artifacts_dir=root / "release-artifacts",
                 work_root=root / "consumer",
+                live_build=True,
+                env={},
             )
             report_json = Path(payload["reports"]["json"])
             report_md = Path(payload["reports"]["markdown"])
@@ -75,6 +77,7 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("kb-build dry-run", check_names)
         self.assertIn("query host-assisted help", check_names)
         self.assertIn("query missing config guard", check_names)
+        self.assertIn("live build skipped", check_names)
         self.assertTrue(payload["reports"]["json"].endswith("consumer-acceptance-report.json"))
 
 

@@ -138,12 +138,12 @@ python3 tools/live_integration_check.py
 For a stronger live check, build a temporary KB from one Markdown file, then run validation:
 
 ```bash
-python3 skills/ragflow-doc-to-md/scripts/convert.py --input ./sample-docs --output ./run/handoff --mode passthrough
-python3 skills/ragflow-kb-build/scripts/build.py --doc-manifest ./run/handoff/doc_manifest.json --kb-name kb:rc-smoke --profile skills/ragflow-kb-build/templates/default-en-768.json --output ./run/kb_manifest.json
-python3 skills/ragflow-kb-build/scripts/validate.py --kb-manifest ./run/kb_manifest.json --level smoke
+RAGFLOW_BASE_URL=https://ragflow.example.test \
+RAGFLOW_API_KEY=... \
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc1 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-live --overwrite --download-timeout 30 --live-build
 ```
 
-Do not run the stronger live check against production datasets.
+`--live-build` creates a disposable KB from the sample Markdown produced during consumer acceptance, waits for parsing, runs `ragflow-kb-build validate --level smoke`, then runs `ragflow-query` in direct and host-assisted modes. It does not delete the created KB automatically; run it only in a test workspace and clean up the KB after validation.
 
 ## Promotion
 
