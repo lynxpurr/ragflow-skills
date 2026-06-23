@@ -386,7 +386,7 @@ Tasks:
 - [x] Support `DOC_TO_MD_BACKEND`, `DOC_TO_MD_REMOTE_URL`, `DOC_TO_MD_REMOTE_API_KEY`, and `DOC_TO_MD_TIMEOUT`.
 - [x] Add fake remote converter tests for CLI-agent doc conversion.
 - [x] Add a platform smoke profile or check that exercises remote converter configuration without external network dependency.
-- [ ] Decide whether MinerU remains a generic remote converter contract in v1 or gets a named `mineru` adapter in v0.2.
+- [x] Decide whether MinerU remains a generic remote converter contract in v1 or gets a named `mineru` adapter in v0.2. Decision: MinerU is a named service backend using `MINERU_*` config.
 - [x] Clean empty release artifact directories such as unused `agents/` or `references/`.
 - [ ] Regenerate release archives and publish `v0.1.0-rc2`.
 

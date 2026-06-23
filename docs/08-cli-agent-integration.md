@@ -55,6 +55,16 @@ export RAGFLOW_API_KEY=...
 Document conversion remote backend:
 
 ```bash
+export DOC_TO_MD_BACKEND=mineru
+export MINERU_BASE_URL=https://mineru.net/api/v1/agent
+export MINERU_API_KEY=...
+export MINERU_TIMEOUT=300
+export MINERU_POLL_INTERVAL=3
+```
+
+Generic converter backend:
+
+```bash
 export DOC_TO_MD_BACKEND=remote
 export DOC_TO_MD_REMOTE_URL=https://converter.example.test/convert
 export DOC_TO_MD_REMOTE_API_KEY=...
@@ -88,7 +98,7 @@ RAGFlow may be reachable through:
 
 Public scripts do not start or manage RAGFlow. They only call an explicitly configured endpoint.
 
-Pandoc is treated as a local binary on `PATH`. MinerU or other layout-aware parsers should be exposed either as a local tool outside this suite or as a remote converter that accepts the public remote conversion contract.
+Pandoc is treated as a local binary on `PATH`. MinerU is treated as a remote service by default and is configured through `MINERU_*` environment variables. Other layout-aware parsers can use the generic remote converter contract.
 
 ## Document To Markdown
 
@@ -103,6 +113,18 @@ python ragflow-doc-to-md/scripts/convert.py \
 ```
 
 Remote converter:
+
+```bash
+python ragflow-doc-to-md/scripts/convert.py \
+  --input ./raw \
+  --output ./handoff \
+  --backend mineru \
+  --json
+```
+
+The MinerU backend uses the Agent parsing API shape: create a parse task, upload the local file to the returned signed URL, poll the task, and download the returned Markdown URL.
+
+Generic remote converter:
 
 ```bash
 python ragflow-doc-to-md/scripts/convert.py \

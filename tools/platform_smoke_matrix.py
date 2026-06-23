@@ -180,7 +180,7 @@ def _write_input_doc(workspace: Path) -> Path:
     return input_dir
 
 
-def _run_remote_converter_env_check(
+def _run_mineru_env_check(
     *,
     profile: PlatformProfile,
     convert_script: Path,
@@ -194,45 +194,86 @@ def _run_remote_converter_env_check(
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
             body = json.dumps(
-                {"markdown": "# Remote Converter Smoke\n\nConverted through env config.\n"}
+                {
+                    "code": 0,
+                    "data": {
+                        "task_id": "smoke-task",
+                        "file_url": f"http://127.0.0.1:{self.server.server_port}/upload/smoke-task",
+                    },
+                }
             ).encode("utf-8")
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
+        def do_PUT(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            self.send_response(204)
+            self.end_headers()
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path == "/parse/smoke-task":
+                body = json.dumps(
+                    {
+                        "code": 0,
+                        "data": {
+                            "state": "done",
+                            "markdown_url": f"http://127.0.0.1:{self.server.server_port}/markdown/smoke-task.md",
+                        },
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.path == "/markdown/smoke-task.md":
+                body = b"# MinerU Service Smoke\n\nConverted through MINERU_* env config.\n"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/markdown")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_response(404)
+            self.end_headers()
+
         def log_message(self, _format: str, *args: object) -> None:
             return
 
-    remote_input = workspace / "remote-input"
-    remote_output = workspace / "remote-handoff"
-    remote_input.mkdir(parents=True, exist_ok=True)
-    (remote_input / "remote.pdf").write_bytes(b"%PDF remote converter smoke")
+    mineru_input = workspace / "mineru-input"
+    mineru_output = workspace / "mineru-handoff"
+    mineru_input.mkdir(parents=True, exist_ok=True)
+    (mineru_input / "mineru.pdf").write_bytes(b"%PDF mineru service smoke")
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        remote_env = {
+        mineru_env = {
             **env,
-            "DOC_TO_MD_BACKEND": "remote",
-            "DOC_TO_MD_REMOTE_URL": f"http://127.0.0.1:{server.server_port}/convert",
-            "DOC_TO_MD_REMOTE_API_KEY": "smoke-key",
-            "DOC_TO_MD_TIMEOUT": "5",
+            "DOC_TO_MD_BACKEND": "mineru",
+            "MINERU_BASE_URL": f"http://127.0.0.1:{server.server_port}",
+            "MINERU_API_KEY": "smoke-key",
+            "MINERU_TIMEOUT": "5",
+            "MINERU_POLL_INTERVAL": "0.1",
         }
         result = _run_command(
             [
                 sys.executable,
                 str(convert_script),
                 "--input",
-                str(remote_input),
+                str(mineru_input),
                 "--output",
-                str(remote_output),
+                str(mineru_output),
                 "--json",
             ],
             cwd=workspace,
-            env=remote_env,
+            env=mineru_env,
         )
     finally:
         server.shutdown()
@@ -241,23 +282,23 @@ def _run_remote_converter_env_check(
 
     _record_command_check(
         checks,
-        "doc-to-md remote env backend",
+        "doc-to-md mineru env backend",
         result,
         required_stdout='"ok": true',
     )
-    markdown_path = remote_output / "documents" / "remote.md"
-    ok = markdown_path.exists() and "Remote Converter Smoke" in markdown_path.read_text(
+    markdown_path = mineru_output / "documents" / "mineru.md"
+    ok = markdown_path.exists() and "MinerU Service Smoke" in markdown_path.read_text(
         encoding="utf-8"
     )
     checks.append(
         {
-            "name": "remote converter markdown produced",
+            "name": "mineru service markdown produced",
             "ok": ok,
             "returncode": 0 if ok else 1,
             "error": "" if ok else f"missing or invalid {markdown_path}",
         }
     )
-    manifest_path = remote_output / "doc_manifest.json"
+    manifest_path = mineru_output / "doc_manifest.json"
     return manifest_path if manifest_path.exists() else None
 
 
@@ -519,7 +560,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     )
     _record_command_check(checks, "doc-to-md passthrough", convert_result, required_stdout='"ok": true')
     doc_manifest = handoff_dir / "doc_manifest.json"
-    remote_doc_manifest = _run_remote_converter_env_check(
+    mineru_doc_manifest = _run_mineru_env_check(
         profile=profile,
         convert_script=convert_script,
         workspace=workspace,
@@ -594,7 +635,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
 
     artifact_files = [
         doc_manifest,
-        remote_doc_manifest,
+        mineru_doc_manifest,
         kb_manifest,
         artifacts_dir / "query_direct.json",
         artifacts_dir / "query_host_assisted.json",

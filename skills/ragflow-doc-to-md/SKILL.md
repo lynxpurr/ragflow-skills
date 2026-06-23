@@ -11,17 +11,28 @@ Inputs:
 
 - Existing Markdown via `--mode passthrough`.
 - Plain text and simple HTML via the built-in converter.
-- Office/PDF/EPUB-like formats through `--backend pandoc` when pandoc is installed, or `--backend remote --remote-url ...`.
+- Office/PDF/EPUB-like formats through `--backend mineru`, `--backend pandoc` when pandoc is installed, or `--backend remote --remote-url ...`.
 
 Command examples:
 
 ```bash
 python scripts/convert.py --input ./docs --output ./handoff --mode passthrough
 python scripts/convert.py --input ./raw --output ./handoff --backend builtin
+python scripts/convert.py --input ./raw --output ./handoff --backend mineru
 python scripts/convert.py --input ./raw --output ./handoff --backend remote --remote-url https://converter.example/api/convert
 ```
 
-Remote conversion can also be configured through the host agent environment:
+MinerU service conversion can be configured through the host agent environment:
+
+```bash
+DOC_TO_MD_BACKEND=mineru
+MINERU_BASE_URL=https://mineru.net/api/v1/agent
+MINERU_API_KEY=...
+MINERU_TIMEOUT=300
+MINERU_POLL_INTERVAL=3
+```
+
+Generic remote conversion can also be configured through the host agent environment:
 
 ```bash
 DOC_TO_MD_BACKEND=remote
@@ -35,4 +46,5 @@ Notes:
 - The output directory contains `documents/*.md` plus `doc_manifest.json`.
 - `doc_manifest.json` uses `source_root: "."`, so downstream `ragflow-kb-build` can consume it after the handoff directory moves.
 - Use `--strict` when skipped files should fail the run.
+- The MinerU backend uses the Agent parsing API shape: create parse task, upload to signed URL, poll task, then download Markdown.
 - The remote backend expects JSON with `filename` and base64 `content_base64`, and returns `markdown` or `content`.

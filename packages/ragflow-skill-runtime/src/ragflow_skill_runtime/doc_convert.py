@@ -9,6 +9,7 @@ import json
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -34,6 +35,9 @@ PANDOC_AUTO_EXTENSIONS = {
     ".org",
     ".tex",
 }
+DEFAULT_MINERU_BASE_URL = "https://mineru.net/api/v1/agent"
+MINERU_DONE_STATE = "done"
+MINERU_FAILED_STATE = "failed"
 
 
 @dataclass(frozen=True)
@@ -278,6 +282,142 @@ def remote_convert(
     return markdown
 
 
+def _json_request(
+    url: str,
+    *,
+    method: str = "GET",
+    payload: Mapping[str, Any] | None = None,
+    api_key: str | None = None,
+    timeout: float = 120.0,
+) -> Mapping[str, Any]:
+    headers = {"Accept": "application/json"}
+    body = None
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise DocConvertError(f"MinerU request failed with HTTP {exc.code}: {detail}") from exc
+    except error.URLError as exc:
+        raise DocConvertError(f"MinerU request failed: {exc.reason}") from exc
+    except json.JSONDecodeError as exc:
+        raise DocConvertError("MinerU response is not valid JSON") from exc
+    if not isinstance(data, Mapping):
+        raise DocConvertError("MinerU response must be a JSON object")
+    code = data.get("code")
+    if code not in (None, 0):
+        message = data.get("msg") or data.get("message") or "unknown MinerU error"
+        raise DocConvertError(f"MinerU API returned code {code}: {message}")
+    return data
+
+
+def _download_text(url: str, *, timeout: float) -> str:
+    req = request.Request(url, headers={"Accept": "text/markdown,text/plain,*/*"})
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode("utf-8")
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise DocConvertError(f"MinerU markdown download failed with HTTP {exc.code}: {detail}") from exc
+    except error.URLError as exc:
+        raise DocConvertError(f"MinerU markdown download failed: {exc.reason}") from exc
+
+
+def _upload_file(upload_url: str, source: SourceDocument, *, timeout: float) -> None:
+    req = request.Request(upload_url, data=source.path.read_bytes(), method="PUT")
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            if resp.status not in (200, 201, 204):
+                raise DocConvertError(f"MinerU upload failed with HTTP {resp.status}")
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise DocConvertError(f"MinerU upload failed with HTTP {exc.code}: {detail}") from exc
+    except error.URLError as exc:
+        raise DocConvertError(f"MinerU upload failed: {exc.reason}") from exc
+
+
+def mineru_agent_convert(
+    source: SourceDocument,
+    *,
+    base_url: str = DEFAULT_MINERU_BASE_URL,
+    api_key: str | None = None,
+    timeout: float = 300.0,
+    poll_interval: float = 3.0,
+    language: str = "ch",
+    page_range: str | None = None,
+    enable_table: bool = True,
+    is_ocr: bool = False,
+    enable_formula: bool = True,
+) -> str:
+    """Convert one file with the MinerU Agent parsing API."""
+
+    if timeout <= 0:
+        raise DocConvertError("MinerU timeout must be greater than zero")
+    if poll_interval <= 0:
+        raise DocConvertError("MinerU poll interval must be greater than zero")
+    root = base_url.rstrip("/")
+    payload: dict[str, Any] = {
+        "file_name": source.path.name,
+        "language": language,
+        "enable_table": enable_table,
+        "is_ocr": is_ocr,
+        "enable_formula": enable_formula,
+    }
+    if page_range:
+        payload["page_range"] = page_range
+
+    deadline = time.monotonic() + timeout
+    create = _json_request(
+        f"{root}/parse/file",
+        method="POST",
+        payload=payload,
+        api_key=api_key,
+        timeout=min(timeout, 120.0),
+    )
+    data = create.get("data")
+    if not isinstance(data, Mapping):
+        raise DocConvertError("MinerU create-task response missing data")
+    task_id = data.get("task_id")
+    upload_url = data.get("file_url")
+    if not isinstance(task_id, str) or not task_id:
+        raise DocConvertError("MinerU create-task response missing task_id")
+    if not isinstance(upload_url, str) or not upload_url:
+        raise DocConvertError("MinerU create-task response missing file_url")
+
+    _upload_file(upload_url, source, timeout=min(max(deadline - time.monotonic(), 1.0), 120.0))
+
+    last_state = "unknown"
+    while time.monotonic() < deadline:
+        remaining = max(deadline - time.monotonic(), 1.0)
+        status = _json_request(
+            f"{root}/parse/{task_id}",
+            api_key=api_key,
+            timeout=min(remaining, 120.0),
+        )
+        status_data = status.get("data")
+        if not isinstance(status_data, Mapping):
+            raise DocConvertError("MinerU status response missing data")
+        state = status_data.get("state")
+        last_state = str(state)
+        if state == MINERU_DONE_STATE:
+            markdown_url = status_data.get("markdown_url")
+            if not isinstance(markdown_url, str) or not markdown_url:
+                raise DocConvertError("MinerU completed without markdown_url")
+            return _download_text(markdown_url, timeout=min(remaining, 120.0))
+        if state == MINERU_FAILED_STATE:
+            message = status_data.get("err_msg") or status_data.get("message") or "unknown error"
+            raise DocConvertError(f"MinerU parsing failed: {message}")
+        time.sleep(min(poll_interval, max(deadline - time.monotonic(), 0.0)))
+
+    raise DocConvertError(f"MinerU parsing timed out after {timeout:g}s; last state: {last_state}")
+
+
 def pandoc_convert(source: SourceDocument) -> str:
     """Convert with an installed pandoc binary."""
 
@@ -304,6 +444,15 @@ def convert_source_to_markdown(
     remote_url: str | None = None,
     remote_api_key: str | None = None,
     remote_timeout: float = 120.0,
+    mineru_base_url: str | None = None,
+    mineru_api_key: str | None = None,
+    mineru_timeout: float = 300.0,
+    mineru_poll_interval: float = 3.0,
+    mineru_language: str = "ch",
+    mineru_page_range: str | None = None,
+    mineru_enable_table: bool = True,
+    mineru_is_ocr: bool = False,
+    mineru_enable_formula: bool = True,
 ) -> tuple[str, list[str]]:
     """Convert one source document to Markdown and return warnings."""
 
@@ -338,12 +487,25 @@ def convert_source_to_markdown(
         ), warnings
     if backend == "remote" and not remote_url:
         raise DocConvertError("remote backend requires --remote-url")
+    if backend == "mineru":
+        return mineru_agent_convert(
+            source,
+            base_url=mineru_base_url or DEFAULT_MINERU_BASE_URL,
+            api_key=mineru_api_key,
+            timeout=mineru_timeout,
+            poll_interval=mineru_poll_interval,
+            language=mineru_language,
+            page_range=mineru_page_range,
+            enable_table=mineru_enable_table,
+            is_ocr=mineru_is_ocr,
+            enable_formula=mineru_enable_formula,
+        ), warnings
 
     supported = ", ".join(sorted(BUILTIN_EXTENSIONS))
     attempted = f"; attempted fallback: {'; '.join(warnings)}" if warnings else ""
     raise DocConvertError(
         f"no converter available for {source.source_path} ({suffix or 'no extension'}); "
-        f"builtin supports {supported}, or configure pandoc/remote backend{attempted}"
+        f"builtin supports {supported}, or configure pandoc/remote/mineru backend{attempted}"
     )
 
 
