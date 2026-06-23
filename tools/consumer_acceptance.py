@@ -42,6 +42,23 @@ def _minimal_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def _github_env() -> dict[str, str]:
+    env = _minimal_env()
+    for key in (
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "GH_CONFIG_DIR",
+        "GH_HOST",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GITHUB_HOST",
+    ):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    return env
+
+
 def _run_command(
     command: list[str],
     *,
@@ -419,7 +436,7 @@ def download_github_release(*, tag: str, repo: str, output_dir: Path) -> dict[st
     ]
     for asset in REQUIRED_ASSETS:
         command.extend(["--pattern", asset])
-    result = _run_command(command, cwd=ROOT, env=_minimal_env(), timeout=180.0)
+    result = _run_command(command, cwd=ROOT, env=_github_env(), timeout=180.0)
     return {
         "ok": result["ok"],
         "command": command,

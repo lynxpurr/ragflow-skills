@@ -71,6 +71,8 @@ To exercise the GitHub Release download path through `gh`, use:
 python3 tools/consumer_acceptance.py --github-release v0.1.0-rc1 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-github --overwrite
 ```
 
+For private repositories, run `gh auth login` first or set `GH_TOKEN`/`GITHUB_TOKEN`. The harness preserves GitHub CLI auth environment only for the release download step; the unpacked skill checks still run with a minimal consumer environment.
+
 ## RC1 Forward-Test Result
 
 The fresh-agent artifact dry run passed on 2026-06-23.

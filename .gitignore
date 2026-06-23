@@ -21,6 +21,7 @@ release-artifacts/
 
 # Local config and secrets
 .ragflow/
+.local/
 auth.json
 vault.json
 *.local.json
