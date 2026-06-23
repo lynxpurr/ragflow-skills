@@ -72,6 +72,10 @@ On `develop`, `ragflow-doc-to-md` also produces `quality_report.json` and writes
 
 Long Markdown files can be inspected with `python scripts/convert.py segment-plan ...` and materialized into ordinary `segments/*.md` files with `python scripts/convert.py split ...`; those segment directories can be ingested with the existing `ragflow-kb-build --input` path.
 
+## Diagnostics
+
+On `develop`, `ragflow-kb-build` includes read-only diagnostics: `scripts/probe.py` checks safe RAGFlow API compatibility, and `scripts/diagnose.py` explains KB manifest, parse-state, short-ID, duplicate-name, suffix-fragment, and zero-chunk symptoms without private database access.
+
 ## Validation
 
 ```bash

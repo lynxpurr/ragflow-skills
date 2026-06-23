@@ -21,6 +21,8 @@ python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:
 python scripts/build.py --config /path/to/ragflow-config.local.yaml --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-zh-512.json
 python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-en-768.json --dry-run --json
 python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-en-768.json --allow-blocked
+python scripts/probe.py --config /path/to/ragflow-config.local.yaml --report-md ./run/ragflow_probe.md
+python scripts/diagnose.py --kb-manifest ./run/kb_manifest.json --live --report-md ./run/diagnostic.md
 python scripts/inspect_kb.py --kb-manifest ./run/kb_manifest.json
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level smoke
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level regression --queries ./templates/validation-queries.example.json --report-md ./run/validation.md
@@ -36,5 +38,7 @@ Notes:
 - When a `doc_manifest.json` contains `quality_gate.status: BLOCKED`, `build.py` refuses to upload by default. Use `--allow-blocked` only after the user explicitly accepts the risk.
 - Use `--dry-run` to validate local inputs without touching RAGFlow; dry-run prints JSON and does not write `kb_manifest.json`.
 - Use `--no-wait` only when the host platform should continue while RAGFlow parses asynchronously.
+- Use `probe.py` to check safe RAGFlow API compatibility before live build operations.
+- Use `diagnose.py` to explain manifest, parse-state, duplicate-name, short-ID, and zero-chunk symptoms without private database access.
 - `validate.py` supports `smoke`, `regression`, and `benchmark`; regression/benchmark require a user-provided query set.
 - Query sets are small JSON files with `question`, optional `min_chunks`, `expected_terms`, and `expected_documents`.

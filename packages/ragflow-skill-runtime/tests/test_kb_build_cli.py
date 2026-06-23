@@ -15,7 +15,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_SRC = ROOT / "packages" / "ragflow-skill-runtime" / "src"
 BUILD_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "build.py"
+DIAGNOSE_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "diagnose.py"
 INSPECT_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "inspect_kb.py"
+PROBE_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "probe.py"
 VALIDATE_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "validate.py"
 PROFILE_PATH = ROOT / "skills" / "ragflow-kb-build" / "templates" / "default-en-768.json"
 
@@ -237,6 +239,56 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["dataset"]["id"], "ds-1")
         self.assertEqual(payload["document_count"], 1)
+
+    def test_diagnose_manifest_via_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "kb_manifest.json"
+            report_md = root / "diagnostic.md"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "short", "name": "kb:test(1)"},
+                        "documents": [{"document_id": "doc-1", "status": "running", "chunk_count": 0}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(DIAGNOSE_SCRIPT),
+                    "--kb-manifest",
+                    str(manifest),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            report_text = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertIn("dataset_id_short", {issue["issue_type"] for issue in payload["issues"]})
+        self.assertIn("RAGFlow Diagnostic Report", report_text)
+
+    def test_probe_help_renders(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(PROBE_SCRIPT), "--help"],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_env(),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Probe RAGFlow API compatibility", result.stdout)
 
     def test_validate_regression_requires_queries_without_network(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

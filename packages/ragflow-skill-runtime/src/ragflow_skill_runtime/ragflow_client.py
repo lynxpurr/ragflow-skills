@@ -80,6 +80,16 @@ class RAGFlowClient:
             payload.update({k: v for k, v in profile.items() if v is not None})
         return self.post("/datasets", payload)
 
+    def get_dataset(self, dataset_id: str) -> Any:
+        """Fetch one dataset by ID."""
+
+        return self.get(f"/datasets/{dataset_id}")
+
+    def delete_dataset(self, dataset_id: str) -> Any:
+        """Delete one dataset by ID."""
+
+        return self.delete(f"/datasets/{dataset_id}")
+
     def trigger_parse(self, dataset_id: str, document_ids: list[str]) -> Any:
         """Trigger parsing for uploaded documents."""
 
@@ -89,6 +99,17 @@ class RAGFlowClient:
         """List documents in a dataset."""
 
         return self.get(f"/datasets/{dataset_id}/documents?page={page}&page_size={page_size}")
+
+    def iter_document_pages(self, dataset_id: str, *, page_size: int = 200, max_pages: int = 100):
+        """Yield paginated document-list responses for a dataset."""
+
+        for page in range(1, max_pages + 1):
+            yield self.list_documents(dataset_id, page=page, page_size=page_size)
+
+    def delete_document(self, dataset_id: str, document_id: str) -> Any:
+        """Delete one document by ID from a dataset when the server supports it."""
+
+        return self.delete(f"/datasets/{dataset_id}/documents", {"document_ids": [document_id]})
 
     def upload_document(self, dataset_id: str, file_path: str | Path) -> Any:
         """Upload one file with multipart/form-data using only the standard library."""

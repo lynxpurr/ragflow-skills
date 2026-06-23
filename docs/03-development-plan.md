@@ -31,6 +31,7 @@ Completed foundations:
 - Phase 10 first release candidate validation and GitHub prerelease publication
 - Phase 12 CLI agent integration polish, including host-agent config templates and MinerU service backend
 - High-value roadmap Phase 13 document quality and segmentation MVP
+- High-value roadmap Phase 14 read-only RAGFlow diagnostics MVP
 
 Partially completed:
 
@@ -509,6 +510,30 @@ Exit criteria:
 - Empty or broken Markdown handoffs are prevented from reaching live RAGFlow upload unless the user explicitly accepts the risk.
 - Long Markdown files can be split into `segments/*.md`, then ingested by passing the segment directory to `ragflow-kb-build --input`.
 - Existing v0.1 command surfaces and manifests remain backward-compatible.
+
+## Phase 17: Read-Only RAGFlow Diagnostics MVP
+
+Goal: expose safe public diagnostics for common RAGFlow ingestion and KB-state problems without requiring private database or Elasticsearch access.
+
+Tasks:
+
+- [x] Add `diagnostics.py` with `ragflow_kb_diagnostic_report_v1`.
+- [x] Add short dataset/document ID checks.
+- [x] Add duplicate-name and suffix-fragment detection.
+- [x] Add stuck parse, failed parse, and zero-chunk diagnostics.
+- [x] Add safe `RAGFlowClient` helpers for dataset detail, dataset deletion, document deletion, and paginated document listing.
+- [x] Add `ragflow-kb-build/scripts/diagnose.py`.
+- [x] Add `ragflow-kb-build/scripts/probe.py`.
+- [x] Add JSON and Markdown diagnostic report output.
+- [x] Add unit, CLI, and clean-consumer help coverage.
+- [ ] Add live disposable probe tests where credentials are present.
+- [ ] Add append, parse-only-new-documents, and cleanup preview/confirm commands.
+
+Exit criteria:
+
+- Host agents can explain short-ID, duplicate-name, parse-state, and zero-chunk symptoms from public artifacts.
+- `probe.py` and `diagnose.py` are read-only by default and do not mutate RAGFlow.
+- High-risk maintenance commands remain deferred until the diagnostic surface is stable.
 
 ## Definition of Done
 

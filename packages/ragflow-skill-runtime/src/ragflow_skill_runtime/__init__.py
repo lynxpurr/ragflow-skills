@@ -48,6 +48,13 @@ from .doc_segment import (
     materialize_segments,
     plan_markdown_segmentation,
 )
+from .diagnostics import (
+    DIAGNOSTIC_REPORT_SCHEMA,
+    DiagnosticIssue,
+    diagnose_kb_manifest,
+    probe_ragflow_client,
+    render_diagnostic_markdown,
+)
 from .manifests import (
     DocManifest,
     DocumentEntry,
@@ -95,6 +102,8 @@ __all__ = [
     "DEFAULT_HARD_MAX_CHARS",
     "DEFAULT_MIN_SEGMENT_CHARS",
     "DEFAULT_SOFT_MAX_CHARS",
+    "DIAGNOSTIC_REPORT_SCHEMA",
+    "DiagnosticIssue",
     "DocManifest",
     "DocToMdConfig",
     "ConvertedDocument",
@@ -131,6 +140,7 @@ __all__ = [
     "ValidationQuery",
     "ValidationReport",
     "convert_source_to_markdown",
+    "diagnose_kb_manifest",
     "discover_markdown_documents",
     "discover_source_documents",
     "extract_markdown_title",
@@ -144,6 +154,7 @@ __all__ = [
     "make_quality_report_payload",
     "materialize_segments",
     "plan_markdown_segmentation",
+    "probe_ragflow_client",
     "quality_documents_from_manifest",
     "load_api_key",
     "load_config",
@@ -155,6 +166,7 @@ __all__ = [
     "normalize_retrieval_response",
     "normalize_document_state",
     "resolve_dataset_ids",
+    "render_diagnostic_markdown",
     "render_quality_markdown",
     "render_markdown_report",
     "run_retrieval_validation",

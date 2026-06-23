@@ -392,6 +392,24 @@ def _run_no_network_checks(
     )
     _record_command_check(checks, "kb-build dry-run", build_result, required_output='"dry_run": true')
 
+    diagnose_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "diagnose.py")
+    diagnose_help = _run_command([python_executable, str(diagnose_script), "--help"], cwd=work_root, env=env)
+    _record_command_check(
+        checks,
+        "kb-build diagnose help",
+        diagnose_help,
+        required_output="Diagnose a RAGFlow KB manifest",
+    )
+
+    probe_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "probe.py")
+    probe_help = _run_command([python_executable, str(probe_script), "--help"], cwd=work_root, env=env)
+    _record_command_check(
+        checks,
+        "kb-build probe help",
+        probe_help,
+        required_output="Probe RAGFlow API compatibility",
+    )
+
     query_script = _skill_path(extract_dir, "ragflow-query", "scripts", "query.py")
     query_help = _run_command([python_executable, str(query_script), "--help"], cwd=work_root, env=env)
     _record_command_check(checks, "query top-level help", query_help, required_output="Portable RAGFlow query CLI")

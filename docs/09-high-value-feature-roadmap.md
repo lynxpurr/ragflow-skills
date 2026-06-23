@@ -478,12 +478,12 @@ Goal: turn old RAGFlow operational pitfalls into safe public diagnostics.
 
 Tasks:
 
-- [ ] Add client helpers for dataset detail, dataset deletion, document deletion, and paginated document lists.
-- [ ] Add `ragflow-kb-build probe`.
-- [ ] Add `ragflow-kb-build diagnose`.
-- [ ] Add duplicate-name and suffix-fragment detection.
-- [ ] Add short-ID validation for manifests and CLI inputs.
-- [ ] Add stuck parse and zero chunk diagnostics.
+- [x] Add client helpers for dataset detail, dataset deletion, document deletion, and paginated document lists.
+- [x] Add `ragflow-kb-build probe`.
+- [x] Add `ragflow-kb-build diagnose`.
+- [x] Add duplicate-name and suffix-fragment detection.
+- [x] Add short-ID validation for manifests and CLI inputs.
+- [x] Add stuck parse and zero chunk diagnostics.
 - [ ] Add `append` with upload-before/after diff.
 - [ ] Add parse-only-new-documents default behavior.
 - [ ] Add cleanup preview and explicit-confirm cleanup mode.
@@ -493,6 +493,10 @@ Exit criteria:
 
 - Host agents can explain common RAGFlow ingestion failures without private DB access.
 - Users can append documents safely without full KB rebuilds.
+
+Implementation note:
+
+- The current MVP is read-only: `probe.py` and `diagnose.py` report symptoms and recommendations, while append/delete/cleanup execution remains deferred.
 
 ### Phase 15: Benchmark Validation
 

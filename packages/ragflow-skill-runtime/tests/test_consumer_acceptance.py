@@ -80,6 +80,8 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("doc-to-md split", check_names)
         self.assertIn("profile api payload filters internal metadata", check_names)
         self.assertIn("kb-build dry-run", check_names)
+        self.assertIn("kb-build diagnose help", check_names)
+        self.assertIn("kb-build probe help", check_names)
         self.assertIn("query host-assisted help", check_names)
         self.assertIn("query missing config guard", check_names)
         self.assertIn("live build skipped", check_names)
