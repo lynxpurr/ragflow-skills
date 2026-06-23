@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_SRC = ROOT / "packages" / "ragflow-skill-runtime" / "src"
 APPEND_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "append.py"
 BUILD_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "build.py"
+CLEANUP_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "cleanup.py"
 DIAGNOSE_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "diagnose.py"
 INSPECT_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "inspect_kb.py"
 PROBE_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "probe.py"
@@ -391,6 +392,90 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Append Markdown documents", result.stdout)
         self.assertIn("--execute", result.stdout)
+
+    def test_cleanup_preview_via_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "kb_manifest.json"
+            output = root / "cleanup_plan.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "0123456789abcdef", "name": "kb:disposable"},
+                        "documents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLEANUP_SCRIPT),
+                    "--kb-manifest",
+                    str(manifest),
+                    "--output",
+                    str(output),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            file_payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["schema"], "ragflow_cleanup_plan_v1")
+        self.assertEqual(file_payload["required_confirmation"]["confirm_dataset_id"], "0123456789abcdef")
+
+    def test_cleanup_execute_requires_confirmation_before_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "kb_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "0123456789abcdef", "name": "kb:disposable"},
+                        "documents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLEANUP_SCRIPT),
+                    "--kb-manifest",
+                    str(manifest),
+                    "--execute",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("confirm-dataset-id", json.loads(result.stdout)["error"])
+
+    def test_cleanup_help_renders(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(CLEANUP_SCRIPT), "--help"],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_env(),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Preview or execute cleanup", result.stdout)
+        self.assertIn("--confirm-dataset-id", result.stdout)
 
     def test_probe_help_renders(self) -> None:
         result = subprocess.run(

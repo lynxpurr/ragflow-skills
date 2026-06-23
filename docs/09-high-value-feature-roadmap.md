@@ -486,7 +486,7 @@ Tasks:
 - [x] Add stuck parse and zero chunk diagnostics.
 - [x] Add `append` with upload-before/after diff.
 - [x] Add parse-only-new-documents default behavior.
-- [ ] Add cleanup preview and explicit-confirm cleanup mode.
+- [x] Add cleanup preview and explicit-confirm cleanup mode.
 - [ ] Add live disposable tests for probe/append/cleanup where credentials are present.
 
 Exit criteria:
@@ -496,7 +496,7 @@ Exit criteria:
 
 Implementation note:
 
-- `probe.py` and `diagnose.py` are read-only. `append.py` defaults to a non-mutating plan; only `--execute` uploads, and it parses only newly uploaded document IDs. Cleanup execution remains deferred.
+- `probe.py` and `diagnose.py` are read-only. `append.py` defaults to a non-mutating plan; only `--execute` uploads, and it parses only newly uploaded document IDs. `cleanup.py` also defaults to a non-mutating plan; deletion requires `--execute` plus exact dataset ID and KB name confirmation.
 
 ### Phase 15: Benchmark Validation
 

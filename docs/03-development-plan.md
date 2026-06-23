@@ -529,15 +529,16 @@ Tasks:
 - [x] Add `ragflow-kb-build/scripts/append.py` with safe non-mutating default plans.
 - [x] Add live-preview support for append upload-before snapshots.
 - [x] Make append execution parse only newly uploaded document IDs by default.
+- [x] Add `ragflow-kb-build/scripts/cleanup.py` with non-mutating previews.
+- [x] Require explicit dataset ID and KB name confirmation before cleanup execution.
 - [ ] Add live disposable probe tests where credentials are present.
-- [ ] Add cleanup preview/confirm command.
 
 Exit criteria:
 
 - Host agents can explain short-ID, duplicate-name, parse-state, and zero-chunk symptoms from public artifacts.
 - `probe.py` and `diagnose.py` are read-only by default and do not mutate RAGFlow.
 - `append.py` does not mutate RAGFlow unless `--execute` is explicit.
-- Cleanup remains deferred until the append path is validated.
+- `cleanup.py` does not delete a dataset unless `--execute` and exact confirmation flags are provided.
 
 ## Definition of Done
 

@@ -401,6 +401,15 @@ def _run_no_network_checks(
         required_output="Append Markdown documents",
     )
 
+    cleanup_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "cleanup.py")
+    cleanup_help = _run_command([python_executable, str(cleanup_script), "--help"], cwd=work_root, env=env)
+    _record_command_check(
+        checks,
+        "kb-build cleanup help",
+        cleanup_help,
+        required_output="Preview or execute cleanup",
+    )
+
     diagnose_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "diagnose.py")
     diagnose_help = _run_command([python_executable, str(diagnose_script), "--help"], cwd=work_root, env=env)
     _record_command_check(

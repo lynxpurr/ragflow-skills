@@ -78,6 +78,8 @@ On `develop`, `ragflow-kb-build` includes read-only diagnostics: `scripts/probe.
 
 `scripts/append.py` supports safe KB maintenance: it defaults to a non-mutating append plan, can optionally read a live before-snapshot, and only uploads when `--execute` is explicit.
 
+`scripts/cleanup.py` also defaults to a non-mutating plan. Dataset deletion requires `--execute` plus exact dataset ID and KB name confirmation.
+
 ## Validation
 
 ```bash
