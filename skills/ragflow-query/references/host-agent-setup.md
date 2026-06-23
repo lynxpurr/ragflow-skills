@@ -8,6 +8,7 @@ For a copy-paste prompt that end users can give to their own host agent, use `us
 
 - Prefer host-agent config and environment variables over asking the user to run manual setup commands.
 - Never write real API keys into a skill folder, repository file, release artifact, prompt transcript, or shared project document.
+- Never print key prefixes, suffixes, partial token values, or inline comments that look like real secrets. Use `${ENV_VAR}`, secret names, or redacted placeholders in reports.
 - Use `templates/ragflow-config.example.yaml` as the config template.
 - Put real config in a stable host-agent path and point scripts to it with `RAGFLOW_CONFIG` or `--config`.
 - Treat RAGFlow and MinerU as external services. Do not start or supervise them from these skills.

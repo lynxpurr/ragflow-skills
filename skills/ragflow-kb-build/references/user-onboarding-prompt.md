@@ -24,6 +24,7 @@ The prompt asks the host agent to gather only missing service information, confi
 重要安全要求：
 - 不要把真实 API key 写入 skill 文件夹、git 仓库、项目文档、release artifacts 或聊天总结。
 - 不要在输出中明文打印 API key。
+- 不要在配置片段、报告或注释里输出 API key 的前缀、后缀、局部片段或看起来像真实 token 的值；只写 `${ENV_VAR}`、secret 名称或已脱敏占位符。
 - 优先使用宿主 agent 的 secret store、环境变量或私有 config 文件保存密钥。
 - RAGFlow 和 MinerU 是外部服务，不要尝试从 skill 内启动或守护这些服务。
 - 默认 RAGFlow / MinerU 可能在远程机器、LAN、VPN 或 HTTPS gateway 上，不要假设它们和 agent 在同一台机器。
