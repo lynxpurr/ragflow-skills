@@ -60,7 +60,7 @@ export RAGFLOW_CONFIG=$HOME/.hermes/ragflow/config.local.yaml
 Recommended locations:
 
 - Hermes: `~/.hermes/ragflow/config.local.yaml`
-- OpenClaw: `/etc/openclaw/ragflow/config.local.yaml`, `/var/lib/openclaw/ragflow/config.local.yaml`, or a mounted secret/config path
+- OpenClaw: `~/.config/openclaw/ragflow/config.local.yaml`, `/etc/openclaw/ragflow/config.local.yaml`, `/var/lib/openclaw/ragflow/config.local.yaml`, or a mounted secret/config path
 - Claude Code / opencode: `~/.config/ragflow-skills/config.local.yaml`
 - Local project fallback: `.ragflow/config.yaml` plus `.ragflow/config.local.yaml` in the current working directory
 

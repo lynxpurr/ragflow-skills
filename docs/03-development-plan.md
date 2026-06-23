@@ -471,6 +471,7 @@ Tasks:
 - [x] Clarify that the built-in `mineru` backend expects MinerU Agent API, while local synchronous `/parse` services need a compatible gateway or the generic `remote` backend.
 - [x] Forward-test the prompt with OpenClaw and tighten guidance so incompatible MinerU services do not get persisted as `doc_to_md.backend: mineru`.
 - [x] Clarify that host agents must not patch release-artifact `scripts/_vendor`; source runtime changes must be made in `packages/ragflow-skill-runtime` and re-vendored.
+- [x] Add the OpenClaw user-level config path `~/.config/openclaw/ragflow/config.local.yaml` observed during second-round validation.
 
 Exit criteria:
 

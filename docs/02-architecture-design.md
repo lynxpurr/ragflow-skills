@@ -203,7 +203,7 @@ Public skills read configuration with this effective precedence:
 Each public skill ships `templates/ragflow-config.example.yaml`. Real config should be copied to a stable host-agent path, not stored in the skill folder. Recommended paths are:
 
 - Hermes: `~/.hermes/ragflow/config.local.yaml`.
-- OpenClaw: `/etc/openclaw/ragflow/config.local.yaml`, `/var/lib/openclaw/ragflow/config.local.yaml`, or a mounted secret/config path.
+- OpenClaw: `~/.config/openclaw/ragflow/config.local.yaml`, `/etc/openclaw/ragflow/config.local.yaml`, `/var/lib/openclaw/ragflow/config.local.yaml`, or a mounted secret/config path.
 - Claude Code and opencode: `~/.config/ragflow-skills/config.local.yaml`.
 - Project fallback: `.ragflow/config.yaml` plus `.ragflow/config.local.yaml` only when the working directory is stable.
 

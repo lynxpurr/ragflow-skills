@@ -22,7 +22,7 @@ For a copy-paste prompt that end users can give to their own host agent, use `us
 Recommended real config paths:
 
 - Hermes: `~/.hermes/ragflow/config.local.yaml`
-- OpenClaw: `/etc/openclaw/ragflow/config.local.yaml`, `/var/lib/openclaw/ragflow/config.local.yaml`, or a mounted secret/config path
+- OpenClaw: `~/.config/openclaw/ragflow/config.local.yaml`, `/etc/openclaw/ragflow/config.local.yaml`, `/var/lib/openclaw/ragflow/config.local.yaml`, or a mounted secret/config path
 - Claude Code and opencode: `~/.config/ragflow-skills/config.local.yaml`
 - Project fallback: `.ragflow/config.local.yaml` only when the working directory is stable and private
 

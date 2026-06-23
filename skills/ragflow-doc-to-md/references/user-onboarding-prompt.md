@@ -54,7 +54,7 @@ The prompt asks the host agent to gather only missing service information, confi
 
 请按宿主环境选择配置路径：
 - Hermes: ~/.hermes/ragflow/config.local.yaml
-- OpenClaw: /etc/openclaw/ragflow/config.local.yaml、/var/lib/openclaw/ragflow/config.local.yaml 或挂载的 secret/config 路径
+- OpenClaw: ~/.config/openclaw/ragflow/config.local.yaml、/etc/openclaw/ragflow/config.local.yaml、/var/lib/openclaw/ragflow/config.local.yaml 或挂载的 secret/config 路径
 - Claude Code / opencode: ~/.config/ragflow-skills/config.local.yaml
 - 只有在工作目录稳定且私有时，才使用 .ragflow/config.local.yaml
 
