@@ -78,12 +78,15 @@ The public examples are intentionally small and live inside the skills they supp
 
 - `ragflow-doc-to-md/templates/doc_manifest.example.json`
 - `ragflow-doc-to-md/templates/ragflow-config.example.yaml`
+- `ragflow-doc-to-md/references/host-agent-setup.md`
 - `ragflow-kb-build/templates/ragflow-config.example.yaml`
+- `ragflow-kb-build/references/host-agent-setup.md`
 - `ragflow-kb-build/templates/validation-queries.example.json`
 - `ragflow-query/templates/ragflow-config.example.yaml`
+- `ragflow-query/references/host-agent-setup.md`
 - `ragflow-query/templates/host-assisted-response.example.json`
 
-These examples cover host-agent configuration, the handoff manifest, validation query set, and host-assisted evidence payload without shipping private datasets or real credentials.
+These examples cover host-agent configuration, host-agent E2E preparation, the handoff manifest, validation query set, and host-assisted evidence payload without shipping private datasets or real credentials.
 
 ## Agents Metadata Decision
 

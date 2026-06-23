@@ -389,6 +389,7 @@ Tasks:
 - [x] Decide whether MinerU remains a generic remote converter contract in v1 or gets a named `mineru` adapter in v0.2. Decision: MinerU is a named service backend using `MINERU_*` config.
 - [x] Add `mineru` backend support to `ragflow-doc-to-md`.
 - [x] Add shared `templates/ragflow-config.example.yaml` to each public skill.
+- [x] Add `references/host-agent-setup.md` to each public skill so Hermes/OpenClaw-style agents can prepare config and E2E checks from the released skill itself.
 - [x] Support unified config files for `ragflow`, `doc_to_md`, and `mineru` sections.
 - [x] Support `${ENV_VAR}` substitution in lightweight JSON/YAML config files.
 - [x] Document recommended host-agent config locations for Hermes, OpenClaw, Claude Code, and opencode.
