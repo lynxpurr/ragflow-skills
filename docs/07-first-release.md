@@ -1,6 +1,6 @@
 # First Release Candidate
 
-Status: rc2 published
+Status: rc3 candidate in progress
 Date: 2026-06-23
 
 ## RC Goal
@@ -167,7 +167,38 @@ Observed result:
 - `ragflow-query` exposed direct and host-assisted query interfaces
 - missing RAGFlow config failed before network work with the expected base URL error
 
-Live RAGFlow/MinerU validation has not been run for RC2 because no disposable live endpoint credentials were provided in this environment.
+## RC2 Hermes Live E2E Result
+
+Hermes ran a disposable live E2E check on 2026-06-23 from source commit `d7771c4`.
+
+Observed result:
+
+- Offline validation passed: unit tests, release check, hygiene check, platform smoke matrix, archive export, and local consumer acceptance.
+- `ragflow-doc-to-md` passthrough produced `doc_manifest.json`.
+- `ragflow-kb-build` created a disposable RAGFlow dataset and uploaded one Markdown document.
+- Dataset parsing did not complete because the configured Tongyi embedding provider returned an overdue-payment error.
+- `ragflow-query` was skipped because the test KB had zero chunks.
+- The disposable test KB was deleted.
+
+RC2 should not be promoted directly to stable because the live check also found that default profile templates carried internal `parser_config.__language__` metadata into the RAGFlow dataset API payload, producing RAGFlow API `code: 101` on affected dataset-create calls.
+
+## RC3 Candidate
+
+RC3 is the fix candidate for the Hermes live-E2E finding.
+
+Required RC3 fixes:
+
+- Filter internal `parser_config.__*` keys from RAGFlow dataset API payloads.
+- Preserve those keys in manifests so profile metadata remains visible to host agents and users.
+- Add a regression test covering the API-payload filtering behavior.
+
+Before publishing RC3, rerun the full release checklist and local consumer acceptance. After publishing RC3, rerun GitHub Release consumer acceptance:
+
+```bash
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc3 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-rc3-github --overwrite --download-timeout 90
+```
+
+The Tongyi overdue-payment parse failure is an infrastructure issue. Do not treat it as a code failure, but do require either a successful disposable live E2E after the provider is usable or an explicit stable-release waiver.
 
 ## RC1 GitHub Consumer Acceptance
 

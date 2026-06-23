@@ -16,6 +16,7 @@ python3 tools/vendor_import_smoke.py
 python3 tools/platform_smoke_matrix.py
 python3 tools/release_hygiene_check.py
 python3 tools/export_release_archives.py
+python3 tools/consumer_acceptance.py --artifacts-dir release-artifacts --work-dir /tmp/ragflow-consumer-acceptance --overwrite
 python3 tools/live_integration_check.py
 ```
 
@@ -60,6 +61,14 @@ python3 tools/live_integration_check.py
 ```
 
 Use it before a public release when a reachable RAGFlow endpoint is available.
+
+For a stronger disposable-KB check through the released artifacts, use:
+
+```bash
+python3 tools/consumer_acceptance.py --artifacts-dir release-artifacts --work-dir /tmp/ragflow-consumer-acceptance-live --overwrite --live-build
+```
+
+This path creates a temporary RAGFlow dataset, uploads one Markdown document, waits for parsing, validates retrieval, and runs direct plus host-assisted query checks. It depends on the configured RAGFlow embedding provider being usable; provider billing or quota failures are infrastructure failures, not release artifact packaging failures.
 
 ## Runtime Compatibility
 

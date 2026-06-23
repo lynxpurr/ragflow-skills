@@ -57,9 +57,12 @@ class ChunkProfile:
         )
 
     def to_dataset_payload(self) -> dict[str, Any]:
+        parser_config = {
+            key: value for key, value in self.parser_config.items() if not key.startswith("__")
+        }
         payload: dict[str, Any] = {
             "chunk_method": self.chunk_method,
-            "parser_config": self.parser_config,
+            "parser_config": parser_config,
         }
         if self.embedding_model:
             payload["embedding_model"] = self.embedding_model

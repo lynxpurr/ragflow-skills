@@ -42,6 +42,26 @@ class ProfileTests(unittest.TestCase):
                 }
             )
 
+    def test_dataset_payload_filters_internal_parser_config_keys(self) -> None:
+        profile = ChunkProfile.from_dict(
+            {
+                "profile_id": "default-zh-512",
+                "chunk_size": 512,
+                "parser_config": {
+                    "chunk_token_num": 512,
+                    "auto_keywords": 0,
+                    "__language__": "Chinese",
+                },
+            }
+        )
+
+        payload = profile.to_dataset_payload()
+        manifest = profile.to_manifest_dict()
+
+        self.assertNotIn("__language__", payload["parser_config"])
+        self.assertEqual(payload["parser_config"]["chunk_token_num"], 512)
+        self.assertEqual(manifest["parser_config"]["__language__"], "Chinese")
+
 
 if __name__ == "__main__":
     unittest.main()

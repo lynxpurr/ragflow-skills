@@ -42,7 +42,8 @@ Partially completed:
 Near-term priority correction:
 
 - The next public-suite milestone is not private dedao bridging.
-- The next milestone is RC2 after CLI-agent target-scope changes and unified service config hardening.
+- RC2 validated the CLI-agent target-scope changes and unified service config hardening.
+- The next milestone is RC3 with the default profile API-payload fix discovered during Hermes live E2E.
 - Platform work should stay focused on Hermes, OpenClaw, Claude Code, opencode, and CLI-style runners.
 
 ## Phase 0: Architecture Skeleton
@@ -419,7 +420,9 @@ Tasks:
 - [x] Run clean consumer acceptance from local refreshed artifacts.
 - [x] Publish `v0.1.0-rc2` as a GitHub prerelease.
 - [x] Run consumer acceptance against the GitHub `v0.1.0-rc2` assets.
-- [ ] Run live RAGFlow/MinerU integration checks when reachable disposable services are available, or record an explicit waiver.
+- [x] Run Hermes-assisted live RAGFlow check against a disposable test KB.
+- [x] Record live finding: default profile `parser_config.__language__` leaked into RAGFlow dataset create payload and caused API `code: 101`.
+- [x] Record live infrastructure waiver candidate: Tongyi embedding provider was unavailable because of overdue payment, blocking parse completion after dataset creation and upload.
 - [ ] Merge or promote the selected release commit to `main`.
 - [ ] Tag and publish stable `v0.1.0`.
 
@@ -428,6 +431,28 @@ Exit criteria:
 - RC2 artifacts are downloadable and self-contained.
 - Local and GitHub consumer acceptance paths pass.
 - Stable promotion decision is based on the refreshed CLI-agent scope, not RC1.
+- RC2 is not promoted directly because Hermes live E2E found a default profile payload bug.
+
+## Phase 14: RC3 Fix Candidate
+
+Goal: fix Hermes live-E2E findings, refresh artifacts, and publish a release candidate suitable for stable promotion after live infrastructure is healthy or explicitly waived.
+
+Tasks:
+
+- [x] Filter internal `parser_config.__*` keys from RAGFlow dataset API payloads while preserving them in manifests.
+- [x] Add a regression test for default-profile internal metadata filtering.
+- [ ] Run the full pre-release command list from `docs/06-release-hardening.md`.
+- [ ] Commit and push the fix on `develop`.
+- [ ] Export refreshed per-skill archives and `release-manifest.json` from the fix commit.
+- [ ] Publish `v0.1.0-rc3` as a GitHub prerelease.
+- [ ] Run consumer acceptance against the GitHub `v0.1.0-rc3` assets.
+- [ ] Re-run Hermes live E2E after the embedding provider is usable, or record an explicit stable-release waiver for infrastructure billing.
+
+Exit criteria:
+
+- Default profiles no longer send internal metadata fields to RAGFlow API.
+- RC3 artifacts are downloadable and self-contained.
+- Stable promotion has either a passing disposable live E2E or a documented infrastructure waiver.
 
 ## Definition of Done
 
