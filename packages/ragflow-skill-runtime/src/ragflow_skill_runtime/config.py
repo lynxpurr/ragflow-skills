@@ -26,8 +26,8 @@ class RagflowConfig:
 
     base_url: str | None = None
     api_key: str | None = None
-    timeout: float = 60.0
-    verify_ssl: bool = True
+    timeout: float | None = None
+    verify_ssl: bool | None = True
     llm_base_url: str | None = None
     llm_api_key: str | None = None
 
@@ -99,6 +99,19 @@ def _parse_scalar(value: str) -> Any:
         return int(value)
     except ValueError:
         return value.strip().strip("\"'")
+
+
+def _parse_bool(value: Any, *, default: bool | None = None) -> bool | None:
+    if value in (None, ""):
+        return default
+    if isinstance(value, bool):
+        return value
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    raise ConfigError(f"boolean config value must be true or false: {value!r}")
 
 
 def _read_simple_yaml(path: Path) -> dict[str, Any]:
@@ -208,12 +221,15 @@ def _from_mapping(data: Mapping[str, Any]) -> RagflowConfig:
     ragflow = data.get("ragflow") if isinstance(data.get("ragflow"), Mapping) else {}
     llm = data.get("llm") if isinstance(data.get("llm"), Mapping) else {}
     merged = {**data, **ragflow}
+    verify_ssl = _pick(merged, "verify_ssl")
 
     return RagflowConfig(
         base_url=_pick(merged, "base_url", "ragflow_base_url", "url"),
         api_key=_pick(merged, "api_key", "ragflow_api_key"),
-        timeout=float(_pick(merged, "timeout", "request_timeout") or 60.0),
-        verify_ssl=bool(_pick(merged, "verify_ssl") if _pick(merged, "verify_ssl") is not None else True),
+        timeout=float(_pick(merged, "timeout", "request_timeout"))
+        if _pick(merged, "timeout", "request_timeout") is not None
+        else None,
+        verify_ssl=_parse_bool(verify_ssl, default=None),
         llm_base_url=_pick(llm, "base_url", "llm_base_url") or _pick(data, "llm_base_url"),
         llm_api_key=_pick(llm, "api_key", "llm_api_key") or _pick(data, "llm_api_key"),
     )
@@ -253,8 +269,8 @@ def _merge(base: RagflowConfig, override: RagflowConfig) -> RagflowConfig:
     return RagflowConfig(
         base_url=override.base_url or base.base_url,
         api_key=override.api_key or base.api_key,
-        timeout=override.timeout if override.timeout != 60.0 else base.timeout,
-        verify_ssl=override.verify_ssl,
+        timeout=override.timeout if override.timeout is not None else base.timeout,
+        verify_ssl=override.verify_ssl if override.verify_ssl is not None else base.verify_ssl,
         llm_base_url=override.llm_base_url or base.llm_base_url,
         llm_api_key=override.llm_api_key or base.llm_api_key,
     )
@@ -331,9 +347,8 @@ def load_skill_config(
         ragflow=RagflowConfig(
             base_url=env_map.get("RAGFLOW_BASE_URL"),
             api_key=load_api_key(env=env_map, required=False),
-            timeout=float(env_map.get("RAGFLOW_TIMEOUT", config.ragflow.timeout)),
-            verify_ssl=env_map.get("RAGFLOW_VERIFY_SSL", str(config.ragflow.verify_ssl)).lower()
-            not in {"0", "false", "no", "off"},
+            timeout=float(env_map["RAGFLOW_TIMEOUT"]) if env_map.get("RAGFLOW_TIMEOUT") else None,
+            verify_ssl=_parse_bool(env_map.get("RAGFLOW_VERIFY_SSL"), default=None),
             llm_base_url=env_map.get("RAGFLOW_LLM_BASE_URL"),
             llm_api_key=env_map.get("RAGFLOW_LLM_API_KEY"),
         ),
@@ -373,6 +388,8 @@ def load_skill_config(
     ragflow = replace(
         config.ragflow,
         base_url=normalize_base_url(config.ragflow.base_url) if config.ragflow.base_url else None,
+        timeout=60.0 if config.ragflow.timeout is None else config.ragflow.timeout,
+        verify_ssl=True if config.ragflow.verify_ssl is None else config.ragflow.verify_ssl,
     )
     return replace(config, ragflow=ragflow)
 

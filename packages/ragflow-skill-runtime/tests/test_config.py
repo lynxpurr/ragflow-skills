@@ -92,6 +92,8 @@ class ConfigTests(unittest.TestCase):
             (config_dir / "config.yaml").write_text(
                 "ragflow:\n"
                 "  base_url: https://ragflow.example.test\n"
+                "  timeout: 44\n"
+                "  verify_ssl: false\n"
                 "doc_to_md:\n"
                 "  backend: remote\n"
                 "mineru:\n"
@@ -114,10 +116,22 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(config.ragflow.base_url, "https://ragflow.example.test/api/v1")
         self.assertEqual(config.ragflow.api_key, "local-ragflow-key")
+        self.assertEqual(config.ragflow.timeout, 44)
+        self.assertFalse(config.ragflow.verify_ssl)
         self.assertEqual(config.doc_to_md.backend, "mineru")
         self.assertEqual(config.mineru.base_url, "https://mineru.example.test/api/v1/agent")
         self.assertEqual(config.mineru.api_key, "local-mineru-key")
         self.assertEqual(config.mineru.timeout, 120)
+
+    def test_environment_overrides_verify_ssl(self) -> None:
+        config = load_config(
+            env={
+                "RAGFLOW_BASE_URL": "https://ragflow.example.test",
+                "RAGFLOW_VERIFY_SSL": "false",
+            }
+        )
+
+        self.assertFalse(config.verify_ssl)
 
     def test_missing_base_url_raises_when_normalized_property_used(self) -> None:
         config = load_config(env={})

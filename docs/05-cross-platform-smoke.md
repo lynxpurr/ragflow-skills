@@ -74,7 +74,7 @@ The fake client is intentional. The matrix should verify packaging and CLI behav
 | `MinerU create-task response missing task_id` | MinerU-compatible service does not match the Agent parsing API contract | Verify `MINERU_BASE_URL` and the service contract. |
 | `manifest not found` | Handoff artifact path not preserved between steps | Pass absolute artifact paths or keep all steps in one workspace. |
 | `agentic mode is not implemented` | Script-owned synthesis requested in v1 | Use `--mode agentic --host-assisted`; host agent performs synthesis. |
-| Network or DNS errors in real use | RAGFlow endpoint is not reachable from the runner | Use a reachable localhost, LAN, VPN, or HTTPS endpoint and provide `RAGFLOW_API_KEY`. |
+| Network or DNS errors in real use | RAGFlow endpoint is not reachable from the runner | Use a reachable LAN, VPN, HTTPS, or explicitly configured localhost debug endpoint and provide `RAGFLOW_API_KEY`. |
 
 ## V1 Boundary
 

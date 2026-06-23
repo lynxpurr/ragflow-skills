@@ -11,7 +11,7 @@ This guide describes how to use the public RAGFlow skills from controllable prog
 - OpenClaw;
 - Claude Code;
 - opencode;
-- similar local, LAN, VPN, or HTTPS-reachable CLI runners.
+- similar LAN, VPN, HTTPS, or explicitly local-debug CLI runners.
 
 Commercial SaaS agent sandboxes are not a v1 target. First-party SaaS platforms should integrate RAGFlow, MinerU, Pandoc, validation, and retrieval as native backend services rather than by shelling out to these portable scripts.
 
@@ -43,7 +43,7 @@ export RAGFLOW_SKILL_RUNTIME_PATH=/path/to/ragflow-skills/packages/ragflow-skill
 
 ## Configuration
 
-Prefer a stable host-agent config file for repeated use, explicit CLI flags for one-off overrides, and environment variables for secrets or deployment injection.
+Prefer a stable host-agent config file for repeated use, explicit CLI flags for one-off overrides, and environment variables for secrets or deployment injection. The default assumption is that RAGFlow and MinerU run outside the agent machine and are reached through LAN, VPN, or HTTPS endpoints.
 
 Each public skill ships the same template:
 
@@ -115,13 +115,13 @@ Do not commit local config files or real credentials. Use `${ENV_VAR}` placehold
 
 RAGFlow may be reachable through:
 
-- localhost for local Hermes/OpenClaw deployments;
 - LAN or VPN addresses for controlled workstations or clusters;
 - HTTPS gateways for remote runners.
+- localhost only when the host agent and service are intentionally co-located for debugging or a single-machine deployment.
 
 Public scripts do not start or manage RAGFlow. They only call an explicitly configured endpoint.
 
-Pandoc is treated as a local binary on `PATH`. MinerU is treated as a remote service by default and is configured through `MINERU_*` environment variables. Other layout-aware parsers can use the generic remote converter contract.
+Pandoc is treated as a local binary on `PATH`. MinerU is treated as a remote service by default and is configured through the shared config file or `MINERU_*` environment variables. Other layout-aware parsers can use the generic remote converter contract.
 
 ## Document To Markdown
 
@@ -234,12 +234,14 @@ Hermes:
 
 - source checkout can use `RAGFLOW_SKILL_RUNTIME_PATH`;
 - release artifacts can use vendored runtime;
-- localhost or LAN RAGFlow endpoints are valid.
+- use LAN, VPN, or HTTPS RAGFlow/MinerU endpoints by default;
+- localhost is valid only when services are intentionally running on the same machine.
 
 OpenClaw:
 
 - use CLI mode in v1;
 - configure RAGFlow through flags, environment variables, or a workspace config file;
+- prefer mounted config/secret paths for RAGFlow and MinerU endpoints;
 - `serve` remains deferred until a repeated low-latency tool endpoint is needed.
 
 Claude Code and opencode:

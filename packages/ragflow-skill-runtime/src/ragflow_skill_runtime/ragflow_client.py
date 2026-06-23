@@ -21,7 +21,11 @@ class RAGFlowClient:
         headers = {}
         if config.api_key:
             headers["Authorization"] = f"Bearer {config.api_key}"
-        self.http = JSONHTTPClient(timeout=config.timeout, headers=headers)
+        self.http = JSONHTTPClient(
+            timeout=60.0 if config.timeout is None else config.timeout,
+            headers=headers,
+            verify_ssl=True if config.verify_ssl is None else config.verify_ssl,
+        )
 
     def _url(self, path: str) -> str:
         return f"{self.base_url}/{path.lstrip('/')}"

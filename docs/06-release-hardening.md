@@ -77,10 +77,13 @@ Release artifacts must work through path 2. Editable installs are optional conve
 The public examples are intentionally small and live inside the skills they support:
 
 - `ragflow-doc-to-md/templates/doc_manifest.example.json`
+- `ragflow-doc-to-md/templates/ragflow-config.example.yaml`
+- `ragflow-kb-build/templates/ragflow-config.example.yaml`
 - `ragflow-kb-build/templates/validation-queries.example.json`
+- `ragflow-query/templates/ragflow-config.example.yaml`
 - `ragflow-query/templates/host-assisted-response.example.json`
 
-These examples cover the handoff manifest, validation query set, and host-assisted evidence payload without shipping private datasets.
+These examples cover host-agent configuration, the handoff manifest, validation query set, and host-assisted evidence payload without shipping private datasets or real credentials.
 
 ## Agents Metadata Decision
 

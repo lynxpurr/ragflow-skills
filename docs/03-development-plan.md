@@ -29,7 +29,7 @@ Completed foundations:
 - Phase 8 cross-platform smoke matrix
 - Phase 9 release hardening
 - Phase 10 first release candidate validation and GitHub prerelease publication
-- Phase 12 documentation started for CLI agent integration
+- Phase 12 CLI agent integration polish, including host-agent config templates and MinerU service backend
 
 Partially completed:
 
@@ -42,7 +42,7 @@ Partially completed:
 Near-term priority correction:
 
 - The next public-suite milestone is not private dedao bridging.
-- The next milestone is CLI agent integration polish and RC2 after RC1 target-scope changes.
+- The next milestone is RC2 after CLI-agent target-scope changes and unified service config hardening.
 - Platform work should stay focused on Hermes, OpenClaw, Claude Code, opencode, and CLI-style runners.
 
 ## Phase 0: Architecture Skeleton
@@ -387,15 +387,46 @@ Tasks:
 - [x] Add fake remote converter tests for CLI-agent doc conversion.
 - [x] Add a platform smoke profile or check that exercises remote converter configuration without external network dependency.
 - [x] Decide whether MinerU remains a generic remote converter contract in v1 or gets a named `mineru` adapter in v0.2. Decision: MinerU is a named service backend using `MINERU_*` config.
+- [x] Add `mineru` backend support to `ragflow-doc-to-md`.
+- [x] Add shared `templates/ragflow-config.example.yaml` to each public skill.
+- [x] Support unified config files for `ragflow`, `doc_to_md`, and `mineru` sections.
+- [x] Support `${ENV_VAR}` substitution in lightweight JSON/YAML config files.
+- [x] Document recommended host-agent config locations for Hermes, OpenClaw, Claude Code, and opencode.
+- [x] Make endpoint guidance remote-first: RAGFlow and MinerU normally live on LAN, VPN, or HTTPS endpoints.
+- [x] Preserve config-file `timeout` and `verify_ssl` values when `.local` files or CLI overrides only set credentials.
+- [x] Wire `verify_ssl` config through to the HTTP client.
 - [x] Clean empty release artifact directories such as unused `agents/` or `references/`.
+- [x] Run design/code self-check and update architecture, integration, release, and roadmap docs.
 - [ ] Regenerate release archives and publish `v0.1.0-rc2`.
 
 Exit criteria:
 
 - All public examples use Hermes/OpenClaw/Claude Code/opencode wording.
 - Raw-document conversion can be configured through environment variables, matching RAGFlow config ergonomics.
-- The no-network smoke suite covers the remote conversion path.
+- The no-network smoke suite covers the remote and MinerU service conversion paths.
+- Host-agent config templates ship without real credentials and do not encourage storing local config in skill folders.
 - RC2 artifacts represent the final v1 target scope.
+
+## Phase 13: RC2 Release and Stable Promotion
+
+Goal: cut a refreshed release candidate from the current CLI-agent-focused source and prepare stable `v0.1.0`.
+
+Tasks:
+
+- [ ] Run the full pre-release command list from `docs/06-release-hardening.md`.
+- [ ] Export refreshed per-skill archives and `release-manifest.json`.
+- [ ] Run clean consumer acceptance from local refreshed artifacts.
+- [ ] Publish `v0.1.0-rc2` as a GitHub prerelease.
+- [ ] Run consumer acceptance against the GitHub `v0.1.0-rc2` assets.
+- [ ] Run live RAGFlow/MinerU integration checks when reachable disposable services are available, or record an explicit waiver.
+- [ ] Merge or promote the selected release commit to `main`.
+- [ ] Tag and publish stable `v0.1.0`.
+
+Exit criteria:
+
+- RC2 artifacts are downloadable and self-contained.
+- Local and GitHub consumer acceptance paths pass.
+- Stable promotion decision is based on the refreshed CLI-agent scope, not RC1.
 
 ## Definition of Done
 

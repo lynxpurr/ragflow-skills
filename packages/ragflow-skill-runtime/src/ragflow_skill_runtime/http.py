@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib import error, request
@@ -22,9 +23,21 @@ class HTTPResponse:
 class JSONHTTPClient:
     """Minimal JSON HTTP client based on ``urllib``."""
 
-    def __init__(self, *, timeout: float = 60.0, headers: Mapping[str, str] | None = None):
+    def __init__(
+        self,
+        *,
+        timeout: float = 60.0,
+        headers: Mapping[str, str] | None = None,
+        verify_ssl: bool = True,
+    ):
         self.timeout = timeout
         self.headers = dict(headers or {})
+        self.verify_ssl = verify_ssl
+
+    def _ssl_context(self) -> ssl.SSLContext | None:
+        if self.verify_ssl:
+            return None
+        return ssl._create_unverified_context()
 
     def request_json(
         self,
@@ -42,7 +55,7 @@ class JSONHTTPClient:
 
         req = request.Request(url, data=body, method=method.upper(), headers=merged_headers)
         try:
-            with request.urlopen(req, timeout=self.timeout) as resp:
+            with request.urlopen(req, timeout=self.timeout, context=self._ssl_context()) as resp:
                 raw = resp.read()
                 data = json.loads(raw.decode("utf-8")) if raw else None
                 return HTTPResponse(resp.status, dict(resp.headers.items()), data)
@@ -67,7 +80,7 @@ class JSONHTTPClient:
         merged_headers = {**self.headers, **(headers or {})}
         req = request.Request(url, data=body, method=method.upper(), headers=merged_headers)
         try:
-            with request.urlopen(req, timeout=self.timeout) as resp:
+            with request.urlopen(req, timeout=self.timeout, context=self._ssl_context()) as resp:
                 raw = resp.read()
                 data = json.loads(raw.decode("utf-8")) if raw else None
                 return HTTPResponse(resp.status, dict(resp.headers.items()), data)

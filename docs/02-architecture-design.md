@@ -24,7 +24,8 @@ Commercial SaaS agent sandboxes are explicitly out of the v1 public skill target
 - Loose coupling: skills communicate through thin manifest files and `ragflow-skill-runtime`, not through direct imports of each other.
 - Self-contained release: every published skill can run without editable installs or local absolute paths.
 - Portable by default: no `/home/zenz`, no implicit localhost assumption, and no required long-running daemon.
-- CLI-agent friendly: explicit localhost, LAN, VPN, or HTTPS RAGFlow endpoints are all valid when configured by the user.
+- Remote-service friendly: RAGFlow and MinerU normally live on reachable LAN, VPN, or HTTPS endpoints; localhost is only a configured local-debug case.
+- CLI-agent friendly: Hermes, OpenClaw, Claude Code, and opencode can provide config through host-agent files, environment variables, or explicit CLI flags.
 - Non-SaaS public scope: optimize for Hermes, OpenClaw, Claude Code, opencode, and similar programming-agent CLI tools.
 - Product-grade validation: KB build includes retrieval validation as a first-class command.
 - Progressive disclosure: `SKILL.md` files stay short; detailed behavior goes into `references/` and deterministic code goes into `scripts/`.
@@ -191,13 +192,45 @@ Release artifacts must include `scripts/_vendor/ragflow_skill_runtime/` so Claud
 
 ## Configuration Contract
 
-Public skills read configuration in this order:
+Public skills read configuration with this effective precedence:
 
 1. Explicit CLI flags.
 2. Environment variables.
-3. Config file path from `RAGFLOW_CONFIG`.
-4. Local project config such as `.ragflow/config.yaml`.
+3. Explicit config file from `--config` or `RAGFLOW_CONFIG`.
+4. Auto-discovered project config: `.ragflow/config.json|yaml|yml`, then `.ragflow/config.local.json|yaml|yml`.
 5. Safe defaults.
+
+Each public skill ships `templates/ragflow-config.example.yaml`. Real config should be copied to a stable host-agent path, not stored in the skill folder. Recommended paths are:
+
+- Hermes: `~/.hermes/ragflow/config.local.yaml`.
+- OpenClaw: `/etc/openclaw/ragflow/config.local.yaml`, `/var/lib/openclaw/ragflow/config.local.yaml`, or a mounted secret/config path.
+- Claude Code and opencode: `~/.config/ragflow-skills/config.local.yaml`.
+- Project fallback: `.ragflow/config.yaml` plus `.ragflow/config.local.yaml` only when the working directory is stable.
+
+The config file is intentionally lightweight YAML/JSON, not a formal schema system. It supports top-level sections for `ragflow`, `doc_to_md`, and `mineru`, plus `${ENV_VAR}` substitution for secrets.
+
+Example:
+
+```yaml
+ragflow:
+  base_url: https://ragflow.example.com
+  api_key: ${RAGFLOW_API_KEY}
+  timeout: 60
+  verify_ssl: true
+
+doc_to_md:
+  backend: mineru
+
+mineru:
+  base_url: https://mineru.net/api/v1/agent
+  api_key: ${MINERU_API_KEY}
+  timeout: 300
+  poll_interval: 3
+  language: ch
+  enable_table: true
+  is_ocr: false
+  enable_formula: true
+```
 
 Core environment variables:
 
@@ -205,13 +238,30 @@ Core environment variables:
 |---|---|
 | `RAGFLOW_BASE_URL` | RAGFlow API base URL, such as `https://ragflow.example.com/api/v1`. |
 | `RAGFLOW_API_KEY` | RAGFlow bearer token. |
+| `RAGFLOW_TIMEOUT` | RAGFlow request timeout in seconds. |
+| `RAGFLOW_VERIFY_SSL` | Set to `false` only for controlled self-signed test endpoints. |
 | `RAGFLOW_CONFIG` | Optional config file path. |
 | `RAGFLOW_AUTH_FILE` | Optional auth file path. |
 | `RAGFLOW_SKILL_RUNTIME_PATH` | Optional development-time source override for `ragflow_skill_runtime`. |
 | `RAGFLOW_LLM_BASE_URL` | Optional OpenAI-compatible LLM endpoint for script-owned synthesis. |
 | `RAGFLOW_LLM_API_KEY` | Optional LLM API key. |
+| `DOC_TO_MD_BACKEND` | Document converter backend: `auto`, `builtin`, `pandoc`, `remote`, or `mineru`. |
+| `DOC_TO_MD_REMOTE_URL` | Generic remote converter endpoint. |
+| `DOC_TO_MD_REMOTE_API_KEY` | Generic remote converter bearer token. |
+| `DOC_TO_MD_TIMEOUT` | Generic remote converter timeout in seconds. |
+| `MINERU_BASE_URL` | MinerU Agent API base URL. |
+| `MINERU_API_KEY` | MinerU API key. |
+| `MINERU_TIMEOUT` | MinerU parse timeout in seconds. |
+| `MINERU_POLL_INTERVAL` | MinerU parse polling interval in seconds. |
+| `MINERU_LANGUAGE` | MinerU language option. |
+| `MINERU_PAGE_RANGE` | Optional MinerU page range. |
+| `MINERU_ENABLE_TABLE` | MinerU table parsing boolean. |
+| `MINERU_IS_OCR` | MinerU OCR boolean. |
+| `MINERU_ENABLE_FORMULA` | MinerU formula parsing boolean. |
 
 No public script may default to `http://localhost:9380` unless the user asks for local mode or a config file explicitly declares it.
+
+Public skills do not start or supervise RAGFlow, MinerU, Pandoc workers, or query daemons. RAGFlow and MinerU are external services configured by endpoint and key. Pandoc is a local binary if installed on `PATH`; otherwise use MinerU or a generic remote converter.
 
 ## Thin Manifest Strategy
 
@@ -323,10 +373,10 @@ V1 scope decision:
 
 | Platform | Core loading | RAGFlow access | Recommended interface |
 |---|---|---|---|
-| Hermes local | Installed package or vendor | Localhost or LAN | CLI. |
-| OpenClaw | Installed package or vendor | Localhost, LAN, or HTTPS gateway | CLI for v1; `serve` deferred. |
+| Hermes local | Installed package or vendor | LAN, VPN, HTTPS, or explicit localhost debug endpoint | CLI. |
+| OpenClaw | Installed package or vendor | LAN, VPN, HTTPS gateway, or explicit localhost debug endpoint | CLI for v1; `serve` deferred. |
 | Claude Code | Vendor preferred | HTTPS or reachable LAN endpoint | CLI. |
-| opencode | Vendor preferred | HTTPS, localhost, or reachable LAN endpoint | CLI. |
+| opencode | Vendor preferred | HTTPS, VPN, or reachable LAN endpoint | CLI. |
 | Strict vendor/env runner | Vendor required | Env-provided endpoint | Compatibility stress profile, not a product target. |
 | Artifact-oriented CLI runner | Vendor required | Env-provided endpoint | CLI plus artifacts. |
 
