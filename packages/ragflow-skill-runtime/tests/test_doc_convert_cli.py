@@ -205,7 +205,7 @@ class DocConvertCliTests(unittest.TestCase):
                     }
                 ).encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", "text/plain")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
@@ -305,6 +305,90 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(payload["language"], "en")
         self.assertEqual(payload["page_range"], "1-2")
         self.assertTrue(payload["enable_table"])
+
+    def test_convert_mineru_sync_backend_from_environment(self) -> None:
+        captured: dict[str, object] = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0"))
+                captured["path"] = self.path
+                captured["auth"] = self.headers.get("Authorization")
+                captured["content_type"] = self.headers.get("Content-Type")
+                captured["body"] = self.rfile.read(length)
+                body = json.dumps(
+                    {
+                        "code": 0,
+                        "data": {
+                            "markdown": "# MinerU Sync\n\nConverted by a synchronous multipart service.\n"
+                        },
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                input_dir = root / "input"
+                output_dir = root / "handoff"
+                input_dir.mkdir()
+                (input_dir / "paper.pdf").write_bytes(b"%PDF fake sync")
+                env = _env()
+                env.update(
+                    {
+                        "DOC_TO_MD_BACKEND": "mineru-sync",
+                        "MINERU_BASE_URL": f"http://127.0.0.1:{server.server_port}/api/v1",
+                        "MINERU_API_KEY": "mineru-secret",
+                        "MINERU_TIMEOUT": "5",
+                        "MINERU_LANGUAGE": "en",
+                        "MINERU_ENABLE_TABLE": "true",
+                        "MINERU_IS_OCR": "false",
+                        "MINERU_ENABLE_FORMULA": "true",
+                    }
+                )
+
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(CONVERT_SCRIPT),
+                        "--input",
+                        str(input_dir),
+                        "--output",
+                        str(output_dir),
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    env=env,
+                )
+
+                markdown = (output_dir / "documents" / "paper.md").read_text(encoding="utf-8")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("# MinerU Sync", markdown)
+        self.assertEqual(captured["path"], "/api/v1/parse")
+        self.assertEqual(captured["auth"], "Bearer mineru-secret")
+        self.assertIn("multipart/form-data", str(captured["content_type"]))
+        body = captured["body"]
+        self.assertIsInstance(body, bytes)
+        self.assertIn(b'name="file"; filename="paper.pdf"', body)
+        self.assertIn(b"%PDF fake sync", body)
+        self.assertIn(b'name="language"', body)
+        self.assertIn(b"en", body)
 
     def test_convert_mineru_backend_from_config_file(self) -> None:
         class Handler(BaseHTTPRequestHandler):

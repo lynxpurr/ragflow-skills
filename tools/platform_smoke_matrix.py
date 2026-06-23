@@ -193,6 +193,26 @@ def _run_mineru_env_check(
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            if self.path.endswith("/parse"):
+                body = json.dumps(
+                    {
+                        "code": 0,
+                        "data": {
+                            "markdown": "# MinerU Sync Service Smoke\n\nConverted through mineru-sync env config.\n"
+                        },
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if not self.path.endswith("/parse/file"):
+                self.send_response(404)
+                self.end_headers()
+                return
             body = json.dumps(
                 {
                     "code": 0,
@@ -202,7 +222,6 @@ def _run_mineru_env_check(
                     },
                 }
             ).encode("utf-8")
-            self.rfile.read(int(self.headers.get("Content-Length", "0")))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -247,6 +266,7 @@ def _run_mineru_env_check(
 
     mineru_input = workspace / "mineru-input"
     mineru_output = workspace / "mineru-handoff"
+    mineru_sync_output = workspace / "mineru-sync-handoff"
     mineru_input.mkdir(parents=True, exist_ok=True)
     (mineru_input / "mineru.pdf").write_bytes(b"%PDF mineru service smoke")
 
@@ -275,6 +295,26 @@ def _run_mineru_env_check(
             cwd=workspace,
             env=mineru_env,
         )
+        mineru_sync_env = {
+            **env,
+            "DOC_TO_MD_BACKEND": "mineru-sync",
+            "MINERU_BASE_URL": f"http://127.0.0.1:{server.server_port}/sync",
+            "MINERU_API_KEY": "smoke-key",
+            "MINERU_TIMEOUT": "5",
+        }
+        sync_result = _run_command(
+            [
+                sys.executable,
+                str(convert_script),
+                "--input",
+                str(mineru_input),
+                "--output",
+                str(mineru_sync_output),
+                "--json",
+            ],
+            cwd=workspace,
+            env=mineru_sync_env,
+        )
     finally:
         server.shutdown()
         server.server_close()
@@ -284,6 +324,12 @@ def _run_mineru_env_check(
         checks,
         "doc-to-md mineru env backend",
         result,
+        required_stdout='"ok": true',
+    )
+    _record_command_check(
+        checks,
+        "doc-to-md mineru-sync env backend",
+        sync_result,
         required_stdout='"ok": true',
     )
     markdown_path = mineru_output / "documents" / "mineru.md"
@@ -296,6 +342,18 @@ def _run_mineru_env_check(
             "ok": ok,
             "returncode": 0 if ok else 1,
             "error": "" if ok else f"missing or invalid {markdown_path}",
+        }
+    )
+    sync_markdown_path = mineru_sync_output / "documents" / "mineru.md"
+    sync_ok = sync_markdown_path.exists() and "MinerU Sync Service Smoke" in sync_markdown_path.read_text(
+        encoding="utf-8"
+    )
+    checks.append(
+        {
+            "name": "mineru-sync service markdown produced",
+            "ok": sync_ok,
+            "returncode": 0 if sync_ok else 1,
+            "error": "" if sync_ok else f"missing or invalid {sync_markdown_path}",
         }
     )
     manifest_path = mineru_output / "doc_manifest.json"
@@ -636,6 +694,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     artifact_files = [
         doc_manifest,
         mineru_doc_manifest,
+        workspace / "mineru-sync-handoff" / "doc_manifest.json",
         kb_manifest,
         artifacts_dir / "query_direct.json",
         artifacts_dir / "query_host_assisted.json",

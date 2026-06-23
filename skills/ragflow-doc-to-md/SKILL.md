@@ -27,7 +27,7 @@ Use `templates/ragflow-config.example.yaml` as the shared config template. Put t
 
 When a host agent should prepare config, run smoke checks, or perform end-to-end validation for the user, read `references/host-agent-setup.md` first. When an end user needs a copy-paste prompt to give their own host agent, use `references/user-onboarding-prompt.md`.
 
-MinerU service conversion can be configured through the host agent environment only when the service implements the MinerU Agent API or a compatible gateway:
+MinerU Agent API conversion can be configured through the host agent environment:
 
 ```bash
 DOC_TO_MD_BACKEND=mineru
@@ -35,6 +35,15 @@ MINERU_BASE_URL=https://mineru.net/api/v1/agent
 MINERU_API_KEY=...
 MINERU_TIMEOUT=300
 MINERU_POLL_INTERVAL=3
+```
+
+Self-hosted synchronous multipart `/parse` MinerU services use `mineru-sync`:
+
+```bash
+DOC_TO_MD_BACKEND=mineru-sync
+MINERU_BASE_URL=http://mineru.internal:8777/api/v1
+MINERU_API_KEY=...
+MINERU_TIMEOUT=300
 ```
 
 Generic remote conversion can also be configured through the host agent environment:
@@ -51,5 +60,6 @@ Notes:
 - The output directory contains `documents/*.md` plus `doc_manifest.json`.
 - `doc_manifest.json` uses `source_root: "."`, so downstream `ragflow-kb-build` can consume it after the handoff directory moves.
 - Use `--strict` when skipped files should fail the run.
-- The MinerU backend uses the Agent parsing API shape: create parse task at `/parse/file`, upload to signed URL, poll `/parse/{task_id}`, then download Markdown. Local synchronous multipart `/parse` services require a compatible gateway or `--backend remote`.
+- The `mineru` and `mineru-agent` backends use the Agent parsing API shape: create parse task at `/parse/file`, upload to signed URL, poll `/parse/{task_id}`, then download Markdown.
+- The `mineru-sync` and `mineru-local` backends post multipart form data to `/parse` and expect Markdown text or JSON containing `markdown`, `content`, `text`, `result`, or `markdown_url`.
 - The remote backend expects JSON with `filename` and base64 `content_base64`, and returns `markdown` or `content`.

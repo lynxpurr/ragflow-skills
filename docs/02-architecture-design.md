@@ -219,11 +219,13 @@ ragflow:
   verify_ssl: true
 
 doc_to_md:
-  # Keep auto unless MinerU Agent API or a compatible gateway is configured.
+  # Keep auto unless the MinerU protocol is confirmed.
+  # Use mineru/mineru-agent for Agent API; use mineru-sync/mineru-local for sync multipart /parse.
   backend: auto
 
 mineru:
-  # `doc_to_md.backend: mineru` expects the MinerU Agent API protocol.
+  # Agent API example: https://mineru.net/api/v1/agent
+  # Sync multipart example: http://mineru.internal:8777/api/v1
   base_url: https://mineru.net/api/v1/agent
   api_key: ${MINERU_API_KEY}
   timeout: 300
@@ -251,7 +253,7 @@ Core environment variables:
 | `DOC_TO_MD_REMOTE_URL` | Generic remote converter endpoint. |
 | `DOC_TO_MD_REMOTE_API_KEY` | Generic remote converter bearer token. |
 | `DOC_TO_MD_TIMEOUT` | Generic remote converter timeout in seconds. |
-| `MINERU_BASE_URL` | MinerU Agent API base URL. |
+| `MINERU_BASE_URL` | MinerU service base URL. Use an Agent API base for `mineru` / `mineru-agent`, or a sync multipart service root for `mineru-sync` / `mineru-local`. |
 | `MINERU_API_KEY` | MinerU API key. |
 | `MINERU_TIMEOUT` | MinerU parse timeout in seconds. |
 | `MINERU_POLL_INTERVAL` | MinerU parse polling interval in seconds. |

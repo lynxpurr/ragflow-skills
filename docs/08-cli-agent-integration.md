@@ -76,11 +76,13 @@ ragflow:
   verify_ssl: true
 
 doc_to_md:
-  # Keep auto unless MinerU Agent API or a compatible gateway is configured.
+  # Keep auto unless the MinerU protocol is confirmed.
+  # Use mineru/mineru-agent for Agent API; use mineru-sync/mineru-local for sync multipart /parse.
   backend: auto
 
 mineru:
-  # `doc_to_md.backend: mineru` expects the MinerU Agent API protocol.
+  # Agent API example: https://mineru.net/api/v1/agent
+  # Sync multipart example: http://mineru.internal:8777/api/v1
   base_url: https://mineru.net/api/v1/agent
   api_key: ${MINERU_API_KEY}
   timeout: 300
@@ -106,7 +108,7 @@ Environment-only configuration remains supported:
 ```bash
 export RAGFLOW_BASE_URL=https://ragflow.example.test
 export RAGFLOW_API_KEY=...
-# Use mineru only with MinerU Agent API or a compatible gateway.
+# Use mineru for MinerU Agent API, or mineru-sync for sync multipart /parse.
 export DOC_TO_MD_BACKEND=mineru
 export MINERU_BASE_URL=https://mineru.net/api/v1/agent
 export MINERU_API_KEY=...
@@ -124,7 +126,7 @@ RAGFlow may be reachable through:
 
 Public scripts do not start or manage RAGFlow. They only call an explicitly configured endpoint.
 
-Pandoc is treated as a local binary on `PATH`. MinerU is treated as a remote service by default and is configured through the shared config file or `MINERU_*` environment variables. The built-in `mineru` backend expects the MinerU Agent API protocol: create a task at `/parse/file`, upload to the returned URL, poll `/parse/{task_id}`, then download Markdown. Other MinerU-compatible services, including local synchronous multipart `/parse` APIs, should be exposed through a compatible gateway or the generic remote converter contract.
+Pandoc is treated as a local binary on `PATH`. MinerU is treated as a remote service by default and is configured through the shared config file or `MINERU_*` environment variables. The `mineru` and `mineru-agent` backends expect the MinerU Agent API protocol: create a task at `/parse/file`, upload to the returned URL, poll `/parse/{task_id}`, then download Markdown. The `mineru-sync` and `mineru-local` backends support self-hosted synchronous multipart `/parse` services on localhost, LAN, VPN, or HTTPS.
 
 ## Document To Markdown
 
@@ -148,7 +150,7 @@ python ragflow-doc-to-md/scripts/convert.py \
   --json
 ```
 
-The MinerU backend uses the Agent parsing API shape: create a parse task, upload the local file to the returned signed URL, poll the task, and download the returned Markdown URL. Do not point this backend directly at a local synchronous multipart `/parse` service unless a gateway makes it Agent API compatible.
+The `mineru` backend uses the Agent parsing API shape: create a parse task, upload the local file to the returned signed URL, poll the task, and download the returned Markdown URL. Use `--backend mineru-sync` for synchronous multipart `/parse` services.
 
 Generic remote converter:
 

@@ -389,6 +389,7 @@ Tasks:
 - [x] Add a platform smoke profile or check that exercises remote converter configuration without external network dependency.
 - [x] Decide whether MinerU remains a generic remote converter contract in v1 or gets a named `mineru` adapter in v0.2. Decision: MinerU is a named service backend using `MINERU_*` config.
 - [x] Add `mineru` backend support to `ragflow-doc-to-md`.
+- [x] Add `mineru-sync` backend support for self-hosted synchronous multipart `/parse` services on localhost, LAN, VPN, or HTTPS.
 - [x] Add shared `templates/ragflow-config.example.yaml` to each public skill.
 - [x] Add `references/host-agent-setup.md` to each public skill so Hermes/OpenClaw-style agents can prepare config and E2E checks from the released skill itself.
 - [x] Support unified config files for `ragflow`, `doc_to_md`, and `mineru` sections.
@@ -468,8 +469,8 @@ Tasks:
 - [x] Add a release-build assertion that every public skill artifact includes the prompt.
 - [x] Record the prompt as a public release example in `docs/06-release-hardening.md`.
 - [x] Forward-test the prompt with Hermes and record the MinerU protocol distinction found during onboarding.
-- [x] Clarify that the built-in `mineru` backend expects MinerU Agent API, while local synchronous `/parse` services need a compatible gateway or the generic `remote` backend.
-- [x] Forward-test the prompt with OpenClaw and tighten guidance so incompatible MinerU services do not get persisted as `doc_to_md.backend: mineru`.
+- [x] Clarify that `mineru` / `mineru-agent` target MinerU Agent API, while `mineru-sync` / `mineru-local` target synchronous multipart `/parse` services.
+- [x] Forward-test the prompt with OpenClaw and tighten guidance so synchronous multipart MinerU services use `doc_to_md.backend: mineru-sync`, not `mineru`.
 - [x] Clarify that host agents must not patch release-artifact `scripts/_vendor`; source runtime changes must be made in `packages/ragflow-skill-runtime` and re-vendored.
 - [x] Add the OpenClaw user-level config path `~/.config/openclaw/ragflow/config.local.yaml` observed during second-round validation.
 
@@ -479,8 +480,8 @@ Exit criteria:
 - The prompt instructs host agents to ask only for missing RAGFlow/MinerU endpoint and key values.
 - The prompt instructs host agents to keep secrets out of skill folders, repositories, release artifacts, and reports.
 - The prompt guides host agents through no-network smoke, optional MinerU conversion, and disposable RAGFlow live E2E.
-- MinerU onboarding does not imply that every MinerU-named HTTP service is compatible with `--backend mineru`.
-- Config templates default to `doc_to_md.backend: auto`; `mineru` is opt-in after protocol compatibility is confirmed.
+- MinerU onboarding distinguishes Agent API and synchronous multipart `/parse` services before choosing a backend.
+- Config templates default to `doc_to_md.backend: auto`; `mineru` and `mineru-sync` are opt-in after protocol compatibility is confirmed.
 
 ## Definition of Done
 
