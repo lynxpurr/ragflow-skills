@@ -44,6 +44,7 @@ def _minimal_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
 
 def _github_env() -> dict[str, str]:
     env = _minimal_env()
+    env["GH_PROMPT_DISABLED"] = "1"
     for key in (
         "HOME",
         "XDG_CONFIG_HOME",
@@ -421,7 +422,7 @@ def run_consumer_acceptance(
     return payload
 
 
-def download_github_release(*, tag: str, repo: str, output_dir: Path) -> dict[str, Any]:
+def download_github_release(*, tag: str, repo: str, output_dir: Path, timeout: float = 60.0) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     command = [
         "gh",
@@ -436,7 +437,7 @@ def download_github_release(*, tag: str, repo: str, output_dir: Path) -> dict[st
     ]
     for asset in REQUIRED_ASSETS:
         command.extend(["--pattern", asset])
-    result = _run_command(command, cwd=ROOT, env=_github_env(), timeout=180.0)
+    result = _run_command(command, cwd=ROOT, env=_github_env(), timeout=timeout)
     return {
         "ok": result["ok"],
         "command": command,
@@ -453,6 +454,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--github-release", help="Download this GitHub release tag before running")
     parser.add_argument("--repo", default="lynxpurr/ragflow-skills", help="GitHub repo for --github-release")
     parser.add_argument("--download-dir", help="Directory for downloaded GitHub release assets")
+    parser.add_argument("--download-timeout", type=float, default=60.0, help="Seconds to wait for gh release download")
     parser.add_argument("--work-dir", help="Acceptance workspace; defaults to a temporary directory")
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing work directory")
     parser.add_argument("--live", action="store_true", help="Also run a live query when RAGFlow env vars are present")
@@ -470,7 +472,12 @@ def main(argv: list[str] | None = None) -> int:
                     download_dir = Path(args.work_dir).resolve() / "downloads"
                 else:
                     download_dir = Path(tempfile.mkdtemp(prefix="ragflow-release-download-"))
-            download = download_github_release(tag=args.github_release, repo=args.repo, output_dir=download_dir)
+            download = download_github_release(
+                tag=args.github_release,
+                repo=args.repo,
+                output_dir=download_dir,
+                timeout=args.download_timeout,
+            )
             if not download["ok"]:
                 print(json.dumps({"ok": False, "download": download}, ensure_ascii=False, indent=2))
                 return 1

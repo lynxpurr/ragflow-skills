@@ -35,6 +35,7 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertEqual(env["HOME"], "/tmp/test-home")
         self.assertEqual(env["GH_TOKEN"], "token")
         self.assertEqual(env["GITHUB_TOKEN"], "github-token")
+        self.assertEqual(env["GH_PROMPT_DISABLED"], "1")
         self.assertEqual(env["PYTHONNOUSERSITE"], "1")
 
     def test_run_consumer_acceptance_from_local_archives(self) -> None:
