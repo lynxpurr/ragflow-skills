@@ -45,6 +45,7 @@ Near-term priority correction:
 - RC2 validated the CLI-agent target-scope changes and unified service config hardening.
 - The next milestone is RC3 with the default profile API-payload fix discovered during Hermes live E2E.
 - Platform work should stay focused on Hermes, OpenClaw, Claude Code, opencode, and CLI-style runners.
+- Post-v0.1 high-value feature work is tracked in `docs/09-high-value-feature-roadmap.md`, beginning with Phase 13 document quality and segmentation.
 
 ## Phase 0: Architecture Skeleton
 

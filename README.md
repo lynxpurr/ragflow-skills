@@ -88,3 +88,4 @@ This repository contains only the public, portable RAGFlow skill suite. Private 
 Commercial SaaS agent sandboxes are not a v1 target. The intended public targets are programming-agent CLI environments the user controls or can configure, especially Hermes, OpenClaw, Claude Code, and opencode. A first-party SaaS platform should integrate document parsing, RAGFlow, and retrieval as native backend tools rather than by running these portable skill scripts inside a sandbox.
 
 See `docs/08-cli-agent-integration.md` for CLI agent configuration and invocation patterns.
+See `docs/09-high-value-feature-roadmap.md` for the v0.2+ plan to add quality gates, segmentation, RAGFlow diagnostics, benchmark validation, routing, and agentic observability.
