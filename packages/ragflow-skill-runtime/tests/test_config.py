@@ -5,7 +5,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ragflow_skill_runtime.config import ConfigError, load_config, normalize_base_url, read_config_file
+from ragflow_skill_runtime.config import (
+    ConfigError,
+    load_config,
+    load_skill_config,
+    normalize_base_url,
+    read_config_file,
+)
 
 
 class ConfigTests(unittest.TestCase):
@@ -47,6 +53,71 @@ class ConfigTests(unittest.TestCase):
             data = read_config_file(path)
         self.assertEqual(data["base_url"], "https://ragflow.example.test")
         self.assertEqual(data["timeout"], 12)
+
+    def test_read_nested_yaml_file_with_env_substitution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.yaml"
+            path.write_text(
+                "ragflow:\n"
+                "  base_url: https://ragflow.example.test\n"
+                "  api_key: ${RAGFLOW_API_KEY}\n"
+                "doc_to_md:\n"
+                "  backend: mineru\n"
+                "mineru:\n"
+                "  base_url: https://mineru.example.test/api/v1/agent\n"
+                "  api_key: ${MINERU_API_KEY}\n"
+                "  timeout: 123\n"
+                "  enable_table: true\n",
+                encoding="utf-8",
+            )
+            data = read_config_file(
+                path,
+                env={
+                    "RAGFLOW_API_KEY": "ragflow-secret",
+                    "MINERU_API_KEY": "mineru-secret",
+                },
+            )
+
+        self.assertEqual(data["ragflow"]["api_key"], "ragflow-secret")
+        self.assertEqual(data["doc_to_md"]["backend"], "mineru")
+        self.assertEqual(data["mineru"]["api_key"], "mineru-secret")
+        self.assertEqual(data["mineru"]["timeout"], 123)
+        self.assertTrue(data["mineru"]["enable_table"])
+
+    def test_load_skill_config_merges_project_local_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / ".ragflow"
+            config_dir.mkdir()
+            (config_dir / "config.yaml").write_text(
+                "ragflow:\n"
+                "  base_url: https://ragflow.example.test\n"
+                "doc_to_md:\n"
+                "  backend: remote\n"
+                "mineru:\n"
+                "  base_url: https://mineru.example.test/api/v1/agent\n"
+                "  timeout: 300\n",
+                encoding="utf-8",
+            )
+            (config_dir / "config.local.yaml").write_text(
+                "ragflow:\n"
+                "  api_key: local-ragflow-key\n"
+                "doc_to_md:\n"
+                "  backend: mineru\n"
+                "mineru:\n"
+                "  api_key: local-mineru-key\n"
+                "  timeout: 120\n",
+                encoding="utf-8",
+            )
+
+            config = load_skill_config(env={}, cwd=root)
+
+        self.assertEqual(config.ragflow.base_url, "https://ragflow.example.test/api/v1")
+        self.assertEqual(config.ragflow.api_key, "local-ragflow-key")
+        self.assertEqual(config.doc_to_md.backend, "mineru")
+        self.assertEqual(config.mineru.base_url, "https://mineru.example.test/api/v1/agent")
+        self.assertEqual(config.mineru.api_key, "local-mineru-key")
+        self.assertEqual(config.mineru.timeout, 120)
 
     def test_missing_base_url_raises_when_normalized_property_used(self) -> None:
         config = load_config(env={})

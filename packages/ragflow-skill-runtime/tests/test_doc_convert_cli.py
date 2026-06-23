@@ -306,6 +306,108 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(payload["page_range"], "1-2")
         self.assertTrue(payload["enable_table"])
 
+    def test_convert_mineru_backend_from_config_file(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                body = json.dumps(
+                    {
+                        "code": 0,
+                        "data": {
+                            "task_id": "task-config",
+                            "file_url": f"http://127.0.0.1:{self.server.server_port}/upload/task-config",
+                        },
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_PUT(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                self.send_response(204)
+                self.end_headers()
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/parse/task-config":
+                    body = json.dumps(
+                        {
+                            "code": 0,
+                            "data": {
+                                "state": "done",
+                                "markdown_url": f"http://127.0.0.1:{self.server.server_port}/markdown/task-config.md",
+                            },
+                        }
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if self.path == "/markdown/task-config.md":
+                    body = b"# Config MinerU\n\nConverted through config file.\n"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/markdown")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                input_dir = root / "input"
+                output_dir = root / "handoff"
+                config_path = root / "ragflow-config.yaml"
+                input_dir.mkdir()
+                (input_dir / "paper.pdf").write_bytes(b"%PDF fake")
+                config_path.write_text(
+                    "doc_to_md:\n"
+                    "  backend: mineru\n"
+                    "mineru:\n"
+                    f"  base_url: http://127.0.0.1:{server.server_port}\n"
+                    "  timeout: 5\n"
+                    "  poll_interval: 0.1\n",
+                    encoding="utf-8",
+                )
+
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(CONVERT_SCRIPT),
+                        "--config",
+                        str(config_path),
+                        "--input",
+                        str(input_dir),
+                        "--output",
+                        str(output_dir),
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    env=_env(),
+                )
+
+                markdown = (output_dir / "documents" / "paper.md").read_text(encoding="utf-8")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("# Config MinerU", markdown)
+
     def test_convert_skips_unsupported_file_in_non_strict_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

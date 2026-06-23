@@ -19,4 +19,7 @@ def project_config_candidates(start: Path) -> list[Path]:
         root / ".ragflow" / "config.json",
         root / ".ragflow" / "config.yaml",
         root / ".ragflow" / "config.yml",
+        root / ".ragflow" / "config.local.json",
+        root / ".ragflow" / "config.local.yaml",
+        root / ".ragflow" / "config.local.yml",
     ]

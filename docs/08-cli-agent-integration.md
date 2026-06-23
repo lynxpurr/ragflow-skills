@@ -43,50 +43,73 @@ export RAGFLOW_SKILL_RUNTIME_PATH=/path/to/ragflow-skills/packages/ragflow-skill
 
 ## Configuration
 
-Prefer explicit CLI flags for one-off tasks and environment variables for repeated agent sessions.
+Prefer a stable host-agent config file for repeated use, explicit CLI flags for one-off overrides, and environment variables for secrets or deployment injection.
 
-RAGFlow:
-
-```bash
-export RAGFLOW_BASE_URL=https://ragflow.example.test
-export RAGFLOW_API_KEY=...
-```
-
-Document conversion remote backend:
-
-```bash
-export DOC_TO_MD_BACKEND=mineru
-export MINERU_BASE_URL=https://mineru.net/api/v1/agent
-export MINERU_API_KEY=...
-export MINERU_TIMEOUT=300
-export MINERU_POLL_INTERVAL=3
-```
-
-Generic converter backend:
-
-```bash
-export DOC_TO_MD_BACKEND=remote
-export DOC_TO_MD_REMOTE_URL=https://converter.example.test/convert
-export DOC_TO_MD_REMOTE_API_KEY=...
-export DOC_TO_MD_TIMEOUT=120
-```
-
-Local config files are also supported:
+Each public skill ships the same template:
 
 ```text
-.ragflow/config.yaml
+templates/ragflow-config.example.yaml
 ```
+
+Copy it to a stable host-agent path and point scripts to it with `RAGFLOW_CONFIG`:
+
+```bash
+export RAGFLOW_CONFIG=$HOME/.hermes/ragflow/config.local.yaml
+```
+
+Recommended locations:
+
+- Hermes: `~/.hermes/ragflow/config.local.yaml`
+- OpenClaw: `/etc/openclaw/ragflow/config.local.yaml`, `/var/lib/openclaw/ragflow/config.local.yaml`, or a mounted secret/config path
+- Claude Code / opencode: `~/.config/ragflow-skills/config.local.yaml`
+- Local project fallback: `.ragflow/config.yaml` plus `.ragflow/config.local.yaml` in the current working directory
+
+Prefer host-agent config paths over document-project folders when project naming or working directories are unstable. Do not put real config in the skill folder; skill folders are release artifacts and may be replaced during upgrades.
 
 Example:
 
 ```yaml
-base_url: https://ragflow.example.test
-api_key: replace-with-local-secret
-timeout: 60
-verify_ssl: true
+ragflow:
+  base_url: https://ragflow.example.test
+  api_key: ${RAGFLOW_API_KEY}
+  timeout: 60
+  verify_ssl: true
+
+doc_to_md:
+  backend: mineru
+
+mineru:
+  base_url: https://mineru.net/api/v1/agent
+  api_key: ${MINERU_API_KEY}
+  timeout: 300
+  poll_interval: 3
+  language: ch
+  enable_table: true
+  is_ocr: false
+  enable_formula: true
 ```
 
-Do not commit local config files or real credentials.
+Generic remote converter alternative:
+
+```yaml
+doc_to_md:
+  backend: remote
+  remote_url: https://converter.example.test/convert
+  remote_api_key: ${DOC_TO_MD_REMOTE_API_KEY}
+  remote_timeout: 120
+```
+
+Environment-only configuration remains supported:
+
+```bash
+export RAGFLOW_BASE_URL=https://ragflow.example.test
+export RAGFLOW_API_KEY=...
+export DOC_TO_MD_BACKEND=mineru
+export MINERU_BASE_URL=https://mineru.net/api/v1/agent
+export MINERU_API_KEY=...
+```
+
+Do not commit local config files or real credentials. Use `${ENV_VAR}` placeholders in shared config files when possible.
 
 ## Endpoint Rules
 

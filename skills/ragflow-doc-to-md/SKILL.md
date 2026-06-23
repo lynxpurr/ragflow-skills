@@ -20,7 +20,10 @@ python scripts/convert.py --input ./docs --output ./handoff --mode passthrough
 python scripts/convert.py --input ./raw --output ./handoff --backend builtin
 python scripts/convert.py --input ./raw --output ./handoff --backend mineru
 python scripts/convert.py --input ./raw --output ./handoff --backend remote --remote-url https://converter.example/api/convert
+python scripts/convert.py --config /path/to/ragflow-config.local.yaml --input ./raw --output ./handoff --json
 ```
+
+Use `templates/ragflow-config.example.yaml` as the shared config template. Put the real config in a stable host-agent config path, such as Hermes or OpenClaw config storage, and point scripts to it with `RAGFLOW_CONFIG` or `--config`. Do not put real keys in the skill folder.
 
 MinerU service conversion can be configured through the host agent environment:
 

@@ -1,7 +1,15 @@
 """Portable runtime primitives for public RAGFlow skills."""
 
 from .auth import AuthError, load_api_key
-from .config import ConfigError, RagflowConfig, load_config
+from .config import (
+    ConfigError,
+    DocToMdConfig,
+    MineruConfig,
+    RagflowConfig,
+    SkillConfig,
+    load_config,
+    load_skill_config,
+)
 from .doc_convert import (
     ConvertedDocument,
     DocConvertError,
@@ -59,6 +67,7 @@ __all__ = [
     "AuthError",
     "ConfigError",
     "DocManifest",
+    "DocToMdConfig",
     "ConvertedDocument",
     "DocConvertError",
     "DocumentEntry",
@@ -66,10 +75,12 @@ __all__ = [
     "KbDocumentEntry",
     "KbManifest",
     "ManifestError",
+    "MineruConfig",
     "ChunkProfile",
     "ProfileError",
     "RAGFlowClient",
     "RagflowConfig",
+    "SkillConfig",
     "SourceDocument",
     "BuildDocument",
     "BuildError",
@@ -91,6 +102,7 @@ __all__ = [
     "make_doc_manifest_payload",
     "load_api_key",
     "load_config",
+    "load_skill_config",
     "load_doc_manifest",
     "load_kb_manifest",
     "load_profile",

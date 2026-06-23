@@ -31,6 +31,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     convert_source_to_markdown,
     discover_source_documents,
     extract_markdown_title,
+    load_skill_config,
     make_doc_manifest_payload,
     safe_markdown_name,
     sha256_file,
@@ -52,16 +53,16 @@ def _error(message: str, *, json_output: bool) -> int:
     return 2
 
 
-def _remote_api_key(args: argparse.Namespace) -> str | None:
-    return args.remote_api_key or os.environ.get("DOC_TO_MD_REMOTE_API_KEY")
+def _remote_api_key(args: argparse.Namespace, config) -> str | None:
+    return args.remote_api_key or config.doc_to_md.remote_api_key
 
 
-def _remote_url(args: argparse.Namespace) -> str | None:
-    return args.remote_url or os.environ.get("DOC_TO_MD_REMOTE_URL")
+def _remote_url(args: argparse.Namespace, config) -> str | None:
+    return args.remote_url or config.doc_to_md.remote_url
 
 
-def _backend(args: argparse.Namespace) -> str:
-    backend = args.backend or os.environ.get("DOC_TO_MD_BACKEND") or "auto"
+def _backend(args: argparse.Namespace, config) -> str:
+    backend = args.backend or config.doc_to_md.backend or "auto"
     if backend not in BACKEND_CHOICES:
         allowed = ", ".join(sorted(BACKEND_CHOICES))
         raise DocConvertError(f"DOC_TO_MD_BACKEND must be one of: {allowed}")
@@ -70,8 +71,6 @@ def _backend(args: argparse.Namespace) -> str:
 
 def _remote_timeout(args: argparse.Namespace) -> float:
     value = args.remote_timeout
-    if value is None:
-        value = os.environ.get("DOC_TO_MD_TIMEOUT")
     if value in (None, ""):
         return 120.0
     try:
@@ -83,22 +82,22 @@ def _remote_timeout(args: argparse.Namespace) -> float:
     return timeout
 
 
-def _env_or_arg(args: argparse.Namespace, field: str, env_name: str, default: str | None = None) -> str | None:
+def _config_or_arg(args: argparse.Namespace, field: str, config_value, default=None):
     value = getattr(args, field)
-    return value or os.environ.get(env_name) or default
+    return value if value not in (None, "") else config_value if config_value not in (None, "") else default
 
 
-def _float_env_or_arg(
+def _float_config_or_arg(
     args: argparse.Namespace,
     field: str,
-    env_name: str,
+    config_value,
     default: float,
     *,
     label: str,
 ) -> float:
     value = getattr(args, field)
     if value is None:
-        value = os.environ.get(env_name)
+        value = config_value
     if value in (None, ""):
         return default
     try:
@@ -110,10 +109,10 @@ def _float_env_or_arg(
     return parsed
 
 
-def _bool_env_or_arg(args: argparse.Namespace, field: str, env_name: str, default: bool) -> bool:
+def _bool_config_or_arg(args: argparse.Namespace, field: str, config_value, default: bool, *, label: str) -> bool:
     value = getattr(args, field)
     if value is None:
-        value = os.environ.get(env_name)
+        value = config_value
     if value in (None, ""):
         return default
     if isinstance(value, bool):
@@ -123,25 +122,30 @@ def _bool_env_or_arg(args: argparse.Namespace, field: str, env_name: str, defaul
         return True
     if lowered in {"0", "false", "no", "off"}:
         return False
-    raise DocConvertError(f"{env_name} must be true or false")
+    raise DocConvertError(f"{label} must be true or false")
 
 
 def _run(args: argparse.Namespace) -> int:
     try:
-        backend = _backend(args)
-        remote_url = _remote_url(args)
-        remote_timeout = _remote_timeout(args)
-        mineru_timeout = _float_env_or_arg(
+        config = load_skill_config(config_file=args.config)
+        backend = _backend(args, config)
+        remote_url = _remote_url(args, config)
+        remote_timeout = (
+            _remote_timeout(args)
+            if args.remote_timeout is not None
+            else config.doc_to_md.remote_timeout or 120.0
+        )
+        mineru_timeout = _float_config_or_arg(
             args,
             "mineru_timeout",
-            "MINERU_TIMEOUT",
+            config.mineru.timeout,
             300.0,
             label="MINERU_TIMEOUT",
         )
-        mineru_poll_interval = _float_env_or_arg(
+        mineru_poll_interval = _float_config_or_arg(
             args,
             "mineru_poll_interval",
-            "MINERU_POLL_INTERVAL",
+            config.mineru.poll_interval,
             3.0,
             label="MINERU_POLL_INTERVAL",
         )
@@ -170,17 +174,35 @@ def _run(args: argparse.Namespace) -> int:
                     mode=args.mode,
                     backend=backend,
                     remote_url=remote_url,
-                    remote_api_key=_remote_api_key(args),
+                    remote_api_key=_remote_api_key(args, config),
                     remote_timeout=remote_timeout,
-                    mineru_base_url=_env_or_arg(args, "mineru_base_url", "MINERU_BASE_URL"),
-                    mineru_api_key=_env_or_arg(args, "mineru_api_key", "MINERU_API_KEY"),
+                    mineru_base_url=_config_or_arg(args, "mineru_base_url", config.mineru.base_url),
+                    mineru_api_key=_config_or_arg(args, "mineru_api_key", config.mineru.api_key),
                     mineru_timeout=mineru_timeout,
                     mineru_poll_interval=mineru_poll_interval,
-                    mineru_language=_env_or_arg(args, "mineru_language", "MINERU_LANGUAGE", "ch") or "ch",
-                    mineru_page_range=_env_or_arg(args, "mineru_page_range", "MINERU_PAGE_RANGE"),
-                    mineru_enable_table=_bool_env_or_arg(args, "mineru_enable_table", "MINERU_ENABLE_TABLE", True),
-                    mineru_is_ocr=_bool_env_or_arg(args, "mineru_is_ocr", "MINERU_IS_OCR", False),
-                    mineru_enable_formula=_bool_env_or_arg(args, "mineru_enable_formula", "MINERU_ENABLE_FORMULA", True),
+                    mineru_language=_config_or_arg(args, "mineru_language", config.mineru.language, "ch") or "ch",
+                    mineru_page_range=_config_or_arg(args, "mineru_page_range", config.mineru.page_range),
+                    mineru_enable_table=_bool_config_or_arg(
+                        args,
+                        "mineru_enable_table",
+                        config.mineru.enable_table,
+                        True,
+                        label="MINERU_ENABLE_TABLE",
+                    ),
+                    mineru_is_ocr=_bool_config_or_arg(
+                        args,
+                        "mineru_is_ocr",
+                        config.mineru.is_ocr,
+                        False,
+                        label="MINERU_IS_OCR",
+                    ),
+                    mineru_enable_formula=_bool_config_or_arg(
+                        args,
+                        "mineru_enable_formula",
+                        config.mineru.enable_formula,
+                        True,
+                        label="MINERU_ENABLE_FORMULA",
+                    ),
                 )
             except (UnicodeDecodeError, OSError, DocConvertError) as exc:
                 if args.strict:
@@ -223,6 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Convert documents into a Markdown handoff bundle")
     parser.add_argument("--input", required=True, help="Input file or directory")
     parser.add_argument("--output", required=True, help="Output handoff directory")
+    parser.add_argument("--config", help="Unified config file; defaults to RAGFLOW_CONFIG or .ragflow/config*.yaml")
     parser.add_argument("--mode", choices=["auto", "passthrough", "convert"], default="auto")
     parser.add_argument("--backend", choices=sorted(BACKEND_CHOICES), help="Conversion backend; defaults to DOC_TO_MD_BACKEND or auto")
     parser.add_argument("--remote-url", help="Remote conversion endpoint; defaults to DOC_TO_MD_REMOTE_URL")

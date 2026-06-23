@@ -1,0 +1,28 @@
+# Copy this file to a stable host-agent config path, then set RAGFLOW_CONFIG.
+# Recommended examples:
+#   Hermes:   ~/.hermes/ragflow/config.local.yaml
+#   OpenClaw: /etc/openclaw/ragflow/config.local.yaml or a mounted secret path
+#   Claude:   ~/.config/ragflow-skills/config.local.yaml
+#
+# Do not commit real API keys.
+
+ragflow:
+  base_url: https://ragflow.example.com
+  api_key: ${RAGFLOW_API_KEY}
+  timeout: 60
+  verify_ssl: true
+
+doc_to_md:
+  backend: mineru
+
+mineru:
+  base_url: https://mineru.net/api/v1/agent
+  api_key: ${MINERU_API_KEY}
+  timeout: 300
+  poll_interval: 3
+  language: ch
+  page_range:
+  enable_table: true
+  is_ocr: false
+  enable_formula: true
+
