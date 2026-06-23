@@ -32,7 +32,7 @@ Release artifacts vendor that runtime into each skill:
 scripts/_vendor/ragflow_skill_runtime/
 ```
 
-This keeps development DRY while allowing Claude Code, OpenClaw, Hermes, and SaaS agent sandboxes to run the skills without editable installs or local machine paths.
+This keeps development DRY while allowing Hermes, OpenClaw, Claude Code, opencode, and similar programming-agent CLI tools to run the skills without editable installs or local machine paths.
 
 ## Current Release Candidate
 
@@ -60,3 +60,5 @@ python3 tools/live_integration_check.py
 ## Scope
 
 This repository contains only the public, portable RAGFlow skill suite. Private dedao-specific workflows are intentionally excluded.
+
+Commercial SaaS agent sandboxes are not a v1 target. The intended public targets are programming-agent CLI environments the user controls or can configure, especially Hermes, OpenClaw, Claude Code, and opencode. A first-party SaaS platform should integrate document parsing, RAGFlow, and retrieval as native backend tools rather than by running these portable skill scripts inside a sandbox.

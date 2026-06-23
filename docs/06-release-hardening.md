@@ -83,6 +83,6 @@ These examples cover the handoff manifest, validation query set, and host-assist
 
 ## Agents Metadata Decision
 
-Do not add `agents/openai.yaml` in v1. The suite targets Hermes, OpenClaw, Claude Code, and generic SaaS sandboxes, so the first release keeps platform-neutral `SKILL.md` plus scripts as the canonical interface.
+Do not add `agents/openai.yaml` in v1. The suite targets Hermes, OpenClaw, Claude Code, opencode, and similar programming-agent CLI tools, so the first release keeps platform-neutral `SKILL.md` plus scripts as the canonical interface.
 
 Add `agents/openai.yaml` later only when a target marketplace or host UI requires it. When adding it, generate one file per public skill from the current `SKILL.md` and validate it against the target host schema.

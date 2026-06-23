@@ -1,13 +1,17 @@
 # SaaS Platform Integration Plan
 
-Status: design proposal
+Status: optional native-SaaS reference, outside active public CLI skill scope
 Date: 2026-06-23
 
 ## Goal
 
 Build first-class document parsing, RAGFlow knowledge-base generation, validation, and retrieval capabilities inside the user's own SaaS agent platform.
 
-The public `ragflow-skills` release remains useful for Hermes, OpenClaw, Claude Code, and third-party code sandboxes. Inside the user's own SaaS platform, however, the better product shape is a native managed-tool architecture:
+The public `ragflow-skills` release remains useful for Hermes, OpenClaw, Claude Code, opencode, and similar programming-agent CLI tools. Inside the user's own SaaS platform, however, the better product shape is a native managed-tool architecture:
+
+Commercial SaaS agent sandboxes are no longer an active target for the public `ragflow-skills` v1 line. If the user builds a first-party SaaS platform, this document describes a separate native integration path implemented in the platform backend rather than through portable skill scripts.
+
+Rationale: third-party commercial SaaS agent sandboxes are usually hard to extend at the service and networking layer, while the user prefers controlled environments such as OpenClaw and Hermes. In the user's own SaaS platform, the stronger architecture is to make RAGFlow, MinerU, Pandoc, validation, and retrieval first-class platform services and tools implemented directly in backend code.
 
 ```text
 Agent / User
@@ -44,7 +48,7 @@ Use for external platforms that the user does not fully control:
 - Hermes agent;
 - OpenClaw deployments outside the SaaS backend;
 - Claude Code;
-- third-party SaaS code sandboxes.
+- strict vendor/env runners used for compatibility stress tests.
 
 Shape:
 
@@ -414,6 +418,6 @@ The public skills are still valuable as:
 - external distribution artifacts;
 - CLI fallback;
 - reference implementation for manifests and command semantics;
-- compatibility layer for Hermes, OpenClaw, Claude Code, and third-party sandboxes.
+- compatibility layer for Hermes, OpenClaw, Claude Code, opencode, and strict vendor/env runners.
 
 The native SaaS path should provide the best product experience by hiding endpoints, secrets, ports, and daemon management behind platform-managed connectors and tools.

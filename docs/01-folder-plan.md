@@ -5,7 +5,7 @@ Date: 2026-06-22
 
 ## Goal
 
-Create a cross-platform public RAGFlow skill suite that can run in Hermes, OpenClaw, Claude Code, and SaaS agent sandboxes. The public suite must not depend on dedao tools, personal paths, localhost-only services, or editable installs.
+Create a cross-platform public RAGFlow skill suite that can run in Hermes, OpenClaw, Claude Code, opencode, and similar programming-agent CLI tools. The public suite must not depend on dedao tools, personal paths, implicit localhost services, or editable installs.
 
 ## Top-Level Layout
 
@@ -75,7 +75,7 @@ This gives us:
 
 - DRY in source: one runtime package to maintain.
 - Self-contained in distribution: each skill can run without `pip install -e`.
-- SaaS sandbox compatibility: scripts can import vendored runtime from local files.
+- Strict vendor/env compatibility: scripts can import vendored runtime from local files without editable installs.
 
 ## Public Skills
 

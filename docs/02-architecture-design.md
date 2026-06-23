@@ -16,12 +16,16 @@ ragflow-skill-runtime          shared runtime, vendored into release artifacts
 
 Dedao-related skills stay private and are not shipped.
 
+Commercial SaaS agent sandboxes are explicitly out of the v1 public skill target set. They are usually difficult to extend, constrain service configuration, and are not the user's preferred deployment path. If the user builds a first-party SaaS platform, RAGFlow, MinerU, Pandoc, and retrieval workflows should be implemented as platform-native backend services and LangGraph/tool code, using this repository only as a reference for command semantics and manifest shapes.
+
 ## Design Principles
 
 - High cohesion: each public skill owns one state transition.
 - Loose coupling: skills communicate through thin manifest files and `ragflow-skill-runtime`, not through direct imports of each other.
 - Self-contained release: every published skill can run without editable installs or local absolute paths.
-- Portable by default: no `/home/zenz`, no localhost assumption, no long-running daemon requirement.
+- Portable by default: no `/home/zenz`, no implicit localhost assumption, and no required long-running daemon.
+- CLI-agent friendly: explicit localhost, LAN, VPN, or HTTPS RAGFlow endpoints are all valid when configured by the user.
+- Non-SaaS public scope: optimize for Hermes, OpenClaw, Claude Code, opencode, and similar programming-agent CLI tools.
 - Product-grade validation: KB build includes retrieval validation as a first-class command.
 - Progressive disclosure: `SKILL.md` files stay short; detailed behavior goes into `references/` and deterministic code goes into `scripts/`.
 
@@ -71,7 +75,7 @@ Owns:
 - Direct retrieval.
 - Host-assisted agentic evidence retrieval.
 - `--mode auto|direct|agentic` dispatch.
-- Host-assisted fallback for SaaS platforms where the host agent does final answer generation.
+- Host-assisted evidence return for host agents that do final answer generation.
 
 Does not own:
 
@@ -183,7 +187,7 @@ def bootstrap_core() -> None:
 bootstrap_core()
 ```
 
-Release artifacts must include `scripts/_vendor/ragflow_skill_runtime/` so SaaS sandboxes can run without package installation.
+Release artifacts must include `scripts/_vendor/ragflow_skill_runtime/` so Claude Code, opencode, and other CLI agents can run without package installation.
 
 ## Configuration Contract
 
@@ -298,7 +302,7 @@ python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level benchmar
 | `agentic` | Partial: host-assisted evidence return is supported; script-owned planning/synthesis is future work. |
 | `auto` | Implemented conservatively: currently falls back to direct mode. |
 
-SaaS fallback:
+Host-assisted fallback:
 
 - If no LLM key is available, `agentic` can run in `--host-assisted` mode.
 - In host-assisted mode, the script returns plan/chunks/evidence and lets the host agent synthesize the final answer.
@@ -320,12 +324,15 @@ V1 scope decision:
 | Platform | Core loading | RAGFlow access | Recommended interface |
 |---|---|---|---|
 | Hermes local | Installed package or vendor | Localhost or LAN | CLI. |
-| OpenClaw | Installed package or vendor | LAN or HTTPS gateway | CLI for v1; `serve` deferred. |
+| OpenClaw | Installed package or vendor | Localhost, LAN, or HTTPS gateway | CLI for v1; `serve` deferred. |
 | Claude Code | Vendor preferred | HTTPS or reachable LAN endpoint | CLI. |
-| SaaS sandbox | Vendor required | HTTPS gateway | CLI, no daemon. |
-| Manus-like app | Vendor required | HTTPS gateway | CLI plus artifacts. |
+| opencode | Vendor preferred | HTTPS, localhost, or reachable LAN endpoint | CLI. |
+| Strict vendor/env runner | Vendor required | Env-provided endpoint | Compatibility stress profile, not a product target. |
+| Artifact-oriented CLI runner | Vendor required | Env-provided endpoint | CLI plus artifacts. |
 
-The most restrictive target is the SaaS sandbox. Design defaults should satisfy it first.
+The primary targets are programming-agent CLI tools. Strict sandbox-style behavior is retained as a compatibility stress profile, but commercial SaaS agent sandboxes are no longer an active v1 target.
+
+This means the strict profile is an engineering guardrail, not a product promise. It checks that release artifacts remain self-contained, do not depend on `/home/zenz`, and can read endpoint credentials from environment variables. It does not imply support for arbitrary commercial SaaS agent platforms.
 
 ## Release Build
 

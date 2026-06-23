@@ -55,15 +55,22 @@ PLATFORM_PROFILES: tuple[PlatformProfile, ...] = (
         notes="CLI-only smoke with no editable install.",
     ),
     PlatformProfile(
-        id="saas-sandbox-https",
-        platform="SaaS sandbox",
+        id="opencode-cli",
+        platform="opencode",
         runtime_mode="vendored-release",
-        config_mode="env",
-        notes="No daemon, no pip install, HTTPS-style RAGFLOW_BASE_URL from environment.",
+        config_mode="cli",
+        notes="CLI-only smoke for opencode-style programming agents.",
     ),
     PlatformProfile(
-        id="manus-artifact-cli",
-        platform="Manus-like artifact runner",
+        id="strict-vendor-env",
+        platform="Strict vendor/env runner",
+        runtime_mode="vendored-release",
+        config_mode="env",
+        notes="Compatibility stress profile with no editable install and env-provided RAGFlow config.",
+    ),
+    PlatformProfile(
+        id="artifact-runner-cli",
+        platform="Artifact-oriented CLI runner",
         runtime_mode="vendored-release",
         config_mode="env",
         notes="CLI smoke writes handoff, evidence, and validation report artifacts.",
@@ -76,6 +83,11 @@ PLATFORM_PROFILES: tuple[PlatformProfile, ...] = (
         notes="V1 CLI path; long-running serve mode is intentionally deferred.",
     ),
 )
+
+PROFILE_ALIASES = {
+    "saas-sandbox-https": "strict-vendor-env",
+    "manus-artifact-cli": "artifact-runner-cli",
+}
 
 
 def _minimal_env(profile: PlatformProfile) -> dict[str, str]:
@@ -516,10 +528,11 @@ def selected_profiles(ids: list[str] | None = None) -> list[PlatformProfile]:
     if not ids:
         return list(PLATFORM_PROFILES)
     known = {profile.id: profile for profile in PLATFORM_PROFILES}
-    missing = [profile_id for profile_id in ids if profile_id not in known]
+    resolved_ids = [PROFILE_ALIASES.get(profile_id, profile_id) for profile_id in ids]
+    missing = [profile_id for profile_id in resolved_ids if profile_id not in known]
     if missing:
         raise SystemExit(f"unknown platform profile(s): {', '.join(missing)}")
-    return [known[profile_id] for profile_id in ids]
+    return [known[profile_id] for profile_id in resolved_ids]
 
 
 def run_smoke_matrix(

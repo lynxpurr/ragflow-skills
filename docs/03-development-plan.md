@@ -12,7 +12,9 @@ Implement a cross-platform public RAGFlow skill suite in the current workspace:
 - `ragflow-query`
 - shared `ragflow-skill-runtime`
 
-The suite must be self-contained at release time and usable from Hermes, OpenClaw, Claude Code, and SaaS agent code sandboxes.
+The suite must be self-contained at release time and usable from Hermes, OpenClaw, Claude Code, opencode, and similar programming-agent CLI tools.
+
+Commercial SaaS agent sandboxes are excluded from the active public-skill roadmap. The user's own SaaS platform should implement document parsing, KB generation, validation, and retrieval as native backend capabilities, not by delegating first-class product workflows to portable skill scripts.
 
 ## Current Snapshot
 
@@ -40,6 +42,7 @@ Near-term priority correction:
 
 - The next public-suite milestone is not private dedao bridging.
 - The next milestone is stable release promotion after RC1 external artifact validation.
+- Platform work should stay focused on Hermes, OpenClaw, Claude Code, opencode, and CLI-style runners.
 
 ## Phase 0: Architecture Skeleton
 
@@ -127,7 +130,7 @@ Tasks:
 - [x] Implement `--kb`, `--kb-manifest`, and `--top-k`.
 - [x] Move direct retrieval logic into `ragflow_skill_runtime/retrieval.py`.
 - [x] Add `--mode auto` classification placeholder with conservative direct fallback.
-- [x] Add `--host-assisted` response shape for SaaS agent synthesis.
+- [x] Add `--host-assisted` response shape for host-agent synthesis.
 - [ ] Add optional `serve` subcommand for local/OpenClaw use.
 - [ ] Port agentic retrieval after direct mode is stable.
 
@@ -193,7 +196,7 @@ Tasks:
 
 Validation:
 
-- [x] Passthrough mode works in a clean SaaS-like environment.
+- [x] Passthrough mode works in a clean strict vendor/env environment.
 - [x] Missing optional converters produce clear warnings.
 - [x] `doc_manifest.json` can be consumed by `ragflow-kb-build`.
 
@@ -260,8 +263,9 @@ Tasks:
 - [x] Add `tools/platform_smoke_matrix.py`.
 - [x] Hermes local smoke: source-runtime and vendor mode.
 - [x] Claude Code smoke: CLI mode with vendored core.
-- [x] SaaS sandbox simulation: no pip install, no daemon, HTTPS-style base URL config.
-- [x] Manus-like artifact smoke: CLI produces files in a declared output directory.
+- [x] opencode CLI smoke: vendored runtime and CLI-only execution.
+- [x] Strict vendor/env simulation: no editable install, env-provided RAGFlow config.
+- [x] Artifact-oriented CLI smoke: CLI produces files in a declared output directory.
 - [x] OpenClaw v1 smoke: document and test CLI-only usage while `serve` is deferred.
 - [x] Document failure modes and workarounds for config, auth, and network reachability.
 
@@ -270,7 +274,7 @@ Invocation:
 ```bash
 python3 tools/platform_smoke_matrix.py
 python3 tools/platform_smoke_matrix.py --work-dir /tmp/ragflow-platform-smoke
-python3 tools/platform_smoke_matrix.py --profile saas-sandbox-https
+python3 tools/platform_smoke_matrix.py --profile strict-vendor-env
 ```
 
 Exit criteria:
@@ -379,7 +383,7 @@ The public suite is ready for first external use when:
 - [x] `ragflow-kb-build build` produces `kb_manifest.json`.
 - [x] `ragflow-kb-build validate --level smoke` works.
 - [x] `ragflow-doc-to-md --mode passthrough` produces `doc_manifest.json`.
-- [x] SaaS sandbox simulation works without daemon or editable install.
+- [x] Strict vendor/env simulation works without daemon or editable install.
 - [x] Release hygiene check blocks private paths, private workflow references, and missing vendored runtime.
 - [x] Release archive export produces deterministic per-skill archives and checksum manifest.
 - [x] Dedao skills remain private and untouched.

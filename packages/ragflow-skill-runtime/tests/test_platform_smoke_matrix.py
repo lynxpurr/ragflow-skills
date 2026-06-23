@@ -37,24 +37,29 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("doc-to-md passthrough", check_names)
         self.assertIn("query direct and host-assisted", check_names)
 
-    def test_run_smoke_matrix_for_saas_profile(self) -> None:
+    def test_run_smoke_matrix_for_strict_vendor_env_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             payload = run_smoke_matrix(
                 dist_dir=Path(tmp) / "dist",
                 work_root=Path(tmp) / "work",
-                profile_ids=["saas-sandbox-https"],
+                profile_ids=["strict-vendor-env"],
             )
 
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(len(payload["profiles"]), 1)
         profile = payload["profiles"][0]
-        self.assertEqual(profile["id"], "saas-sandbox-https")
+        self.assertEqual(profile["id"], "strict-vendor-env")
         self.assertEqual(profile["config_mode"], "env")
         self.assertTrue(profile["ok"], profile)
         self.assertTrue(
             any(path.endswith("validation_report.md") for path in profile["artifacts"]),
             profile["artifacts"],
         )
+
+    def test_legacy_saas_profile_aliases_to_strict_vendor_env(self) -> None:
+        profiles = selected_profiles(["saas-sandbox-https"])
+
+        self.assertEqual([profile.id for profile in profiles], ["strict-vendor-env"])
 
 
 if __name__ == "__main__":
