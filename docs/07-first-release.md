@@ -1,11 +1,11 @@
 # First Release Candidate
 
-Status: rc1 published
+Status: rc2 published
 Date: 2026-06-23
 
 ## RC Goal
 
-Use `v0.1.0-rc1` to validate that the public RAGFlow skills can be distributed as self-contained artifacts before promoting a stable `v0.1.0`.
+Use release candidates to validate that the public RAGFlow skills can be distributed as self-contained artifacts before promoting a stable `v0.1.0`.
 
 The RC is successful when:
 
@@ -71,6 +71,12 @@ To exercise the GitHub Release download path through `gh`, use:
 python3 tools/consumer_acceptance.py --github-release v0.1.0-rc1 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-github --overwrite
 ```
 
+For the current RC2 release, use:
+
+```bash
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc2 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-rc2-github --overwrite --download-timeout 90
+```
+
 For private repositories, run `gh auth login` first or set `GH_TOKEN`/`GITHUB_TOKEN`. The harness preserves GitHub CLI auth environment only for the release download step, disables interactive `gh` prompts, and accepts `--download-timeout` for slow networks. GitHub assets download to a separate temporary directory by default so `--overwrite` can safely clean the consumer work directory. The unpacked skill checks still run with a minimal consumer environment.
 
 ## RC1 Forward-Test Result
@@ -111,6 +117,57 @@ The release manifest records `source_commit: 082ccec`.
 After RC1, `develop` was refocused on Hermes, OpenClaw, Claude Code, opencode, and similar programming-agent CLI tools. Commercial SaaS agent sandboxes are no longer an active public-skill target.
 
 Do not promote RC1 directly to stable. Cut `v0.1.0-rc2` from the updated `develop` branch, regenerate all three skill archives, and rerun consumer acceptance before stable `v0.1.0`.
+
+## RC2 GitHub Release
+
+`v0.1.0-rc2` is published as a GitHub prerelease:
+
+https://github.com/lynxpurr/ragflow-skills/releases/tag/v0.1.0-rc2
+
+RC2 source commit: `9fa41d7`.
+
+Attached assets:
+
+- `ragflow-doc-to-md.tar.gz` - 23046 bytes - sha256 `c19c38298e62a6d13b5b652a6cb96a10dbf5f71f2a127e2e1cfbd602ebed70a4`
+- `ragflow-kb-build.tar.gz` - 23045 bytes - sha256 `19b507a406936d48e4b4a12b40b0525ef26d4cc25a3bd45b15447a03ec23d2a0`
+- `ragflow-query.tar.gz` - 21982 bytes - sha256 `6403e3cc99f4fe8996a9dac13dbb80e7d564df4b408faac794d1fa1c04557dfd`
+- `release-manifest.json` - 1129 bytes - asset sha256 `27d2d8118c8fb26dc75a30b40775f2affcdc6c8af630717acc633130e3addb0a`
+
+RC2 includes the post-RC1 target refocus and configuration hardening:
+
+- public scope is Hermes, OpenClaw, Claude Code, opencode, and similar controllable CLI-agent environments;
+- each public skill ships `templates/ragflow-config.example.yaml`;
+- `ragflow-doc-to-md` supports a named MinerU service backend through `MINERU_*` config;
+- endpoint docs are remote-first for RAGFlow and MinerU;
+- `timeout` and `verify_ssl` config values survive local credential overlays and CLI partial overrides;
+- `verify_ssl` is wired through to the HTTP client.
+
+## RC2 Validation Result
+
+RC2 local artifact consumer acceptance passed on 2026-06-23:
+
+```bash
+python3 tools/consumer_acceptance.py --artifacts-dir release-artifacts --work-dir /tmp/ragflow-consumer-acceptance-rc2-local --overwrite
+```
+
+RC2 GitHub Release consumer acceptance also passed on 2026-06-23:
+
+```bash
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc2 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-rc2-github --overwrite --download-timeout 90
+```
+
+Observed result:
+
+- `ok: true`
+- source type: `github-release`
+- artifacts downloaded from `v0.1.0-rc2`
+- vendored runtime was present
+- `ragflow-doc-to-md` produced `doc_manifest.json`
+- `ragflow-kb-build --dry-run` consumed the handoff manifest
+- `ragflow-query` exposed direct and host-assisted query interfaces
+- missing RAGFlow config failed before network work with the expected base URL error
+
+Live RAGFlow/MinerU validation has not been run for RC2 because no disposable live endpoint credentials were provided in this environment.
 
 ## RC1 GitHub Consumer Acceptance
 
@@ -155,10 +212,10 @@ python3 tools/consumer_acceptance.py --github-release v0.1.0-rc1 --repo lynxpurr
 
 After RC validation:
 
-1. Tag `develop` as `v0.1.0-rc1`.
+1. Tag `develop` as a release candidate.
 2. Attach or store the three `.tar.gz` files plus `release-manifest.json`.
 3. Collect forward-test and live-test notes.
 4. Fix RC findings on `develop`.
 5. Promote to `main` only after a clean RC pass.
 
-Items 1 and 2 are complete for RC1. The GitHub Release consumer acceptance path is also complete. Before stable `v0.1.0`, either run or explicitly waive the stronger live RAGFlow endpoint check.
+Items 1-4 are complete for RC2. The GitHub Release consumer acceptance path is also complete. Before stable `v0.1.0`, either run or explicitly waive the stronger live RAGFlow endpoint check.

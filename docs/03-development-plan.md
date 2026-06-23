@@ -361,9 +361,9 @@ Tasks:
 - [x] Run no-network consumer acceptance from local RC1 artifacts.
 - [x] Run one external install trial from GitHub Release artifacts on a clean agent workspace.
 - [x] Add opt-in `--live-build` gate for disposable KB build, smoke validation, and direct/host-assisted query.
-- [ ] Cut `v0.1.0-rc2` from updated `develop`; RC1 predates the final CLI-agent target refocus.
+- [x] Cut `v0.1.0-rc2` from updated `develop`; RC1 predates the final CLI-agent target refocus.
 - [ ] Run the stronger live RAGFlow endpoint check against a disposable test KB, or record an explicit stable-release waiver.
-- [ ] Fix or document any RC1 findings on `develop`.
+- [x] Fix or document any RC1 findings on `develop`.
 - [x] Decide whether stable `v0.1.0` can reuse the RC1 source commit or needs a new release commit. It needs a new release commit and RC2.
 - [ ] Promote the chosen release commit to `main`.
 - [ ] Tag and publish stable `v0.1.0` with refreshed artifacts.
@@ -397,7 +397,7 @@ Tasks:
 - [x] Wire `verify_ssl` config through to the HTTP client.
 - [x] Clean empty release artifact directories such as unused `agents/` or `references/`.
 - [x] Run design/code self-check and update architecture, integration, release, and roadmap docs.
-- [ ] Regenerate release archives and publish `v0.1.0-rc2`.
+- [x] Regenerate release archives and publish `v0.1.0-rc2`.
 
 Exit criteria:
 
@@ -413,11 +413,11 @@ Goal: cut a refreshed release candidate from the current CLI-agent-focused sourc
 
 Tasks:
 
-- [ ] Run the full pre-release command list from `docs/06-release-hardening.md`.
-- [ ] Export refreshed per-skill archives and `release-manifest.json`.
-- [ ] Run clean consumer acceptance from local refreshed artifacts.
-- [ ] Publish `v0.1.0-rc2` as a GitHub prerelease.
-- [ ] Run consumer acceptance against the GitHub `v0.1.0-rc2` assets.
+- [x] Run the full pre-release command list from `docs/06-release-hardening.md`.
+- [x] Export refreshed per-skill archives and `release-manifest.json`.
+- [x] Run clean consumer acceptance from local refreshed artifacts.
+- [x] Publish `v0.1.0-rc2` as a GitHub prerelease.
+- [x] Run consumer acceptance against the GitHub `v0.1.0-rc2` assets.
 - [ ] Run live RAGFlow/MinerU integration checks when reachable disposable services are available, or record an explicit waiver.
 - [ ] Merge or promote the selected release commit to `main`.
 - [ ] Tag and publish stable `v0.1.0`.
