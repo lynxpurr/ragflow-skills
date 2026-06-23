@@ -392,6 +392,55 @@ def _run_no_network_checks(
     )
     _record_command_check(checks, "kb-build dry-run", build_result, required_output='"dry_run": true')
 
+    profile_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "profile.py")
+    profile_lint_result = _run_command(
+        [
+            python_executable,
+            str(profile_script),
+            "lint",
+            "--profile",
+            str(profile),
+            "--report-md",
+            str(work_root / "profile_lint.md"),
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build profile lint",
+        profile_lint_result,
+        required_output='"schema": "ragflow_profile_lint_report_v1"',
+    )
+    profile_lint_md = work_root / "profile_lint.md"
+    if profile_lint_md.exists():
+        produced.append(profile_lint_md)
+
+    recommended_profile = work_root / "recommended_profile.json"
+    profile_recommend_result = _run_command(
+        [
+            python_executable,
+            str(profile_script),
+            "recommend",
+            "--language",
+            "en",
+            "--doc-type",
+            "manual",
+            "--output",
+            str(recommended_profile),
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build profile recommend",
+        profile_recommend_result,
+        required_output='"schema": "ragflow_profile_recommendation_v1"',
+    )
+    if recommended_profile.exists():
+        produced.append(recommended_profile)
+
     validate_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "validate.py")
     benchmark_manifest = work_root / "benchmark_kb_manifest.json"
     benchmark_queries = work_root / "benchmark_queries.json"

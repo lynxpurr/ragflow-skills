@@ -561,6 +561,27 @@ Exit criteria:
 - A user can run a public benchmark gate without an LLM key and see ranking metrics, failed thresholds, query-type breakdowns, and baseline deltas.
 - Existing smoke and regression validation behavior remains backward-compatible.
 
+## Phase 19: Profile Engineering MVP
+
+Goal: make chunk profile selection explicit, explainable, and testable before live upload.
+
+Tasks:
+
+- [x] Add `ragflow-kb-build/scripts/profile.py`.
+- [x] Implement `profile lint` with deterministic consistency, overlap, parser-key, and metadata checks.
+- [x] Implement `profile explain` with filtered RAGFlow API payload output.
+- [x] Implement rule-based `profile recommend` for `auto`, Chinese, and English starter profiles across common document types.
+- [x] Implement `profile compare` using validation report metrics from profile experiments.
+- [x] Export profile utilities from `ragflow_skill_runtime`.
+- [x] Add unit, CLI, release-build, clean-consumer, and platform-smoke coverage.
+- [x] Update public skill docs and roadmap status.
+
+Exit criteria:
+
+- A user can lint or explain a profile before upload.
+- A user can generate a neutral starter profile without secrets or live services.
+- A user can compare profile experiment validation reports before accepting a profile change.
+
 ## Definition of Done
 
 The public suite is ready for first external use when:

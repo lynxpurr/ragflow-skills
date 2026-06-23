@@ -58,9 +58,10 @@ Each profile performs the same no-network smoke:
 2. Run `ragflow-doc-to-md/scripts/convert.py` in passthrough mode and verify `doc_manifest.json`.
 3. For environment-config profiles, run `ragflow-doc-to-md` against fake MinerU services using `DOC_TO_MD_BACKEND=mineru` for Agent API and `DOC_TO_MD_BACKEND=mineru-sync` for synchronous multipart `/parse`.
 4. Run `ragflow-kb-build/scripts/build.py --dry-run` against the handoff manifest.
-5. Create a fake `kb_manifest.json` for no-network query and validation smoke.
-6. Import `ragflow-query/scripts/query.py`, inject a fake `RAGFlowClient`, and run direct plus host-assisted query paths.
-7. Import `ragflow-kb-build/scripts/validate.py`, inject a fake `RAGFlowClient`, and produce JSON plus Markdown validation reports.
+5. Run `ragflow-kb-build/scripts/profile.py lint` against a public profile template.
+6. Create a fake `kb_manifest.json` for no-network query and validation smoke.
+7. Import `ragflow-query/scripts/query.py`, inject a fake `RAGFlowClient`, and run direct plus host-assisted query paths.
+8. Import `ragflow-kb-build/scripts/validate.py`, inject a fake `RAGFlowClient`, and produce JSON plus Markdown validation reports.
 
 The fake client is intentional. The matrix should verify packaging and CLI behavior rather than live RAGFlow service availability. Localhost, LAN, VPN, and HTTPS RAGFlow endpoints are all valid in real CLI-agent use when explicitly configured.
 

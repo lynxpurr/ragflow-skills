@@ -653,6 +653,27 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     )
     _record_command_check(checks, "kb-build dry-run", build_result, required_stdout='"dry_run": true')
 
+    profile_script = script_root / "ragflow-kb-build" / "scripts" / "profile.py"
+    profile_lint_result = _run_command(
+        [
+            sys.executable,
+            str(profile_script),
+            "lint",
+            "--profile",
+            str(PROFILE_PATH),
+            "--report-md",
+            str(artifacts_dir / "profile_lint.md"),
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb profile lint",
+        profile_lint_result,
+        required_stdout='"schema": "ragflow_profile_lint_report_v1"',
+    )
+
     kb_manifest = _write_fake_kb_manifest(workspace, artifacts_dir)
     queries_path = _write_query_set(artifacts_dir)
 
@@ -698,6 +719,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         kb_manifest,
         artifacts_dir / "query_direct.json",
         artifacts_dir / "query_host_assisted.json",
+        artifacts_dir / "profile_lint.md",
         artifacts_dir / "validation_report.json",
         artifacts_dir / "validation_report.md",
     ]

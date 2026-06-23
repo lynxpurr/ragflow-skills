@@ -348,6 +348,25 @@ python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level benchmar
 
 Benchmark remains deterministic and retrieval-only. RAGAS-style or LLM-judged suites stay optional backlog until a public user needs them.
 
+## Profile Model
+
+Chunk profiles remain small JSON/YAML files consumed by `ragflow-kb-build --profile`.
+`ragflow-kb-build/scripts/profile.py` adds deterministic helper commands around the same profile
+contract:
+
+```bash
+python scripts/profile.py lint --profile ./templates/default-en-768.json
+python scripts/profile.py explain --profile ./templates/default-zh-512.json
+python scripts/profile.py recommend --language en --doc-type manual --output ./recommended-profile.json
+python scripts/profile.py compare --report ./profile-a-validation.json --report ./profile-b-validation.json
+```
+
+`lint` reports local consistency issues such as chunk-size mismatches, risky overlap ratios,
+unsupported public parser keys, and internal `parser_config.__*` metadata. `explain` shows the
+RAGFlow API payload after internal metadata filtering. `recommend` produces neutral starter
+profiles only; profile acceptance should still be based on validation reports. `compare` ranks
+validation reports from profile experiments using deterministic pass-rate and benchmark metrics.
+
 ## Query Modes
 
 `ragflow-query` exposes one user-facing command and three modes:

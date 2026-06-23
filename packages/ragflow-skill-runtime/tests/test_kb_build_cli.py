@@ -20,6 +20,7 @@ CLEANUP_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "cleanup.py"
 DIAGNOSE_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "diagnose.py"
 INSPECT_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "inspect_kb.py"
 PROBE_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "probe.py"
+PROFILE_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "profile.py"
 VALIDATE_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "validate.py"
 PROFILE_PATH = ROOT / "skills" / "ragflow-kb-build" / "templates" / "default-en-768.json"
 
@@ -488,6 +489,114 @@ class KbBuildCliTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Probe RAGFlow API compatibility", result.stdout)
+
+    def test_profile_help_renders(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(PROFILE_SCRIPT), "--help"],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_env(),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Lint, explain, recommend", result.stdout)
+
+    def test_profile_lint_and_recommend_via_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_md = root / "profile_lint.md"
+            lint_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROFILE_SCRIPT),
+                    "lint",
+                    "--profile",
+                    str(PROFILE_PATH),
+                    "--report-md",
+                    str(report_md),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            output_profile = root / "recommended.json"
+            recommend_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROFILE_SCRIPT),
+                    "recommend",
+                    "--language",
+                    "en",
+                    "--doc-type",
+                    "manual",
+                    "--output",
+                    str(output_profile),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            lint_report_text = report_md.read_text(encoding="utf-8")
+            recommended_payload = json.loads(output_profile.read_text(encoding="utf-8"))
+
+        self.assertEqual(lint_result.returncode, 0, lint_result.stdout)
+        self.assertIn("profile_lint_report_v1", lint_result.stdout)
+        self.assertIn("default-en-768", lint_report_text)
+        self.assertEqual(recommend_result.returncode, 0, recommend_result.stdout)
+        self.assertEqual(recommended_payload["chunk_size"], 768)
+
+    def test_profile_compare_via_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first.json"
+            second = root / "second.json"
+            out_md = root / "compare.md"
+            first.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "metrics": {"pass_rate": 0.8},
+                        "benchmark": {"metrics": {"hit_rate": 0.5, "mrr": 0.4, "ndcg_at_k": 0.4}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            second.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "metrics": {"pass_rate": 1.0},
+                        "benchmark": {"metrics": {"hit_rate": 1.0, "mrr": 0.8, "ndcg_at_k": 0.8}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROFILE_SCRIPT),
+                    "compare",
+                    "--report",
+                    str(first),
+                    "--report",
+                    str(second),
+                    "--report-md",
+                    str(out_md),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            compare_report_text = out_md.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["winner"]["path"], str(second))
+        self.assertIn("Profile Compare", compare_report_text)
 
     def test_validate_regression_requires_queries_without_network(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

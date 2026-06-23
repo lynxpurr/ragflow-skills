@@ -97,6 +97,19 @@ python skills/ragflow-kb-build/scripts/validate.py \
 
 The benchmark layer is deterministic and retrieval-only. It does not require an LLM key or private benchmark corpus.
 
+## Profile Engineering
+
+On `develop`, `ragflow-kb-build/scripts/profile.py` provides deterministic chunk-profile review:
+
+```bash
+python skills/ragflow-kb-build/scripts/profile.py lint --profile skills/ragflow-kb-build/templates/default-en-768.json
+python skills/ragflow-kb-build/scripts/profile.py explain --profile skills/ragflow-kb-build/templates/default-zh-512.json
+python skills/ragflow-kb-build/scripts/profile.py recommend --language en --doc-type manual --output ./run/recommended-profile.json
+python skills/ragflow-kb-build/scripts/profile.py compare --report ./run/profile-a-validation.json --report ./run/profile-b-validation.json
+```
+
+Use `profile compare` after benchmark validation runs to rank profile experiments before accepting a KB profile change.
+
 ## Validation
 
 ```bash

@@ -528,18 +528,22 @@ Goal: make chunk profile selection explicit, explainable, and testable.
 
 Tasks:
 
-- [ ] Add profile subcommand entrypoint under `ragflow-kb-build`.
-- [ ] Implement `profile lint`.
-- [ ] Implement `profile explain`.
-- [ ] Implement rule-based `profile recommend`.
-- [ ] Implement `profile compare` using validation reports.
-- [ ] Add warnings for unsupported or high-risk parser_config keys.
-- [ ] Add language-specific guidance using `parser_config.__language__` while filtering API payloads.
-- [ ] Add docs and tests for common Chinese/English book/manual profiles.
+- [x] Add profile subcommand entrypoint under `ragflow-kb-build`.
+- [x] Implement `profile lint`.
+- [x] Implement `profile explain`.
+- [x] Implement rule-based `profile recommend`.
+- [x] Implement `profile compare` using validation reports.
+- [x] Add warnings for unsupported or high-risk parser_config keys.
+- [x] Add language-specific guidance using `parser_config.__language__` while filtering API payloads.
+- [x] Add docs and tests for common Chinese/English book/manual profiles.
 
 Exit criteria:
 
 - Users can choose or review profiles before upload instead of accepting hidden defaults.
+
+Implementation note:
+
+- The current MVP is deterministic and local-only. It checks profile consistency, explains the filtered API payload, creates neutral starter profiles for Chinese/English/auto and common document types, and compares validation reports from profile experiments. It does not perform live auto-tuning or LLM-assisted profile generation.
 
 ### Phase 17: Neutral Routing
 
