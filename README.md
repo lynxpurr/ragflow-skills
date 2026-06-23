@@ -54,6 +54,8 @@ references/user-onboarding-prompt.md
 
 Use it when giving the skills to another user. They can paste the prompt into Hermes, OpenClaw, Claude Code, opencode, or a similar controllable CLI agent. The host agent will then read the skill docs, ask only for missing RAGFlow or MinerU service settings, create a safe local config, run no-network smoke checks, and optionally run a disposable live RAGFlow E2E after user approval.
 
+The built-in MinerU backend expects the MinerU Agent API protocol. Local synchronous MinerU services need a compatible gateway or the generic remote converter backend.
+
 The prompt is duplicated intentionally so each skill archive is self-contained. The canonical source copies are:
 
 ```text

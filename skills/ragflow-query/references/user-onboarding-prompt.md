@@ -27,6 +27,7 @@ The prompt asks the host agent to gather only missing service information, confi
 - 优先使用宿主 agent 的 secret store、环境变量或私有 config 文件保存密钥。
 - RAGFlow 和 MinerU 是外部服务，不要尝试从 skill 内启动或守护这些服务。
 - 默认 RAGFlow / MinerU 可能在远程机器、LAN、VPN 或 HTTPS gateway 上，不要假设它们和 agent 在同一台机器。
+- 先识别 MinerU 服务协议：当前 `ragflow-doc-to-md --backend mineru` 支持 MinerU Agent API（`/parse/file` 创建任务、上传文件、轮询任务、下载 Markdown）。如果用户提供的是本地同步 multipart `/parse` 等不同协议，请不要硬套 `--backend mineru`，应说明协议不兼容，并建议使用兼容 gateway 或 `--backend remote` 自定义适配。
 - 只询问缺失的信息，不要让我手动拼接每一条命令。
 
 请先检查并报告：
@@ -43,6 +44,7 @@ The prompt asks the host agent to gather only missing service information, confi
 
 如果我要解析 PDF / Office / 图片型文档，请再向我询问：
 - 是否使用 MinerU 服务
+- MinerU 服务协议是否为 Agent API，或是否已有兼容 gateway
 - MinerU base URL
 - MinerU API key 或 secret 名称/位置
 - 语言、OCR、表格、公式等选项是否使用默认值
@@ -65,6 +67,7 @@ doc_to_md:
   backend: mineru
 
 mineru:
+  # `backend: mineru` expects the MinerU Agent API protocol.
   base_url: https://mineru.example.com/api/v1/agent
   api_key: ${MINERU_API_KEY}
   timeout: 300
@@ -89,11 +92,12 @@ mineru:
 第二阶段：可选的 MinerU 测试
 
 如果我提供了测试 PDF / Office 文件，并且 MinerU 配置完整，请运行一次最小转换测试：
-- 使用 ragflow-doc-to-md --backend mineru
+- 如果服务是 MinerU Agent API 或兼容 gateway，使用 ragflow-doc-to-md --backend mineru
+- 如果服务是本地同步 multipart /parse 等不同协议，不要把它当作 mineru backend；请报告协议差异，并跳过或使用已配置的 --backend remote 适配器
 - 生成 Markdown handoff
 - 报告转换产物路径和 warning
 
-如果 MinerU 信息不完整，请跳过并说明缺哪些字段。
+如果 MinerU 信息不完整或协议不兼容，请跳过并说明缺哪些字段或协议差异。
 
 第三阶段：真实 RAGFlow live E2E
 

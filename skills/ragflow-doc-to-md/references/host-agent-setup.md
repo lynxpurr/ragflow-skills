@@ -11,6 +11,7 @@ For a copy-paste prompt that end users can give to their own host agent, use `us
 - Use `templates/ragflow-config.example.yaml` as the config template.
 - Put real config in a stable host-agent path and point scripts to it with `RAGFLOW_CONFIG` or `--config`.
 - Treat RAGFlow and MinerU as external services. Do not start or supervise them from these skills.
+- Distinguish MinerU service protocols before testing conversion. The `mineru` backend supports the MinerU Agent API shape: create a parse task with `/parse/file`, upload to the returned URL, poll `/parse/{task_id}`, then download Markdown. Local synchronous multipart APIs such as `/parse` require a compatible gateway or the generic `remote` backend.
 - Keep all E2E artifacts in a temporary or user-approved workspace, and report paths at the end.
 
 ## Config Locations
@@ -39,6 +40,7 @@ doc_to_md:
   backend: mineru
 
 mineru:
+  # `backend: mineru` expects the MinerU Agent API protocol.
   base_url: https://mineru.net/api/v1/agent
   api_key: ${MINERU_API_KEY}
   timeout: 300
@@ -73,6 +75,7 @@ Before live E2E:
 4. Confirm MinerU settings only when raw PDF/Office conversion is in scope:
    - `MINERU_BASE_URL`
    - `MINERU_API_KEY`
+   - whether the service implements the MinerU Agent API or a compatible gateway
 5. Use LAN, VPN, or HTTPS endpoints by default. Use localhost only for an intentional single-machine debug setup.
 
 If required values are missing, ask the user only for the missing endpoint/key names. Do not ask them to manually edit every command.
@@ -143,7 +146,7 @@ python ragflow-query/scripts/query.py \
   --json
 ```
 
-For PDF/Office E2E, use `ragflow-doc-to-md --backend mineru` with a small test file before the KB build step.
+For PDF/Office E2E, use `ragflow-doc-to-md --backend mineru` with a small test file before the KB build step only when the service implements the MinerU Agent API or a compatible gateway. If the available service is a local synchronous multipart API, report the protocol mismatch and use a configured `--backend remote` adapter instead.
 
 ## GitHub Release E2E
 

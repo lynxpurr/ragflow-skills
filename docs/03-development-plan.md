@@ -467,6 +467,8 @@ Tasks:
 - [x] Link the prompt from each `references/host-agent-setup.md`.
 - [x] Add a release-build assertion that every public skill artifact includes the prompt.
 - [x] Record the prompt as a public release example in `docs/06-release-hardening.md`.
+- [x] Forward-test the prompt with Hermes and record the MinerU protocol distinction found during onboarding.
+- [x] Clarify that the built-in `mineru` backend expects MinerU Agent API, while local synchronous `/parse` services need a compatible gateway or the generic `remote` backend.
 
 Exit criteria:
 
@@ -474,6 +476,7 @@ Exit criteria:
 - The prompt instructs host agents to ask only for missing RAGFlow/MinerU endpoint and key values.
 - The prompt instructs host agents to keep secrets out of skill folders, repositories, release artifacts, and reports.
 - The prompt guides host agents through no-network smoke, optional MinerU conversion, and disposable RAGFlow live E2E.
+- MinerU onboarding does not imply that every MinerU-named HTTP service is compatible with `--backend mineru`.
 
 ## Definition of Done
 

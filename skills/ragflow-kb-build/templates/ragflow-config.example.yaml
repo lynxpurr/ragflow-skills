@@ -16,6 +16,7 @@ doc_to_md:
   backend: mineru
 
 mineru:
+  # `doc_to_md.backend: mineru` expects the MinerU Agent API protocol.
   base_url: https://mineru.net/api/v1/agent
   api_key: ${MINERU_API_KEY}
   timeout: 300
@@ -25,4 +26,3 @@ mineru:
   enable_table: true
   is_ocr: false
   enable_formula: true
-
