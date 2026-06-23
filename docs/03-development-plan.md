@@ -366,8 +366,8 @@ Tasks:
 - [x] Run the stronger live RAGFlow endpoint check against a disposable test KB.
 - [x] Fix or document any RC1 findings on `develop`.
 - [x] Decide whether stable `v0.1.0` can reuse the RC1 source commit or needs a new release commit. It needs a new release commit and RC2.
-- [ ] Promote the chosen release commit to `main`.
-- [ ] Tag and publish stable `v0.1.0` with refreshed artifacts.
+- [x] Promote the chosen release commit to `main`.
+- [x] Tag and publish stable `v0.1.0` with refreshed artifacts.
 
 Exit criteria:
 
@@ -423,8 +423,8 @@ Tasks:
 - [x] Run Hermes-assisted live RAGFlow check against a disposable test KB.
 - [x] Record live finding: default profile `parser_config.__language__` leaked into RAGFlow dataset create payload and caused API `code: 101`.
 - [x] Record live infrastructure waiver candidate: Tongyi embedding provider was unavailable because of overdue payment, blocking parse completion after dataset creation and upload.
-- [ ] Merge or promote the selected release commit to `main`.
-- [ ] Tag and publish stable `v0.1.0`.
+- [x] Merge or promote the selected release commit to `main`.
+- [x] Tag and publish stable `v0.1.0`.
 
 Exit criteria:
 

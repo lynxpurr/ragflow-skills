@@ -272,6 +272,39 @@ Produced artifacts were retained under `/tmp/ragflow-consumer-acceptance-rc3-liv
 
 Conclusion: RC3 passed the complete end-to-end path from GitHub Release download through real RAGFlow KB creation, parse, smoke validation, direct retrieval, host-assisted retrieval, and cleanup. RC3 is eligible for stable `v0.1.0` promotion.
 
+## Stable v0.1.0 Release
+
+`v0.1.0` is published as the first stable GitHub release:
+
+https://github.com/lynxpurr/ragflow-skills/releases/tag/v0.1.0
+
+Stable source commit: `d6039c6`.
+
+Attached assets:
+
+- `ragflow-doc-to-md.tar.gz` - 24965 bytes - sha256 `679526f9285c617c63e29a5a5cee80a191d94f9e339fa3d095253b224b3313cb`
+- `ragflow-kb-build.tar.gz` - 25022 bytes - sha256 `e4a091a45f82c600f1e333c8d0c025545ba8bcb7023ff9aada9b0b68d425fdc9`
+- `ragflow-query.tar.gz` - 23941 bytes - sha256 `f34dd2aa431af2f6b79d76132e737d4ee002d091e222d517963f4dd132dee707`
+- `release-manifest.json` - 1129 bytes - asset sha256 `88a36677713f3dadea3800330247638549877edaf6f9cb42e30b083f0ae083fe`
+
+Stable GitHub Release consumer acceptance passed on 2026-06-23:
+
+```bash
+python3 tools/consumer_acceptance.py --github-release v0.1.0 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-v0.1.0-github --overwrite --download-timeout 90
+```
+
+Observed result:
+
+- `ok: true`
+- source type: `github-release`
+- artifacts downloaded from `v0.1.0`
+- vendored runtime was present
+- `ragflow-doc-to-md` produced `doc_manifest.json`
+- default profile API payload filtering check passed
+- `ragflow-kb-build --dry-run` consumed the handoff manifest
+- `ragflow-query` exposed direct and host-assisted query interfaces
+- missing RAGFlow config failed before network work with the expected base URL error
+
 ## RC1 GitHub Consumer Acceptance
 
 The GitHub Release artifact path passed on 2026-06-23:
@@ -321,4 +354,4 @@ After RC validation:
 4. Fix RC findings on `develop`.
 5. Promote to `main` only after a clean RC pass.
 
-Items 1-4 are complete for RC3. The GitHub Release consumer acceptance path and stronger live RAGFlow endpoint check are complete. Stable `v0.1.0` can be promoted from the RC3 release source.
+Items 1-5 are complete. Stable `v0.1.0` has been promoted from the RC3-validated source, published, and verified through GitHub Release consumer acceptance.
