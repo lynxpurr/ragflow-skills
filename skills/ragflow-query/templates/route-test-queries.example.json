@@ -1,0 +1,14 @@
+{
+  "queries": [
+    {
+      "id": "route-general",
+      "question": "How do I get started with the sample onboarding flow?",
+      "expected_kb": "kb:general-sample"
+    },
+    {
+      "id": "route-technical",
+      "question": "Which API configuration should a developer use?",
+      "expected_kb": "kb:technical-sample"
+    }
+  ]
+}

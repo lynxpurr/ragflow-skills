@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,10 +27,18 @@ def load_query_module():
 
 
 class FakeQueryClient:
+    last_request = None
+
     def __init__(self, config):
         self.config = config
 
     def retrieve(self, *, question, dataset_ids, top_k=5, similarity_threshold=None):
+        FakeQueryClient.last_request = {
+            "question": question,
+            "dataset_ids": dataset_ids,
+            "top_k": top_k,
+            "similarity_threshold": similarity_threshold,
+        }
         return {
             "data": {
                 "chunks": [
@@ -161,6 +170,130 @@ class QueryCliTests(unittest.TestCase):
             )
         self.assertEqual(code, 0, stdout.getvalue())
         self.assertIn('"host_assisted": true', stdout.getvalue().lower())
+
+    def test_route_commands_use_routing_config(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            routing = root / "routing.json"
+            routes = root / "routes.json"
+            report_md = root / "route-test.md"
+            routing.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "knowledge_bases": [
+                            {
+                                "name": "kb:general",
+                                "dataset_id": "ds-general",
+                                "hints": ["general", "onboarding"],
+                            },
+                            {
+                                "name": "kb:technical",
+                                "dataset_id": "ds-technical",
+                                "hints": ["api", "runtime"],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            routes.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {
+                                "id": "q1",
+                                "question": "How does the API runtime work?",
+                                "expected_kb": "kb:technical",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                list_code = module.main(["list-kbs", "--routing-config", str(routing)])
+            list_payload = json.loads(stdout.getvalue())
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                route_code = module.main(
+                    ["route", "How does the API runtime work?", "--routing-config", str(routing), "--json"]
+                )
+            route_payload = json.loads(stdout.getvalue())
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                test_code = module.main(
+                    [
+                        "route-test",
+                        "--routing-config",
+                        str(routing),
+                        "--queries",
+                        str(routes),
+                        "--report-md",
+                        str(report_md),
+                    ]
+                )
+            route_test_payload = json.loads(stdout.getvalue())
+            route_test_markdown = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(list_code, 0)
+        self.assertEqual(list_payload["count"], 2)
+        self.assertEqual(route_code, 0)
+        self.assertEqual(route_payload["selected"]["dataset_id"], "ds-technical")
+        self.assertEqual(test_code, 0)
+        self.assertEqual(route_test_payload["metrics"]["accuracy"], 1.0)
+        self.assertIn("Route Test", route_test_markdown)
+
+    def test_auto_mode_uses_routing_config_with_fake_client(self) -> None:
+        module = load_query_module()
+        module.RAGFlowClient = FakeQueryClient
+        with tempfile.TemporaryDirectory() as tmp:
+            routing = Path(tmp) / "routing.json"
+            routing.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "knowledge_bases": [
+                            {
+                                "name": "kb:technical",
+                                "dataset_id": "ds-technical",
+                                "hints": ["api"],
+                                "params": {"top_k": 7, "similarity_threshold": 0.2},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "test-key",
+                        "ask",
+                        "API usage question",
+                        "--mode",
+                        "auto",
+                        "--routing-config",
+                        str(routing),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(FakeQueryClient.last_request["dataset_ids"], ["ds-technical"])
+        self.assertEqual(FakeQueryClient.last_request["top_k"], 7)
+        self.assertEqual(FakeQueryClient.last_request["similarity_threshold"], 0.2)
+        self.assertEqual(payload["metadata"]["route"]["selected"]["name"], "kb:technical")
 
 
 if __name__ == "__main__":

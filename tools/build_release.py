@@ -93,6 +93,18 @@ script = Path({str(query_script)!r})
 spec = importlib.util.spec_from_file_location("release_query_cli", script)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+routing = Path(__file__).parent / "routing.json"
+routing.write_text(json.dumps({{
+    "version": "0.1",
+    "knowledge_bases": [
+        {{
+            "name": "kb:release-smoke",
+            "dataset_id": "ds-smoke",
+            "hints": ["release smoke"],
+            "params": {{"top_k": 5}}
+        }}
+    ]
+}}, ensure_ascii=False), encoding="utf-8")
 
 class FakeClient:
     def __init__(self, config):
@@ -116,6 +128,7 @@ payloads = []
 for argv in [
     ["--base-url", "https://ragflow.example.test", "--api-key", "test-key", "ask", "release smoke", "--dataset-id", "ds-smoke", "--mode", "direct", "--json"],
     ["--base-url", "https://ragflow.example.test", "--api-key", "test-key", "ask", "release smoke", "--dataset-id", "ds-smoke", "--mode", "agentic", "--host-assisted", "--json"],
+    ["--base-url", "https://ragflow.example.test", "--api-key", "test-key", "ask", "release smoke", "--mode", "auto", "--routing-config", str(routing), "--json"],
 ]:
     from io import StringIO
     import contextlib

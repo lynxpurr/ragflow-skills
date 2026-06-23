@@ -60,8 +60,9 @@ Each profile performs the same no-network smoke:
 4. Run `ragflow-kb-build/scripts/build.py --dry-run` against the handoff manifest.
 5. Run `ragflow-kb-build/scripts/profile.py lint` against a public profile template.
 6. Create a fake `kb_manifest.json` for no-network query and validation smoke.
-7. Import `ragflow-query/scripts/query.py`, inject a fake `RAGFlowClient`, and run direct plus host-assisted query paths.
-8. Import `ragflow-kb-build/scripts/validate.py`, inject a fake `RAGFlowClient`, and produce JSON plus Markdown validation reports.
+7. Run `ragflow-query/scripts/query.py route-test` against a public fake routing config.
+8. Import `ragflow-query/scripts/query.py`, inject a fake `RAGFlowClient`, and run direct plus host-assisted query paths.
+9. Import `ragflow-kb-build/scripts/validate.py`, inject a fake `RAGFlowClient`, and produce JSON plus Markdown validation reports.
 
 The fake client is intentional. The matrix should verify packaging and CLI behavior rather than live RAGFlow service availability. Localhost, LAN, VPN, and HTTPS RAGFlow endpoints are all valid in real CLI-agent use when explicitly configured.
 
@@ -74,6 +75,7 @@ The fake client is intentional. The matrix should verify packaging and CLI behav
 | `remote backend requires --remote-url` | Remote conversion was selected without `--remote-url` or `DOC_TO_MD_REMOTE_URL` | Pass `--remote-url` or export `DOC_TO_MD_REMOTE_URL`. |
 | `MinerU create-task response missing task_id` | `DOC_TO_MD_BACKEND=mineru` was pointed at a service that does not match the Agent parsing API contract | Use an Agent API endpoint, or set `DOC_TO_MD_BACKEND=mineru-sync` for synchronous multipart `/parse`. |
 | `manifest not found` | Handoff artifact path not preserved between steps | Pass absolute artifact paths or keep all steps in one workspace. |
+| `auto routing found no matching KB` | Routing config has no matching hints and no default KB | Add user-owned hints/defaults or pass explicit `--dataset-id`, `--kb`, or `--kb-manifest`. |
 | `agentic mode is not implemented` | Script-owned synthesis requested in v1 | Use `--mode agentic --host-assisted`; host agent performs synthesis. |
 | Network or DNS errors in real use | RAGFlow endpoint is not reachable from the runner | Use a reachable LAN, VPN, HTTPS, or explicitly configured localhost debug endpoint and provide `RAGFLOW_API_KEY`. |
 

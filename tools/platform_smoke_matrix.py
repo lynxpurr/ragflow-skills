@@ -678,6 +678,67 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     queries_path = _write_query_set(artifacts_dir)
 
     query_script = script_root / "ragflow-query" / "scripts" / "query.py"
+    routing_config = artifacts_dir / "routing_config.json"
+    route_queries = artifacts_dir / "route_queries.json"
+    routing_config.write_text(
+        json.dumps(
+            {
+                "version": "0.1",
+                "knowledge_bases": [
+                    {
+                        "name": "kb:platform-general",
+                        "dataset_id": "ds-platform-general",
+                        "hints": ["general", "platform"],
+                    },
+                    {
+                        "name": "kb:platform-technical",
+                        "dataset_id": "ds-platform-technical",
+                        "hints": ["known term", "runtime"],
+                    },
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    route_queries.write_text(
+        json.dumps(
+            {
+                "queries": [
+                    {
+                        "id": "route-known-term",
+                        "question": "Where is the known term in the runtime?",
+                        "expected_kb": "kb:platform-technical",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    route_test_result = _run_command(
+        [
+            sys.executable,
+            str(query_script),
+            "route-test",
+            "--routing-config",
+            str(routing_config),
+            "--queries",
+            str(route_queries),
+            "--report-md",
+            str(artifacts_dir / "route_test.md"),
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query route-test",
+        route_test_result,
+        required_stdout='"accuracy": 1.0',
+    )
     query_runner = workspace / "query_runner.py"
     _write_query_runner(
         runner_path=query_runner,
@@ -719,6 +780,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         kb_manifest,
         artifacts_dir / "query_direct.json",
         artifacts_dir / "query_host_assisted.json",
+        artifacts_dir / "route_test.md",
         artifacts_dir / "profile_lint.md",
         artifacts_dir / "validation_report.json",
         artifacts_dir / "validation_report.md",

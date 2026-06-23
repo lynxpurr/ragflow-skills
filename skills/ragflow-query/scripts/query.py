@@ -30,10 +30,16 @@ from ragflow_skill_runtime import (  # noqa: E402
     QueryResult,
     RAGFlowClient,
     RetrievalError,
+    RoutingError,
+    load_route_test_queries,
     load_config,
     load_kb_manifest,
+    load_routing_config,
     normalize_retrieval_response,
+    render_route_test_markdown,
     resolve_dataset_ids,
+    route_question,
+    run_route_tests,
 )
 
 
@@ -59,10 +65,35 @@ def _load_runtime(args: argparse.Namespace):
     return load_config(config_file=args.config, overrides=overrides)
 
 
+def _routing_config_path(args: argparse.Namespace) -> str | None:
+    return getattr(args, "routing_config", None) or os.environ.get("RAGFLOW_ROUTING_CONFIG")
+
+
+def _load_routing(args: argparse.Namespace):
+    path = _routing_config_path(args)
+    if not path:
+        raise RoutingError("routing config is required; pass --routing-config or set RAGFLOW_ROUTING_CONFIG")
+    return load_routing_config(path)
+
+
+def _write_text(path: str | None, text: str) -> None:
+    if not path:
+        return
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(text, encoding="utf-8")
+
+
+def _write_json(path: str | None, data: Any) -> None:
+    if path:
+        _write_text(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+
 def _ask(args: argparse.Namespace) -> int:
     mode = args.mode
-    if mode == "auto":
-        mode = "direct"
+    route_result = None
+    routed_params: dict[str, Any] = {}
+    explicit_dataset_inputs = bool(args.dataset_id or args.kb or args.kb_manifest)
 
     if mode == "agentic" and not args.host_assisted:
         return _error(
@@ -74,22 +105,40 @@ def _ask(args: argparse.Namespace) -> int:
         kb_manifest = load_kb_manifest(args.kb_manifest) if args.kb_manifest else None
         config = _load_runtime(args)
         client = RAGFlowClient(config)
-        dataset_ids = resolve_dataset_ids(
-            client=client,
-            dataset_ids=args.dataset_id,
-            dataset_names=args.kb,
-            kb_manifest=kb_manifest,
+        if mode == "auto" and not explicit_dataset_inputs and _routing_config_path(args):
+            routing = _load_routing(args)
+            route_result = route_question(routing, args.question)
+            if not route_result.selected:
+                raise RoutingError("auto routing found no matching KB; pass explicit --dataset-id/--kb or add route hints")
+            dataset_ids = [route_result.selected.kb.dataset_id]
+            routed_params = route_result.selected.kb.params
+            mode = "direct"
+        else:
+            if mode == "auto":
+                mode = "direct"
+            dataset_ids = resolve_dataset_ids(
+                client=client,
+                dataset_ids=args.dataset_id,
+                dataset_names=args.kb,
+                kb_manifest=kb_manifest,
+            )
+        effective_top_k = args.top_k or int(routed_params.get("top_k") or 5)
+        effective_similarity_threshold = (
+            args.similarity_threshold
+            if args.similarity_threshold is not None
+            else routed_params.get("similarity_threshold")
         )
         raw = client.retrieve(
             question=args.question,
             dataset_ids=dataset_ids,
-            top_k=args.top_k,
-            similarity_threshold=args.similarity_threshold,
+            top_k=effective_top_k,
+            similarity_threshold=effective_similarity_threshold,
         )
         chunks = normalize_retrieval_response(raw)
-    except (ConfigError, RetrievalError, OSError, RuntimeError) as exc:
+    except (ConfigError, RetrievalError, RoutingError, ValueError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=args.json)
 
+    route_payload = route_result.to_dict() if route_result else None
     result = QueryResult(
         question=args.question,
         mode=mode,
@@ -99,9 +148,11 @@ def _ask(args: argparse.Namespace) -> int:
         host_assisted=args.host_assisted,
         metadata={
             "requested_mode": args.mode,
-            "top_k": args.top_k,
+            "top_k": effective_top_k,
+            "similarity_threshold": effective_similarity_threshold,
             "chunk_count": len(chunks),
             "synthesis": "host-assisted" if args.host_assisted else "not-requested",
+            **({"route": route_payload} if route_payload else {}),
         },
     )
     payload = {"ok": True, **result.to_dict(include_raw=args.include_raw)}
@@ -115,6 +166,51 @@ def _ask(args: argparse.Namespace) -> int:
     return 0
 
 
+def _list_kbs(args: argparse.Namespace) -> int:
+    try:
+        routing = _load_routing(args)
+    except (RoutingError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=True)
+    payload = {
+        "ok": True,
+        "schema": "ragflow_route_kb_list_v1",
+        "count": len(routing.knowledge_bases),
+        "routing_config": routing.to_dict(),
+    }
+    _json_dump(payload)
+    return 0
+
+
+def _route(args: argparse.Namespace) -> int:
+    try:
+        routing = _load_routing(args)
+        result = route_question(routing, args.question)
+    except (RoutingError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    payload = result.to_dict()
+    if args.json:
+        _json_dump(payload)
+    elif result.selected:
+        selected = result.selected
+        print(f"{selected.kb.name}\t{selected.kb.dataset_id}\tscore={selected.score:.2f}")
+    else:
+        print("no route matched", file=sys.stderr)
+    return 0 if result.selected else 1
+
+
+def _route_test(args: argparse.Namespace) -> int:
+    try:
+        routing = _load_routing(args)
+        queries = load_route_test_queries(args.queries)
+        report = run_route_tests(routing, queries)
+    except (RoutingError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=True)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_route_test_markdown(report))
+    _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _add_runtime_options(parser: argparse.ArgumentParser, *, suppress_defaults: bool = False) -> None:
     default = argparse.SUPPRESS if suppress_defaults else None
     parser.add_argument("--config", default=default, help="Path to JSON or simple YAML config")
@@ -122,19 +218,41 @@ def _add_runtime_options(parser: argparse.ArgumentParser, *, suppress_defaults: 
     parser.add_argument("--api-key", default=default, help="RAGFlow API key; overrides RAGFLOW_API_KEY")
 
 
+def _add_routing_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--routing-config", help="Routing config path; defaults to RAGFLOW_ROUTING_CONFIG")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Portable RAGFlow query CLI")
     _add_runtime_options(parser)
 
     sub = parser.add_subparsers(dest="command", required=True)
+    list_kbs = sub.add_parser("list-kbs", help="List KBs in a routing config")
+    _add_routing_option(list_kbs)
+    list_kbs.set_defaults(func=_list_kbs)
+
+    route = sub.add_parser("route", help="Route a question to a configured KB")
+    _add_routing_option(route)
+    route.add_argument("question")
+    route.add_argument("--json", action="store_true")
+    route.set_defaults(func=_route)
+
+    route_test = sub.add_parser("route-test", help="Run route regression checks")
+    _add_routing_option(route_test)
+    route_test.add_argument("--queries", required=True, help="Route-test queries JSON")
+    route_test.add_argument("--report-json", help="Optional JSON report output path")
+    route_test.add_argument("--report-md", help="Optional Markdown report output path")
+    route_test.set_defaults(func=_route_test)
+
     ask = sub.add_parser("ask", help="Ask a question against RAGFlow")
     _add_runtime_options(ask, suppress_defaults=True)
+    _add_routing_option(ask)
     ask.add_argument("question", help="Question to retrieve evidence for")
     ask.add_argument("--mode", choices=["auto", "direct", "agentic"], default="auto")
     ask.add_argument("--dataset-id", action="append", default=[], help="RAGFlow dataset ID; repeatable")
     ask.add_argument("--kb", action="append", default=[], help="RAGFlow KB/dataset name; repeatable")
     ask.add_argument("--kb-manifest", help="Path to kb_manifest.json")
-    ask.add_argument("--top-k", type=int, default=5)
+    ask.add_argument("--top-k", type=int)
     ask.add_argument("--similarity-threshold", type=float)
     ask.add_argument("--host-assisted", action="store_true", help="Return evidence for host agent synthesis")
     ask.add_argument("--json", action="store_true", help="Emit JSON")

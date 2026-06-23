@@ -576,6 +576,82 @@ raise SystemExit(code)
     ask_help = _run_command([python_executable, str(query_script), "ask", "--help"], cwd=work_root, env=env)
     _record_command_check(checks, "query host-assisted help", ask_help, required_output="--host-assisted")
 
+    routing_config = work_root / "routing_config.json"
+    route_queries = work_root / "route_queries.json"
+    routing_config.write_text(
+        json.dumps(
+            {
+                "version": "0.1",
+                "knowledge_bases": [
+                    {
+                        "name": "kb:consumer-general",
+                        "dataset_id": "ds-consumer-general",
+                        "hints": ["consumer", "general"],
+                    },
+                    {
+                        "name": "kb:consumer-technical",
+                        "dataset_id": "ds-consumer-technical",
+                        "hints": ["api", "runtime"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    route_queries.write_text(
+        json.dumps(
+            {
+                "queries": [
+                    {
+                        "id": "route-api",
+                        "question": "How does the API runtime work?",
+                        "expected_kb": "kb:consumer-technical",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    list_kbs = _run_command(
+        [python_executable, str(query_script), "list-kbs", "--routing-config", str(routing_config)],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(checks, "query list-kbs", list_kbs, required_output='"count": 2')
+    route_result = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "route",
+            "How does the API runtime work?",
+            "--routing-config",
+            str(routing_config),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(checks, "query route", route_result, required_output='"dataset_id": "ds-consumer-technical"')
+    route_test_report = work_root / "route_test.md"
+    route_test = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "route-test",
+            "--routing-config",
+            str(routing_config),
+            "--queries",
+            str(route_queries),
+            "--report-md",
+            str(route_test_report),
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(checks, "query route-test", route_test, required_output='"accuracy": 1.0')
+    if route_test_report.exists():
+        produced.append(route_test_report)
+
     missing_config = _run_command(
         [
             python_executable,

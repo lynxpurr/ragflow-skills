@@ -110,6 +110,27 @@ python skills/ragflow-kb-build/scripts/profile.py compare --report ./run/profile
 
 Use `profile compare` after benchmark validation runs to rank profile experiments before accepting a KB profile change.
 
+## Neutral Routing
+
+On `develop`, `ragflow-query --mode auto` can use a user-owned routing config when no explicit KB is passed:
+
+```bash
+python skills/ragflow-query/scripts/query.py list-kbs \
+  --routing-config skills/ragflow-query/templates/routing-config.example.json
+
+python skills/ragflow-query/scripts/query.py route \
+  "Which API configuration should I use?" \
+  --routing-config skills/ragflow-query/templates/routing-config.example.json \
+  --json
+
+python skills/ragflow-query/scripts/query.py route-test \
+  --routing-config skills/ragflow-query/templates/routing-config.example.json \
+  --queries skills/ragflow-query/templates/route-test-queries.example.json \
+  --report-md ./run/route-test.md
+```
+
+Routing is deterministic and private-data-free: users provide their own KB names, dataset IDs, hints, and retrieval params. Explicit `--dataset-id`, `--kb`, or `--kb-manifest` still takes precedence over auto routing.
+
 ## Validation
 
 ```bash
@@ -132,4 +153,4 @@ This repository contains only the public, portable RAGFlow skill suite. Private 
 Commercial SaaS agent sandboxes are not a v1 target. The intended public targets are programming-agent CLI environments the user controls or can configure, especially Hermes, OpenClaw, Claude Code, and opencode. A first-party SaaS platform should integrate document parsing, RAGFlow, and retrieval as native backend tools rather than by running these portable skill scripts inside a sandbox.
 
 See `docs/08-cli-agent-integration.md` for CLI agent configuration and invocation patterns.
-See `docs/09-high-value-feature-roadmap.md` for the v0.2+ plan to add quality gates, segmentation, RAGFlow diagnostics, benchmark validation, routing, and agentic observability.
+See `docs/09-high-value-feature-roadmap.md` for completed v0.2+ high-value features and the remaining agentic observability plan.

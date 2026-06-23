@@ -375,7 +375,35 @@ validation reports from profile experiments using deterministic pass-rate and be
 |---|---|
 | `direct` | Implemented: retrieve chunks from one or more KBs and return normalized chunks. |
 | `agentic` | Partial: host-assisted evidence return is supported; script-owned planning/synthesis is future work. |
-| `auto` | Implemented conservatively: currently falls back to direct mode. |
+| `auto` | Implemented: routes with a user-owned routing config when no explicit KB is provided; otherwise falls back to direct mode. |
+
+Routing config stays neutral and user-owned:
+
+```json
+{
+  "version": "0.1",
+  "knowledge_bases": [
+    {
+      "name": "kb:example",
+      "dataset_id": "dataset-id",
+      "description": "Example KB",
+      "hints": ["example", "sample topic"],
+      "params": {"top_k": 5, "similarity_threshold": 0.1}
+    }
+  ]
+}
+```
+
+Route helpers:
+
+```bash
+python scripts/query.py list-kbs --routing-config ./routing-config.json
+python scripts/query.py route "question" --routing-config ./routing-config.json --json
+python scripts/query.py route-test --routing-config ./routing-config.json --queries ./routes.json
+python scripts/query.py ask "question" --mode auto --routing-config ./routing-config.json --json
+```
+
+Explicit `--dataset-id`, `--kb`, or `--kb-manifest` takes precedence over route selection.
 
 Host-assisted fallback:
 
@@ -387,6 +415,7 @@ Current gap:
 - `serve` is not implemented yet.
 - Script-owned LLM synthesis is not implemented yet.
 - Agentic planning/reflection is not implemented yet.
+- Route regex and centroid routing are not implemented yet.
 
 V1 scope decision:
 

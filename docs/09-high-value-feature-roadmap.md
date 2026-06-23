@@ -551,18 +551,22 @@ Goal: make `ragflow-query --mode auto` useful without private route tables.
 
 Tasks:
 
-- [ ] Define `ragflow_routing_config_v1`.
-- [ ] Add config loading for user-owned route hints.
-- [ ] Add `ragflow-query list-kbs`.
-- [ ] Add `ragflow-query route`.
-- [ ] Add `ragflow-query route-test`.
-- [ ] Wire `ask --mode auto` to the route resolver.
-- [ ] Add deterministic route regression fixtures.
+- [x] Define `ragflow_routing_config_v1`.
+- [x] Add config loading for user-owned route hints.
+- [x] Add `ragflow-query list-kbs`.
+- [x] Add `ragflow-query route`.
+- [x] Add `ragflow-query route-test`.
+- [x] Wire `ask --mode auto` to the route resolver.
+- [x] Add deterministic route regression fixtures.
 - [ ] Add optional centroid fields without requiring centroid computation.
 
 Exit criteria:
 
 - A user can maintain their own routing hints and run auto retrieval with measurable route accuracy.
+
+Implementation note:
+
+- The current MVP uses deterministic hint/token scoring, optional default KB fallback, route-test accuracy reports, and route-selected retrieval params. Explicit `--dataset-id`, `--kb`, and `--kb-manifest` still take precedence. Regex hints and centroid routing remain deferred.
 
 ### Phase 18: Agentic Observability
 

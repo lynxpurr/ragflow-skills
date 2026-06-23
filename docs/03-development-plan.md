@@ -32,12 +32,15 @@ Completed foundations:
 - Phase 12 CLI agent integration polish, including host-agent config templates and MinerU service backend
 - High-value roadmap Phase 13 document quality and segmentation MVP
 - High-value roadmap Phase 14 read-only RAGFlow diagnostics MVP
+- High-value roadmap Phase 15 benchmark validation MVP
+- High-value roadmap Phase 16 profile engineering MVP
+- High-value roadmap Phase 17 neutral routing MVP
 
 Partially completed:
 
 - Phase 3 `ragflow-query`
   - Direct retrieval CLI exists.
-  - `--mode auto` currently falls back conservatively to direct mode.
+  - `--mode auto` now uses user-owned routing config when provided; without routing config or with explicit KB inputs, it remains direct retrieval.
   - Host-assisted evidence return exists.
   - V1 scope is CLI-only; `serve` and script-owned agentic planning/synthesis are deferred.
 
@@ -134,7 +137,7 @@ Tasks:
 - [x] Implement normalized JSON output.
 - [x] Implement `--kb`, `--kb-manifest`, and `--top-k`.
 - [x] Move direct retrieval logic into `ragflow_skill_runtime/retrieval.py`.
-- [x] Add `--mode auto` classification placeholder with conservative direct fallback.
+- [x] Add `--mode auto` classification placeholder with conservative direct fallback. Superseded by Phase 20 routing config support.
 - [x] Add `--host-assisted` response shape for host-agent synthesis.
 - [ ] Add optional `serve` subcommand for local/OpenClaw use.
 - [ ] Port agentic retrieval after direct mode is stable.
@@ -581,6 +584,29 @@ Exit criteria:
 - A user can lint or explain a profile before upload.
 - A user can generate a neutral starter profile without secrets or live services.
 - A user can compare profile experiment validation reports before accepting a profile change.
+
+## Phase 20: Neutral Routing MVP
+
+Goal: make `ragflow-query --mode auto` useful without shipping private route tables.
+
+Tasks:
+
+- [x] Add `ragflow_routing_config_v1` runtime dataclasses.
+- [x] Add routing config loading for user-owned KB names, dataset IDs, hints, and retrieval params.
+- [x] Add deterministic hint/token scoring.
+- [x] Add `ragflow-query list-kbs`.
+- [x] Add `ragflow-query route`.
+- [x] Add `ragflow-query route-test`.
+- [x] Wire `ask --mode auto` to routing config when no explicit KB input is supplied.
+- [x] Preserve explicit `--dataset-id`, `--kb`, and `--kb-manifest` precedence.
+- [x] Add public routing config and route-test templates.
+- [x] Add unit, CLI, release-build, clean-consumer, and platform-smoke coverage.
+
+Exit criteria:
+
+- A user can maintain their own routing hints and run auto retrieval with deterministic route selection.
+- Route regression tests run without RAGFlow network access.
+- No private KB names, hints, or route tables are shipped.
 
 ## Definition of Done
 

@@ -138,7 +138,7 @@ Output:
 Primary commands:
 
 ```bash
-python scripts/query.py ask "What does the policy say?" --mode auto --json
+python scripts/query.py ask "What does the policy say?" --mode auto --routing-config ./routing-config.json --json
 python scripts/query.py ask "Compare A and B" --mode agentic --host-assisted --json
 ```
 
