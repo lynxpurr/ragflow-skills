@@ -456,6 +456,25 @@ Exit criteria:
 - RC3 artifacts are downloadable and self-contained.
 - Stable promotion has a passing disposable live E2E.
 
+## Phase 15: Host-Agent User Onboarding Prompt
+
+Goal: ship a standard copy-paste prompt that end users can give to Hermes, OpenClaw, Claude Code, opencode, or another controllable CLI agent so the host agent can gather RAGFlow/MinerU service settings, configure the skills, and run validation.
+
+Tasks:
+
+- [x] Add `references/user-onboarding-prompt.md` to each public skill.
+- [x] Link the prompt from each public `SKILL.md`.
+- [x] Link the prompt from each `references/host-agent-setup.md`.
+- [x] Add a release-build assertion that every public skill artifact includes the prompt.
+- [x] Record the prompt as a public release example in `docs/06-release-hardening.md`.
+
+Exit criteria:
+
+- The prompt is included in every future public skill artifact.
+- The prompt instructs host agents to ask only for missing RAGFlow/MinerU endpoint and key values.
+- The prompt instructs host agents to keep secrets out of skill folders, repositories, release artifacts, and reports.
+- The prompt guides host agents through no-network smoke, optional MinerU conversion, and disposable RAGFlow live E2E.
+
 ## Definition of Done
 
 The public suite is ready for first external use when:

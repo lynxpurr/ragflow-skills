@@ -2,6 +2,8 @@
 
 Use this reference when Hermes, OpenClaw, Claude Code, opencode, or another controllable CLI agent needs to configure and validate the public RAGFlow skills on behalf of a user.
 
+For a copy-paste prompt that end users can give to their own host agent, use `user-onboarding-prompt.md`.
+
 ## Agent Responsibilities
 
 - Prefer host-agent config and environment variables over asking the user to run manual setup commands.

@@ -21,6 +21,7 @@ class ReleaseBuildTests(unittest.TestCase):
                 self.assertTrue((skill_root / "scripts" / "_vendor" / "ragflow_skill_runtime" / "__init__.py").exists())
                 self.assertFalse((skill_root / "agents").exists())
                 self.assertTrue((skill_root / "references" / "host-agent-setup.md").exists())
+                self.assertTrue((skill_root / "references" / "user-onboarding-prompt.md").exists())
 
             self.assertTrue((dist_dir / "ragflow-doc-to-md" / "scripts" / "convert.py").exists())
             self.assertTrue((dist_dir / "ragflow-kb-build" / "scripts" / "inspect_kb.py").exists())
