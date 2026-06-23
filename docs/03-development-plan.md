@@ -363,7 +363,7 @@ Tasks:
 - [x] Run one external install trial from GitHub Release artifacts on a clean agent workspace.
 - [x] Add opt-in `--live-build` gate for disposable KB build, smoke validation, and direct/host-assisted query.
 - [x] Cut `v0.1.0-rc2` from updated `develop`; RC1 predates the final CLI-agent target refocus.
-- [ ] Run the stronger live RAGFlow endpoint check against a disposable test KB, or record an explicit stable-release waiver.
+- [x] Run the stronger live RAGFlow endpoint check against a disposable test KB.
 - [x] Fix or document any RC1 findings on `develop`.
 - [x] Decide whether stable `v0.1.0` can reuse the RC1 source commit or needs a new release commit. It needs a new release commit and RC2.
 - [ ] Promote the chosen release commit to `main`.
@@ -448,13 +448,13 @@ Tasks:
 - [x] Run clean consumer acceptance from local refreshed artifacts.
 - [x] Publish `v0.1.0-rc3` as a GitHub prerelease.
 - [x] Run consumer acceptance against the GitHub `v0.1.0-rc3` assets.
-- [ ] Re-run Hermes live E2E after the embedding provider is usable, or record an explicit stable-release waiver for infrastructure billing.
+- [x] Re-run Hermes live E2E after the embedding provider is usable.
 
 Exit criteria:
 
 - Default profiles no longer send internal metadata fields to RAGFlow API.
 - RC3 artifacts are downloadable and self-contained.
-- Stable promotion has either a passing disposable live E2E or a documented infrastructure waiver.
+- Stable promotion has a passing disposable live E2E.
 
 ## Definition of Done
 

@@ -247,6 +247,31 @@ Observed result:
 - `ragflow-query` exposed direct and host-assisted query interfaces
 - missing RAGFlow config failed before network work with the expected base URL error
 
+## RC3 Hermes Live E2E Result
+
+Hermes ran a disposable live E2E check on 2026-06-23 from the GitHub Release `v0.1.0-rc3` assets.
+
+Observed result:
+
+- Offline GitHub Release consumer acceptance passed: 8/8 checks.
+- `profile api payload filters internal metadata` passed; `__language__` was removed from the RAGFlow API payload.
+- RAGFlow base URL was `http://localhost:9380`; the API key was loaded from the local vault and not printed.
+- The disposable KB was `kb:ragflow-skills-e2e-20260623-1749`.
+- Dataset ID was `d3fbf0366ee811f1a644bf00e587cade`.
+- One Markdown document was uploaded: `sample.md`.
+- Parse was triggered successfully and completed without timeout.
+- Tongyi embedding `text-embedding-v4@Tongyi-Qianwen` was usable; no overdue-payment error appeared.
+- The parsed KB produced one chunk.
+- `ragflow-kb-build validate --level smoke` passed with `100%` success, `avg_chunks: 1.0`, and `empty_results: 0`.
+- `ragflow-query --mode direct` returned one chunk.
+- `ragflow-query --mode agentic --host-assisted` returned one evidence chunk.
+- RAGFlow accepted the dataset payload without API `code: 101`.
+- The disposable KB was deleted after validation.
+
+Produced artifacts were retained under `/tmp/ragflow-consumer-acceptance-rc3-live/`, including `handoff/doc_manifest.json`, `live/kb_manifest.json`, validation reports, and direct plus host-assisted query JSON outputs.
+
+Conclusion: RC3 passed the complete end-to-end path from GitHub Release download through real RAGFlow KB creation, parse, smoke validation, direct retrieval, host-assisted retrieval, and cleanup. RC3 is eligible for stable `v0.1.0` promotion.
+
 ## RC1 GitHub Consumer Acceptance
 
 The GitHub Release artifact path passed on 2026-06-23:
@@ -281,7 +306,7 @@ For a stronger live check, build a temporary KB from one Markdown file, then run
 ```bash
 RAGFLOW_BASE_URL=https://ragflow.example.test \
 RAGFLOW_API_KEY=... \
-python3 tools/consumer_acceptance.py --github-release v0.1.0-rc1 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-live --overwrite --download-timeout 30 --live-build
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc3 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-live --overwrite --download-timeout 90 --live-build
 ```
 
 `--live-build` creates a disposable KB from the sample Markdown produced during consumer acceptance, waits for parsing, runs `ragflow-kb-build validate --level smoke`, then runs `ragflow-query` in direct and host-assisted modes. It does not delete the created KB automatically; run it only in a test workspace and clean up the KB after validation.
@@ -296,4 +321,4 @@ After RC validation:
 4. Fix RC findings on `develop`.
 5. Promote to `main` only after a clean RC pass.
 
-Items 1-4 are complete for RC2. The GitHub Release consumer acceptance path is also complete. Before stable `v0.1.0`, either run or explicitly waive the stronger live RAGFlow endpoint check.
+Items 1-4 are complete for RC3. The GitHub Release consumer acceptance path and stronger live RAGFlow endpoint check are complete. Stable `v0.1.0` can be promoted from the RC3 release source.
