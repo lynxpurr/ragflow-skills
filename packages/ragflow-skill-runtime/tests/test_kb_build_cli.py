@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_SRC = ROOT / "packages" / "ragflow-skill-runtime" / "src"
+APPEND_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "append.py"
 BUILD_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "build.py"
 DIAGNOSE_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "diagnose.py"
 INSPECT_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "inspect_kb.py"
@@ -277,6 +278,119 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertIn("dataset_id_short", {issue["issue_type"] for issue in payload["issues"]})
         self.assertIn("RAGFlow Diagnostic Report", report_text)
+
+    def test_append_dry_run_via_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "append"
+            input_dir.mkdir()
+            (input_dir / "a.md").write_text("# A\n", encoding="utf-8")
+            (input_dir / "b.md").write_text("# B\n", encoding="utf-8")
+            manifest = root / "kb_manifest.json"
+            output = root / "append_plan.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "0123456789abcdef", "name": "kb:test"},
+                        "documents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(APPEND_SCRIPT),
+                    "--kb-manifest",
+                    str(manifest),
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            file_payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["planned_upload_count"], 2)
+        self.assertEqual(file_payload["schema"], "ragflow_append_plan_v1")
+
+    def test_append_blocks_doc_manifest_with_blocked_quality_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            handoff = root / "handoff"
+            docs_dir = handoff / "documents"
+            docs_dir.mkdir(parents=True)
+            (docs_dir / "sample.md").write_text("# Sample\n", encoding="utf-8")
+            doc_manifest = handoff / "doc_manifest.json"
+            doc_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "quality_gate": {"status": "BLOCKED"},
+                        "documents": [
+                            {
+                                "source_path": "source.pdf",
+                                "markdown_path": "documents/sample.md",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            kb_manifest = root / "kb_manifest.json"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "0123456789abcdef", "name": "kb:test"},
+                        "documents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(APPEND_SCRIPT),
+                    "--kb-manifest",
+                    str(kb_manifest),
+                    "--doc-manifest",
+                    str(doc_manifest),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("quality gate is BLOCKED", json.loads(result.stdout)["error"])
+
+    def test_append_help_renders(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(APPEND_SCRIPT), "--help"],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_env(),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Append Markdown documents", result.stdout)
+        self.assertIn("--execute", result.stdout)
 
     def test_probe_help_renders(self) -> None:
         result = subprocess.run(

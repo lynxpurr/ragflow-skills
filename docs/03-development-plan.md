@@ -526,14 +526,18 @@ Tasks:
 - [x] Add `ragflow-kb-build/scripts/probe.py`.
 - [x] Add JSON and Markdown diagnostic report output.
 - [x] Add unit, CLI, and clean-consumer help coverage.
+- [x] Add `ragflow-kb-build/scripts/append.py` with safe non-mutating default plans.
+- [x] Add live-preview support for append upload-before snapshots.
+- [x] Make append execution parse only newly uploaded document IDs by default.
 - [ ] Add live disposable probe tests where credentials are present.
-- [ ] Add append, parse-only-new-documents, and cleanup preview/confirm commands.
+- [ ] Add cleanup preview/confirm command.
 
 Exit criteria:
 
 - Host agents can explain short-ID, duplicate-name, parse-state, and zero-chunk symptoms from public artifacts.
 - `probe.py` and `diagnose.py` are read-only by default and do not mutate RAGFlow.
-- High-risk maintenance commands remain deferred until the diagnostic surface is stable.
+- `append.py` does not mutate RAGFlow unless `--execute` is explicit.
+- Cleanup remains deferred until the append path is validated.
 
 ## Definition of Done
 

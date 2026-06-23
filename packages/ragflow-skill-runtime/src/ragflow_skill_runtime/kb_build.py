@@ -145,6 +145,32 @@ def _extract_document_items(response: Any) -> list[Mapping[str, Any]]:
     return []
 
 
+def extract_document_items(response: Any) -> list[Mapping[str, Any]]:
+    """Extract document objects from common RAGFlow list-document response shapes."""
+
+    return _extract_document_items(response)
+
+
+def extract_document_name(document: Mapping[str, Any]) -> str:
+    """Extract a display/document name from common RAGFlow document shapes."""
+
+    for key in ("name", "document_name", "docnm_kwd", "filename", "file_name"):
+        value = document.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def extract_document_id(document: Mapping[str, Any]) -> str:
+    """Extract a document ID from common RAGFlow document shapes."""
+
+    for key in ("id", "document_id"):
+        value = document.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def _as_float(value: Any) -> float | None:
     if isinstance(value, bool) or value is None:
         return None

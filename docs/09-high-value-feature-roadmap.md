@@ -484,8 +484,8 @@ Tasks:
 - [x] Add duplicate-name and suffix-fragment detection.
 - [x] Add short-ID validation for manifests and CLI inputs.
 - [x] Add stuck parse and zero chunk diagnostics.
-- [ ] Add `append` with upload-before/after diff.
-- [ ] Add parse-only-new-documents default behavior.
+- [x] Add `append` with upload-before/after diff.
+- [x] Add parse-only-new-documents default behavior.
 - [ ] Add cleanup preview and explicit-confirm cleanup mode.
 - [ ] Add live disposable tests for probe/append/cleanup where credentials are present.
 
@@ -496,7 +496,7 @@ Exit criteria:
 
 Implementation note:
 
-- The current MVP is read-only: `probe.py` and `diagnose.py` report symptoms and recommendations, while append/delete/cleanup execution remains deferred.
+- `probe.py` and `diagnose.py` are read-only. `append.py` defaults to a non-mutating plan; only `--execute` uploads, and it parses only newly uploaded document IDs. Cleanup execution remains deferred.
 
 ### Phase 15: Benchmark Validation
 

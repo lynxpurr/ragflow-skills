@@ -392,6 +392,15 @@ def _run_no_network_checks(
     )
     _record_command_check(checks, "kb-build dry-run", build_result, required_output='"dry_run": true')
 
+    append_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "append.py")
+    append_help = _run_command([python_executable, str(append_script), "--help"], cwd=work_root, env=env)
+    _record_command_check(
+        checks,
+        "kb-build append help",
+        append_help,
+        required_output="Append Markdown documents",
+    )
+
     diagnose_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "diagnose.py")
     diagnose_help = _run_command([python_executable, str(diagnose_script), "--help"], cwd=work_root, env=env)
     _record_command_check(

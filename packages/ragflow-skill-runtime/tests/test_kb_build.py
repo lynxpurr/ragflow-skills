@@ -10,6 +10,9 @@ from ragflow_skill_runtime.kb_build import (
     discover_markdown_documents,
     extract_document_states,
     extract_dataset_id,
+    extract_document_id,
+    extract_document_items,
+    extract_document_name,
     extract_uploaded_document_id,
     make_kb_manifest_payload,
     normalize_document_state,
@@ -78,6 +81,22 @@ class KbBuildTests(unittest.TestCase):
 
     def test_extract_uploaded_document_id_from_list_response(self) -> None:
         self.assertEqual(extract_uploaded_document_id({"data": [{"id": "doc-1"}]}), "doc-1")
+
+    def test_extract_document_items_names_and_ids(self) -> None:
+        items = extract_document_items(
+            {
+                "data": {
+                    "items": [
+                        {"id": "doc-1", "name": "a.md"},
+                        {"document_id": "doc-2", "docnm_kwd": "b.md"},
+                    ]
+                }
+            }
+        )
+
+        self.assertEqual(len(items), 2)
+        self.assertEqual(extract_document_id(items[0]), "doc-1")
+        self.assertEqual(extract_document_name(items[1]), "b.md")
 
     def test_make_kb_manifest_payload(self) -> None:
         profile = ChunkProfile.from_dict({"profile_id": "default-en-768", "chunk_size": 768})

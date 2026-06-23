@@ -76,6 +76,8 @@ Long Markdown files can be inspected with `python scripts/convert.py segment-pla
 
 On `develop`, `ragflow-kb-build` includes read-only diagnostics: `scripts/probe.py` checks safe RAGFlow API compatibility, and `scripts/diagnose.py` explains KB manifest, parse-state, short-ID, duplicate-name, suffix-fragment, and zero-chunk symptoms without private database access.
 
+`scripts/append.py` supports safe KB maintenance: it defaults to a non-mutating append plan, can optionally read a live before-snapshot, and only uploads when `--execute` is explicit.
+
 ## Validation
 
 ```bash
