@@ -268,6 +268,36 @@ def _run_no_network_checks(
 
     build_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "build.py")
     profile = _skill_path(extract_dir, "ragflow-kb-build", "templates", "default-en-768.json")
+    vendor_parent = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "_vendor")
+    profile_payload_check = _run_command(
+        [
+            python_executable,
+            "-c",
+            (
+                "import json, sys\n"
+                "from pathlib import Path\n"
+                "sys.path.insert(0, str(Path(sys.argv[1])))\n"
+                "from ragflow_skill_runtime.profiles import load_profile\n"
+                "profile = load_profile(sys.argv[2])\n"
+                "payload = profile.to_dataset_payload()\n"
+                "parser_config = payload.get('parser_config', {})\n"
+                "if any(key.startswith('__') for key in parser_config):\n"
+                "    print(json.dumps({'ok': False, 'parser_config': parser_config}, ensure_ascii=False))\n"
+                "    raise SystemExit(1)\n"
+                "print(json.dumps({'ok': True, 'parser_config': parser_config}, ensure_ascii=False))\n"
+            ),
+            str(vendor_parent),
+            str(profile),
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "profile api payload filters internal metadata",
+        profile_payload_check,
+        required_output='"ok": true',
+    )
     build_result = _run_command(
         [
             python_executable,

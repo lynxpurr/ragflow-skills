@@ -74,6 +74,7 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         check_names = [check["name"] for check in payload["checks"]]
         self.assertIn("vendored runtime present", check_names)
         self.assertIn("doc-to-md passthrough", check_names)
+        self.assertIn("profile api payload filters internal metadata", check_names)
         self.assertIn("kb-build dry-run", check_names)
         self.assertIn("query host-assisted help", check_names)
         self.assertIn("query missing config guard", check_names)
