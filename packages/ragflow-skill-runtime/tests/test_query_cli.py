@@ -171,6 +171,71 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(code, 0, stdout.getvalue())
         self.assertIn('"host_assisted": true', stdout.getvalue().lower())
 
+    def test_ask_can_write_trace_and_audit_citations(self) -> None:
+        module = load_query_module()
+        module.RAGFlowClient = FakeQueryClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trace_json = root / "trace.json"
+            trace_md = root / "trace.md"
+            query_output = root / "query.json"
+            audit_json = root / "audit.json"
+            audit_md = root / "audit.md"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "test-key",
+                        "ask",
+                        "question",
+                        "--mode",
+                        "agentic",
+                        "--host-assisted",
+                        "--dataset-id",
+                        "ds-1",
+                        "--json",
+                        "--include-trace",
+                        "--trace-json",
+                        str(trace_json),
+                        "--trace-md",
+                        str(trace_md),
+                    ]
+                )
+            query_output.write_text(stdout.getvalue(), encoding="utf-8")
+            payload = json.loads(stdout.getvalue())
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                audit_code = module.main(
+                    [
+                        "audit-citations",
+                        "--query-output",
+                        str(query_output),
+                        "--answer",
+                        "The answer is supported by the retrieved evidence [1].",
+                        "--report-json",
+                        str(audit_json),
+                        "--report-md",
+                        str(audit_md),
+                        "--json",
+                    ]
+                )
+            audit_payload = json.loads(stdout.getvalue())
+
+            self.assertEqual(code, 0, query_output.read_text(encoding="utf-8"))
+            self.assertIn("evidence", payload)
+            self.assertIn("trace", payload)
+            self.assertEqual(payload["trace"]["schema"], "ragflow_query_trace_v1")
+            self.assertTrue(trace_json.exists())
+            self.assertIn("RAGFlow Query Trace", trace_md.read_text(encoding="utf-8"))
+            self.assertEqual(audit_code, 0)
+            self.assertTrue(audit_payload["ok"])
+            self.assertTrue(audit_json.exists())
+            self.assertIn("RAGFlow Citation Audit", audit_md.read_text(encoding="utf-8"))
+
     def test_route_commands_use_routing_config(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:

@@ -5,9 +5,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 import sys
+import time
 from typing import Any
 
 
@@ -31,15 +33,21 @@ from ragflow_skill_runtime import (  # noqa: E402
     RAGFlowClient,
     RetrievalError,
     RoutingError,
+    audit_citations,
+    build_query_trace,
+    evidence_from_query_payload,
     load_route_test_queries,
     load_config,
     load_kb_manifest,
     load_routing_config,
     normalize_retrieval_response,
+    render_citation_audit_markdown,
+    render_query_trace_markdown,
     render_route_test_markdown,
     resolve_dataset_ids,
     route_question,
     run_route_tests,
+    weight_evidence,
 )
 
 
@@ -89,11 +97,22 @@ def _write_json(path: str | None, data: Any) -> None:
         _write_text(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
 
+def _read_json(path: str | Path) -> Any:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _ask(args: argparse.Namespace) -> int:
     mode = args.mode
     route_result = None
     routed_params: dict[str, Any] = {}
     explicit_dataset_inputs = bool(args.dataset_id or args.kb or args.kb_manifest)
+    started_at = _utc_now()
+    total_start = time.perf_counter()
+    retrieval_duration_ms = 0.0
 
     if mode == "agentic" and not args.host_assisted:
         return _error(
@@ -128,17 +147,43 @@ def _ask(args: argparse.Namespace) -> int:
             if args.similarity_threshold is not None
             else routed_params.get("similarity_threshold")
         )
+        retrieval_start = time.perf_counter()
         raw = client.retrieve(
             question=args.question,
             dataset_ids=dataset_ids,
             top_k=effective_top_k,
             similarity_threshold=effective_similarity_threshold,
         )
+        retrieval_duration_ms = (time.perf_counter() - retrieval_start) * 1000
         chunks = normalize_retrieval_response(raw)
     except (ConfigError, RetrievalError, RoutingError, ValueError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=args.json)
 
+    total_duration_ms = (time.perf_counter() - total_start) * 1000
+    finished_at = _utc_now()
     route_payload = route_result.to_dict() if route_result else None
+    evidence = weight_evidence(args.question, chunks)
+    trace = build_query_trace(
+        question=args.question,
+        requested_mode=args.mode,
+        effective_mode=mode,
+        dataset_ids=dataset_ids,
+        top_k=effective_top_k,
+        similarity_threshold=effective_similarity_threshold,
+        host_assisted=args.host_assisted,
+        chunk_count=len(chunks),
+        evidence=evidence,
+        route=route_payload,
+        timings_ms={
+            "total": round(total_duration_ms, 3),
+            "retrieval": round(retrieval_duration_ms, 3),
+        },
+        started_at=started_at,
+        finished_at=finished_at,
+        warnings=[] if chunks else ["retrieval returned zero chunks"],
+    )
+    _write_json(args.trace_json, trace)
+    _write_text(args.trace_md, render_query_trace_markdown(trace))
     result = QueryResult(
         question=args.question,
         mode=mode,
@@ -152,10 +197,19 @@ def _ask(args: argparse.Namespace) -> int:
             "similarity_threshold": effective_similarity_threshold,
             "chunk_count": len(chunks),
             "synthesis": "host-assisted" if args.host_assisted else "not-requested",
+            "duration_ms": round(total_duration_ms, 3),
+            "retrieval_ms": round(retrieval_duration_ms, 3),
+            "evidence_count": len(evidence),
             **({"route": route_payload} if route_payload else {}),
         },
     )
-    payload = {"ok": True, **result.to_dict(include_raw=args.include_raw)}
+    payload = {
+        "ok": True,
+        **result.to_dict(include_raw=args.include_raw),
+        "evidence": evidence,
+    }
+    if args.include_trace:
+        payload["trace"] = trace
     if args.json or args.host_assisted:
         _json_dump(payload)
     else:
@@ -211,6 +265,27 @@ def _route_test(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _audit_citations(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        answer = args.answer
+        if args.answer_file:
+            answer = Path(args.answer_file).read_text(encoding="utf-8")
+        if not answer or not answer.strip():
+            raise ValueError("answer text is required")
+        evidence = evidence_from_query_payload(query_payload)
+        report = audit_citations(answer, evidence)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_citation_audit_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _add_runtime_options(parser: argparse.ArgumentParser, *, suppress_defaults: bool = False) -> None:
     default = argparse.SUPPRESS if suppress_defaults else None
     parser.add_argument("--config", default=default, help="Path to JSON or simple YAML config")
@@ -244,6 +319,16 @@ def build_parser() -> argparse.ArgumentParser:
     route_test.add_argument("--report-md", help="Optional Markdown report output path")
     route_test.set_defaults(func=_route_test)
 
+    audit = sub.add_parser("audit-citations", help="Audit host-generated answer citations")
+    audit.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    answer_group = audit.add_mutually_exclusive_group(required=True)
+    answer_group.add_argument("--answer", help="Host-generated answer text")
+    answer_group.add_argument("--answer-file", help="File containing host-generated answer text")
+    audit.add_argument("--report-json", help="Optional JSON report output path")
+    audit.add_argument("--report-md", help="Optional Markdown report output path")
+    audit.add_argument("--json", action="store_true", help="Emit JSON report")
+    audit.set_defaults(func=_audit_citations)
+
     ask = sub.add_parser("ask", help="Ask a question against RAGFlow")
     _add_runtime_options(ask, suppress_defaults=True)
     _add_routing_option(ask)
@@ -257,6 +342,9 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--host-assisted", action="store_true", help="Return evidence for host agent synthesis")
     ask.add_argument("--json", action="store_true", help="Emit JSON")
     ask.add_argument("--include-raw", action="store_true", help="Include raw RAGFlow chunks in JSON")
+    ask.add_argument("--include-trace", action="store_true", help="Include full query trace in JSON output")
+    ask.add_argument("--trace-json", help="Optional query trace JSON output path")
+    ask.add_argument("--trace-md", help="Optional query trace Markdown output path")
     ask.set_defaults(func=_ask)
     return parser
 

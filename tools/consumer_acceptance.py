@@ -652,6 +652,57 @@ raise SystemExit(code)
     if route_test_report.exists():
         produced.append(route_test_report)
 
+    query_output = work_root / "query_output.json"
+    citation_audit_json = work_root / "citation_audit.json"
+    citation_audit_md = work_root / "citation_audit.md"
+    query_output.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "question": "What can run without repository source context?",
+                "chunks": [
+                    {
+                        "content": "This release artifact can run without repository source context.",
+                        "similarity": 0.9,
+                        "document_name": "sample.md",
+                        "dataset_id": "ds-consumer-acceptance",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    citation_audit = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "audit-citations",
+            "--query-output",
+            str(query_output),
+            "--answer",
+            "The release artifact can run without repository source context [1].",
+            "--report-json",
+            str(citation_audit_json),
+            "--report-md",
+            str(citation_audit_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query citation audit",
+        citation_audit,
+        required_output='"schema": "ragflow_citation_audit_v1"',
+    )
+    if citation_audit_json.exists():
+        produced.append(citation_audit_json)
+    if citation_audit_md.exists():
+        produced.append(citation_audit_md)
+
     missing_config = _run_command(
         [
             python_executable,

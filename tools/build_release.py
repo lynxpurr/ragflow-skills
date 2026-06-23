@@ -125,9 +125,11 @@ class FakeClient:
 
 module.RAGFlowClient = FakeClient
 payloads = []
+trace_json = Path(__file__).parent / "query_trace.json"
+trace_md = Path(__file__).parent / "query_trace.md"
 for argv in [
     ["--base-url", "https://ragflow.example.test", "--api-key", "test-key", "ask", "release smoke", "--dataset-id", "ds-smoke", "--mode", "direct", "--json"],
-    ["--base-url", "https://ragflow.example.test", "--api-key", "test-key", "ask", "release smoke", "--dataset-id", "ds-smoke", "--mode", "agentic", "--host-assisted", "--json"],
+    ["--base-url", "https://ragflow.example.test", "--api-key", "test-key", "ask", "release smoke", "--dataset-id", "ds-smoke", "--mode", "agentic", "--host-assisted", "--json", "--trace-json", str(trace_json), "--trace-md", str(trace_md)],
     ["--base-url", "https://ragflow.example.test", "--api-key", "test-key", "ask", "release smoke", "--mode", "auto", "--routing-config", str(routing), "--json"],
 ]:
     from io import StringIO
@@ -138,10 +140,37 @@ for argv in [
     if code != 0:
         raise SystemExit(code)
     payload = json.loads(stdout.getvalue())
-    if not payload.get("ok") or not payload.get("chunks"):
+    if not payload.get("ok") or not payload.get("chunks") or not payload.get("evidence"):
         raise SystemExit(2)
     payloads.append(payload)
-print(json.dumps({{"ok": True, "payloads": payloads}}, ensure_ascii=False))
+if not trace_json.exists() or "RAGFlow Query Trace" not in trace_md.read_text(encoding="utf-8"):
+    raise SystemExit(3)
+query_output = Path(__file__).parent / "query_output.json"
+audit_json = Path(__file__).parent / "citation_audit.json"
+audit_md = Path(__file__).parent / "citation_audit.md"
+query_output.write_text(json.dumps(payloads[1], ensure_ascii=False, indent=2), encoding="utf-8")
+from io import StringIO
+import contextlib
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    audit_code = module.main([
+        "audit-citations",
+        "--query-output",
+        str(query_output),
+        "--answer",
+        "Release smoke answer [1].",
+        "--report-json",
+        str(audit_json),
+        "--report-md",
+        str(audit_md),
+        "--json",
+    ])
+if audit_code != 0:
+    raise SystemExit(audit_code)
+audit_payload = json.loads(stdout.getvalue())
+if not audit_payload.get("ok") or not audit_json.exists() or not audit_md.exists():
+    raise SystemExit(4)
+print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload}}, ensure_ascii=False))
 """,
             encoding="utf-8",
         )

@@ -131,6 +131,33 @@ python skills/ragflow-query/scripts/query.py route-test \
 
 Routing is deterministic and private-data-free: users provide their own KB names, dataset IDs, hints, and retrieval params. Explicit `--dataset-id`, `--kb`, or `--kb-manifest` still takes precedence over auto routing.
 
+## Agentic Observability
+
+On `develop`, `ragflow-query ask` returns deterministic evidence weights and can write redaction-safe query trace reports:
+
+```bash
+python skills/ragflow-query/scripts/query.py ask \
+  "What does this KB say?" \
+  --kb-manifest ./run/kb_manifest.json \
+  --mode agentic \
+  --host-assisted \
+  --json \
+  --trace-json ./run/query_trace.json \
+  --trace-md ./run/query_trace.md
+```
+
+After the host agent writes a final answer from retrieved evidence, `audit-citations` can check simple numeric citations such as `[1]` against the query output:
+
+```bash
+python skills/ragflow-query/scripts/query.py audit-citations \
+  --query-output ./run/query.json \
+  --answer-file ./run/answer.md \
+  --report-json ./run/citation_audit.json \
+  --report-md ./run/citation_audit.md
+```
+
+This remains retrieval-only: no LLM key is required and script-owned synthesis is still deferred.
+
 ## Validation
 
 ```bash
@@ -153,4 +180,4 @@ This repository contains only the public, portable RAGFlow skill suite. Private 
 Commercial SaaS agent sandboxes are not a v1 target. The intended public targets are programming-agent CLI environments the user controls or can configure, especially Hermes, OpenClaw, Claude Code, and opencode. A first-party SaaS platform should integrate document parsing, RAGFlow, and retrieval as native backend tools rather than by running these portable skill scripts inside a sandbox.
 
 See `docs/08-cli-agent-integration.md` for CLI agent configuration and invocation patterns.
-See `docs/09-high-value-feature-roadmap.md` for completed v0.2+ high-value features and the remaining agentic observability plan.
+See `docs/09-high-value-feature-roadmap.md` for completed v0.2+ high-value features and the remaining optional synthesis backlog.

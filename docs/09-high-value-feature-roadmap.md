@@ -574,17 +574,27 @@ Goal: improve agentic evidence quality without making LLM synthesis mandatory.
 
 Tasks:
 
-- [ ] Add evidence weighting to normalized query results.
-- [ ] Add optional query trace JSON output.
-- [ ] Add timing and retrieval parameter metadata.
-- [ ] Add citation-audit input format for host-generated answers.
-- [ ] Add `ragflow-query audit-citations`.
+- [x] Add evidence weighting to normalized query results.
+- [x] Add optional query trace JSON output.
+- [x] Add query trace Markdown output.
+- [x] Add timing and retrieval parameter metadata.
+- [x] Add citation-audit input format for host-generated answers.
+- [x] Add `ragflow-query audit-citations`.
+- [x] Add clean-consumer and platform-smoke coverage.
 - [ ] Add optional LLM provider config only after audit and tracing are stable.
 - [ ] Add script-owned planner/synthesis as an experimental opt-in mode.
 
 Exit criteria:
 
 - Host agents can explain why evidence was selected, audit citations, and debug weak retrievals.
+
+Implementation note:
+
+- The current MVP remains retrieval-only. `ask` returns deterministic evidence weights, can write
+  `ragflow_query_trace_v1` JSON/Markdown reports, and records retrieval timing plus zero-result
+  warnings. `audit-citations` checks host-generated answers against query output using simple
+  numeric citations such as `[1]`. LLM-owned synthesis, planning, and provider configuration remain
+  deferred.
 
 ## Recommended Implementation Order
 

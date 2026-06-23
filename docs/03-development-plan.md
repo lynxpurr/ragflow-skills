@@ -1,7 +1,7 @@
 # RAGFlow Skills Phased Development Plan
 
 Status: active roadmap
-Date: 2026-06-22
+Date: 2026-06-24
 
 ## Objective
 
@@ -35,13 +35,14 @@ Completed foundations:
 - High-value roadmap Phase 15 benchmark validation MVP
 - High-value roadmap Phase 16 profile engineering MVP
 - High-value roadmap Phase 17 neutral routing MVP
+- High-value roadmap Phase 18 agentic observability MVP
 
 Partially completed:
 
 - Phase 3 `ragflow-query`
   - Direct retrieval CLI exists.
   - `--mode auto` now uses user-owned routing config when provided; without routing config or with explicit KB inputs, it remains direct retrieval.
-  - Host-assisted evidence return exists.
+  - Host-assisted evidence return includes evidence weights and optional trace reports.
   - V1 scope is CLI-only; `serve` and script-owned agentic planning/synthesis are deferred.
 
 Near-term priority correction:
@@ -607,6 +608,28 @@ Exit criteria:
 - A user can maintain their own routing hints and run auto retrieval with deterministic route selection.
 - Route regression tests run without RAGFlow network access.
 - No private KB names, hints, or route tables are shipped.
+
+## Phase 21: Agentic Observability MVP
+
+Goal: improve host-assisted evidence quality without requiring an LLM key or script-owned synthesis.
+
+Tasks:
+
+- [x] Add deterministic evidence weighting for `ragflow-query ask` results.
+- [x] Add `--trace-json` and `--trace-md` outputs with `ragflow_query_trace_v1`.
+- [x] Add retrieval timing, selected params, route metadata, and zero-result warnings to traces.
+- [x] Add `ragflow-query audit-citations` for host-generated answers.
+- [x] Add `ragflow_citation_audit_v1` JSON and Markdown reports.
+- [x] Add public example payloads for host-assisted output, traces, and citation audit.
+- [x] Add unit, CLI, release-build, clean-consumer, and platform-smoke coverage.
+- [ ] Keep script-owned LLM synthesis deferred until tracing and audit behavior is stable in real use.
+
+Exit criteria:
+
+- Host agents can inspect why evidence was selected.
+- Host agents can preserve trace artifacts for weak retrieval debugging.
+- Host-generated answers can be checked against retrieved evidence using simple numeric citations such as `[1]`.
+- Existing direct, auto, and host-assisted query paths remain backward-compatible.
 
 ## Definition of Done
 

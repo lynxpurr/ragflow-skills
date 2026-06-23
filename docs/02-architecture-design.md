@@ -408,7 +408,31 @@ Explicit `--dataset-id`, `--kb`, or `--kb-manifest` takes precedence over route 
 Host-assisted fallback:
 
 - If no LLM key is available, `agentic` can run in `--host-assisted` mode.
-- In host-assisted mode, the script returns plan/chunks/evidence and lets the host agent synthesize the final answer.
+- In host-assisted mode, the script returns chunks, deterministic evidence weights, and optional
+  trace reports; the host agent synthesizes the final answer.
+
+Observability helpers:
+
+```bash
+python scripts/query.py ask "question" \
+  --kb-manifest ./kb_manifest.json \
+  --mode agentic \
+  --host-assisted \
+  --json \
+  --trace-json ./query_trace.json \
+  --trace-md ./query_trace.md
+
+python scripts/query.py audit-citations \
+  --query-output ./query.json \
+  --answer-file ./answer.md \
+  --report-json ./citation_audit.json \
+  --report-md ./citation_audit.md
+```
+
+`ragflow_query_trace_v1` records selected mode, dataset IDs, route details when present, retrieval
+parameters, timing, zero-result warnings, and evidence weights. `ragflow_citation_audit_v1` checks
+simple numeric citations such as `[1]` against retrieved evidence. Both reports are redaction-safe
+and do not require an LLM key.
 
 Current gap:
 

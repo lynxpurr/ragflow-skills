@@ -1,0 +1,26 @@
+{
+  "ok": true,
+  "schema": "ragflow_citation_audit_v1",
+  "metrics": {
+    "evidence_count": 1,
+    "citation_count": 1,
+    "cited_evidence_count": 1,
+    "invalid_citation_count": 0,
+    "unsupported_uncited_statement_count": 0,
+    "errors": 0,
+    "warnings": 0
+  },
+  "citations": {
+    "numeric": [
+      1
+    ],
+    "valid_ranks": [
+      1
+    ],
+    "cited_ranks": [
+      1
+    ],
+    "invalid_ranks": []
+  },
+  "issues": []
+}

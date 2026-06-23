@@ -42,7 +42,7 @@ python3 tools/platform_smoke_matrix.py --list-profiles
 | `claude-code-cli` | Claude Code | `scripts/_vendor/ragflow_skill_runtime` | CLI flags | CLI-only use works without editable installs. |
 | `opencode-cli` | opencode | `scripts/_vendor/ragflow_skill_runtime` | CLI flags | CLI-only use works for opencode-style programming agents. |
 | `strict-vendor-env` | Strict vendor/env runner | `scripts/_vendor/ragflow_skill_runtime` | `RAGFLOW_*`, `DOC_TO_MD_*`, and `MINERU_*` environment variables | Compatibility stress profile with env-provided RAGFlow and MinerU service config. |
-| `artifact-runner-cli` | Artifact-oriented CLI runner | `scripts/_vendor/ragflow_skill_runtime` | environment | Handoff, MinerU service conversion, query evidence, and validation reports are written as artifacts. |
+| `artifact-runner-cli` | Artifact-oriented CLI runner | `scripts/_vendor/ragflow_skill_runtime` | environment | Handoff, MinerU service conversion, query evidence, trace, citation audit, and validation reports are written as artifacts. |
 | `openclaw-cli-v1` | OpenClaw | `scripts/_vendor/ragflow_skill_runtime` | CLI flags | V1 CLI path works while `serve` remains deferred. |
 
 Legacy aliases are accepted for older docs and scripts:
@@ -62,7 +62,8 @@ Each profile performs the same no-network smoke:
 6. Create a fake `kb_manifest.json` for no-network query and validation smoke.
 7. Run `ragflow-query/scripts/query.py route-test` against a public fake routing config.
 8. Import `ragflow-query/scripts/query.py`, inject a fake `RAGFlowClient`, and run direct plus host-assisted query paths.
-9. Import `ragflow-kb-build/scripts/validate.py`, inject a fake `RAGFlowClient`, and produce JSON plus Markdown validation reports.
+9. Produce query trace JSON/Markdown and run `audit-citations` against the host-assisted output.
+10. Import `ragflow-kb-build/scripts/validate.py`, inject a fake `RAGFlowClient`, and produce JSON plus Markdown validation reports.
 
 The fake client is intentional. The matrix should verify packaging and CLI behavior rather than live RAGFlow service availability. Localhost, LAN, VPN, and HTTPS RAGFlow endpoints are all valid in real CLI-agent use when explicitly configured.
 
@@ -76,6 +77,7 @@ The fake client is intentional. The matrix should verify packaging and CLI behav
 | `MinerU create-task response missing task_id` | `DOC_TO_MD_BACKEND=mineru` was pointed at a service that does not match the Agent parsing API contract | Use an Agent API endpoint, or set `DOC_TO_MD_BACKEND=mineru-sync` for synchronous multipart `/parse`. |
 | `manifest not found` | Handoff artifact path not preserved between steps | Pass absolute artifact paths or keep all steps in one workspace. |
 | `auto routing found no matching KB` | Routing config has no matching hints and no default KB | Add user-owned hints/defaults or pass explicit `--dataset-id`, `--kb`, or `--kb-manifest`. |
+| `answer references unavailable citation ranks` | Host-generated answer cites `[n]` that is not present in query evidence | Regenerate the answer from available evidence or rerun retrieval with a higher `--top-k`. |
 | `agentic mode is not implemented` | Script-owned synthesis requested in v1 | Use `--mode agentic --host-assisted`; host agent performs synthesis. |
 | Network or DNS errors in real use | RAGFlow endpoint is not reachable from the runner | Use a reachable LAN, VPN, HTTPS, or explicitly configured localhost debug endpoint and provide `RAGFLOW_API_KEY`. |
 

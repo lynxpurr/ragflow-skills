@@ -65,6 +65,17 @@ from .manifests import (
     load_doc_manifest,
     load_kb_manifest,
 )
+from .observability import (
+    CITATION_AUDIT_SCHEMA,
+    TRACE_SCHEMA,
+    EvidenceWeight,
+    audit_citations,
+    build_query_trace,
+    evidence_from_query_payload,
+    render_citation_audit_markdown,
+    render_query_trace_markdown,
+    weight_evidence,
+)
 from .ragflow_client import RAGFlowClient
 from .profiles import (
     ChunkProfile,
@@ -173,6 +184,8 @@ __all__ = [
     "BenchmarkEvaluation",
     "BenchmarkGate",
     "BenchmarkQrel",
+    "CITATION_AUDIT_SCHEMA",
+    "EvidenceWeight",
     "NormalizedChunk",
     "QueryResult",
     "RetrievalError",
@@ -181,12 +194,15 @@ __all__ = [
     "RoutingConfig",
     "RoutingError",
     "RoutingKnowledgeBase",
+    "TRACE_SCHEMA",
     "ValidationCaseResult",
     "ValidationError",
     "ValidationQuery",
     "ValidationReport",
-    "convert_source_to_markdown",
+    "audit_citations",
+    "build_query_trace",
     "compare_validation_reports",
+    "convert_source_to_markdown",
     "diagnose_kb_manifest",
     "discover_markdown_documents",
     "discover_source_documents",
@@ -196,6 +212,7 @@ __all__ = [
     "extract_document_name",
     "extract_document_states",
     "evaluate_query_result",
+    "evidence_from_query_payload",
     "explain_profile",
     "attach_benchmark_evaluation",
     "html_to_markdown",
@@ -225,7 +242,9 @@ __all__ = [
     "normalize_document_state",
     "resolve_dataset_ids",
     "render_diagnostic_markdown",
+    "render_citation_audit_markdown",
     "render_quality_markdown",
+    "render_query_trace_markdown",
     "render_markdown_report",
     "recommend_profile",
     "render_profile_compare_markdown",
@@ -239,6 +258,7 @@ __all__ = [
     "smoke_query",
     "text_to_markdown",
     "wait_for_document_states",
+    "weight_evidence",
 ]
 
 __version__ = "0.1.0"

@@ -17,6 +17,8 @@ python scripts/query.py list-kbs --routing-config ./templates/routing-config.exa
 python scripts/query.py route "Which API configuration should I use?" --routing-config ./templates/routing-config.example.json --json
 python scripts/query.py route-test --routing-config ./templates/routing-config.example.json --queries ./templates/route-test-queries.example.json --report-md ./run/route_test.md
 python scripts/query.py --config /path/to/ragflow-config.local.yaml ask "Question" --mode auto --routing-config ./routing-config.json --json
+python scripts/query.py --config /path/to/ragflow-config.local.yaml ask "Question" --kb-manifest ./kb_manifest.json --mode agentic --host-assisted --json --trace-json ./run/query_trace.json --trace-md ./run/query_trace.md
+python scripts/query.py audit-citations --query-output ./run/query.json --answer-file ./run/answer.md --report-json ./run/citation_audit.json --report-md ./run/citation_audit.md
 ```
 
 Use `templates/ragflow-config.example.yaml` as the shared config template. Put the real config in a stable host-agent config path, such as Hermes or OpenClaw config storage, and point scripts to it with `RAGFLOW_CONFIG` or `--config`. Do not put real keys in the skill folder.
@@ -29,7 +31,9 @@ Notes:
 - `--mode auto` uses `--routing-config` or `RAGFLOW_ROUTING_CONFIG` when no explicit `--dataset-id`, `--kb`, or `--kb-manifest` is provided; otherwise it falls back to direct retrieval.
 - Routing config is user-owned and deterministic. Use `list-kbs`, `route`, and `route-test` to inspect it before live retrieval.
 - `--mode agentic --host-assisted` still retrieves from RAGFlow; the host agent performs final synthesis from returned evidence.
-- See `templates/host-assisted-response.example.json` for the expected evidence payload shape.
+- `ask` returns deterministic evidence weights and can write `--trace-json` / `--trace-md` for host-agent debugging.
+- Use `audit-citations` after host synthesis to check simple numeric citations like `[1]` against retrieved evidence.
+- See `templates/host-assisted-response.example.json`, `templates/query-trace.example.json`, and `templates/citation-audit.example.json` for expected payload shapes.
 - Release artifacts are smoke-tested against a fake RAGFlow endpoint for both direct and host-assisted query paths.
 - For v1, agentic mode means host-assisted evidence return only.
 - Script-owned agentic planning/synthesis is deferred.

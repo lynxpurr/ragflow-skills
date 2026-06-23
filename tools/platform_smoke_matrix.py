@@ -461,7 +461,18 @@ module.RAGFlowClient = FakeClient
 payloads = []
 for mode, extra, output_name in [
     ("direct", ["--json"], "query_direct.json"),
-    ("agentic", ["--host-assisted", "--json"], "query_host_assisted.json"),
+    (
+        "agentic",
+        [
+            "--host-assisted",
+            "--json",
+            "--trace-json",
+            str(artifacts_dir / "query_trace.json"),
+            "--trace-md",
+            str(artifacts_dir / "query_trace.md"),
+        ],
+        "query_host_assisted.json",
+    ),
 ]:
     argv = (
         runtime_args
@@ -483,13 +494,37 @@ for mode, extra, output_name in [
     payload = json.loads(stdout.getvalue())
     if not payload.get("ok") or not payload.get("chunks"):
         raise SystemExit(3)
+    if not payload.get("evidence"):
+        raise SystemExit(5)
     (artifacts_dir / output_name).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\\n",
         encoding="utf-8",
     )
     payloads.append({{"mode": mode, "chunk_count": len(payload.get("chunks", []))}})
 
-print(json.dumps({{"ok": True, "payloads": payloads}}, ensure_ascii=False))
+answer_path = artifacts_dir / "answer.md"
+answer_path.write_text("The known term is present in the portable validation chunk [1].\\n", encoding="utf-8")
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    audit_code = module.main([
+        "audit-citations",
+        "--query-output",
+        str(artifacts_dir / "query_host_assisted.json"),
+        "--answer-file",
+        str(answer_path),
+        "--report-json",
+        str(artifacts_dir / "citation_audit.json"),
+        "--report-md",
+        str(artifacts_dir / "citation_audit.md"),
+        "--json",
+    ])
+if audit_code != 0:
+    raise SystemExit(audit_code)
+audit_payload = json.loads(stdout.getvalue())
+if not audit_payload.get("ok"):
+    raise SystemExit(6)
+
+print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload}}, ensure_ascii=False))
 """,
         encoding="utf-8",
     )
@@ -780,6 +815,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         kb_manifest,
         artifacts_dir / "query_direct.json",
         artifacts_dir / "query_host_assisted.json",
+        artifacts_dir / "query_trace.json",
+        artifacts_dir / "query_trace.md",
+        artifacts_dir / "citation_audit.json",
+        artifacts_dir / "citation_audit.md",
         artifacts_dir / "route_test.md",
         artifacts_dir / "profile_lint.md",
         artifacts_dir / "validation_report.json",

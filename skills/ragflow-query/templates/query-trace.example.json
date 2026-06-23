@@ -1,33 +1,28 @@
 {
-  "ok": true,
+  "schema": "ragflow_query_trace_v1",
   "question": "What does this knowledge base say about the project?",
-  "mode": "agentic",
+  "mode": {
+    "requested": "agentic",
+    "effective": "agentic",
+    "host_assisted": true
+  },
   "dataset_ids": [
     "dataset-id"
   ],
-  "chunks": [
-    {
-      "content": "A concise evidence chunk returned by RAGFlow.",
-      "similarity": 0.92,
-      "document_name": "source.md",
-      "document_id": "document-id",
-      "dataset_id": "dataset-id",
-      "chunk_id": "chunk-id",
-      "important_keywords": [
-        "project"
-      ]
-    }
-  ],
-  "answer": null,
-  "host_assisted": true,
-  "metadata": {
-    "requested_mode": "agentic",
+  "retrieval": {
     "top_k": 5,
-    "chunk_count": 1,
-    "synthesis": "host-assisted",
-    "duration_ms": 42.5,
-    "retrieval_ms": 38.2,
-    "evidence_count": 1
+    "similarity_threshold": 0.1,
+    "chunk_count": 1
+  },
+  "route": null,
+  "timings_ms": {
+    "total": 42.5,
+    "retrieval": 38.2
+  },
+  "cost": {
+    "ragflow_retrieval_calls": 1,
+    "llm_calls": 0,
+    "script_owned_synthesis": false
   },
   "evidence": [
     {
@@ -54,5 +49,8 @@
         "top-ranked"
       ]
     }
-  ]
+  ],
+  "warnings": [],
+  "started_at": "2026-01-01T00:00:00+00:00",
+  "finished_at": "2026-01-01T00:00:00+00:00"
 }
