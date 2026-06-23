@@ -31,7 +31,7 @@ class ReleaseHygieneTests(unittest.TestCase):
             root = Path(tmp)
             target = root / "skill" / "scripts"
             target.mkdir(parents=True)
-            (target / "bad.py").write_text('BAD = "/home/zenz/private"\n', encoding="utf-8")
+            (target / "bad.py").write_text('BAD = "/home/private-user/private"\n', encoding="utf-8")
 
             findings = scan_forbidden_patterns(root, base=root)
 

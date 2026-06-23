@@ -36,9 +36,9 @@ This keeps development DRY while allowing Hermes, OpenClaw, Claude Code, opencod
 
 ## Stable Release
 
-`v0.1.0` is available as the first stable GitHub release:
+`v0.1.0` is the first stable release. Replace `OWNER` with the publishing GitHub namespace:
 
-https://github.com/lynxpurr/ragflow-skills/releases/tag/v0.1.0
+https://github.com/OWNER/ragflow-skills/releases/tag/v0.1.0
 
 Download the per-skill `.tar.gz` archive for the target platform and verify checksums against `release-manifest.json`.
 

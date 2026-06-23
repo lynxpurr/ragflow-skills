@@ -87,7 +87,7 @@ Tasks:
 
 Constraints:
 
-- No `/home/zenz` defaults.
+- No hardcoded personal home-directory defaults.
 - No dedao imports.
 - No OPC references.
 - No real credentials.

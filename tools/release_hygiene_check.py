@@ -51,7 +51,24 @@ PRIVATE_FILE_NAMES = {
 ALLOW_MARKER = "release-hygiene: allow"
 
 FORBIDDEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("personal_home_path", re.compile(r"/home/zenz")),  # release-hygiene: allow
+    ("personal_home_path", re.compile(r"/(?:home|Users)/[A-Za-z0-9._-]+(?:/|$)")),
+    (
+        "private_ipv4_literal",
+        re.compile(
+            r"\b(?:10(?:\.[0-9]{1,3}){3}|"
+            r"192"
+            r"\."
+            r"168(?:\.[0-9]{1,3}){2}|"
+            r"172\.(?:1[6-9]|2[0-9]|3[01])(?:\.[0-9]{1,3}){2})\b"
+        ),
+    ),
+    (
+        "secret_token_literal",
+        re.compile(
+            r"\b(?:ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{20,}|"
+            r"AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35})\b"
+        ),
+    ),
     ("opc_bridge_path", re.compile(r"opc-bridge|shared-infra", re.IGNORECASE)),  # release-hygiene: allow
     ("private_dedao_reference", re.compile(r"dedao|得到|薛兆丰", re.IGNORECASE)),  # release-hygiene: allow
     ("ragflow_localhost_default", re.compile(r"localhost:9380|127\.0\.0\.1:9380")),  # release-hygiene: allow

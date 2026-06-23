@@ -642,7 +642,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run clean-consumer acceptance checks against release artifacts")
     parser.add_argument("--artifacts-dir", default=str(DEFAULT_ARTIFACTS_DIR), help="Directory containing release artifacts")
     parser.add_argument("--github-release", help="Download this GitHub release tag before running")
-    parser.add_argument("--repo", default="lynxpurr/ragflow-skills", help="GitHub repo for --github-release")
+    parser.add_argument(
+        "--repo",
+        default=os.environ.get("GITHUB_REPOSITORY"),
+        help="GitHub repo owner/name for --github-release; defaults to GITHUB_REPOSITORY",
+    )
     parser.add_argument("--download-dir", help="Directory for downloaded GitHub release assets")
     parser.add_argument("--download-timeout", type=float, default=60.0, help="Seconds to wait for gh release download")
     parser.add_argument("--work-dir", help="Acceptance workspace; defaults to a temporary directory")
@@ -655,6 +659,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--live-parse-timeout", type=float, default=300.0)
     parser.add_argument("--live-poll-interval", type=float, default=2.0)
     args = parser.parse_args(argv)
+    if args.github_release and not args.repo:
+        parser.error("--repo is required with --github-release unless GITHUB_REPOSITORY is set")
 
     try:
         artifacts_dir = Path(args.artifacts_dir).resolve()

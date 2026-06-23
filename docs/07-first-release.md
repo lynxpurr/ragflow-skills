@@ -68,19 +68,19 @@ python3 tools/consumer_acceptance.py --artifacts-dir release-artifacts --work-di
 To exercise the GitHub Release download path through `gh`, use:
 
 ```bash
-python3 tools/consumer_acceptance.py --github-release v0.1.0-rc1 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-github --overwrite
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc1 --repo OWNER/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-github --overwrite
 ```
 
 For RC2, use:
 
 ```bash
-python3 tools/consumer_acceptance.py --github-release v0.1.0-rc2 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-rc2-github --overwrite --download-timeout 90
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc2 --repo OWNER/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-rc2-github --overwrite --download-timeout 90
 ```
 
 For the current RC3 release, use:
 
 ```bash
-python3 tools/consumer_acceptance.py --github-release v0.1.0-rc3 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-rc3-github --overwrite --download-timeout 90
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc3 --repo OWNER/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-rc3-github --overwrite --download-timeout 90
 ```
 
 For private repositories, run `gh auth login` first or set `GH_TOKEN`/`GITHUB_TOKEN`. The harness preserves GitHub CLI auth environment only for the release download step, disables interactive `gh` prompts, and accepts `--download-timeout` for slow networks. GitHub assets download to a separate temporary directory by default so `--overwrite` can safely clean the consumer work directory. The unpacked skill checks still run with a minimal consumer environment.
@@ -107,7 +107,7 @@ Follow-up fixes applied:
 
 `v0.1.0-rc1` is published as a GitHub prerelease:
 
-https://github.com/lynxpurr/ragflow-skills/releases/tag/v0.1.0-rc1
+https://github.com/OWNER/ragflow-skills/releases/tag/v0.1.0-rc1
 
 Attached assets:
 
@@ -128,7 +128,7 @@ Do not promote RC1 directly to stable. Cut `v0.1.0-rc2` from the updated `develo
 
 `v0.1.0-rc2` is published as a GitHub prerelease:
 
-https://github.com/lynxpurr/ragflow-skills/releases/tag/v0.1.0-rc2
+https://github.com/OWNER/ragflow-skills/releases/tag/v0.1.0-rc2
 
 RC2 source commit: `9fa41d7`.
 
@@ -159,7 +159,7 @@ python3 tools/consumer_acceptance.py --artifacts-dir release-artifacts --work-di
 RC2 GitHub Release consumer acceptance also passed on 2026-06-23:
 
 ```bash
-python3 tools/consumer_acceptance.py --github-release v0.1.0-rc2 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-rc2-github --overwrite --download-timeout 90
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc2 --repo OWNER/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-rc2-github --overwrite --download-timeout 90
 ```
 
 Observed result:
@@ -201,7 +201,7 @@ Required RC3 fixes:
 Before publishing RC3, rerun the full release checklist and local consumer acceptance. After publishing RC3, rerun GitHub Release consumer acceptance:
 
 ```bash
-python3 tools/consumer_acceptance.py --github-release v0.1.0-rc3 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-rc3-github --overwrite --download-timeout 90
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc3 --repo OWNER/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-rc3-github --overwrite --download-timeout 90
 ```
 
 The Tongyi overdue-payment parse failure is an infrastructure issue. Do not treat it as a code failure, but do require either a successful disposable live E2E after the provider is usable or an explicit stable-release waiver.
@@ -210,7 +210,7 @@ The Tongyi overdue-payment parse failure is an infrastructure issue. Do not trea
 
 `v0.1.0-rc3` is published as a GitHub prerelease:
 
-https://github.com/lynxpurr/ragflow-skills/releases/tag/v0.1.0-rc3
+https://github.com/OWNER/ragflow-skills/releases/tag/v0.1.0-rc3
 
 RC3 source commit: `ce19e32`.
 
@@ -232,7 +232,7 @@ python3 tools/consumer_acceptance.py --artifacts-dir release-artifacts --work-di
 RC3 GitHub Release consumer acceptance also passed on 2026-06-23:
 
 ```bash
-python3 tools/consumer_acceptance.py --github-release v0.1.0-rc3 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-rc3-github --overwrite --download-timeout 90
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc3 --repo OWNER/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-rc3-github --overwrite --download-timeout 90
 ```
 
 Observed result:
@@ -255,9 +255,9 @@ Observed result:
 
 - Offline GitHub Release consumer acceptance passed: 8/8 checks.
 - `profile api payload filters internal metadata` passed; `__language__` was removed from the RAGFlow API payload.
-- RAGFlow base URL was `http://localhost:9380`; the API key was loaded from the local vault and not printed.
-- The disposable KB was `kb:ragflow-skills-e2e-20260623-1749`.
-- Dataset ID was `d3fbf0366ee811f1a644bf00e587cade`.
+- RAGFlow base URL was a configured test endpoint; the API key was loaded from a local secret store and not printed.
+- The disposable KB used the `kb:ragflow-skills-e2e-YYYYMMDD-HHMM` naming pattern.
+- Dataset ID was recorded in the private test report and omitted from this public release note.
 - One Markdown document was uploaded: `sample.md`.
 - Parse was triggered successfully and completed without timeout.
 - Tongyi embedding `text-embedding-v4@Tongyi-Qianwen` was usable; no overdue-payment error appeared.
@@ -276,7 +276,7 @@ Conclusion: RC3 passed the complete end-to-end path from GitHub Release download
 
 `v0.1.0` is published as the first stable GitHub release:
 
-https://github.com/lynxpurr/ragflow-skills/releases/tag/v0.1.0
+https://github.com/OWNER/ragflow-skills/releases/tag/v0.1.0
 
 Stable source commit: `d6039c6`.
 
@@ -290,7 +290,7 @@ Attached assets:
 Stable GitHub Release consumer acceptance passed on 2026-06-23:
 
 ```bash
-python3 tools/consumer_acceptance.py --github-release v0.1.0 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-v0.1.0-github --overwrite --download-timeout 90
+python3 tools/consumer_acceptance.py --github-release v0.1.0 --repo OWNER/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-v0.1.0-github --overwrite --download-timeout 90
 ```
 
 Observed result:
@@ -310,7 +310,7 @@ Observed result:
 The GitHub Release artifact path passed on 2026-06-23:
 
 ```bash
-python3 tools/consumer_acceptance.py --github-release v0.1.0-rc1 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-github --overwrite --download-timeout 30
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc1 --repo OWNER/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-github --overwrite --download-timeout 30
 ```
 
 Observed result:
@@ -339,7 +339,7 @@ For a stronger live check, build a temporary KB from one Markdown file, then run
 ```bash
 RAGFLOW_BASE_URL=https://ragflow.example.test \
 RAGFLOW_API_KEY=... \
-python3 tools/consumer_acceptance.py --github-release v0.1.0-rc3 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-live --overwrite --download-timeout 90 --live-build
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc3 --repo OWNER/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-live --overwrite --download-timeout 90 --live-build
 ```
 
 `--live-build` creates a disposable KB from the sample Markdown produced during consumer acceptance, waits for parsing, runs `ragflow-kb-build validate --level smoke`, then runs `ragflow-query` in direct and host-assisted modes. It does not delete the created KB automatically; run it only in a test workspace and clean up the KB after validation.

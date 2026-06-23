@@ -161,7 +161,7 @@ When testing a published release from the source repository, prefer the bundled 
 ```bash
 python3 tools/consumer_acceptance.py \
   --github-release v0.1.0-rc2 \
-  --repo lynxpurr/ragflow-skills \
+  --repo OWNER/ragflow-skills \
   --work-dir /tmp/ragflow-skills-e2e-rc2 \
   --overwrite \
   --download-timeout 90

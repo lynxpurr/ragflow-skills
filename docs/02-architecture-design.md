@@ -23,7 +23,7 @@ Commercial SaaS agent sandboxes are explicitly out of the v1 public skill target
 - High cohesion: each public skill owns one state transition.
 - Loose coupling: skills communicate through thin manifest files and `ragflow-skill-runtime`, not through direct imports of each other.
 - Self-contained release: every published skill can run without editable installs or local absolute paths.
-- Portable by default: no `/home/zenz`, no implicit localhost assumption, and no required long-running daemon.
+- Portable by default: no hardcoded personal home-directory paths, no implicit localhost assumption, and no required long-running daemon.
 - Remote-service friendly: RAGFlow and MinerU normally live on reachable LAN, VPN, or HTTPS endpoints; localhost is only a configured local-debug case.
 - CLI-agent friendly: Hermes, OpenClaw, Claude Code, and opencode can provide config through host-agent files, environment variables, or explicit CLI flags.
 - Non-SaaS public scope: optimize for Hermes, OpenClaw, Claude Code, opencode, and similar programming-agent CLI tools.
@@ -152,7 +152,7 @@ Forbidden content:
 - Dedao code, names, IDs, cookies, or CLI assumptions.
 - OPC or personal infra details.
 - Hardcoded private KB names.
-- Hardcoded `/home/zenz` paths.
+- Hardcoded personal home-directory paths.
 - Cron registry, agent inventory, fleet control, or local operations metadata.
 - Secrets or secret examples that look real.
 
@@ -386,7 +386,7 @@ V1 scope decision:
 
 The primary targets are programming-agent CLI tools. Strict sandbox-style behavior is retained as a compatibility stress profile, but commercial SaaS agent sandboxes are no longer an active v1 target.
 
-This means the strict profile is an engineering guardrail, not a product promise. It checks that release artifacts remain self-contained, do not depend on `/home/zenz`, and can read endpoint credentials from environment variables. It does not imply support for arbitrary commercial SaaS agent platforms.
+This means the strict profile is an engineering guardrail, not a product promise. It checks that release artifacts remain self-contained, do not depend on personal home-directory paths, and can read endpoint credentials from environment variables. It does not imply support for arbitrary commercial SaaS agent platforms.
 
 Operational setup for each CLI agent target is documented in `docs/08-cli-agent-integration.md`.
 
