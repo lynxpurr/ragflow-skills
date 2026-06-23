@@ -10,6 +10,7 @@ skills/ragflow-doc-to-md/         # raw documents -> Markdown handoff
 skills/ragflow-kb-build/          # Markdown -> RAGFlow KB + validation
 skills/ragflow-query/             # direct and host-assisted agentic query CLI
 tools/build_release.py            # self-contained release artifact builder
+tools/consumer_acceptance.py      # clean-consumer release artifact acceptance
 tools/export_release_archives.py  # deterministic per-skill archive exporter
 tools/live_integration_check.py   # opt-in live RAGFlow retrieval check
 tools/platform_smoke_matrix.py    # cross-platform no-network smoke matrix
@@ -52,6 +53,7 @@ python3 tools/vendor_import_smoke.py
 python3 tools/platform_smoke_matrix.py
 python3 tools/release_hygiene_check.py
 python3 tools/export_release_archives.py
+python3 tools/consumer_acceptance.py --artifacts-dir release-artifacts --work-dir /tmp/ragflow-consumer-acceptance --overwrite
 python3 tools/live_integration_check.py
 ```
 

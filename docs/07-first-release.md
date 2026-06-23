@@ -27,6 +27,7 @@ python3 tools/vendor_import_smoke.py
 python3 tools/platform_smoke_matrix.py
 python3 tools/release_hygiene_check.py
 python3 tools/export_release_archives.py
+python3 tools/consumer_acceptance.py --artifacts-dir release-artifacts --work-dir /tmp/ragflow-consumer-acceptance --overwrite
 python3 tools/live_integration_check.py
 ```
 
@@ -57,6 +58,18 @@ python3 ragflow-query/scripts/query.py ask --help
 ```
 
 `build.py --dry-run` validates local inputs and prints JSON; it does not write `kb_manifest.json`.
+
+The scripted version of this consumer path is:
+
+```bash
+python3 tools/consumer_acceptance.py --artifacts-dir release-artifacts --work-dir /tmp/ragflow-consumer-acceptance --overwrite
+```
+
+To exercise the GitHub Release download path through `gh`, use:
+
+```bash
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc1 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-github --overwrite
+```
 
 ## RC1 Forward-Test Result
 
@@ -122,4 +135,4 @@ After RC validation:
 4. Fix RC findings on `develop`.
 5. Promote to `main` only after a clean RC pass.
 
-Items 1 and 2 are complete for RC1. Before stable `v0.1.0`, collect at least one external install note from the GitHub release artifacts and either run or explicitly waive the stronger live RAGFlow endpoint check.
+Items 1 and 2 are complete for RC1. Before stable `v0.1.0`, run `tools/consumer_acceptance.py` against the GitHub Release artifacts and either run or explicitly waive the stronger live RAGFlow endpoint check.
