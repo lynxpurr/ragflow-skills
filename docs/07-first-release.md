@@ -106,6 +106,24 @@ Attached assets:
 
 The release manifest records `source_commit: 082ccec`.
 
+## RC1 GitHub Consumer Acceptance
+
+The GitHub Release artifact path passed on 2026-06-23:
+
+```bash
+python3 tools/consumer_acceptance.py --github-release v0.1.0-rc1 --repo lynxpurr/ragflow-skills --work-dir /tmp/ragflow-consumer-acceptance-github --overwrite --download-timeout 30
+```
+
+Observed result:
+
+- `ok: true`
+- source type: `github-release`
+- artifacts downloaded from `v0.1.0-rc1`
+- `ragflow-doc-to-md` produced `doc_manifest.json`
+- `ragflow-kb-build --dry-run` consumed the handoff manifest
+- `ragflow-query` exposed direct and host-assisted query interfaces
+- missing RAGFlow config failed before network work with the expected base URL error
+
 ## Live Integration
 
 When a test RAGFlow endpoint is available:
@@ -137,4 +155,4 @@ After RC validation:
 4. Fix RC findings on `develop`.
 5. Promote to `main` only after a clean RC pass.
 
-Items 1 and 2 are complete for RC1. Before stable `v0.1.0`, run `tools/consumer_acceptance.py` against the GitHub Release artifacts and either run or explicitly waive the stronger live RAGFlow endpoint check.
+Items 1 and 2 are complete for RC1. The GitHub Release consumer acceptance path is also complete. Before stable `v0.1.0`, either run or explicitly waive the stronger live RAGFlow endpoint check.
