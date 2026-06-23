@@ -38,6 +38,16 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertEqual(env["GH_PROMPT_DISABLED"], "1")
         self.assertEqual(env["PYTHONNOUSERSITE"], "1")
 
+    def test_rejects_artifacts_inside_overwritten_work_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(RuntimeError, "artifacts directory"):
+                run_consumer_acceptance(
+                    artifacts_dir=root / "work" / "downloads",
+                    work_root=root / "work",
+                    overwrite=True,
+                )
+
     def test_run_consumer_acceptance_from_local_archives(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

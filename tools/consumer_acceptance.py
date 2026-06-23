@@ -155,6 +155,14 @@ def _validate_artifacts_dir(artifacts_dir: Path) -> dict[str, Path]:
     return {name: artifacts_dir / name for name in REQUIRED_ASSETS}
 
 
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
 def _safe_extract(archive: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     base = destination.resolve()
@@ -377,6 +385,8 @@ def run_consumer_acceptance(
     live_question: str = "Summarize this knowledge base.",
     live_top_k: int = 3,
 ) -> dict[str, Any]:
+    if overwrite and _is_relative_to(artifacts_dir.resolve(), work_root.resolve()):
+        raise RuntimeError("artifacts directory must not be inside an overwritten work directory")
     _prepare_work_root(work_root, overwrite=overwrite)
     artifacts = _validate_artifacts_dir(artifacts_dir)
     extract_dir = work_root / "unpacked"
@@ -468,10 +478,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.github_release:
             download_dir = Path(args.download_dir).resolve() if args.download_dir else None
             if download_dir is None:
-                if args.work_dir:
-                    download_dir = Path(args.work_dir).resolve() / "downloads"
-                else:
-                    download_dir = Path(tempfile.mkdtemp(prefix="ragflow-release-download-"))
+                download_dir = Path(tempfile.mkdtemp(prefix="ragflow-release-download-"))
             download = download_github_release(
                 tag=args.github_release,
                 repo=args.repo,
