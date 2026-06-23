@@ -265,6 +265,82 @@ def _run_no_network_checks(
     _record_file_check(checks, "doc_manifest produced", doc_manifest)
     if doc_manifest.exists():
         produced.append(doc_manifest)
+    quality_report = handoff_dir / "quality_report.json"
+    _record_file_check(checks, "quality_report produced", quality_report)
+    if quality_report.exists():
+        produced.append(quality_report)
+
+    inspect_result = _run_command(
+        [
+            python_executable,
+            str(convert_script),
+            "inspect",
+            "--doc-manifest",
+            str(doc_manifest),
+            "--report-json",
+            str(work_root / "quality_report.inspect.json"),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(checks, "doc-to-md inspect quality", inspect_result, required_output='"status": "PASS"')
+    inspect_report = work_root / "quality_report.inspect.json"
+    if inspect_report.exists():
+        produced.append(inspect_report)
+
+    long_markdown = work_root / "long.md"
+    long_markdown.write_text("# One\n" + ("a" * 70) + "\n# Two\n" + ("b" * 70) + "\n", encoding="utf-8")
+    segmentation_plan = work_root / "segmentation_plan.json"
+    segment_plan_result = _run_command(
+        [
+            python_executable,
+            str(convert_script),
+            "segment-plan",
+            "--markdown",
+            str(long_markdown),
+            "--output",
+            str(segmentation_plan),
+            "--soft-max-chars",
+            "50",
+            "--hard-max-chars",
+            "90",
+            "--min-segment-chars",
+            "20",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(checks, "doc-to-md segment plan", segment_plan_result, required_output='"recommended": true')
+    if segmentation_plan.exists():
+        produced.append(segmentation_plan)
+
+    segments_dir = work_root / "segments"
+    split_plan = work_root / "split_plan.json"
+    split_result = _run_command(
+        [
+            python_executable,
+            str(convert_script),
+            "split",
+            "--markdown",
+            str(long_markdown),
+            "--output",
+            str(segments_dir),
+            "--plan-output",
+            str(split_plan),
+            "--soft-max-chars",
+            "50",
+            "--hard-max-chars",
+            "90",
+            "--min-segment-chars",
+            "20",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(checks, "doc-to-md split", split_result, required_output='"segment_count": 2')
+    if split_plan.exists():
+        produced.append(split_plan)
 
     build_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "build.py")
     profile = _skill_path(extract_dir, "ragflow-kb-build", "templates", "default-en-768.json")

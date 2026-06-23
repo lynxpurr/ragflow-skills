@@ -30,6 +30,7 @@ Completed foundations:
 - Phase 9 release hardening
 - Phase 10 first release candidate validation and GitHub prerelease publication
 - Phase 12 CLI agent integration polish, including host-agent config templates and MinerU service backend
+- High-value roadmap Phase 13 document quality and segmentation MVP
 
 Partially completed:
 
@@ -483,6 +484,31 @@ Exit criteria:
 - The prompt guides host agents through no-network smoke, optional MinerU conversion, and disposable RAGFlow live E2E.
 - MinerU onboarding distinguishes Agent API and synchronous multipart `/parse` services before choosing a backend.
 - Config templates default to `doc_to_md.backend: auto`; `mineru` and `mineru-sync` are opt-in after protocol compatibility is confirmed.
+
+## Phase 16: Document Quality and Segmentation MVP
+
+Goal: begin the v0.2 high-value roadmap with deterministic handoff quality gates and long-document segmentation.
+
+Tasks:
+
+- [x] Add `doc_quality.py` with quality report dataclasses and gate statuses.
+- [x] Check Markdown existence, emptiness, missing local image references, and conversion warnings.
+- [x] Make `ragflow-doc-to-md` write `quality_report.json` during normal conversion.
+- [x] Add `quality_gate` and `quality_report` as optional fields in `doc_manifest.json`.
+- [x] Add `ragflow-doc-to-md inspect` to regenerate quality reports from existing handoffs.
+- [x] Add `doc_segment.py` with segmentation plan dataclasses and threshold validation.
+- [x] Add `ragflow-doc-to-md segment-plan`.
+- [x] Add `ragflow-doc-to-md split` to materialize segment Markdown files.
+- [x] Add `ragflow-kb-build --allow-blocked`; block `quality_gate.status: BLOCKED` by default.
+- [x] Add unit and CLI coverage for quality reports, blocked manifests, segment planning, and split output.
+- [x] Add clean-consumer acceptance checks for quality report and segmentation command availability.
+- [ ] Add optional manifest rewrite/package mode for split outputs after the basic segment-directory path is validated.
+
+Exit criteria:
+
+- Empty or broken Markdown handoffs are prevented from reaching live RAGFlow upload unless the user explicitly accepts the risk.
+- Long Markdown files can be split into `segments/*.md`, then ingested by passing the segment directory to `ragflow-kb-build --input`.
+- Existing v0.1 command surfaces and manifests remain backward-compatible.
 
 ## Definition of Done
 

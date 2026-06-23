@@ -1,6 +1,6 @@
 # High-Value Feature Roadmap
 
-Status: proposed roadmap for v0.2+
+Status: active roadmap for v0.2+
 Date: 2026-06-23
 
 ## Objective
@@ -451,21 +451,26 @@ Goal: make `ragflow-doc-to-md` produce auditable handoffs that can block bad par
 
 Tasks:
 
-- [ ] Add quality report dataclasses to `ragflow_skill_runtime`.
-- [ ] Add Markdown existence, emptiness, image-reference, and warning-severity checks.
-- [ ] Add `ragflow-doc-to-md inspect`.
-- [ ] Add optional `quality_report.json` to convert output.
-- [ ] Add gate status to `doc_manifest.json` as an optional field.
-- [ ] Add `--allow-blocked` guard in `ragflow-kb-build`.
-- [ ] Add segmentation plan dataclasses.
-- [ ] Add `segment-plan` command.
-- [ ] Add `split` command that materializes `segments/*.md`.
-- [ ] Add consumer acceptance coverage for quality reports and segmented manifests.
+- [x] Add quality report dataclasses to `ragflow_skill_runtime`.
+- [x] Add Markdown existence, emptiness, image-reference, and warning-severity checks.
+- [x] Add `ragflow-doc-to-md inspect`.
+- [x] Add optional `quality_report.json` to convert output.
+- [x] Add gate status to `doc_manifest.json` as an optional field.
+- [x] Add `--allow-blocked` guard in `ragflow-kb-build`.
+- [x] Add segmentation plan dataclasses.
+- [x] Add `segment-plan` command.
+- [x] Add `split` command that materializes `segments/*.md`.
+- [x] Add consumer acceptance coverage for quality reports and segmentation commands.
+- [ ] Add optional manifest rewrite/package mode for split outputs.
 
 Exit criteria:
 
 - A bad or empty Markdown conversion is blocked before live RAGFlow upload.
-- A long Markdown document can be segmented and then ingested through the existing kb-build path.
+- A long Markdown document can be segmented and then ingested through the existing kb-build path by pointing `ragflow-kb-build --input` at the segment directory.
+
+Implementation note:
+
+- The current MVP keeps segmentation manifest rewriting deferred. This avoids surprising mutation of an existing handoff while still allowing safe ingestion of `segments/*.md`.
 
 ### Phase 14: RAGFlow Diagnostics and Safe Maintenance
 
@@ -587,4 +592,3 @@ LLM-dependent behavior.
   wrapper with subcommands?
 - Should route hints support regex in v0.2, or begin with exact/substring hints for easier safety?
 - Should optional LLM synthesis live in `ragflow-query` or remain host-agent assisted until v0.3?
-

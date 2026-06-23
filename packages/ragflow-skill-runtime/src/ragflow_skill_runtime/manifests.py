@@ -67,6 +67,8 @@ class DocManifest:
     created_at: str | None
     source_root: str | None
     documents: list[DocumentEntry]
+    quality_report: str | None = None
+    quality_gate: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DocManifest":
@@ -74,11 +76,21 @@ class DocManifest:
         raw_documents = data.get("documents")
         if not isinstance(raw_documents, list) or not raw_documents:
             raise ManifestError("doc_manifest.documents must be a non-empty list")
+        quality_gate = data.get("quality_gate", {})
+        if quality_gate is None:
+            quality_gate = {}
+        if not isinstance(quality_gate, dict):
+            raise ManifestError("doc_manifest.quality_gate must be an object when provided")
+        quality_report = data.get("quality_report")
+        if quality_report is not None and not isinstance(quality_report, str):
+            raise ManifestError("doc_manifest.quality_report must be a string when provided")
         return cls(
             version=_require_str(data, "version"),
             created_at=data.get("created_at"),
             source_root=data.get("source_root"),
             documents=[DocumentEntry.from_dict(item) for item in raw_documents],
+            quality_report=quality_report,
+            quality_gate=quality_gate,
         )
 
 

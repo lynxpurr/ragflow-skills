@@ -61,10 +61,23 @@ def _load_config(args: argparse.Namespace):
     return load_config(config_file=args.config, overrides=overrides)
 
 
+def _guard_quality_gate(doc_manifest, *, allow_blocked: bool) -> None:
+    if not doc_manifest or allow_blocked:
+        return
+    gate = getattr(doc_manifest, "quality_gate", {}) or {}
+    status = gate.get("status") if isinstance(gate, dict) else None
+    if status == "BLOCKED":
+        raise BuildError(
+            "doc_manifest quality gate is BLOCKED; inspect the quality report or pass "
+            "--allow-blocked to upload anyway"
+        )
+
+
 def _run(args: argparse.Namespace) -> int:
     try:
         profile = load_profile(args.profile)
         doc_manifest = load_doc_manifest(args.doc_manifest) if args.doc_manifest else None
+        _guard_quality_gate(doc_manifest, allow_blocked=args.allow_blocked)
         docs = discover_markdown_documents(
             input_path=args.input,
             doc_manifest=doc_manifest,
@@ -157,6 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="Validate inputs without touching RAGFlow or writing kb_manifest.json")
     parser.add_argument("--no-parse", action="store_true", help="Upload documents without triggering parse")
     parser.add_argument("--no-wait", action="store_true", help="Do not wait for parse completion after triggering parse")
+    parser.add_argument("--allow-blocked", action="store_true", help="Allow upload when doc_manifest quality_gate.status is BLOCKED")
     parser.add_argument("--parse-timeout", type=float, default=300.0, help="Maximum seconds to wait for parse completion")
     parser.add_argument("--poll-interval", type=float, default=2.0, help="Polling interval in seconds while waiting for parse completion")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")

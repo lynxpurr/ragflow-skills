@@ -20,6 +20,7 @@ python scripts/build.py --input ./markdown --kb-name kb:project --profile ./temp
 python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-zh-512.json
 python scripts/build.py --config /path/to/ragflow-config.local.yaml --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-zh-512.json
 python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-en-768.json --dry-run --json
+python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-en-768.json --allow-blocked
 python scripts/inspect_kb.py --kb-manifest ./run/kb_manifest.json
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level smoke
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level regression --queries ./templates/validation-queries.example.json --report-md ./run/validation.md
@@ -32,6 +33,7 @@ When a host agent should prepare config, run smoke checks, or perform end-to-end
 Notes:
 
 - `build.py` creates the dataset, uploads Markdown, triggers parse, waits for parse completion by default, and emits `kb_manifest.json`.
+- When a `doc_manifest.json` contains `quality_gate.status: BLOCKED`, `build.py` refuses to upload by default. Use `--allow-blocked` only after the user explicitly accepts the risk.
 - Use `--dry-run` to validate local inputs without touching RAGFlow; dry-run prints JSON and does not write `kb_manifest.json`.
 - Use `--no-wait` only when the host platform should continue while RAGFlow parses asynchronously.
 - `validate.py` supports `smoke`, `regression`, and `benchmark`; regression/benchmark require a user-provided query set.

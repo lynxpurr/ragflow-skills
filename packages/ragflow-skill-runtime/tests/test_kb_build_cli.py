@@ -130,6 +130,74 @@ class KbBuildCliTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["documents"], [str(docs_dir / "sample.md")])
 
+    def test_build_blocks_doc_manifest_with_blocked_quality_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = Path(tmp) / "handoff"
+            docs_dir = handoff / "documents"
+            docs_dir.mkdir(parents=True)
+            (docs_dir / "sample.md").write_text("# Title\n\nBody\n", encoding="utf-8")
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "quality_gate": {"status": "BLOCKED"},
+                        "documents": [
+                            {
+                                "source_path": "source.pdf",
+                                "markdown_path": "documents/sample.md",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            blocked = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "--doc-manifest",
+                    str(manifest),
+                    "--kb-name",
+                    "kb:test",
+                    "--profile",
+                    str(PROFILE_PATH),
+                    "--dry-run",
+                    "--json",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            allowed = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "--doc-manifest",
+                    str(manifest),
+                    "--kb-name",
+                    "kb:test",
+                    "--profile",
+                    str(PROFILE_PATH),
+                    "--dry-run",
+                    "--allow-blocked",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertEqual(blocked.returncode, 2, blocked.stdout)
+        self.assertIn("quality gate is BLOCKED", json.loads(blocked.stdout)["error"])
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        self.assertTrue(json.loads(allowed.stdout)["ok"])
+
     def test_build_help_exposes_wait_options(self) -> None:
         result = subprocess.run(
             [sys.executable, str(BUILD_SCRIPT), "--help"],

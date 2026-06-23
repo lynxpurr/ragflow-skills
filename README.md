@@ -66,6 +66,12 @@ skills/ragflow-query/references/user-onboarding-prompt.md
 
 Keep secrets out of the skill folders, repository, release artifacts, and reports. Use host-agent secret stores, environment variables, or private config files such as `~/.hermes/ragflow/config.local.yaml` or `~/.config/ragflow-skills/config.local.yaml`.
 
+## Quality and Segmentation
+
+On `develop`, `ragflow-doc-to-md` also produces `quality_report.json` and writes a lightweight `quality_gate` into `doc_manifest.json`. `ragflow-kb-build` refuses `BLOCKED` handoffs by default unless the user explicitly passes `--allow-blocked`.
+
+Long Markdown files can be inspected with `python scripts/convert.py segment-plan ...` and materialized into ordinary `segments/*.md` files with `python scripts/convert.py split ...`; those segment directories can be ingested with the existing `ragflow-kb-build --input` path.
+
 ## Validation
 
 ```bash

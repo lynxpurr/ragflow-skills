@@ -52,11 +52,16 @@ class DocConvertCliTests(unittest.TestCase):
             )
 
             manifest = json.loads((output_dir / "doc_manifest.json").read_text(encoding="utf-8"))
+            quality_report = json.loads((output_dir / "quality_report.json").read_text(encoding="utf-8"))
 
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["document_count"], 1)
+        self.assertEqual(payload["quality_gate"]["status"], "PASS")
+        self.assertEqual(quality_report["gate"]["status"], "PASS")
+        self.assertEqual(manifest["quality_gate"]["status"], "PASS")
+        self.assertEqual(manifest["quality_report"], "quality_report.json")
         self.assertEqual(manifest["documents"][0]["markdown_path"], "documents/alpha.md")
 
     def test_convert_manifest_can_feed_kb_build_discovery(self) -> None:
@@ -521,6 +526,121 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(len(payload["skipped"]), 1)
         self.assertEqual(payload["skipped"][0]["source_path"], "bad.bin")
 
+    def test_inspect_generates_blocked_quality_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = Path(tmp) / "handoff"
+            docs = handoff / "documents"
+            docs.mkdir(parents=True)
+            (docs / "empty.md").write_text("", encoding="utf-8")
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [
+                            {
+                                "source_path": "empty.md",
+                                "markdown_path": "documents/empty.md",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report_md = handoff / "quality_report.md"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "inspect",
+                    "--doc-manifest",
+                    str(manifest),
+                    "--report-md",
+                    str(report_md),
+                    "--fail-on-blocked",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+            report = json.loads((handoff / "quality_report.json").read_text(encoding="utf-8"))
+            report_md_text = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["quality_gate"]["status"], "BLOCKED")
+        self.assertEqual(report["gate"]["status"], "BLOCKED")
+        self.assertIn("Document Quality Report", report_md_text)
+
+    def test_segment_plan_and_split_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "long.md"
+            plan_output = root / "segmentation_plan.json"
+            segments = root / "segments"
+            markdown.write_text("# One\n" + ("a" * 70) + "\n# Two\n" + ("b" * 70) + "\n", encoding="utf-8")
+
+            plan_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "segment-plan",
+                    "--markdown",
+                    str(markdown),
+                    "--output",
+                    str(plan_output),
+                    "--soft-max-chars",
+                    "50",
+                    "--hard-max-chars",
+                    "90",
+                    "--min-segment-chars",
+                    "20",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            split_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "split",
+                    "--markdown",
+                    str(markdown),
+                    "--output",
+                    str(segments),
+                    "--plan-output",
+                    str(root / "split_plan.json"),
+                    "--soft-max-chars",
+                    "50",
+                    "--hard-max-chars",
+                    "90",
+                    "--min-segment-chars",
+                    "20",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+            plan_payload = json.loads(plan_result.stdout)
+            split_payload = json.loads(split_result.stdout)
+            plan_exists = plan_output.exists()
+            first_segment_exists = (segments / "long.part-001.md").exists()
+
+        self.assertEqual(plan_result.returncode, 0, plan_result.stderr)
+        self.assertEqual(split_result.returncode, 0, split_result.stderr)
+        self.assertTrue(plan_exists)
+        self.assertEqual(len(plan_payload["segmentation_plan"]["segments"]), 2)
+        self.assertEqual(split_payload["segment_count"], 2)
+        self.assertTrue(first_segment_exists)
+
     def test_convert_help_renders(self) -> None:
         result = subprocess.run(
             [sys.executable, str(CONVERT_SCRIPT), "--help"],
@@ -533,6 +653,8 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertIn("--remote-url", result.stdout)
         self.assertIn("--remote-timeout", result.stdout)
         self.assertIn("--mineru-base-url", result.stdout)
+        self.assertIn("--quality-report-name", result.stdout)
+        self.assertIn("segment-plan", result.stdout)
         self.assertIn("--strict", result.stdout)
 
 

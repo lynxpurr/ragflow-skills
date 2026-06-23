@@ -21,6 +21,9 @@ python scripts/convert.py --input ./raw --output ./handoff --backend builtin
 python scripts/convert.py --input ./raw --output ./handoff --backend mineru
 python scripts/convert.py --input ./raw --output ./handoff --backend remote --remote-url https://converter.example/api/convert
 python scripts/convert.py --config /path/to/ragflow-config.local.yaml --input ./raw --output ./handoff --json
+python scripts/convert.py inspect --doc-manifest ./handoff/doc_manifest.json --report-md ./handoff/quality_report.md
+python scripts/convert.py segment-plan --markdown ./handoff/documents/book.md --output ./handoff/segmentation_plan.json
+python scripts/convert.py split --markdown ./handoff/documents/book.md --output ./handoff/segments --plan-output ./handoff/segmentation_plan.json
 ```
 
 Use `templates/ragflow-config.example.yaml` as the shared config template. Put the real config in a stable host-agent config path, such as Hermes or OpenClaw config storage, and point scripts to it with `RAGFLOW_CONFIG` or `--config`. Do not put real keys in the skill folder.
@@ -57,9 +60,12 @@ DOC_TO_MD_TIMEOUT=120
 
 Notes:
 
-- The output directory contains `documents/*.md` plus `doc_manifest.json`.
+- The output directory contains `documents/*.md`, `doc_manifest.json`, and `quality_report.json`.
 - `doc_manifest.json` uses `source_root: "."`, so downstream `ragflow-kb-build` can consume it after the handoff directory moves.
+- `quality_gate.status` is written into `doc_manifest.json`; `ragflow-kb-build` blocks `BLOCKED` handoffs unless the user passes `--allow-blocked`.
 - Use `--strict` when skipped files should fail the run.
+- Use `inspect` to regenerate a quality report from an existing handoff.
+- Use `segment-plan` before splitting long Markdown; use `split` when the user wants materialized `segments/*.md` that can be ingested as an ordinary Markdown directory.
 - The `mineru` and `mineru-agent` backends use the Agent parsing API shape: create parse task at `/parse/file`, upload to signed URL, poll `/parse/{task_id}`, then download Markdown.
 - The `mineru-sync` and `mineru-local` backends post multipart form data to `/parse` and expect Markdown text or JSON containing `markdown`, `content`, `text`, `result`, or `markdown_url`.
 - The remote backend expects JSON with `filename` and base64 `content_base64`, and returns `markdown` or `content`.

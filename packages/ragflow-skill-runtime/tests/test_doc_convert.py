@@ -17,6 +17,14 @@ from ragflow_skill_runtime.doc_convert import (
     sha256_file,
     text_to_markdown,
 )
+from ragflow_skill_runtime.doc_quality import (
+    BLOCKED,
+    PASS,
+    PASS_WITH_REVIEW,
+    QualityDocument,
+    make_quality_report_payload,
+)
+from ragflow_skill_runtime.doc_segment import materialize_segments, plan_markdown_segmentation
 
 
 class DocConvertTests(unittest.TestCase):
@@ -97,6 +105,108 @@ class DocConvertTests(unittest.TestCase):
             )
 
         self.assertEqual(payload["documents"][0]["markdown_path"], "documents/input.md")
+
+    def test_quality_report_passes_clean_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "documents" / "clean.md"
+            markdown.parent.mkdir()
+            markdown.write_text("# Clean\n\nBody\n", encoding="utf-8")
+
+            report = make_quality_report_payload(
+                output_root=root,
+                documents=[QualityDocument(source_path="clean.md", markdown_path=markdown)],
+            )
+
+        self.assertEqual(report["gate"]["status"], PASS)
+        self.assertEqual(report["gate"]["summary"]["errors"], 0)
+
+    def test_quality_report_blocks_empty_and_missing_image(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "documents" / "broken.md"
+            empty = root / "documents" / "empty.md"
+            markdown.parent.mkdir()
+            markdown.write_text("# Broken\n\n![missing](images/nope.png)\n", encoding="utf-8")
+            empty.write_text("", encoding="utf-8")
+
+            report = make_quality_report_payload(
+                output_root=root,
+                documents=[
+                    QualityDocument(source_path="broken.md", markdown_path=markdown),
+                    QualityDocument(source_path="empty.md", markdown_path=empty),
+                ],
+            )
+
+        issue_types = {
+            issue["issue_type"]
+            for document in report["documents"]
+            for issue in document["issues"]
+        }
+        self.assertEqual(report["gate"]["status"], BLOCKED)
+        self.assertIn("image_missing", issue_types)
+        self.assertIn("markdown_empty", issue_types)
+
+    def test_quality_report_marks_conversion_warning_for_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "documents" / "review.md"
+            markdown.parent.mkdir()
+            markdown.write_text("# Review\n\nBody\n", encoding="utf-8")
+
+            report = make_quality_report_payload(
+                output_root=root,
+                documents=[
+                    QualityDocument(
+                        source_path="review.docx",
+                        markdown_path=markdown,
+                        warnings=["pandoc was unavailable; used fallback"],
+                    )
+                ],
+            )
+
+        self.assertEqual(report["gate"]["status"], PASS_WITH_REVIEW)
+        self.assertEqual(report["gate"]["summary"]["warnings"], 1)
+
+    def test_plan_markdown_segmentation_uses_heading_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            markdown = Path(tmp) / "long.md"
+            markdown.write_text("# One\n" + ("a" * 70) + "\n# Two\n" + ("b" * 70) + "\n", encoding="utf-8")
+
+            plan = plan_markdown_segmentation(
+                markdown,
+                soft_max_chars=50,
+                hard_max_chars=90,
+                min_segment_chars=20,
+            )
+
+        self.assertTrue(plan.recommended)
+        self.assertEqual(len(plan.segments), 2)
+        self.assertEqual(plan.segments[0].title, "One")
+        self.assertEqual(plan.segments[1].title, "Two")
+
+    def test_materialize_segments_writes_segment_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "long.md"
+            output = root / "segments"
+            plan_output = root / "segmentation_plan.json"
+            markdown.write_text("# One\n" + ("a" * 70) + "\n# Two\n" + ("b" * 70) + "\n", encoding="utf-8")
+
+            result = materialize_segments(
+                markdown,
+                output_dir=output,
+                plan_output=plan_output,
+                soft_max_chars=50,
+                hard_max_chars=90,
+                min_segment_chars=20,
+            )
+            plan_exists = plan_output.exists()
+            first_segment_exists = (output / "long.part-001.md").exists()
+
+        self.assertEqual(len(result.segment_paths), 2)
+        self.assertTrue(plan_exists)
+        self.assertTrue(first_segment_exists)
 
 
 if __name__ == "__main__":
