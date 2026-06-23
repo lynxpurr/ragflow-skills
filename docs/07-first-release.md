@@ -1,6 +1,6 @@
 # First Release Candidate
 
-Status: active
+Status: rc1 published
 Date: 2026-06-23
 
 ## RC Goal
@@ -76,6 +76,21 @@ Follow-up fixes applied:
 - `ragflow-query` now states that host-assisted mode still retrieves from RAGFlow.
 - `ragflow-kb-build` now states that dry-run does not write `kb_manifest.json`.
 
+## RC1 GitHub Release
+
+`v0.1.0-rc1` is published as a GitHub prerelease:
+
+https://github.com/lynxpurr/ragflow-skills/releases/tag/v0.1.0-rc1
+
+Attached assets:
+
+- `ragflow-doc-to-md.tar.gz` - 18136 bytes - sha256 `cff6003ad2e34ab60a5e7c2bc401c956db3d1678b11abec12c7d6f32b74d0f27`
+- `ragflow-kb-build.tar.gz` - 19561 bytes - sha256 `dac700556c6af22ed9e67d536cf52871220fba625e6e75da145ea158202ec3ba`
+- `ragflow-query.tar.gz` - 18497 bytes - sha256 `877813a68de7137169918dedb825374380de544d3fb79b025e7ee8af873aa26d`
+- `release-manifest.json` - 1129 bytes - asset sha256 `4eef930cdb12c567182c39e549223ea711e74a658f9fa30b63b66565976d7789`
+
+The release manifest records `source_commit: 082ccec`.
+
 ## Live Integration
 
 When a test RAGFlow endpoint is available:
@@ -106,3 +121,5 @@ After RC validation:
 3. Collect forward-test and live-test notes.
 4. Fix RC findings on `develop`.
 5. Promote to `main` only after a clean RC pass.
+
+Items 1 and 2 are complete for RC1. Before stable `v0.1.0`, collect at least one external install note from the GitHub release artifacts and either run or explicitly waive the stronger live RAGFlow endpoint check.

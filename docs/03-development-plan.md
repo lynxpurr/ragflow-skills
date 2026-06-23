@@ -26,6 +26,7 @@ Completed foundations:
 - Phase 6 validation command consolidation
 - Phase 8 cross-platform smoke matrix
 - Phase 9 release hardening
+- Phase 10 first release candidate validation and GitHub prerelease publication
 
 Partially completed:
 
@@ -38,7 +39,7 @@ Partially completed:
 Near-term priority correction:
 
 - The next public-suite milestone is not private dedao bridging.
-- The next milestone is release hardening after the cross-platform smoke matrix is green.
+- The next milestone is stable release promotion after RC1 external artifact validation.
 
 ## Phase 0: Architecture Skeleton
 
@@ -337,12 +338,32 @@ Tasks:
 - [x] Complete fresh-agent forward test from release artifacts.
 - [x] Run live integration against a reachable test RAGFlow endpoint, or record explicit skip.
 - [x] Tag `v0.1.0-rc1` after RC docs and forward-test results are committed.
+- [x] Publish GitHub prerelease `v0.1.0-rc1` with all three skill archives and `release-manifest.json`.
 
 Exit criteria:
 
 - Release artifacts can be used without repository context.
 - Live endpoint status is explicit.
 - RC findings are either fixed or tracked before stable release.
+
+## Phase 11: Stable Release Promotion
+
+Goal: promote RC1 into a stable `v0.1.0` release only after the external artifact path is trustworthy.
+
+Tasks:
+
+- [ ] Run one external install trial from GitHub Release artifacts on a clean agent workspace.
+- [ ] Run the stronger live RAGFlow endpoint check against a disposable test KB, or record an explicit stable-release waiver.
+- [ ] Fix or document any RC1 findings on `develop`.
+- [ ] Decide whether stable `v0.1.0` can reuse the RC1 source commit or needs a new release commit.
+- [ ] Promote the chosen release commit to `main`.
+- [ ] Tag and publish stable `v0.1.0` with refreshed artifacts.
+
+Exit criteria:
+
+- Stable artifacts are downloadable from GitHub Release without repository context.
+- At least one real external consumer path has been exercised.
+- `main` represents the latest stable public skill suite.
 
 ## Definition of Done
 

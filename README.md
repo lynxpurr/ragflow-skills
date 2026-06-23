@@ -33,6 +33,14 @@ scripts/_vendor/ragflow_skill_runtime/
 
 This keeps development DRY while allowing Claude Code, OpenClaw, Hermes, and SaaS agent sandboxes to run the skills without editable installs or local machine paths.
 
+## Current Release Candidate
+
+`v0.1.0-rc1` is available as a GitHub prerelease:
+
+https://github.com/lynxpurr/ragflow-skills/releases/tag/v0.1.0-rc1
+
+Download the per-skill `.tar.gz` archive for the target platform and verify checksums against `release-manifest.json`.
+
 ## Validation
 
 ```bash
