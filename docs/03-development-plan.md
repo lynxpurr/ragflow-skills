@@ -829,7 +829,7 @@ Tasks:
 - [ ] Add `ragflow-kb-build qa generate` for grounded QA sets with optional LLM adapter.
 - [x] Add `ragflow-kb-build qa validate` to reject ungrounded generated evidence before benchmark use.
 - [x] Add `ragflow-kb-build qa map-evidence` to map evidence spans onto chunk snapshots.
-- [ ] Add `ragflow-kb-build segment-metadata report`.
+- [x] Add `ragflow-kb-build segment-metadata report`.
 - [ ] Add `ragflow-kb-build optimize --plan-only` for non-mutating experiment planning.
 - [ ] Add candidate profile set loading from files, directories, and generated recommendations.
 - [ ] Add disposable KB naming conventions and collision checks.

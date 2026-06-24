@@ -12,7 +12,9 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .config import ConfigError, read_config_file
+from .doc_segment import SEGMENTATION_SCHEMA
 from .manifests import load_doc_manifest
+from .validation import ValidationError, load_chunk_snapshot
 
 
 RAGFLOW_METADATA_SCHEMA = "ragflow_metadata_v1"
@@ -22,6 +24,7 @@ METADATA_MERGE_REPORT_SCHEMA = "ragflow_metadata_merge_report_v1"
 TAGSET_LINT_REPORT_SCHEMA = "ragflow_tagset_lint_report_v1"
 TAGSET_REPORT_SCHEMA = "ragflow_tagset_report_v1"
 TAGSET_EXPORT_SCHEMA = "ragflow_tagset_export_v1"
+SEGMENT_METADATA_REPORT_SCHEMA = "ragflow_segment_metadata_report_v1"
 
 SAFE_METADATA_FIELDS = {
     "domain",
@@ -49,6 +52,7 @@ SECRET_PATTERNS = (
 )
 TAG_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
 SHA256_RE = re.compile(r"^[a-fA-F0-9]{64}$")
+SEGMENT_PATH_RE = re.compile(r"(?:^|[\\/])?[^\\/]+\.part-\d{3,}\.md$", re.IGNORECASE)
 
 
 class MetadataGovernanceError(RuntimeError):
@@ -749,6 +753,251 @@ def tagset_report_file(path: str | Path, *, metadata_path: str | Path | None = N
     """Load a tagset and return its report."""
 
     return tagset_report_payload(_read_mapping(path), metadata_path=metadata_path)
+
+
+def _coverage_rate(count: int, total: int) -> float:
+    return round(count / total, 4) if total else 0.0
+
+
+def _path_match_keys(value: Any) -> set[str]:
+    if not isinstance(value, str) or not value.strip():
+        return set()
+    clean = value.replace("\\", "/").strip()
+    keys = {clean.lower()}
+    name = Path(clean).name
+    if name:
+        keys.add(name.lower())
+    return {key for key in keys if key}
+
+
+def _chunk_document_keys(chunk: Mapping[str, Any]) -> set[str]:
+    keys: set[str] = set()
+    for field in ("document", "document_name", "document_id", "source", "source_path", "path", "file", "filename"):
+        keys.update(_path_match_keys(chunk.get(field)))
+    return keys
+
+
+def _chunk_has_segment_hint(chunk: Mapping[str, Any]) -> bool:
+    for field in ("segment_id", "segment_index", "segment_title", "segment_path", "source_segment"):
+        value = chunk.get(field)
+        if value not in (None, ""):
+            return True
+    return any(SEGMENT_PATH_RE.search(key) for key in _chunk_document_keys(chunk))
+
+
+def _metadata_document_index(metadata_path: str | Path | None, issues: list[GovernanceIssue]) -> tuple[set[str], int]:
+    if not metadata_path:
+        return set(), 0
+    report = lint_metadata_file(metadata_path)
+    for raw_issue in report.get("issues", []):
+        if not isinstance(raw_issue, Mapping):
+            continue
+        issues.append(
+            GovernanceIssue(
+                severity=str(raw_issue.get("severity", "warning")),
+                code=f"metadata_{raw_issue.get('code', 'issue')}",
+                message=str(raw_issue.get("message", "")),
+                field=raw_issue.get("field") if isinstance(raw_issue.get("field"), str) else None,
+                recommendation=raw_issue.get("recommendation") if isinstance(raw_issue.get("recommendation"), str) else None,
+            )
+        )
+    normalized = report.get("normalized_preview", {})
+    documents = normalized.get("documents", []) if isinstance(normalized, Mapping) else []
+    keys: set[str] = set()
+    count = 0
+    for document in documents:
+        if not isinstance(document, Mapping):
+            continue
+        count += 1
+        for field in ("path", "markdown_path", "source_path"):
+            keys.update(_path_match_keys(document.get(field)))
+    return keys, count
+
+
+def _segmentation_plan_index(
+    segmentation_plan_path: str | Path | None,
+    issues: list[GovernanceIssue],
+) -> tuple[set[str], dict[str, set[str]], int]:
+    if not segmentation_plan_path:
+        return set(), {}, 0
+    raw = _read_mapping(segmentation_plan_path)
+    plan = raw.get("segmentation_plan") if isinstance(raw.get("segmentation_plan"), Mapping) else raw
+    if plan.get("schema") != SEGMENTATION_SCHEMA:
+        issues.append(
+            GovernanceIssue(
+                "error",
+                "segmentation_plan_schema_invalid",
+                f"segmentation plan schema must be {SEGMENTATION_SCHEMA}",
+                "segmentation_plan.schema",
+            )
+        )
+        return set(), {}, 0
+    raw_segments = plan.get("segments", [])
+    if not isinstance(raw_segments, list):
+        issues.append(GovernanceIssue("error", "segmentation_plan_segments_invalid", "segments must be a list", "segments"))
+        return set(), {}, 0
+    segment_index: dict[str, set[str]] = {}
+    all_keys: set[str] = set()
+    for index, segment in enumerate(raw_segments):
+        if not isinstance(segment, Mapping):
+            issues.append(GovernanceIssue("error", "segmentation_plan_segment_invalid", "segment must be an object", f"segments[{index}]"))
+            continue
+        segment_id = str(segment.get("index") or index + 1)
+        keys = set()
+        keys.update(_path_match_keys(segment.get("suggested_markdown_path")))
+        keys.update(_path_match_keys(segment.get("path")))
+        keys.update(_path_match_keys(segment.get("markdown_path")))
+        for key in keys:
+            segment_index.setdefault(key, set()).add(segment_id)
+        all_keys.update(keys)
+    return all_keys, segment_index, len(raw_segments)
+
+
+def segment_metadata_report_file(
+    *,
+    chunk_snapshot_path: str | Path,
+    metadata_path: str | Path | None = None,
+    segmentation_plan_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Report segment provenance and metadata coverage for chunk snapshots."""
+
+    issues: list[GovernanceIssue] = []
+    try:
+        snapshot = load_chunk_snapshot(chunk_snapshot_path)
+    except ValidationError as exc:
+        raise MetadataGovernanceError(str(exc)) from exc
+
+    metadata_keys, metadata_document_count = _metadata_document_index(metadata_path, issues)
+    segment_keys, segment_index, segment_count = _segmentation_plan_index(segmentation_plan_path, issues)
+    raw_chunks = snapshot.get("chunks")
+    chunks = [chunk for chunk in raw_chunks if isinstance(chunk, Mapping)] if isinstance(raw_chunks, list) else []
+    if not chunks:
+        issues.append(GovernanceIssue("error", "chunk_snapshot_empty", "chunk snapshot does not contain any chunks", "chunk_snapshot"))
+
+    chunk_reports: list[dict[str, Any]] = []
+    chunks_with_document_name = 0
+    chunks_with_document_id = 0
+    chunks_with_metadata = 0
+    chunks_with_segment_hint = 0
+    chunks_matching_plan = 0
+    matched_segments: set[str] = set()
+
+    for index, chunk in enumerate(chunks):
+        field_prefix = f"chunks[{index}]"
+        document_name = chunk.get("document_name")
+        document_id = chunk.get("document_id")
+        if isinstance(document_name, str) and document_name.strip():
+            chunks_with_document_name += 1
+        else:
+            issues.append(
+                GovernanceIssue(
+                    "warning",
+                    "chunk_missing_document_name",
+                    "chunk snapshot entry lacks document_name, reducing provenance coverage",
+                    f"{field_prefix}.document_name",
+                )
+            )
+        if isinstance(document_id, str) and document_id.strip():
+            chunks_with_document_id += 1
+        document_keys = _chunk_document_keys(chunk)
+        metadata_matched = bool(metadata_keys and document_keys.intersection(metadata_keys))
+        if metadata_matched:
+            chunks_with_metadata += 1
+        elif metadata_path:
+            issues.append(
+                GovernanceIssue(
+                    "warning",
+                    "chunk_metadata_missing",
+                    "chunk document does not match any metadata document path",
+                    field_prefix,
+                    "Add metadata for the segment path or preserve source document path metadata through splitting.",
+                )
+            )
+        has_segment_hint = _chunk_has_segment_hint(chunk)
+        if has_segment_hint:
+            chunks_with_segment_hint += 1
+        elif segmentation_plan_path:
+            issues.append(
+                GovernanceIssue(
+                    "warning",
+                    "chunk_segment_hint_missing",
+                    "chunk does not expose segment provenance fields or a segment-like document path",
+                    field_prefix,
+                )
+            )
+        segment_ids: set[str] = set()
+        for key in document_keys:
+            segment_ids.update(segment_index.get(key, set()))
+        if segment_ids:
+            chunks_matching_plan += 1
+            matched_segments.update(segment_ids)
+        elif segmentation_plan_path:
+            issues.append(
+                GovernanceIssue(
+                    "warning",
+                    "chunk_segment_plan_unmatched",
+                    "chunk document does not match any segment from the segmentation plan",
+                    field_prefix,
+                )
+            )
+        chunk_reports.append(
+            {
+                "index": index,
+                "snapshot_id": chunk.get("id"),
+                "document_name": document_name,
+                "document_id": document_id,
+                "stable_hash": chunk.get("stable_hash"),
+                "metadata_matched": metadata_matched,
+                "segment_hint": has_segment_hint,
+                "segment_ids": sorted(segment_ids),
+            }
+        )
+
+    reported_missing_segments: set[str] = set()
+    for key in sorted(segment_keys):
+        ids = segment_index.get(key, set())
+        missing_ids = sorted(ids - matched_segments - reported_missing_segments)
+        for segment_id in missing_ids:
+            issues.append(
+                GovernanceIssue(
+                    "warning",
+                    "segment_without_chunk",
+                    "segmentation plan segment was not observed in the chunk snapshot",
+                    f"segments.{segment_id}",
+                )
+            )
+            reported_missing_segments.add(segment_id)
+
+    chunk_count = len(chunks)
+    summary = {
+        **_issue_counts(issues),
+        "chunk_count": chunk_count,
+        "metadata_document_count": metadata_document_count,
+        "segment_count": segment_count,
+        "chunks_with_document_name": chunks_with_document_name,
+        "chunks_with_document_id": chunks_with_document_id,
+        "chunks_with_metadata": chunks_with_metadata,
+        "chunks_with_segment_hint": chunks_with_segment_hint,
+        "chunks_matching_segmentation_plan": chunks_matching_plan,
+        "matched_segment_count": len(matched_segments),
+        "document_name_coverage": _coverage_rate(chunks_with_document_name, chunk_count),
+        "document_id_coverage": _coverage_rate(chunks_with_document_id, chunk_count),
+        "metadata_document_coverage": _coverage_rate(chunks_with_metadata, chunk_count),
+        "segment_hint_coverage": _coverage_rate(chunks_with_segment_hint, chunk_count),
+        "segmentation_plan_coverage": _coverage_rate(len(matched_segments), segment_count),
+    }
+    return {
+        "ok": _ok(issues),
+        "schema": SEGMENT_METADATA_REPORT_SCHEMA,
+        "artifacts": {
+            "chunk_snapshot": str(chunk_snapshot_path),
+            "metadata": str(metadata_path) if metadata_path else None,
+            "segmentation_plan": str(segmentation_plan_path) if segmentation_plan_path else None,
+        },
+        "summary": summary,
+        "chunks": chunk_reports,
+        "issues": [issue.to_dict() for issue in issues],
+    }
 
 
 def export_tagset_payload(payload: Mapping[str, Any], *, fmt: str) -> str | dict[str, Any]:

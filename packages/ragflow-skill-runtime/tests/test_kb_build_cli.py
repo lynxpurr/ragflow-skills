@@ -920,6 +920,78 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(evidence_map_payload["schema"], "ragflow_grounded_qa_evidence_map_v1")
         self.assertEqual(evidence_map_payload["items"][0]["expected_chunks"], ["sha256:" + "b" * 64])
 
+    def test_segment_metadata_report_subcommand_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snapshot = root / "chunk_snapshot.json"
+            metadata = root / "metadata.json"
+            segmentation_plan = root / "segmentation_plan.json"
+            report_md = root / "segment_metadata.md"
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "chunks": [
+                            {
+                                "id": "chunk-1",
+                                "stable_hash": "sha256:" + "c" * 64,
+                                "document_name": "long.part-001.md",
+                                "document_id": "doc-1",
+                                "content_preview": "Segment one content.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_metadata_v1",
+                        "documents": [
+                            {"path": "segments/long.part-001.md", "metadata": {"topic": "Segment Topic"}}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            segmentation_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "doc_segmentation_plan_v1",
+                        "segments": [{"index": 1, "suggested_markdown_path": "segments/long.part-001.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "segment-metadata",
+                    "report",
+                    "--chunk-snapshot",
+                    str(snapshot),
+                    "--metadata",
+                    str(metadata),
+                    "--segmentation-plan",
+                    str(segmentation_plan),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("ragflow_segment_metadata_report_v1", result.stdout)
+        self.assertIn("RAGFlow Segment Metadata Report", report_md_text)
+
     def test_inspect_manifest_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manifest = Path(tmp) / "kb_manifest.json"

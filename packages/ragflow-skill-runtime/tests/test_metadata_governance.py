@@ -8,12 +8,14 @@ from pathlib import Path
 from ragflow_skill_runtime.metadata_governance import (
     RAGFLOW_METADATA_SCHEMA,
     RAGFLOW_TAGSET_SCHEMA,
+    SEGMENT_METADATA_REPORT_SCHEMA,
     export_tagset_payload,
     lint_metadata_payload,
     lint_tagset_payload,
     make_metadata_template_payload,
     make_tagset_template_payload,
     merge_metadata_payloads,
+    segment_metadata_report_file,
     tagset_report_payload,
 )
 
@@ -170,6 +172,124 @@ class MetadataGovernanceTests(unittest.TestCase):
         self.assertIn("assignment_orphan_tag", {issue["code"] for issue in coverage_report["issues"]})
         self.assertIn("name,label,description,aliases", csv_export)
         self.assertIn("example-tag", csv_export)
+
+    def test_segment_metadata_report_matches_metadata_and_segmentation_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snapshot = root / "chunk_snapshot.json"
+            metadata = root / "metadata.json"
+            segmentation_plan = root / "segmentation_plan.json"
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "chunks": [
+                            {
+                                "id": "chunk-1",
+                                "stable_hash": "sha256:" + "c" * 64,
+                                "document_name": "long.part-001.md",
+                                "document_id": "doc-1",
+                                "content_preview": "Segment one content.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "schema": RAGFLOW_METADATA_SCHEMA,
+                        "documents": [
+                            {
+                                "path": "segments/long.part-001.md",
+                                "metadata": {"topic": "Segment Topic", "source_hash": "1" * 64},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            segmentation_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "doc_segmentation_plan_v1",
+                        "segments": [
+                            {
+                                "index": 1,
+                                "title": "One",
+                                "suggested_markdown_path": "segments/long.part-001.md",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = segment_metadata_report_file(
+                chunk_snapshot_path=snapshot,
+                metadata_path=metadata,
+                segmentation_plan_path=segmentation_plan,
+            )
+
+        self.assertEqual(report["schema"], SEGMENT_METADATA_REPORT_SCHEMA)
+        self.assertTrue(report["ok"], report["issues"])
+        self.assertEqual(report["summary"]["metadata_document_coverage"], 1.0)
+        self.assertEqual(report["summary"]["segment_hint_coverage"], 1.0)
+        self.assertEqual(report["summary"]["segmentation_plan_coverage"], 1.0)
+
+    def test_segment_metadata_report_deduplicates_missing_segment_alias_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snapshot = root / "chunk_snapshot.json"
+            segmentation_plan = root / "segmentation_plan.json"
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "chunks": [
+                            {
+                                "id": "chunk-1",
+                                "stable_hash": "sha256:" + "c" * 64,
+                                "document_name": "long.part-001.md",
+                                "content_preview": "Segment one content.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            segmentation_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "doc_segmentation_plan_v1",
+                        "segments": [
+                            {"index": 1, "suggested_markdown_path": "segments/long.part-001.md"},
+                            {"index": 2, "suggested_markdown_path": "segments/long.part-002.md"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = segment_metadata_report_file(
+                chunk_snapshot_path=snapshot,
+                segmentation_plan_path=segmentation_plan,
+            )
+
+        missing_segment_issues = [
+            issue for issue in report["issues"] if issue["code"] == "segment_without_chunk"
+        ]
+        self.assertTrue(report["ok"], report["issues"])
+        self.assertEqual(report["summary"]["segmentation_plan_coverage"], 0.5)
+        self.assertEqual(missing_segment_issues, [
+            {
+                "severity": "warning",
+                "code": "segment_without_chunk",
+                "message": "segmentation plan segment was not observed in the chunk snapshot",
+                "field": "segments.2",
+            }
+        ])
 
 
 if __name__ == "__main__":

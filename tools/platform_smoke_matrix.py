@@ -1129,6 +1129,28 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         qa_map_result,
         required_stdout='"schema": "ragflow_grounded_qa_evidence_map_report_v1"',
     )
+    segment_metadata_report = artifacts_dir / "segment_metadata_report.json"
+    segment_metadata_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "segment-metadata",
+            "report",
+            "--chunk-snapshot",
+            str(chunk_snapshot),
+            "--report-json",
+            str(segment_metadata_report),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb segment-metadata report",
+        segment_metadata_result,
+        required_stdout='"schema": "ragflow_segment_metadata_report_v1"',
+    )
     benchmark_preflight_result = _run_command(
         [
             sys.executable,
@@ -1341,6 +1363,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "benchmark" / "qrels.json",
         artifacts_dir / "benchmark" / "qa.json",
         artifacts_dir / "qa_evidence_map.json",
+        artifacts_dir / "segment_metadata_report.json",
         artifacts_dir / "benchmark_current.json",
         artifacts_dir / "benchmark_baseline.json",
         artifacts_dir / "validation_report.json",

@@ -699,6 +699,10 @@ chunks using `content` or `content_preview`, and exports per-item `expected_chun
 references from stable hashes or chunk IDs. It is deterministic and offline; it does not
 repair near matches or query RAGFlow.
 
+MVP `segment-metadata report` measures document metadata matches, segment-like document
+paths, explicit segment hints, and segmentation-plan coverage in chunk snapshots. It is an
+offline report and does not mutate RAGFlow.
+
 ## Feature Design 15: Retrieval Pollution And Suppression Diagnostics
 
 ### Problem

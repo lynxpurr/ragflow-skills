@@ -757,6 +757,7 @@ def _run_no_network_checks(
     benchmark_queries = work_root / "benchmark_queries.json"
     benchmark_qrels = work_root / "benchmark_qrels.json"
     benchmark_qa = work_root / "benchmark_qa.json"
+    segment_metadata_plan = work_root / "segment_metadata_plan.json"
     benchmark_gate = work_root / "benchmark_gate.json"
     benchmark_chunk_input = work_root / "benchmark_chunks.json"
     benchmark_chunk_snapshot = work_root / "benchmark_chunk_snapshot.json"
@@ -823,6 +824,15 @@ def _run_no_network_checks(
                         ],
                     }
                 ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    segment_metadata_plan.write_text(
+        json.dumps(
+            {
+                "schema": "doc_segmentation_plan_v1",
+                "segments": [{"index": 1, "suggested_markdown_path": "sample.md"}],
             }
         ),
         encoding="utf-8",
@@ -957,6 +967,7 @@ raise SystemExit(code)
     qa_validate_md = work_root / "qa_validate.md"
     qa_evidence_map = work_root / "qa_evidence_map.json"
     qa_evidence_map_md = work_root / "qa_evidence_map.md"
+    segment_metadata_md = work_root / "segment_metadata.md"
     benchmark_import_result = _run_command(
         [
             python_executable,
@@ -1031,6 +1042,31 @@ raise SystemExit(code)
         "kb-build qa map-evidence",
         qa_map_result,
         required_output='"schema": "ragflow_grounded_qa_evidence_map_report_v1"',
+    )
+    segment_metadata_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "segment-metadata",
+            "report",
+            "--chunk-snapshot",
+            str(benchmark_chunk_snapshot),
+            "--metadata",
+            str(metadata_merged),
+            "--segmentation-plan",
+            str(segment_metadata_plan),
+            "--report-md",
+            str(segment_metadata_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build segment-metadata report",
+        segment_metadata_result,
+        required_output='"schema": "ragflow_segment_metadata_report_v1"',
     )
     benchmark_preflight_result = _run_command(
         [
@@ -1191,6 +1227,7 @@ raise SystemExit(code)
         qa_validate_md,
         qa_evidence_map,
         qa_evidence_map_md,
+        segment_metadata_md,
         benchmark_preflight_md,
         benchmark_sample_md,
         benchmark_summary_md,

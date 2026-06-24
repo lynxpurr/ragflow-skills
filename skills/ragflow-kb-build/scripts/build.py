@@ -48,6 +48,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     preflight_benchmark_dataset,
     render_benchmark_governance_markdown,
     sample_benchmark_dataset,
+    segment_metadata_report_file,
     snapshot_chunks,
     summarize_benchmark_report,
     trend_benchmark_reports,
@@ -471,6 +472,21 @@ def _run_qa_map_evidence(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_segment_metadata_report(args: argparse.Namespace) -> int:
+    try:
+        report = segment_metadata_report_file(
+            chunk_snapshot_path=args.chunk_snapshot,
+            metadata_path=args.metadata,
+            segmentation_plan_path=args.segmentation_plan,
+        )
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_governance_markdown(report, title="RAGFlow Segment Metadata Report"))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (MetadataGovernanceError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def build_inspect_handoff_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Inspect a Markdown handoff and optional rich sidecars")
     parser.add_argument("--handoff", required=True, help="Handoff directory containing doc_manifest.json")
@@ -667,6 +683,22 @@ def build_qa_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_segment_metadata_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Report segment provenance metadata coverage for chunk snapshots")
+    subparsers = parser.add_subparsers(dest="segment_metadata_command", required=True)
+
+    report = subparsers.add_parser("report", help="Report segment and metadata coverage in a chunk snapshot")
+    report.add_argument("--chunk-snapshot", required=True, help="ragflow_chunk_snapshot_v1 JSON")
+    report.add_argument("--metadata", help="Optional ragflow_metadata_v1 JSON/YAML for document coverage")
+    report.add_argument("--segmentation-plan", help="Optional doc_segmentation_plan_v1 JSON")
+    report.add_argument("--report-json", help="Optional segment metadata report JSON path")
+    report.add_argument("--report-md", help="Optional segment metadata report Markdown path")
+    report.add_argument("--json", action="store_true", help="Emit JSON errors")
+    report.set_defaults(func=_run_segment_metadata_report)
+
+    return parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build a RAGFlow KB from Markdown")
     parser.add_argument("--input", help="Markdown file or directory")
@@ -710,6 +742,9 @@ def main(argv: list[str] | None = None) -> int:
         if command == "qa":
             qa_args = build_qa_parser().parse_args(command_args)
             return qa_args.func(qa_args)
+        if command == "segment-metadata":
+            segment_metadata_args = build_segment_metadata_parser().parse_args(command_args)
+            return segment_metadata_args.func(segment_metadata_args)
     args = build_parser().parse_args(actual_argv)
     return _run(args)
 
