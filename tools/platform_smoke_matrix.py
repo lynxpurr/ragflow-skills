@@ -487,6 +487,43 @@ def _write_query_set(artifacts_dir: Path) -> Path:
     return queries_path
 
 
+def _write_qrels(artifacts_dir: Path) -> Path:
+    qrels_path = artifacts_dir / "qrels.json"
+    qrels_path.write_text(
+        json.dumps({"q1": {"platform-smoke.md": 1}}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return qrels_path
+
+
+def _write_benchmark_report(path: Path, *, mrr: float) -> Path:
+    path.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "dataset": {"id": "ds-platform-smoke", "name": "kb:platform-smoke"},
+                "benchmark": {
+                    "metrics": {
+                        "query_count": 1,
+                        "hit_rate": 1.0,
+                        "mrr": mrr,
+                        "precision_at_k": 0.5,
+                        "recall_at_k": 1.0,
+                        "ndcg_at_k": mrr,
+                        "map_at_k": mrr,
+                        "empty_result_rate": 0.0,
+                        "supporting_document_coverage": 1.0,
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def _runtime_args(profile: PlatformProfile) -> list[str]:
     if profile.config_mode == "env":
         return []
@@ -644,6 +681,7 @@ def _write_validate_runner(
     validate_script: Path,
     kb_manifest: Path,
     queries_path: Path,
+    metadata_path: Path,
     artifacts_dir: Path,
     profile: PlatformProfile,
 ) -> None:
@@ -663,6 +701,7 @@ from pathlib import Path
 script = Path({str(validate_script)!r})
 kb_manifest = Path({str(kb_manifest)!r})
 queries_path = Path({str(queries_path)!r})
+metadata_path = Path({str(metadata_path)!r})
 report_json = Path({str(report_json)!r})
 report_md = Path({str(report_md)!r})
 runtime_args = {runtime_args!r}
@@ -698,6 +737,8 @@ argv = runtime_args + [
     "regression",
     "--queries",
     str(queries_path),
+    "--metadata",
+    str(metadata_path),
     "--report-json",
     str(report_json),
     "--report-md",
@@ -709,7 +750,7 @@ with contextlib.redirect_stdout(stdout):
 if code != 0:
     raise SystemExit(code)
 payload = json.loads(stdout.getvalue())
-if not payload.get("ok") or not report_json.exists() or not report_md.exists():
+if not payload.get("ok") or not payload.get("metadata_summary", {{}}).get("ok") or not report_json.exists() or not report_md.exists():
     raise SystemExit(4)
 print(json.dumps({{"ok": True, "report_json": str(report_json), "report_md": str(report_md)}}, ensure_ascii=False))
 """,
@@ -881,6 +922,206 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         inspect_handoff_result,
         required_stdout='"schema": "ragflow_handoff_inspection_v1"',
     )
+    metadata_template = artifacts_dir / "metadata.template.json"
+    metadata_lint_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "metadata",
+            "generate-template",
+            "--doc-manifest",
+            str(doc_manifest),
+            "--output",
+            str(metadata_template),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb metadata generate-template",
+        metadata_lint_result,
+        required_stdout='"schema": "ragflow_metadata_v1"',
+    )
+    metadata_lint_report = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "metadata",
+            "lint",
+            "--metadata",
+            str(metadata_template),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb metadata lint",
+        metadata_lint_report,
+        required_stdout='"schema": "ragflow_metadata_lint_report_v1"',
+    )
+    tagset_template = artifacts_dir / "tagset.template.json"
+    tagset_template_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "tagset",
+            "generate-template",
+            "--output",
+            str(tagset_template),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb tagset generate-template",
+        tagset_template_result,
+        required_stdout='"schema": "ragflow_tagset_v1"',
+    )
+    tagset_report_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "tagset",
+            "report",
+            "--tagset",
+            str(tagset_template),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb tagset report",
+        tagset_report_result,
+        required_stdout='"schema": "ragflow_tagset_report_v1"',
+    )
+
+    kb_manifest = _write_fake_kb_manifest(workspace, artifacts_dir)
+    queries_path = _write_query_set(artifacts_dir)
+
+    benchmark_dir = artifacts_dir / "benchmark"
+    qrels_path = _write_qrels(artifacts_dir)
+    benchmark_import_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "benchmark",
+            "import",
+            "--queries",
+            str(queries_path),
+            "--qrels",
+            str(qrels_path),
+            "--output",
+            str(benchmark_dir),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb benchmark import",
+        benchmark_import_result,
+        required_stdout='"schema": "ragflow_benchmark_import_report_v1"',
+    )
+    chunk_snapshot = artifacts_dir / "chunk_snapshot.json"
+    chunk_snapshot_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "snapshot-chunks",
+            "--input",
+            str(input_dir),
+            "--output",
+            str(chunk_snapshot),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb snapshot-chunks",
+        chunk_snapshot_result,
+        required_stdout='"schema": "ragflow_chunk_snapshot_report_v1"',
+    )
+    benchmark_preflight_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "benchmark",
+            "preflight",
+            "--manifest",
+            str(benchmark_dir / "manifest.json"),
+            "--chunk-snapshot",
+            str(chunk_snapshot),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb benchmark preflight",
+        benchmark_preflight_result,
+        required_stdout='"schema": "ragflow_benchmark_preflight_report_v1"',
+    )
+    benchmark_sample_dir = artifacts_dir / "benchmark-sample"
+    benchmark_sample_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "benchmark",
+            "sample",
+            "--manifest",
+            str(benchmark_dir / "manifest.json"),
+            "--output",
+            str(benchmark_sample_dir),
+            "--size",
+            "1",
+            "--seed",
+            "7",
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb benchmark sample",
+        benchmark_sample_result,
+        required_stdout='"schema": "ragflow_benchmark_sample_report_v1"',
+    )
+    current_benchmark_report = _write_benchmark_report(artifacts_dir / "benchmark_current.json", mrr=1.0)
+    baseline_benchmark_report = _write_benchmark_report(artifacts_dir / "benchmark_baseline.json", mrr=0.8)
+    benchmark_delta_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "benchmark",
+            "delta",
+            "--report",
+            str(current_benchmark_report),
+            "--baseline-report",
+            str(baseline_benchmark_report),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb benchmark delta",
+        benchmark_delta_result,
+        required_stdout='"schema": "ragflow_benchmark_delta_report_v1"',
+    )
 
     profile_script = script_root / "ragflow-kb-build" / "scripts" / "profile.py"
     profile_lint_result = _run_command(
@@ -902,9 +1143,6 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         profile_lint_result,
         required_stdout='"schema": "ragflow_profile_lint_report_v1"',
     )
-
-    kb_manifest = _write_fake_kb_manifest(workspace, artifacts_dir)
-    queries_path = _write_query_set(artifacts_dir)
 
     query_script = script_root / "ragflow-query" / "scripts" / "query.py"
     routing_config = artifacts_dir / "routing_config.json"
@@ -991,6 +1229,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         validate_script=validate_script,
         kb_manifest=kb_manifest,
         queries_path=queries_path,
+        metadata_path=metadata_template,
         artifacts_dir=artifacts_dir,
         profile=profile,
     )
@@ -1018,6 +1257,13 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_diagnostic.md",
         artifacts_dir / "route_test.md",
         artifacts_dir / "profile_lint.md",
+        artifacts_dir / "metadata.template.json",
+        artifacts_dir / "tagset.template.json",
+        artifacts_dir / "benchmark" / "manifest.json",
+        artifacts_dir / "benchmark" / "queries.json",
+        artifacts_dir / "benchmark" / "qrels.json",
+        artifacts_dir / "benchmark_current.json",
+        artifacts_dir / "benchmark_baseline.json",
         artifacts_dir / "validation_report.json",
         artifacts_dir / "validation_report.md",
     ]

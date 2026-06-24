@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -497,12 +498,180 @@ def _run_no_network_checks(
         profile_payload_check,
         required_output='"ok": true',
     )
+    metadata_template = work_root / "metadata.template.json"
+    metadata_merged = work_root / "metadata.merged.json"
+    metadata_lint_md = work_root / "metadata_lint.md"
+    metadata_merge_md = work_root / "metadata_merge.md"
+    metadata_template_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "metadata",
+            "generate-template",
+            "--doc-manifest",
+            str(doc_manifest),
+            "--output",
+            str(metadata_template),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build metadata generate-template",
+        metadata_template_result,
+        required_output='"schema": "ragflow_metadata_v1"',
+    )
+    metadata_lint_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "metadata",
+            "lint",
+            "--metadata",
+            str(metadata_template),
+            "--report-md",
+            str(metadata_lint_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build metadata lint",
+        metadata_lint_result,
+        required_output='"schema": "ragflow_metadata_lint_report_v1"',
+    )
+    metadata_merge_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "metadata",
+            "merge",
+            "--doc-manifest",
+            str(doc_manifest),
+            "--handoff-metadata",
+            str(handoff_dir / "metadata.json"),
+            "--metadata",
+            str(metadata_template),
+            "--output",
+            str(metadata_merged),
+            "--report-md",
+            str(metadata_merge_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build metadata merge",
+        metadata_merge_result,
+        required_output='"schema": "ragflow_metadata_merge_report_v1"',
+    )
+    for path in (metadata_template, metadata_merged, metadata_lint_md, metadata_merge_md):
+        if path.exists():
+            produced.append(path)
+
+    tagset_template = work_root / "tagset.template.json"
+    tagset_csv = work_root / "tagset.csv"
+    tagset_report_md = work_root / "tagset_report.md"
+    tagset_template_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "tagset",
+            "generate-template",
+            "--output",
+            str(tagset_template),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build tagset generate-template",
+        tagset_template_result,
+        required_output='"schema": "ragflow_tagset_v1"',
+    )
+    tagset_lint_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "tagset",
+            "lint",
+            "--tagset",
+            str(tagset_template),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build tagset lint",
+        tagset_lint_result,
+        required_output='"schema": "ragflow_tagset_lint_report_v1"',
+    )
+    tagset_export_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "tagset",
+            "export",
+            "--tagset",
+            str(tagset_template),
+            "--format",
+            "csv",
+            "--output",
+            str(tagset_csv),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build tagset export",
+        tagset_export_result,
+        required_output='"format": "csv"',
+    )
+    tagset_report_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "tagset",
+            "report",
+            "--tagset",
+            str(tagset_template),
+            "--report-md",
+            str(tagset_report_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build tagset report",
+        tagset_report_result,
+        required_output='"schema": "ragflow_tagset_report_v1"',
+    )
+    for path in (tagset_template, tagset_csv, tagset_report_md):
+        if path.exists():
+            produced.append(path)
+
     build_result = _run_command(
         [
             python_executable,
             str(build_script),
             "--doc-manifest",
             str(doc_manifest),
+            "--metadata",
+            str(metadata_merged),
             "--kb-name",
             "kb:consumer-acceptance",
             "--profile",
@@ -588,8 +757,12 @@ def _run_no_network_checks(
     benchmark_queries = work_root / "benchmark_queries.json"
     benchmark_qrels = work_root / "benchmark_qrels.json"
     benchmark_gate = work_root / "benchmark_gate.json"
+    benchmark_chunk_input = work_root / "benchmark_chunks.json"
+    benchmark_chunk_snapshot = work_root / "benchmark_chunk_snapshot.json"
+    benchmark_chunk_snapshot_md = work_root / "benchmark_chunk_snapshot.md"
     benchmark_report_json = work_root / "benchmark_report.json"
     benchmark_report_md = work_root / "benchmark_report.md"
+    baseline_benchmark_report_json = work_root / "baseline_benchmark_report.json"
     benchmark_manifest.write_text(
         json.dumps(
             {
@@ -615,10 +788,82 @@ def _run_no_network_checks(
         ),
         encoding="utf-8",
     )
-    benchmark_qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
-    benchmark_gate.write_text(
-        json.dumps({"thresholds": {"min_hit_rate": 1.0, "min_mrr": 1.0}}),
+    benchmark_chunk_content = "Consumer Acceptance can run without repository source context."
+    benchmark_chunk_hash = "sha256:" + hashlib.sha256(benchmark_chunk_content.encode("utf-8")).hexdigest()
+    benchmark_qrels.write_text(
+        json.dumps(
+            {
+                "qrels": [
+                    {
+                        "query_id": "q1",
+                        "expected_documents": ["sample.md"],
+                        "expected_chunks": [benchmark_chunk_hash],
+                    }
+                ]
+            }
+        ),
         encoding="utf-8",
+    )
+    benchmark_chunk_input.write_text(
+        json.dumps(
+            {
+                "chunks": [
+                    {
+                        "content": benchmark_chunk_content,
+                        "document_name": "sample.md",
+                        "chunk_id": "consumer-acceptance-chunk",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    benchmark_gate.write_text(
+        json.dumps({"thresholds": {"min_hit_rate": 1.0, "min_mrr": 1.0, "min_strict_chunk_recall_at_k": 1.0}}),
+        encoding="utf-8",
+    )
+    baseline_benchmark_report_json.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "benchmark": {
+                    "metrics": {
+                        "query_count": 1,
+                        "hit_rate": 1.0,
+                        "mrr": 0.8,
+                        "precision_at_k": 0.25,
+                        "recall_at_k": 1.0,
+                        "ndcg_at_k": 0.8,
+                        "map_at_k": 0.8,
+                        "empty_result_rate": 0.0,
+                        "supporting_document_coverage": 1.0,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    benchmark_snapshot_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "snapshot-chunks",
+            "--input",
+            str(benchmark_chunk_input),
+            "--output",
+            str(benchmark_chunk_snapshot),
+            "--report-md",
+            str(benchmark_chunk_snapshot_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build snapshot-chunks",
+        benchmark_snapshot_result,
+        required_output='"schema": "ragflow_chunk_snapshot_report_v1"',
     )
     benchmark_runner = work_root / "run_benchmark_validate.py"
     benchmark_runner.write_text(
@@ -655,8 +900,10 @@ code = module.main([
     "--level", "benchmark",
     "--queries", {str(benchmark_queries)!r},
     "--qrels", {str(benchmark_qrels)!r},
+    "--chunk-snapshot", {str(benchmark_chunk_snapshot)!r},
     "--gate-config", {str(benchmark_gate)!r},
     "--base-url", "https://ragflow.example.test",
+    "--metadata", {str(metadata_merged)!r},
     "--report-json", {str(benchmark_report_json)!r},
     "--report-md", {str(benchmark_report_md)!r},
 ])
@@ -672,6 +919,204 @@ raise SystemExit(code)
         required_output='"benchmark"',
     )
     for path in (benchmark_report_json, benchmark_report_md):
+        if path.exists():
+            produced.append(path)
+
+    benchmark_dir = work_root / "benchmark"
+    benchmark_sample_dir = work_root / "benchmark_sample"
+    benchmark_import_md = work_root / "benchmark_import.md"
+    benchmark_preflight_md = work_root / "benchmark_preflight.md"
+    benchmark_sample_md = work_root / "benchmark_sample.md"
+    benchmark_summary_md = work_root / "benchmark_summary.md"
+    benchmark_gate_md = work_root / "benchmark_gate.md"
+    benchmark_trend_md = work_root / "benchmark_trend.md"
+    benchmark_delta_md = work_root / "benchmark_delta.md"
+    benchmark_import_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "benchmark",
+            "import",
+            "--queries",
+            str(benchmark_queries),
+            "--qrels",
+            str(benchmark_qrels),
+            "--output",
+            str(benchmark_dir),
+            "--report-md",
+            str(benchmark_import_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build benchmark import",
+        benchmark_import_result,
+        required_output='"schema": "ragflow_benchmark_import_report_v1"',
+    )
+    benchmark_preflight_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "benchmark",
+            "preflight",
+            "--manifest",
+            str(benchmark_dir / "manifest.json"),
+            "--chunk-snapshot",
+            str(benchmark_chunk_snapshot),
+            "--gate-config",
+            str(benchmark_gate),
+            "--report-md",
+            str(benchmark_preflight_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build benchmark preflight",
+        benchmark_preflight_result,
+        required_output='"schema": "ragflow_benchmark_preflight_report_v1"',
+    )
+    benchmark_sample_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "benchmark",
+            "sample",
+            "--manifest",
+            str(benchmark_dir / "manifest.json"),
+            "--output",
+            str(benchmark_sample_dir),
+            "--size",
+            "1",
+            "--seed",
+            "7",
+            "--report-md",
+            str(benchmark_sample_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build benchmark sample",
+        benchmark_sample_result,
+        required_output='"schema": "ragflow_benchmark_sample_report_v1"',
+    )
+    benchmark_summary_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "benchmark",
+            "summarize",
+            "--report",
+            str(benchmark_report_json),
+            "--report-md",
+            str(benchmark_summary_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build benchmark summarize",
+        benchmark_summary_result,
+        required_output='"schema": "ragflow_benchmark_summary_report_v1"',
+    )
+    benchmark_gate_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "benchmark",
+            "gate",
+            "--report",
+            str(benchmark_report_json),
+            "--gate-config",
+            str(benchmark_gate),
+            "--report-md",
+            str(benchmark_gate_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build benchmark gate",
+        benchmark_gate_result,
+        required_output='"schema": "ragflow_benchmark_gate_report_v1"',
+    )
+    benchmark_trend_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "benchmark",
+            "trend",
+            "--report",
+            str(benchmark_report_json),
+            "--baseline-report",
+            str(baseline_benchmark_report_json),
+            "--gate-config",
+            str(benchmark_gate),
+            "--report-md",
+            str(benchmark_trend_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build benchmark trend",
+        benchmark_trend_result,
+        required_output='"schema": "ragflow_benchmark_trend_report_v1"',
+    )
+    benchmark_delta_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "benchmark",
+            "delta",
+            "--report",
+            str(benchmark_report_json),
+            "--baseline-report",
+            str(baseline_benchmark_report_json),
+            "--report-md",
+            str(benchmark_delta_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build benchmark delta",
+        benchmark_delta_result,
+        required_output='"schema": "ragflow_benchmark_delta_report_v1"',
+    )
+    for path in (
+        benchmark_dir / "manifest.json",
+        benchmark_dir / "queries.json",
+        benchmark_dir / "qrels.json",
+        benchmark_sample_dir / "manifest.json",
+        benchmark_sample_dir / "queries.json",
+        benchmark_sample_dir / "qrels.json",
+        benchmark_chunk_snapshot,
+        benchmark_chunk_snapshot_md,
+        benchmark_import_md,
+        benchmark_preflight_md,
+        benchmark_sample_md,
+        benchmark_summary_md,
+        benchmark_gate_md,
+        benchmark_trend_md,
+        benchmark_delta_md,
+    ):
         if path.exists():
             produced.append(path)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -54,6 +55,32 @@ class QueryResult:
             "host_assisted": self.host_assisted,
             "metadata": self.metadata,
         }
+
+
+CHUNK_HASH_ALGORITHM = "sha256:normalized-content-v1"
+
+
+def normalize_chunk_content_for_hash(content: str | None) -> str:
+    """Normalize chunk text before calculating stable content hashes."""
+
+    return " ".join((content or "").split())
+
+
+def stable_content_hash(content: str | None) -> str:
+    """Return a stable content hash for chunk text."""
+
+    normalized = normalize_chunk_content_for_hash(content)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def stable_chunk_hash(chunk: NormalizedChunk | Mapping[str, Any]) -> str:
+    """Return the public stable-hash identifier for a normalized or raw chunk."""
+
+    if isinstance(chunk, NormalizedChunk):
+        content = chunk.content
+    else:
+        content = _first_str(chunk, ["content_with_weight", "content", "text", "page_content"]) or ""
+    return f"sha256:{stable_content_hash(content)}"
 
 
 def _as_float(value: Any) -> float | None:

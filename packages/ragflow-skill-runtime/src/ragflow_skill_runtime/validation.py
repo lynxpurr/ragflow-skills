@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
-from .retrieval import NormalizedChunk, normalize_retrieval_response
+from .retrieval import CHUNK_HASH_ALGORITHM, NormalizedChunk, normalize_retrieval_response, stable_chunk_hash
 
 
 class ValidationError(RuntimeError):
@@ -25,6 +25,13 @@ METRIC_KEYS = (
     "empty_result_rate",
     "supporting_document_coverage",
 )
+STRICT_CHUNK_METRIC_KEYS = (
+    "strict_chunk_recall_at_k",
+    "expected_chunk_hit_rate",
+    "expected_evidence_rank",
+)
+BENCHMARK_METRIC_KEYS = METRIC_KEYS + STRICT_CHUNK_METRIC_KEYS
+CHUNK_SNAPSHOT_SCHEMA = "ragflow_chunk_snapshot_v1"
 
 
 def _string_list(value: Any, *, field_name: str) -> list[str]:
@@ -144,7 +151,15 @@ class BenchmarkQrel:
         if not isinstance(target, str) or not target.strip():
             raise ValidationError(f"qrel[{index}].target or document is required")
 
-        allowed_fields = {"document", "document_name", "document_id", "chunk_id", "content"}
+        allowed_fields = {
+            "document",
+            "document_name",
+            "document_id",
+            "chunk_id",
+            "chunk_hash",
+            "expected_chunk",
+            "content",
+        }
         if field_name not in allowed_fields:
             raise ValidationError(
                 f"qrel[{index}].field must be one of {', '.join(sorted(allowed_fields))}"
@@ -180,6 +195,9 @@ class BenchmarkGate:
     min_recall_at_k: float | None = None
     min_ndcg_at_k: float | None = None
     min_map_at_k: float | None = None
+    min_strict_chunk_recall_at_k: float | None = None
+    min_expected_chunk_hit_rate: float | None = None
+    max_expected_evidence_rank: float | None = None
     max_empty_result_rate: float | None = None
     max_hit_rate_drop: float | None = None
     max_mrr_drop: float | None = None
@@ -200,6 +218,18 @@ class BenchmarkGate:
             min_recall_at_k=_metric_or_none(raw.get("min_recall_at_k"), field_name="min_recall_at_k"),
             min_ndcg_at_k=_metric_or_none(raw.get("min_ndcg_at_k"), field_name="min_ndcg_at_k"),
             min_map_at_k=_metric_or_none(raw.get("min_map_at_k"), field_name="min_map_at_k"),
+            min_strict_chunk_recall_at_k=_metric_or_none(
+                raw.get("min_strict_chunk_recall_at_k"),
+                field_name="min_strict_chunk_recall_at_k",
+            ),
+            min_expected_chunk_hit_rate=_metric_or_none(
+                raw.get("min_expected_chunk_hit_rate"),
+                field_name="min_expected_chunk_hit_rate",
+            ),
+            max_expected_evidence_rank=_metric_or_none(
+                raw.get("max_expected_evidence_rank"),
+                field_name="max_expected_evidence_rank",
+            ),
             max_empty_result_rate=_metric_or_none(
                 raw.get("max_empty_result_rate"), field_name="max_empty_result_rate"
             ),
@@ -219,6 +249,9 @@ class BenchmarkGate:
                 "min_recall_at_k": self.min_recall_at_k,
                 "min_ndcg_at_k": self.min_ndcg_at_k,
                 "min_map_at_k": self.min_map_at_k,
+                "min_strict_chunk_recall_at_k": self.min_strict_chunk_recall_at_k,
+                "min_expected_chunk_hit_rate": self.min_expected_chunk_hit_rate,
+                "max_expected_evidence_rank": self.max_expected_evidence_rank,
                 "max_empty_result_rate": self.max_empty_result_rate,
                 "max_hit_rate_drop": self.max_hit_rate_drop,
                 "max_mrr_drop": self.max_mrr_drop,
@@ -351,6 +384,44 @@ def load_validation_queries(path: str | Path) -> list[ValidationQuery]:
     return queries
 
 
+def _expand_qrel_item(item: Mapping[str, Any], *, index: int) -> list[Mapping[str, Any]]:
+    query_id = item.get("query_id") or item.get("id") or item.get("query")
+    if not isinstance(query_id, str) or not query_id.strip():
+        return [item]
+
+    expanded: list[Mapping[str, Any]] = []
+    metadata = item.get("metadata", {})
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    relevance = item.get("relevance", 1.0)
+
+    if any(key in item for key in ("target", "document", "document_name", "doc", "doc_name", "chunk_id", "document_id")):
+        expanded.append(item)
+
+    for document in _string_list(item.get("expected_documents"), field_name=f"qrel[{index}].expected_documents"):
+        expanded.append(
+            {
+                "query_id": query_id,
+                "target": document,
+                "relevance": relevance,
+                "field": "document",
+                "metadata": dict(metadata),
+            }
+        )
+    for chunk in _string_list(item.get("expected_chunks"), field_name=f"qrel[{index}].expected_chunks"):
+        expanded.append(
+            {
+                "query_id": query_id,
+                "target": chunk,
+                "relevance": relevance,
+                "field": "expected_chunk",
+                "metadata": dict(metadata),
+            }
+        )
+
+    return expanded or [item]
+
+
 def load_benchmark_qrels(path: str | Path) -> dict[str, list[BenchmarkQrel]]:
     """Load qrels for benchmark validation from a compact JSON file."""
 
@@ -364,10 +435,10 @@ def load_benchmark_qrels(path: str | Path) -> dict[str, list[BenchmarkQrel]]:
 
     raw_qrels: list[Mapping[str, Any]] = []
     if isinstance(data, Mapping) and isinstance(data.get("qrels"), list):
-        for item in data["qrels"]:
+        for index, item in enumerate(data["qrels"]):
             if not isinstance(item, Mapping):
                 raise ValidationError("qrels entries must be objects")
-            raw_qrels.append(item)
+            raw_qrels.extend(_expand_qrel_item(item, index=index))
     elif isinstance(data, Mapping):
         index = 0
         for query_id, value in data.items():
@@ -398,10 +469,10 @@ def load_benchmark_qrels(path: str | Path) -> dict[str, list[BenchmarkQrel]]:
             else:
                 raise ValidationError(f"qrels[{query_id}] must be an object or list")
     elif isinstance(data, list):
-        for item in data:
+        for index, item in enumerate(data):
             if not isinstance(item, Mapping):
                 raise ValidationError("qrels entries must be objects")
-            raw_qrels.append(item)
+            raw_qrels.extend(_expand_qrel_item(item, index=index))
     else:
         raise ValidationError("qrels must be an object or list")
 
@@ -433,6 +504,26 @@ def load_benchmark_gate(path: str | Path) -> BenchmarkGate:
     return BenchmarkGate.from_dict(data)
 
 
+def load_chunk_snapshot(path: str | Path) -> dict[str, Any]:
+    """Load a chunk snapshot artifact used for strict chunk recall."""
+
+    snapshot_path = Path(path)
+    try:
+        data = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValidationError(f"chunk snapshot not found: {snapshot_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValidationError(f"chunk snapshot is not valid JSON: {snapshot_path}") from exc
+    if not isinstance(data, Mapping):
+        raise ValidationError("chunk snapshot must be a JSON object")
+    if data.get("schema") != CHUNK_SNAPSHOT_SCHEMA:
+        raise ValidationError(f"chunk snapshot schema must be {CHUNK_SNAPSHOT_SCHEMA}")
+    chunks = data.get("chunks")
+    if not isinstance(chunks, list):
+        raise ValidationError("chunk snapshot chunks must be a list")
+    return dict(data)
+
+
 def load_benchmark_baseline(path: str | Path) -> dict[str, float]:
     """Load benchmark metrics from a previous validation report JSON."""
 
@@ -456,7 +547,7 @@ def load_benchmark_baseline(path: str | Path) -> dict[str, float]:
         raise ValidationError("baseline report does not contain benchmark metrics")
 
     metrics: dict[str, float] = {}
-    for key in METRIC_KEYS:
+    for key in BENCHMARK_METRIC_KEYS:
         value = raw_metrics.get(key)
         if isinstance(value, (int, float)):
             metrics[key] = float(value)
@@ -534,9 +625,94 @@ def _target_matches(candidate: str | None, target: str) -> bool:
     return bool(candidate_norm and target_norm and (candidate_norm == target_norm or target_norm in candidate_norm))
 
 
-def _qrel_matches_chunk(qrel: BenchmarkQrel, chunk: NormalizedChunk) -> bool:
+def _chunk_reference_variants(value: str | None) -> set[str]:
+    normalized = _normalize_match_text(value)
+    if not normalized:
+        return set()
+    variants = {normalized}
+    if normalized.startswith("sha256:"):
+        variants.add(normalized.removeprefix("sha256:"))
+    elif len(normalized) == 64 and all(character in "0123456789abcdef" for character in normalized):
+        variants.add(f"sha256:{normalized}")
+    return variants
+
+
+def _chunk_tokens(chunk: NormalizedChunk) -> set[str]:
+    tokens = set()
+    tokens.update(_chunk_reference_variants(chunk.chunk_id))
+    tokens.update(_chunk_reference_variants(stable_chunk_hash(chunk)))
+    return tokens
+
+
+def _snapshot_alias_index(chunk_snapshot: Mapping[str, Any] | None) -> dict[str, set[str]]:
+    if not chunk_snapshot:
+        return {}
+    chunks = chunk_snapshot.get("chunks") if isinstance(chunk_snapshot, Mapping) else None
+    if not isinstance(chunks, list):
+        return {}
+
+    index: dict[str, set[str]] = {}
+    for item in chunks:
+        if not isinstance(item, Mapping):
+            continue
+        aliases: set[str] = set()
+        for key in ("stable_hash", "content_sha256", "chunk_id", "source_chunk_id"):
+            value = item.get(key)
+            if isinstance(value, str):
+                aliases.update(_chunk_reference_variants(value))
+        raw_aliases = item.get("aliases")
+        if isinstance(raw_aliases, list):
+            for alias in raw_aliases:
+                if isinstance(alias, str):
+                    aliases.update(_chunk_reference_variants(alias))
+        for alias in list(aliases):
+            aliases.update(index.get(alias, set()))
+        for alias in aliases:
+            index[alias] = set(aliases)
+    return index
+
+
+def _expected_chunk_aliases(qrel: BenchmarkQrel, snapshot_index: Mapping[str, set[str]]) -> set[str]:
+    aliases = _chunk_reference_variants(qrel.target)
+    for alias in list(aliases):
+        aliases.update(snapshot_index.get(alias, set()))
+    return aliases
+
+
+def _expected_chunk_key(qrel: BenchmarkQrel, snapshot_index: Mapping[str, set[str]]) -> str:
+    aliases = _expected_chunk_aliases(qrel, snapshot_index)
+    prefixed = sorted(alias for alias in aliases if alias.startswith("sha256:"))
+    if prefixed:
+        return prefixed[0]
+    return sorted(aliases)[0] if aliases else qrel.key
+
+
+def _expected_chunk_match_key(
+    chunk: NormalizedChunk,
+    expected_qrels: list[BenchmarkQrel],
+    snapshot_index: Mapping[str, set[str]],
+) -> str | None:
+    tokens = _chunk_tokens(chunk)
+    for qrel in expected_qrels:
+        aliases = _expected_chunk_aliases(qrel, snapshot_index)
+        if tokens & aliases:
+            return _expected_chunk_key(qrel, snapshot_index)
+    return None
+
+
+def _is_expected_chunk_qrel(qrel: BenchmarkQrel) -> bool:
+    return qrel.field in {"expected_chunk", "chunk_hash", "chunk_id"}
+
+
+def _qrel_matches_chunk(
+    qrel: BenchmarkQrel,
+    chunk: NormalizedChunk,
+    snapshot_index: Mapping[str, set[str]] | None = None,
+) -> bool:
     if qrel.field == "chunk_id":
         return _target_matches(chunk.chunk_id, qrel.target)
+    if qrel.field in {"chunk_hash", "expected_chunk"}:
+        return bool(_chunk_tokens(chunk) & _expected_chunk_aliases(qrel, snapshot_index or {}))
     if qrel.field == "document_id":
         return _target_matches(chunk.document_id, qrel.target)
     if qrel.field == "document_name":
@@ -553,8 +729,13 @@ def _qrel_matches_chunk(qrel: BenchmarkQrel, chunk: NormalizedChunk) -> bool:
 def _best_matching_qrel(
     chunk: NormalizedChunk,
     qrels: list[BenchmarkQrel],
+    snapshot_index: Mapping[str, set[str]] | None = None,
 ) -> BenchmarkQrel | None:
-    matches = [qrel for qrel in qrels if qrel.relevance > 0 and _qrel_matches_chunk(qrel, chunk)]
+    matches = [
+        qrel
+        for qrel in qrels
+        if qrel.relevance > 0 and _qrel_matches_chunk(qrel, chunk, snapshot_index=snapshot_index)
+    ]
     if not matches:
         return None
     return max(matches, key=lambda qrel: qrel.relevance)
@@ -578,11 +759,13 @@ def _query_benchmark_metrics(
     qrels: list[BenchmarkQrel],
     *,
     cutoff: int,
+    snapshot_index: Mapping[str, set[str]],
 ) -> dict[str, Any]:
     if cutoff <= 0:
         raise ValidationError("benchmark cutoff must be positive")
     positive_qrels = [qrel for qrel in qrels if qrel.relevance > 0]
-    relevant_keys = {qrel.key for qrel in positive_qrels}
+    ranking_qrels = [qrel for qrel in positive_qrels if not _is_expected_chunk_qrel(qrel)] or positive_qrels
+    relevant_keys = {qrel.key for qrel in ranking_qrels}
     if not relevant_keys:
         raise ValidationError(f"query {case.query.id!r} has no positive qrels")
 
@@ -590,7 +773,7 @@ def _query_benchmark_metrics(
     rel_by_rank: list[float] = []
     matched_targets: list[str | None] = []
     for chunk in ranked_chunks:
-        match = _best_matching_qrel(chunk, positive_qrels)
+        match = _best_matching_qrel(chunk, ranking_qrels, snapshot_index=snapshot_index)
         rel_by_rank.append(match.relevance if match else 0.0)
         matched_targets.append(match.key if match else None)
 
@@ -610,10 +793,34 @@ def _query_benchmark_metrics(
         unique_hits_so_far += 1
         precision_sum += unique_hits_so_far / index
 
-    ideal_relevances = sorted((qrel.relevance for qrel in positive_qrels), reverse=True)[:cutoff]
+    ideal_relevances = sorted((qrel.relevance for qrel in ranking_qrels), reverse=True)[:cutoff]
     dcg = _dcg(rel_by_rank)
     idcg = _dcg(ideal_relevances)
     recall = len(unique_hits) / len(relevant_keys)
+    expected_chunk_qrels = [qrel for qrel in positive_qrels if _is_expected_chunk_qrel(qrel)]
+    expected_chunk_keys = {
+        _expected_chunk_key(qrel, snapshot_index)
+        for qrel in expected_chunk_qrels
+    }
+    matched_expected_chunks: set[str] = set()
+    first_expected_rank = None
+    for index, chunk in enumerate(ranked_chunks, start=1):
+        match_key = _expected_chunk_match_key(chunk, expected_chunk_qrels, snapshot_index)
+        if not match_key:
+            continue
+        matched_expected_chunks.add(match_key)
+        if first_expected_rank is None:
+            first_expected_rank = index
+
+    strict_metrics: dict[str, float | int] = {}
+    if expected_chunk_keys:
+        strict_metrics = {
+            "strict_chunk_recall_at_k": len(matched_expected_chunks) / len(expected_chunk_keys),
+            "expected_chunk_hit_rate": 1.0 if matched_expected_chunks else 0.0,
+            "expected_evidence_rank": float(first_expected_rank or cutoff + 1),
+            "expected_chunk_count": len(expected_chunk_keys),
+            "matched_expected_chunks": len(matched_expected_chunks),
+        }
 
     return {
         "id": case.query.id,
@@ -629,6 +836,7 @@ def _query_benchmark_metrics(
         "relevant_targets": len(relevant_keys),
         "matched_targets": len(unique_hits),
         "first_relevant_rank": first_relevant_rank,
+        **strict_metrics,
     }
 
 
@@ -636,6 +844,23 @@ def _aggregate_query_metrics(per_query: list[dict[str, Any]]) -> dict[str, float
     metrics: dict[str, float | int] = {"query_count": len(per_query)}
     for key in METRIC_KEYS:
         metrics[key] = _average([float(item[key]) for item in per_query])
+    for key in STRICT_CHUNK_METRIC_KEYS:
+        values = [float(item[key]) for item in per_query if isinstance(item.get(key), (int, float))]
+        if values:
+            metrics[key] = _average(values)
+    expected_chunk_counts = [
+        int(item["expected_chunk_count"])
+        for item in per_query
+        if isinstance(item.get("expected_chunk_count"), int)
+    ]
+    if expected_chunk_counts:
+        metrics["expected_chunk_query_count"] = len(expected_chunk_counts)
+        metrics["expected_chunk_count"] = sum(expected_chunk_counts)
+        metrics["matched_expected_chunks"] = sum(
+            int(item.get("matched_expected_chunks", 0))
+            for item in per_query
+            if isinstance(item.get("expected_chunk_count"), int)
+        )
     return metrics
 
 
@@ -676,6 +901,11 @@ def _gate_check(
     )
 
 
+def _gate_metric(metrics: Mapping[str, float | int], key: str) -> float | None:
+    value = metrics.get(key)
+    return float(value) if isinstance(value, (int, float)) else None
+
+
 def evaluate_benchmark_gate(
     metrics: Mapping[str, float | int],
     *,
@@ -687,41 +917,62 @@ def evaluate_benchmark_gate(
     if gate is None:
         return None
     checks: list[dict[str, Any]] = []
-    _gate_check(checks, metric="hit_rate", operator=">=", actual=float(metrics["hit_rate"]), threshold=gate.min_hit_rate)
-    _gate_check(checks, metric="mrr", operator=">=", actual=float(metrics["mrr"]), threshold=gate.min_mrr)
+    _gate_check(checks, metric="hit_rate", operator=">=", actual=_gate_metric(metrics, "hit_rate"), threshold=gate.min_hit_rate)
+    _gate_check(checks, metric="mrr", operator=">=", actual=_gate_metric(metrics, "mrr"), threshold=gate.min_mrr)
     _gate_check(
         checks,
         metric="precision_at_k",
         operator=">=",
-        actual=float(metrics["precision_at_k"]),
+        actual=_gate_metric(metrics, "precision_at_k"),
         threshold=gate.min_precision_at_k,
     )
     _gate_check(
         checks,
         metric="recall_at_k",
         operator=">=",
-        actual=float(metrics["recall_at_k"]),
+        actual=_gate_metric(metrics, "recall_at_k"),
         threshold=gate.min_recall_at_k,
     )
     _gate_check(
         checks,
         metric="ndcg_at_k",
         operator=">=",
-        actual=float(metrics["ndcg_at_k"]),
+        actual=_gate_metric(metrics, "ndcg_at_k"),
         threshold=gate.min_ndcg_at_k,
     )
     _gate_check(
         checks,
         metric="map_at_k",
         operator=">=",
-        actual=float(metrics["map_at_k"]),
+        actual=_gate_metric(metrics, "map_at_k"),
         threshold=gate.min_map_at_k,
+    )
+    _gate_check(
+        checks,
+        metric="strict_chunk_recall_at_k",
+        operator=">=",
+        actual=_gate_metric(metrics, "strict_chunk_recall_at_k"),
+        threshold=gate.min_strict_chunk_recall_at_k,
+    )
+    _gate_check(
+        checks,
+        metric="expected_chunk_hit_rate",
+        operator=">=",
+        actual=_gate_metric(metrics, "expected_chunk_hit_rate"),
+        threshold=gate.min_expected_chunk_hit_rate,
+    )
+    _gate_check(
+        checks,
+        metric="expected_evidence_rank",
+        operator="<=",
+        actual=_gate_metric(metrics, "expected_evidence_rank"),
+        threshold=gate.max_expected_evidence_rank,
     )
     _gate_check(
         checks,
         metric="empty_result_rate",
         operator="<=",
-        actual=float(metrics["empty_result_rate"]),
+        actual=_gate_metric(metrics, "empty_result_rate"),
         threshold=gate.max_empty_result_rate,
     )
 
@@ -769,6 +1020,7 @@ def attach_benchmark_evaluation(
     gate: BenchmarkGate | None = None,
     baseline_metrics: Mapping[str, float] | None = None,
     baseline_path: str | None = None,
+    chunk_snapshot: Mapping[str, Any] | None = None,
 ) -> ValidationReport:
     """Attach qrels-based ranking metrics to a validation report."""
 
@@ -776,8 +1028,9 @@ def attach_benchmark_evaluation(
     if missing:
         raise ValidationError(f"benchmark qrels missing query id(s): {', '.join(missing)}")
 
+    snapshot_index = _snapshot_alias_index(chunk_snapshot)
     per_query = [
-        _query_benchmark_metrics(case, qrels[case.query.id], cutoff=cutoff)
+        _query_benchmark_metrics(case, qrels[case.query.id], cutoff=cutoff, snapshot_index=snapshot_index)
         for case in report.cases
     ]
     metrics = _aggregate_query_metrics(per_query)
@@ -887,6 +1140,18 @@ def render_markdown_report(report: ValidationReport) -> str:
                 f"- nDCG@k: `{float(benchmark.metrics['ndcg_at_k']):.4f}`",
                 f"- MAP@k: `{float(benchmark.metrics['map_at_k']):.4f}`",
                 f"- Empty result rate: `{float(benchmark.metrics['empty_result_rate']):.2%}`",
+            ]
+        )
+        if "strict_chunk_recall_at_k" in benchmark.metrics:
+            lines.extend(
+                [
+                    f"- Strict chunk recall@k: `{float(benchmark.metrics['strict_chunk_recall_at_k']):.4f}`",
+                    f"- Expected chunk hit rate: `{float(benchmark.metrics['expected_chunk_hit_rate']):.2%}`",
+                    f"- Expected evidence rank: `{float(benchmark.metrics['expected_evidence_rank']):.4f}`",
+                ]
+            )
+        lines.extend(
+            [
                 "",
                 "| id | type | hit | mrr | precision@k | recall@k | ndcg@k | map@k |",
                 "|---|---|---:|---:|---:|---:|---:|---:|",

@@ -31,12 +31,14 @@ from ragflow_skill_runtime import (  # noqa: E402
     load_benchmark_baseline,
     load_benchmark_gate,
     load_benchmark_qrels,
+    load_chunk_snapshot,
     load_config,
     load_kb_manifest,
     load_validation_queries,
     render_markdown_report,
     run_retrieval_validation,
     smoke_query,
+    summarize_metadata_for_documents,
 )
 from ragflow_skill_runtime.config import ConfigError  # noqa: E402
 from ragflow_skill_runtime.manifests import ManifestError  # noqa: E402
@@ -64,9 +66,37 @@ def _write_text(path: str | None, text: str) -> None:
     output.write_text(text, encoding="utf-8")
 
 
+def _render_markdown_with_metadata(report, metadata_summary: dict[str, Any] | None) -> str:
+    markdown = render_markdown_report(report)
+    if not metadata_summary:
+        return markdown
+    lines = [
+        markdown.rstrip(),
+        "",
+        "## Metadata Summary",
+        "",
+        f"- ok: `{str(bool(metadata_summary.get('ok'))).lower()}`",
+        f"- documents: `{metadata_summary.get('document_count', 0)}`",
+        f"- matched build documents: `{metadata_summary.get('matched_build_documents', 0)}`",
+        f"- fields: `{', '.join(metadata_summary.get('fields', []))}`",
+        f"- tags: `{', '.join(metadata_summary.get('tags', []))}`",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def _run(args: argparse.Namespace) -> int:
     try:
         manifest = load_kb_manifest(args.kb_manifest)
+        metadata_summary = summarize_metadata_for_documents(
+            args.metadata,
+            [
+                document.markdown_path or document.source_path or document.document_id
+                for document in manifest.documents
+            ],
+        )
+        if metadata_summary and not metadata_summary.get("ok", False):
+            raise ValidationError("metadata lint failed; run metadata lint for details")
         if args.level == "smoke":
             queries = [smoke_query(args.query, dataset_name=manifest.dataset.name)]
         else:
@@ -90,6 +120,7 @@ def _run(args: argparse.Namespace) -> int:
             qrels = load_benchmark_qrels(args.qrels)
             gate = load_benchmark_gate(args.gate_config) if args.gate_config else None
             baseline = load_benchmark_baseline(args.baseline_report) if args.baseline_report else None
+            chunk_snapshot = load_chunk_snapshot(args.chunk_snapshot) if args.chunk_snapshot else None
             report = attach_benchmark_evaluation(
                 report,
                 qrels=qrels,
@@ -97,11 +128,14 @@ def _run(args: argparse.Namespace) -> int:
                 gate=gate,
                 baseline_metrics=baseline,
                 baseline_path=args.baseline_report,
+                chunk_snapshot=chunk_snapshot,
             )
         payload = report.to_dict(max_chunks=args.max_report_chunks)
+        if metadata_summary:
+            payload["metadata_summary"] = metadata_summary
         rendered_json = json.dumps(payload, ensure_ascii=False, indent=2)
         _write_text(args.report_json, rendered_json + "\n")
-        _write_text(args.report_md, render_markdown_report(report))
+        _write_text(args.report_md, _render_markdown_with_metadata(report, metadata_summary))
         print(rendered_json)
         return 0 if report.ok else 1
     except (ConfigError, ManifestError, ValidationError, OSError, RuntimeError) as exc:
@@ -118,11 +152,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--qrels", help="JSON relevance judgments for benchmark validation")
     parser.add_argument("--gate-config", help="Optional benchmark gate threshold JSON")
     parser.add_argument("--baseline-report", help="Optional previous benchmark report JSON")
+    parser.add_argument("--chunk-snapshot", help="Optional ragflow_chunk_snapshot_v1 file for strict chunk recall")
     parser.add_argument("--metric-cutoff", type=int, help="Metric cutoff for benchmark reports")
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--max-report-chunks", type=int, default=3)
     parser.add_argument("--report-json", help="Optional JSON report output path")
     parser.add_argument("--report-md", help="Optional Markdown report output path")
+    parser.add_argument("--metadata", help="Optional ragflow_metadata_v1 file to summarize and lint before validation")
     parser.add_argument("--config", help="Runtime config file")
     parser.add_argument("--base-url", help="RAGFlow base URL")
     parser.add_argument("--api-key", help="RAGFlow API key")

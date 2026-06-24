@@ -186,7 +186,7 @@ schema production and the later phase owns consumption or live workflow integrat
 | 10. Generation Evaluation | `ragflow-query` | Phase 30 | `evaluate-answer` | answer evaluation report | deterministic citation/support tests, abstention tests |
 | 11. Routing Quality Upgrade | `ragflow-query` | Phase 29 | `route-report`, `route-diagnose`, `centroid build --plan-only` | route report, centroid index schema | route regression fixtures, no-private-route scan |
 | 12. Runtime Resilience And Sanitized Reports | shared runtime, all skills | Phase 31 | retry/rate-limit/cache/checkpoint helpers, `--redaction-report` | sanitized report schema, partial-failure reports, cache stats | fake-secret redaction tests, timeout/fallback tests |
-| 13. Benchmark Governance | `ragflow-kb-build` | Phase 26 | `benchmark import/preflight/trend/delta/gate/summarize` | normalized benchmark manifest, `queries.json`, `qrels.json`, `qa.json` | import/preflight tests, delta/gate tests |
+| 13. Benchmark Governance | `ragflow-kb-build` | Phase 26 | `benchmark import/sample/preflight/trend/delta/gate/summarize` | normalized benchmark manifest, `queries.json`, `qrels.json`, `qa.json` | import/sample/preflight tests, delta/gate tests |
 | 14. Grounded QA And Evidence Mapping | `ragflow-kb-build` | Phase 26 | `qa generate/validate/map-evidence`, `segment-metadata report` | grounded QA and evidence mapping artifacts | evidence-span validation tests, generated-QA gate tests |
 | 15. Retrieval Pollution And Suppression Diagnostics | `ragflow-query`, `ragflow-kb-build` | Phase 27 | `pollution-report`, `rerank-ab`, `suppression-report` | pollution and suppression reports | fake pollution fixtures, recommendation-only safety tests |
 | 16. Query Orchestration Safety And Conversation Context | `ragflow-query` | Phase 30 | `intent classify/route`, `session enrich/inspect` | `ragflow_query_intent_v1`, `ragflow_query_route_decision_v1`, `ragflow_query_session_v1` | deterministic intent/session tests, bounded-context tests |
@@ -322,6 +322,22 @@ Safe public metadata fields:
 Metadata can be user-authored or LLM-assisted, but AI-generated metadata is advisory. It
 must not become a security boundary or an authorization mechanism.
 
+### MVP Contract
+
+Phase 25 implements deterministic governance first:
+
+- `ragflow_metadata_v1` keeps only safe public fields and reports ignored fields.
+- `ragflow_tagset_v1` prepares tags, aliases, metadata defaults, and document
+  assignments without mutating RAGFlow.
+- Metadata merge precedence is explicit: path-derived fields < rich handoff metadata <
+  user-authored metadata.
+- Reports redact secret-like values and fail before build or validation when explicit
+  metadata contains errors.
+- Build and validation can attach metadata summaries with `--metadata`, but upload,
+  parse, retrieval, and RAGFlow dataset settings are unchanged.
+- LLM-assisted metadata generation remains a future adapter. Its output must be marked
+  advisory and must pass the same deterministic lint before use.
+
 ## Feature Design 4: Optimization Loop
 
 ### Problem
@@ -375,6 +391,13 @@ Add snapshot export:
 ```text
 ragflow-kb-build snapshot-chunks
 ```
+
+MVP snapshot export is offline and non-mutating. It accepts a validation/retrieval JSON
+report or local Markdown input and emits `ragflow_chunk_snapshot_v1` with
+`sha256:normalized-content-v1` stable hashes, source hashes, original chunk IDs when
+present, and aliases for strict qrels. `validate --level benchmark --chunk-snapshot`
+can then match `expected_chunks` against either the live chunk ID or the stable content
+hash, so chunk-level recall remains measurable when RAGFlow chunk IDs are unstable.
 
 Add validation metrics:
 
@@ -607,6 +630,7 @@ In `ragflow-kb-build`:
 
 ```text
 benchmark import
+benchmark sample
 benchmark preflight
 benchmark trend
 benchmark delta
@@ -618,7 +642,7 @@ Capabilities:
 
 - import public or user-local benchmark formats into normalized `queries.json`,
   `qrels.json`, `qa.json`, and `manifest.json`;
-- sample deterministically with a seed;
+- sample deterministically with seed and strategy fields;
 - compute source hashes for imported documents;
 - run preflight checks before live benchmark execution;
 - compare current summaries against a baseline;

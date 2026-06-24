@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -282,6 +283,511 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["handoff"]["retrieval_hint_count"], 1)
         self.assertEqual(payload["handoff"]["assistant_test_count"], 1)
         self.assertIn("RAGFlow Handoff Inspection", report_md_text)
+
+    def test_metadata_governance_subcommands_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            handoff = root / "handoff"
+            docs_dir = handoff / "documents"
+            docs_dir.mkdir(parents=True)
+            (docs_dir / "sample.md").write_text("# Sample\n", encoding="utf-8")
+            doc_manifest = handoff / "doc_manifest.json"
+            doc_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [
+                            {
+                                "source_path": "source/sample.pdf",
+                                "markdown_path": "documents/sample.md",
+                                "title": "Sample",
+                                "sha256": "1" * 64,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            handoff_metadata = handoff / "metadata.json"
+            handoff_metadata.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_document_metadata_v1",
+                        "documents": [
+                            {
+                                "markdown": {"path": "documents/sample.md"},
+                                "title": "Handoff Sample",
+                                "locale": "en",
+                                "source_sha256": "2" * 64,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            template = root / "metadata.template.json"
+            merged = root / "metadata.merged.json"
+            lint_md = root / "metadata_lint.md"
+            merge_md = root / "metadata_merge.md"
+
+            generate_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "metadata",
+                    "generate-template",
+                    "--doc-manifest",
+                    str(doc_manifest),
+                    "--output",
+                    str(template),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            lint_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "metadata",
+                    "lint",
+                    "--metadata",
+                    str(template),
+                    "--report-md",
+                    str(lint_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            merge_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "metadata",
+                    "merge",
+                    "--doc-manifest",
+                    str(doc_manifest),
+                    "--handoff-metadata",
+                    str(handoff_metadata),
+                    "--metadata",
+                    str(template),
+                    "--output",
+                    str(merged),
+                    "--report-md",
+                    str(merge_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            build_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "--doc-manifest",
+                    str(doc_manifest),
+                    "--metadata",
+                    str(merged),
+                    "--kb-name",
+                    "kb:test",
+                    "--profile",
+                    str(PROFILE_PATH),
+                    "--dry-run",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            merged_payload = json.loads(merged.read_text(encoding="utf-8"))
+            template_exists = template.exists()
+            lint_md_text = lint_md.read_text(encoding="utf-8") if lint_md.exists() else ""
+            merge_md_text = merge_md.read_text(encoding="utf-8") if merge_md.exists() else ""
+            build_payload = json.loads(build_result.stdout) if build_result.stdout else {}
+
+        self.assertEqual(generate_result.returncode, 0, generate_result.stderr)
+        self.assertTrue(template_exists)
+        self.assertEqual(lint_result.returncode, 0, lint_result.stdout)
+        self.assertIn("RAGFlow Metadata Lint Report", lint_md_text)
+        self.assertEqual(merge_result.returncode, 0, merge_result.stdout)
+        self.assertIn("RAGFlow Metadata Merge Report", merge_md_text)
+        self.assertEqual(merged_payload["schema"], "ragflow_metadata_v1")
+        self.assertEqual(build_result.returncode, 0, build_result.stdout)
+        self.assertTrue(build_payload["metadata_summary"]["ok"])
+
+    def test_tagset_governance_subcommands_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tagset = root / "tagset.json"
+            lint_md = root / "tagset_lint.md"
+            report_md = root / "tagset_report.md"
+            export_csv = root / "tagset.csv"
+
+            generate_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "tagset",
+                    "generate-template",
+                    "--output",
+                    str(tagset),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            lint_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "tagset",
+                    "lint",
+                    "--tagset",
+                    str(tagset),
+                    "--report-md",
+                    str(lint_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            export_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "tagset",
+                    "export",
+                    "--tagset",
+                    str(tagset),
+                    "--format",
+                    "csv",
+                    "--output",
+                    str(export_csv),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            report_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "tagset",
+                    "report",
+                    "--tagset",
+                    str(tagset),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            lint_md_text = lint_md.read_text(encoding="utf-8") if lint_md.exists() else ""
+            export_csv_text = export_csv.read_text(encoding="utf-8") if export_csv.exists() else ""
+            report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(generate_result.returncode, 0, generate_result.stderr)
+        self.assertEqual(lint_result.returncode, 0, lint_result.stdout)
+        self.assertIn("RAGFlow Tagset Lint Report", lint_md_text)
+        self.assertEqual(export_result.returncode, 0, export_result.stdout)
+        self.assertIn("example-tag", export_csv_text)
+        self.assertEqual(report_result.returncode, 0, report_result.stdout)
+        self.assertIn("RAGFlow Tagset Report", report_md_text)
+
+    def test_benchmark_governance_subcommands_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            gate = root / "gate.json"
+            report = root / "benchmark_report.json"
+            chunk_report = root / "chunk_report.json"
+            chunk_snapshot = root / "chunk_snapshot.json"
+            baseline_report = root / "baseline_report.json"
+            benchmark_dir = root / "benchmark"
+            benchmark_sample_dir = root / "benchmark_sample"
+            snapshot_md = root / "chunk_snapshot.md"
+            import_md = root / "benchmark_import.md"
+            preflight_md = root / "benchmark_preflight.md"
+            sample_md = root / "benchmark_sample.md"
+            summary_md = root / "benchmark_summary.md"
+            gate_md = root / "benchmark_gate.md"
+            trend_md = root / "benchmark_trend.md"
+            delta_md = root / "benchmark_delta.md"
+            queries.write_text(
+                json.dumps({"queries": [{"id": "q1", "question": "What is supported?", "metadata": {"type": "fact"}}]}),
+                encoding="utf-8",
+            )
+            qrels.write_text(json.dumps({"q1": {"source.md": 1}}), encoding="utf-8")
+            chunk_report.write_text(
+                json.dumps(
+                    {
+                        "cases": [
+                            {
+                                "id": "q1",
+                                "top_chunks": [
+                                    {
+                                        "content": "Expected evidence body",
+                                        "document_name": "source.md",
+                                        "chunk_id": "chunk-a",
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            gate.write_text(json.dumps({"thresholds": {"min_hit_rate": 1.0, "max_empty_result_rate": 0.0}}), encoding="utf-8")
+            report.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "dataset": {"id": "ds-1", "name": "kb:test"},
+                        "benchmark": {
+                            "metrics": {
+                                "query_count": 1,
+                                "hit_rate": 1.0,
+                                "mrr": 1.0,
+                                "precision_at_k": 0.5,
+                                "recall_at_k": 1.0,
+                                "ndcg_at_k": 1.0,
+                                "map_at_k": 1.0,
+                                "empty_result_rate": 0.0,
+                                "supporting_document_coverage": 1.0,
+                            },
+                            "query_type_breakdown": {"fact": {"query_count": 1, "hit_rate": 1.0}},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            baseline_report.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "benchmark": {
+                            "metrics": {
+                                "query_count": 1,
+                                "hit_rate": 1.0,
+                                "mrr": 0.8,
+                                "precision_at_k": 0.4,
+                                "recall_at_k": 1.0,
+                                "ndcg_at_k": 0.9,
+                                "map_at_k": 0.8,
+                                "empty_result_rate": 0.0,
+                                "supporting_document_coverage": 1.0,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            import_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "import",
+                    "--queries",
+                    str(queries),
+                    "--qrels",
+                    str(qrels),
+                    "--output",
+                    str(benchmark_dir),
+                    "--report-md",
+                    str(import_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            snapshot_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "snapshot-chunks",
+                    "--input",
+                    str(chunk_report),
+                    "--output",
+                    str(chunk_snapshot),
+                    "--report-md",
+                    str(snapshot_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            preflight_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "preflight",
+                    "--manifest",
+                    str(benchmark_dir / "manifest.json"),
+                    "--chunk-snapshot",
+                    str(chunk_snapshot),
+                    "--gate-config",
+                    str(gate),
+                    "--report-md",
+                    str(preflight_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            sample_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "sample",
+                    "--manifest",
+                    str(benchmark_dir / "manifest.json"),
+                    "--output",
+                    str(benchmark_sample_dir),
+                    "--size",
+                    "1",
+                    "--seed",
+                    "7",
+                    "--report-md",
+                    str(sample_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            summarize_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "summarize",
+                    "--report",
+                    str(report),
+                    "--report-md",
+                    str(summary_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            gate_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "gate",
+                    "--report",
+                    str(report),
+                    "--gate-config",
+                    str(gate),
+                    "--report-md",
+                    str(gate_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            trend_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "trend",
+                    "--report",
+                    str(report),
+                    "--baseline-report",
+                    str(baseline_report),
+                    "--gate-config",
+                    str(gate),
+                    "--report-md",
+                    str(trend_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            delta_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "delta",
+                    "--report",
+                    str(report),
+                    "--baseline-report",
+                    str(baseline_report),
+                    "--report-md",
+                    str(delta_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            snapshot_md_text = snapshot_md.read_text(encoding="utf-8") if snapshot_md.exists() else ""
+            preflight_md_text = preflight_md.read_text(encoding="utf-8") if preflight_md.exists() else ""
+            sample_md_text = sample_md.read_text(encoding="utf-8") if sample_md.exists() else ""
+            gate_md_text = gate_md.read_text(encoding="utf-8") if gate_md.exists() else ""
+            trend_md_text = trend_md.read_text(encoding="utf-8") if trend_md.exists() else ""
+            delta_md_text = delta_md.read_text(encoding="utf-8") if delta_md.exists() else ""
+
+        self.assertEqual(import_result.returncode, 0, import_result.stdout)
+        self.assertIn('"schema": "ragflow_benchmark_import_report_v1"', import_result.stdout)
+        self.assertEqual(snapshot_result.returncode, 0, snapshot_result.stdout)
+        self.assertIn("ragflow_chunk_snapshot_report_v1", snapshot_result.stdout)
+        self.assertIn("RAGFlow Chunk Snapshot Report", snapshot_md_text)
+        self.assertEqual(preflight_result.returncode, 0, preflight_result.stdout)
+        self.assertIn("RAGFlow Benchmark Preflight Report", preflight_md_text)
+        self.assertEqual(sample_result.returncode, 0, sample_result.stdout)
+        self.assertIn("ragflow_benchmark_sample_report_v1", sample_result.stdout)
+        self.assertIn("RAGFlow Benchmark Sample Report", sample_md_text)
+        self.assertEqual(summarize_result.returncode, 0, summarize_result.stdout)
+        self.assertIn("ragflow_benchmark_summary_report_v1", summarize_result.stdout)
+        self.assertEqual(gate_result.returncode, 0, gate_result.stdout)
+        self.assertIn("RAGFlow Benchmark Gate Report", gate_md_text)
+        self.assertEqual(trend_result.returncode, 0, trend_result.stdout)
+        self.assertIn("ragflow_benchmark_trend_report_v1", trend_result.stdout)
+        self.assertIn("RAGFlow Benchmark Trend Report", trend_md_text)
+        self.assertEqual(delta_result.returncode, 0, delta_result.stdout)
+        self.assertIn("ragflow_benchmark_delta_report_v1", delta_result.stdout)
+        self.assertIn("RAGFlow Benchmark Delta Report", delta_md_text)
 
     def test_inspect_manifest_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -673,7 +1179,13 @@ class KbBuildCliTests(unittest.TestCase):
                     {
                         "version": "0.1",
                         "dataset": {"id": "ds-1", "name": "kb:test"},
-                        "documents": [],
+                        "documents": [
+                            {
+                                "document_id": "doc-1",
+                                "source_path": "source.md",
+                                "markdown_path": "documents/source.md",
+                            }
+                        ],
                     }
                 ),
                 encoding="utf-8",
@@ -730,6 +1242,22 @@ class KbBuildCliTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            metadata = root / "metadata.json"
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_metadata_v1",
+                        "documents": [
+                            {
+                                "path": "documents/source.md",
+                                "metadata": {"domain": "example-domain", "topic": "Example"},
+                                "tags": ["example-tag"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
             report_md = root / "report.md"
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
@@ -743,6 +1271,8 @@ class KbBuildCliTests(unittest.TestCase):
                         str(queries),
                         "--base-url",
                         "https://ragflow.example.test",
+                        "--metadata",
+                        str(metadata),
                         "--report-md",
                         str(report_md),
                     ]
@@ -753,7 +1283,10 @@ class KbBuildCliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["metrics"]["pass_rate"], 1.0)
+        self.assertTrue(payload["metadata_summary"]["ok"])
+        self.assertEqual(payload["metadata_summary"]["tag_count"], 1)
         self.assertIn("q1", report_text)
+        self.assertIn("Metadata Summary", report_text)
 
     def test_validate_benchmark_with_qrels_and_gate_via_fake_client(self) -> None:
         module = load_validate_module()
@@ -789,10 +1322,40 @@ class KbBuildCliTests(unittest.TestCase):
                 encoding="utf-8",
             )
             qrels = root / "qrels.json"
-            qrels.write_text(json.dumps({"q1": {"source.md": 1}}), encoding="utf-8")
+            expected_hash = "sha256:" + hashlib.sha256("Known includes known term".encode("utf-8")).hexdigest()
+            qrels.write_text(
+                json.dumps(
+                    {
+                        "qrels": [
+                            {
+                                "query_id": "q1",
+                                "expected_documents": ["source.md"],
+                                "expected_chunks": [expected_hash],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            chunk_snapshot = root / "chunk_snapshot.json"
+            chunk_snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "chunks": [
+                            {
+                                "stable_hash": expected_hash,
+                                "document_name": "source.md",
+                                "aliases": [expected_hash],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
             gate = root / "gate.json"
             gate.write_text(
-                json.dumps({"thresholds": {"min_hit_rate": 1.0, "min_mrr": 1.0}}),
+                json.dumps({"thresholds": {"min_hit_rate": 1.0, "min_mrr": 1.0, "min_strict_chunk_recall_at_k": 1.0}}),
                 encoding="utf-8",
             )
             baseline = root / "baseline.json"
@@ -817,6 +1380,8 @@ class KbBuildCliTests(unittest.TestCase):
                         str(gate),
                         "--baseline-report",
                         str(baseline),
+                        "--chunk-snapshot",
+                        str(chunk_snapshot),
                         "--base-url",
                         "https://ragflow.example.test",
                         "--report-md",
@@ -829,6 +1394,7 @@ class KbBuildCliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["benchmark"]["metrics"]["hit_rate"], 1.0)
+        self.assertEqual(payload["benchmark"]["metrics"]["strict_chunk_recall_at_k"], 1.0)
         self.assertEqual(payload["benchmark"]["query_type_breakdown"]["fact"]["query_count"], 1)
         self.assertTrue(payload["benchmark"]["gate"]["ok"])
         self.assertEqual(payload["benchmark"]["baseline"]["delta"]["mrr"], 0.5)

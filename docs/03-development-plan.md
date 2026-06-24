@@ -788,18 +788,22 @@ Goal: provide a neutral public replacement for old KB Ops metadata and tag disci
 
 Tasks:
 
-- [ ] Add `ragflow_metadata_v1` runtime schema with safe public fields.
-- [ ] Add `ragflow_tagset_v1` runtime schema for RAGFlow tag preparation.
-- [ ] Add `ragflow-kb-build metadata lint`.
-- [ ] Add `ragflow-kb-build metadata merge` for combining handoff metadata, user metadata, and path-derived metadata.
-- [ ] Add `ragflow-kb-build metadata generate-template` for user-editable starter files.
-- [ ] Add `ragflow-kb-build tagset lint`.
-- [ ] Add `ragflow-kb-build tagset export` for RAGFlow-compatible CSV/JSON outputs.
-- [ ] Add `ragflow-kb-build tagset report` for coverage, duplicates, and orphan tag warnings.
-- [ ] Wire metadata summaries into build and validation reports without changing default upload behavior.
+- [x] Add `ragflow_metadata_v1` runtime schema with safe public fields.
+- [x] Add `ragflow_tagset_v1` runtime schema for RAGFlow tag preparation.
+- [x] Add `ragflow-kb-build metadata lint`.
+- [x] Add `ragflow-kb-build metadata merge` for combining handoff metadata, user metadata, and path-derived metadata.
+- [x] Add `ragflow-kb-build metadata generate-template` for user-editable starter files.
+- [x] Add `ragflow-kb-build tagset lint`.
+- [x] Add `ragflow-kb-build tagset export` for RAGFlow-compatible CSV/JSON outputs.
+- [x] Add `ragflow-kb-build tagset report` for coverage, duplicates, and orphan tag warnings.
+- [x] Wire metadata summaries into build and validation reports without changing default upload behavior.
 - [ ] Add optional LLM-assisted metadata generation as a deferred adapter, not as the MVP default.
-- [ ] Add offline tests for schema validation, merge precedence, and redaction.
-- [ ] Add sample public metadata and tagset templates with placeholder-only values.
+- [x] Add offline tests for schema validation, merge precedence, and redaction.
+- [x] Add sample public metadata and tagset templates with placeholder-only values.
+
+MVP note: LLM-assisted metadata generation is intentionally not part of the deterministic
+Phase 25 command surface. A future adapter must mark generated metadata advisory and pass
+`metadata lint` before build or validation can summarize it.
 
 Exit criteria:
 
@@ -814,13 +818,13 @@ guided profile optimization workflow with benchmark lifecycle governance.
 
 Tasks:
 
-- [ ] Add `ragflow-kb-build benchmark import` for public or user-local benchmark formats.
-- [ ] Generate normalized benchmark `manifest.json`, `queries.json`, `qrels.json`, `qa.json`, and source hashes.
-- [ ] Support deterministic benchmark sampling with seed and strategy fields.
-- [ ] Add `ragflow-kb-build benchmark preflight`.
-- [ ] Add `ragflow-kb-build benchmark trend` with baseline/current comparison thresholds.
-- [ ] Add `ragflow-kb-build benchmark delta` for recall, nDCG, pollution, wrong-doc, empty-retrieval, cost, and latency changes.
-- [ ] Add `ragflow-kb-build benchmark gate` and `benchmark summarize` wrappers around existing validation reports.
+- [x] Add `ragflow-kb-build benchmark import` for public or user-local benchmark formats.
+- [x] Generate normalized benchmark `manifest.json`, `queries.json`, `qrels.json`, `qa.json`, and source hashes.
+- [x] Support deterministic benchmark sampling with seed and strategy fields.
+- [x] Add `ragflow-kb-build benchmark preflight`.
+- [x] Add `ragflow-kb-build benchmark trend` with baseline/current comparison thresholds.
+- [x] Add `ragflow-kb-build benchmark delta` for recall, nDCG, pollution, wrong-doc, empty-retrieval, cost, and latency changes.
+- [x] Add `ragflow-kb-build benchmark gate` and `benchmark summarize` wrappers around existing validation reports.
 - [ ] Add root-cause hints for retrieval coverage, ranking, tag pollution, generation grounding, citation gaps, over-abstention, and cost/latency regressions.
 - [ ] Add `ragflow-kb-build qa generate` for grounded QA sets with optional LLM adapter.
 - [ ] Add `ragflow-kb-build qa validate` to reject ungrounded generated evidence before benchmark use.
@@ -837,16 +841,17 @@ Tasks:
 - [ ] Produce `profile_experiment_results.json`.
 - [ ] Produce `best_profile_report.md` with metric tradeoffs and recommendation rationale.
 - [ ] Add `cleanup_plan.json` and exact-confirmation cleanup execution.
-- [ ] Add `ragflow-kb-build snapshot-chunks`.
-- [ ] Add chunk snapshot schema with stable content hashes.
-- [ ] Extend qrels to support `expected_chunks`.
-- [ ] Add strict chunk recall, expected chunk hit rate, expected evidence rank, evidence mapping confidence, segment metadata coverage, and chunk coverage metrics.
-- [ ] Add unit tests with fake RAGFlow clients and deterministic chunk snapshots.
+- [x] Add `ragflow-kb-build snapshot-chunks`.
+- [x] Add chunk snapshot schema with stable content hashes.
+- [x] Extend qrels to support `expected_chunks`.
+- [x] Add strict chunk recall, expected chunk hit rate, and expected evidence rank metrics.
+- [ ] Add evidence mapping confidence, segment metadata coverage, and chunk coverage metrics.
+- [x] Add unit tests with fake RAGFlow clients and deterministic chunk snapshots.
 - [ ] Add live disposable tests gated by credentials and explicit confirmation.
 
 Exit criteria:
 
-- Users can import, preflight, summarize, trend, and delta benchmark runs with public schemas.
+- Users can import, sample, preflight, summarize, trend, and delta benchmark runs with public schemas.
 - Users can compare multiple profiles with repeatable reports.
 - Mutating optimization never runs without explicit execution flags.
 - Chunk-level recall can be measured even when RAGFlow chunk IDs are unstable.
