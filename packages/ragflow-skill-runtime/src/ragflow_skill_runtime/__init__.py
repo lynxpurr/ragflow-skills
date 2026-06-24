@@ -172,6 +172,7 @@ from .benchmark_governance import (
     BENCHMARK_SUMMARY_REPORT_SCHEMA,
     BENCHMARK_TREND_REPORT_SCHEMA,
     CHUNK_SNAPSHOT_REPORT_SCHEMA,
+    GROUNDED_QA_VALIDATE_REPORT_SCHEMA,
     GROUNDED_QA_SCHEMA,
     BenchmarkGovernanceError,
     delta_benchmark_reports,
@@ -183,6 +184,7 @@ from .benchmark_governance import (
     snapshot_chunks,
     summarize_benchmark_report,
     trend_benchmark_reports,
+    validate_grounded_qa,
 )
 from .retrieval import (
     CHUNK_HASH_ALGORITHM,
@@ -302,6 +304,7 @@ __all__ = [
     "CITATION_AUDIT_SCHEMA",
     "EvidenceWeight",
     "GROUNDED_QA_SCHEMA",
+    "GROUNDED_QA_VALIDATE_REPORT_SCHEMA",
     "NormalizedChunk",
     "QUERY_DIAGNOSTIC_SCHEMA",
     "METADATA_LINT_REPORT_SCHEMA",
@@ -423,6 +426,7 @@ __all__ = [
     "tagset_report_payload",
     "text_to_markdown",
     "trend_benchmark_reports",
+    "validate_grounded_qa",
     "wait_for_document_states",
     "weight_evidence",
 ]

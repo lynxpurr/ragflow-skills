@@ -14,6 +14,7 @@ from ragflow_skill_runtime.benchmark_governance import (
     BENCHMARK_SUMMARY_REPORT_SCHEMA,
     BENCHMARK_TREND_REPORT_SCHEMA,
     CHUNK_SNAPSHOT_REPORT_SCHEMA,
+    GROUNDED_QA_VALIDATE_REPORT_SCHEMA,
     delta_benchmark_reports,
     gate_benchmark_report,
     import_benchmark_dataset,
@@ -22,6 +23,7 @@ from ragflow_skill_runtime.benchmark_governance import (
     snapshot_chunks,
     summarize_benchmark_report,
     trend_benchmark_reports,
+    validate_grounded_qa,
 )
 
 
@@ -85,6 +87,77 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertEqual(snapshot["summary"]["chunk_count"], 1)
         self.assertTrue(snapshot["chunks"][0]["stable_hash"].startswith("sha256:"))
         self.assertIn("chunk-a", snapshot["chunks"][0]["aliases"])
+
+    def test_validate_grounded_qa_accepts_exact_source_spans(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "sources"
+            source_dir.mkdir()
+            (source_dir / "source.md").write_text(
+                "# Source\n\nThe supported answer is copied exactly from here.\n",
+                encoding="utf-8",
+            )
+            qa = root / "qa.json"
+            qa.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_grounded_qa_v1",
+                        "items": [
+                            {
+                                "id": "qa-1",
+                                "question": "What is supported?",
+                                "answer": "The supported answer.",
+                                "evidence": [
+                                    {
+                                        "document": "source.md",
+                                        "text": "The supported answer is copied exactly from here.",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = validate_grounded_qa(qa_path=qa, source_dir=source_dir)
+
+        self.assertEqual(report["schema"], GROUNDED_QA_VALIDATE_REPORT_SCHEMA)
+        self.assertTrue(report["ok"], report["issues"])
+        self.assertEqual(report["summary"]["item_count"], 1)
+        self.assertEqual(report["summary"]["grounded_span_count"], 1)
+
+    def test_validate_grounded_qa_rejects_missing_or_unmatched_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "sources.json"
+            source.write_text(json.dumps({"source.md": "Only this source sentence exists."}), encoding="utf-8")
+            qa = root / "qa.json"
+            qa.write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {"id": "missing", "question": "Missing evidence?", "answer": "No evidence."},
+                            {
+                                "id": "unmatched",
+                                "question": "Wrong evidence?",
+                                "answer": "Wrong evidence.",
+                                "evidence": [{"document": "source.md", "quote": "This sentence is not present."}],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = validate_grounded_qa(qa_path=qa, sources_path=source)
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["summary"]["invalid_item_count"], 2)
+        self.assertEqual(
+            [issue["code"] for issue in report["issues"]],
+            ["qa_item_missing_evidence", "evidence_span_not_found"],
+        )
 
     def test_sample_benchmark_dataset_is_deterministic_and_filters_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

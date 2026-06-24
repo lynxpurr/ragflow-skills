@@ -31,6 +31,7 @@ BENCHMARK_MANIFEST_SCHEMA = "ragflow_benchmark_manifest_v1"
 BENCHMARK_QUERIES_SCHEMA = "ragflow_benchmark_queries_v1"
 BENCHMARK_QRELS_SCHEMA = "ragflow_benchmark_qrels_v1"
 GROUNDED_QA_SCHEMA = "ragflow_grounded_qa_v1"
+GROUNDED_QA_VALIDATE_REPORT_SCHEMA = "ragflow_grounded_qa_validate_report_v1"
 BENCHMARK_IMPORT_REPORT_SCHEMA = "ragflow_benchmark_import_report_v1"
 BENCHMARK_SAMPLE_REPORT_SCHEMA = "ragflow_benchmark_sample_report_v1"
 BENCHMARK_PREFLIGHT_REPORT_SCHEMA = "ragflow_benchmark_preflight_report_v1"
@@ -120,6 +121,364 @@ def _qa_payload(path: str | Path | None) -> dict[str, Any]:
     if isinstance(raw, list):
         return {"schema": GROUNDED_QA_SCHEMA, "items": raw}
     raise BenchmarkGovernanceError("qa file must be a JSON object or list")
+
+
+@dataclass(frozen=True)
+class _SourceText:
+    name: str
+    text: str
+    path: str | None = None
+    aliases: tuple[str, ...] = ()
+
+
+_SOURCE_TEXT_SUFFIXES = {".md", ".markdown", ".txt", ".json", ".jsonl", ".csv", ".yaml", ".yml"}
+
+
+def _clean_string(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _first_string(payload: Mapping[str, Any], keys: Iterable[str]) -> str | None:
+    for key in keys:
+        value = _clean_string(payload.get(key))
+        if value:
+            return value
+    return None
+
+
+def _source_key(value: str) -> str:
+    return value.replace("\\", "/").strip().lower()
+
+
+def _source_ref_keys(value: str | None) -> set[str]:
+    if not value:
+        return set()
+    normalized = value.replace("\\", "/").strip()
+    keys = {_source_key(normalized)}
+    name = Path(normalized).name
+    if name:
+        keys.add(_source_key(name))
+    return {key for key in keys if key}
+
+
+def _source_aliases(*, path: Path | None = None, root: Path | None = None, name: str | None = None) -> tuple[str, ...]:
+    aliases: set[str] = set()
+    if name:
+        aliases.update(_source_ref_keys(name))
+    if path:
+        aliases.update(_source_ref_keys(str(path)))
+        aliases.update(_source_ref_keys(path.name))
+        try:
+            aliases.update(_source_ref_keys(str(path.resolve())))
+        except OSError:
+            pass
+        if root:
+            try:
+                aliases.update(_source_ref_keys(str(path.relative_to(root))))
+            except ValueError:
+                pass
+    return tuple(sorted(aliases))
+
+
+def _source_from_mapping(payload: Mapping[str, Any], *, fallback_name: str) -> _SourceText | None:
+    text = _first_string(payload, ("text", "content", "body", "markdown", "source_text"))
+    if not text:
+        return None
+    name = _first_string(
+        payload,
+        ("document", "document_name", "source", "source_path", "path", "file", "filename", "name", "id"),
+    ) or fallback_name
+    return _SourceText(name=name, text=text, aliases=_source_aliases(name=name))
+
+
+def _sources_from_json_payload(payload: Any, *, fallback_name: str) -> list[_SourceText]:
+    if isinstance(payload, list):
+        sources: list[_SourceText] = []
+        for index, item in enumerate(payload):
+            if isinstance(item, str) and item.strip():
+                name = f"{fallback_name}#{index + 1}"
+                sources.append(_SourceText(name=name, text=item.strip(), aliases=_source_aliases(name=name)))
+            elif isinstance(item, Mapping):
+                source = _source_from_mapping(item, fallback_name=f"{fallback_name}#{index + 1}")
+                if source:
+                    sources.append(source)
+        return sources
+
+    if isinstance(payload, Mapping):
+        for key in ("sources", "documents", "items"):
+            nested = payload.get(key)
+            if isinstance(nested, list):
+                return _sources_from_json_payload(nested, fallback_name=fallback_name)
+
+        direct_source = _source_from_mapping(payload, fallback_name=fallback_name)
+        if direct_source:
+            return [direct_source]
+
+        sources = []
+        for key, value in sorted(payload.items()):
+            if key == "schema":
+                continue
+            if isinstance(value, str) and value.strip():
+                sources.append(_SourceText(name=key, text=value.strip(), aliases=_source_aliases(name=key)))
+            elif isinstance(value, Mapping):
+                source = _source_from_mapping(value, fallback_name=key)
+                if source:
+                    sources.append(source)
+        return sources
+
+    return []
+
+
+def _load_sources_file(path: Path) -> list[_SourceText]:
+    if path.suffix.lower() == ".json":
+        return _sources_from_json_payload(_read_json(path), fallback_name=path.name)
+    text = path.read_text(encoding="utf-8")
+    return [_SourceText(name=path.name, path=str(path), text=text, aliases=_source_aliases(path=path, name=path.name))]
+
+
+def _load_source_texts(
+    *,
+    sources_path: str | Path | None = None,
+    source_dir: str | Path | None = None,
+) -> list[_SourceText]:
+    sources: list[_SourceText] = []
+
+    if sources_path:
+        source_file = Path(sources_path)
+        if not source_file.exists():
+            raise BenchmarkGovernanceError(f"sources file not found: {source_file}")
+        if source_file.is_dir():
+            raise BenchmarkGovernanceError(f"sources must be a file, not a directory: {source_file}")
+        sources.extend(_load_sources_file(source_file))
+
+    if source_dir:
+        root = Path(source_dir)
+        if not root.exists():
+            raise BenchmarkGovernanceError(f"source dir not found: {root}")
+        files = [root] if root.is_file() else sorted(path for path in root.rglob("*") if path.is_file())
+        for path in files:
+            if path.suffix.lower() not in _SOURCE_TEXT_SUFFIXES:
+                continue
+            text = path.read_text(encoding="utf-8")
+            aliases = _source_aliases(path=path, root=root if root.is_dir() else root.parent, name=path.name)
+            sources.append(_SourceText(name=path.name, path=str(path), text=text, aliases=aliases))
+
+    if (sources_path or source_dir) and not sources:
+        raise BenchmarkGovernanceError("no source text files were found")
+    return sources
+
+
+def _qa_item_identifier(item: Mapping[str, Any], index: int) -> str:
+    return _first_string(item, ("id", "query_id", "question_id", "validation_query_id")) or f"item-{index + 1}"
+
+
+def _evidence_entries(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str) and value.strip():
+        return [value]
+    if isinstance(value, Mapping):
+        if any(_clean_string(value.get(key)) for key in ("text", "quote", "span", "content", "evidence", "excerpt")):
+            return [value]
+        for key in ("spans", "evidence", "items", "quotes"):
+            nested = _evidence_entries(value.get(key))
+            if nested:
+                return nested
+        return [value]
+    return []
+
+
+def _qa_evidence_items(item: Mapping[str, Any]) -> list[Any]:
+    entries: list[Any] = []
+    for key in ("evidence", "evidence_spans", "grounding", "grounded_evidence", "supporting_evidence"):
+        entries.extend(_evidence_entries(item.get(key)))
+    return entries
+
+
+def _evidence_span_text(evidence: Any) -> str | None:
+    if isinstance(evidence, str):
+        return _clean_string(evidence)
+    if isinstance(evidence, Mapping):
+        return _first_string(evidence, ("text", "quote", "span", "content", "evidence", "excerpt"))
+    return None
+
+
+def _evidence_document_ref(evidence: Any) -> str | None:
+    if isinstance(evidence, Mapping):
+        return _first_string(
+            evidence,
+            ("document", "document_name", "source", "source_document", "source_path", "path", "file", "filename", "doc"),
+        )
+    return None
+
+
+def _matching_sources(sources: list[_SourceText], document_ref: str | None) -> list[_SourceText]:
+    keys = _source_ref_keys(document_ref)
+    if not keys:
+        return []
+    return [source for source in sources if keys.intersection(source.aliases)]
+
+
+def _sources_containing_span(sources: list[_SourceText], span: str) -> list[_SourceText]:
+    return [source for source in sources if span in source.text]
+
+
+def validate_grounded_qa(
+    *,
+    qa_path: str | Path,
+    sources_path: str | Path | None = None,
+    source_dir: str | Path | None = None,
+    require_answer: bool = True,
+) -> dict[str, Any]:
+    """Validate grounded QA items and exact evidence spans without touching RAGFlow."""
+
+    payload = _qa_payload(qa_path)
+    raw_items = payload.get("items")
+    sources = _load_source_texts(sources_path=sources_path, source_dir=source_dir)
+    issues: list[BenchmarkGovernanceIssue] = []
+    item_error_ids: set[str] = set()
+    evidence_span_count = 0
+    checked_span_count = 0
+    grounded_span_count = 0
+
+    if not isinstance(raw_items, list):
+        issues.append(BenchmarkGovernanceIssue("error", "qa_items_invalid", "qa items must be a list", "items"))
+        raw_items = []
+    if not raw_items:
+        issues.append(BenchmarkGovernanceIssue("error", "qa_empty", "qa file does not contain any items", "items"))
+
+    for index, raw_item in enumerate(raw_items):
+        field_prefix = f"items[{index}]"
+        if not isinstance(raw_item, Mapping):
+            item_id = f"item-{index + 1}"
+            item_error_ids.add(item_id)
+            issues.append(
+                BenchmarkGovernanceIssue("error", "qa_item_invalid", "qa item must be a JSON object", field_prefix)
+            )
+            continue
+
+        item_id = _qa_item_identifier(raw_item, index)
+        question = _first_string(raw_item, ("question", "query", "prompt", "input"))
+        answer = _first_string(raw_item, ("answer", "expected_answer", "reference_answer", "response"))
+        if not question:
+            item_error_ids.add(item_id)
+            issues.append(
+                BenchmarkGovernanceIssue(
+                    "error",
+                    "qa_item_missing_question",
+                    "qa item must include a question or query",
+                    f"{field_prefix}.question",
+                )
+            )
+        if require_answer and not answer:
+            item_error_ids.add(item_id)
+            issues.append(
+                BenchmarkGovernanceIssue(
+                    "error",
+                    "qa_item_missing_answer",
+                    "qa item must include an answer",
+                    f"{field_prefix}.answer",
+                )
+            )
+
+        evidence_items = _qa_evidence_items(raw_item)
+        if not evidence_items:
+            item_error_ids.add(item_id)
+            issues.append(
+                BenchmarkGovernanceIssue(
+                    "error",
+                    "qa_item_missing_evidence",
+                    "qa item must include grounded evidence spans",
+                    f"{field_prefix}.evidence",
+                    "Add evidence spans copied exactly from source documents.",
+                )
+            )
+            continue
+
+        for evidence_index, evidence in enumerate(evidence_items):
+            evidence_field = f"{field_prefix}.evidence[{evidence_index}]"
+            span = _evidence_span_text(evidence)
+            document_ref = _evidence_document_ref(evidence)
+            if not span:
+                item_error_ids.add(item_id)
+                issues.append(
+                    BenchmarkGovernanceIssue(
+                        "error",
+                        "evidence_span_missing",
+                        "evidence item must include non-empty text, quote, span, content, or evidence",
+                        evidence_field,
+                    )
+                )
+                continue
+
+            evidence_span_count += 1
+            if not sources:
+                continue
+
+            checked_span_count += 1
+            candidates = _matching_sources(sources, document_ref)
+            if candidates and _sources_containing_span(candidates, span):
+                grounded_span_count += 1
+                continue
+
+            any_source_matches = _sources_containing_span(sources, span)
+            if any_source_matches:
+                grounded_span_count += 1
+                if document_ref and candidates:
+                    issues.append(
+                        BenchmarkGovernanceIssue(
+                            "warning",
+                            "evidence_document_mismatch",
+                            "evidence span was found in source text, but not in the referenced document",
+                            evidence_field,
+                        )
+                    )
+                elif document_ref:
+                    issues.append(
+                        BenchmarkGovernanceIssue(
+                            "warning",
+                            "evidence_document_unmatched",
+                            "evidence document reference did not match a loaded source, but the span was found elsewhere",
+                            evidence_field,
+                        )
+                    )
+                continue
+
+            item_error_ids.add(item_id)
+            issues.append(
+                BenchmarkGovernanceIssue(
+                    "error",
+                    "evidence_span_not_found",
+                    "evidence span was not found in the provided sources",
+                    evidence_field,
+                    "Copy evidence spans exactly from the source document or refresh the QA item.",
+                )
+            )
+
+    return {
+        "ok": _ok(issues),
+        "schema": GROUNDED_QA_VALIDATE_REPORT_SCHEMA,
+        "artifacts": {
+            "qa": str(qa_path),
+            "sources": str(sources_path) if sources_path else None,
+            "source_dir": str(source_dir) if source_dir else None,
+        },
+        "summary": {
+            **_issue_counts(issues),
+            "item_count": len(raw_items),
+            "valid_item_count": max(0, len(raw_items) - len(item_error_ids)),
+            "invalid_item_count": len(item_error_ids),
+            "evidence_span_count": evidence_span_count,
+            "checked_span_count": checked_span_count,
+            "grounded_span_count": grounded_span_count,
+            "source_count": len(sources),
+            "require_answer": require_answer,
+        },
+        "issues": [issue.to_dict() for issue in issues],
+    }
 
 
 def _source_hashes(paths: Iterable[str | Path | None]) -> list[dict[str, str]]:

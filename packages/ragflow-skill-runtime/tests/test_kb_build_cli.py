@@ -789,6 +789,88 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("ragflow_benchmark_delta_report_v1", delta_result.stdout)
         self.assertIn("RAGFlow Benchmark Delta Report", delta_md_text)
 
+    def test_qa_validate_subcommand_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "sources"
+            source_dir.mkdir()
+            (source_dir / "source.md").write_text(
+                "The answer is grounded in this source sentence.\n",
+                encoding="utf-8",
+            )
+            qa = root / "qa.json"
+            bad_qa = root / "bad_qa.json"
+            report_md = root / "qa_validate.md"
+            qa.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_grounded_qa_v1",
+                        "items": [
+                            {
+                                "id": "qa-1",
+                                "question": "Where is the answer grounded?",
+                                "answer": "In the source sentence.",
+                                "evidence": [
+                                    {
+                                        "document": "source.md",
+                                        "text": "The answer is grounded in this source sentence.",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bad_qa.write_text(
+                json.dumps({"items": [{"id": "qa-2", "question": "What is missing?", "answer": "Evidence."}]}),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "qa",
+                    "validate",
+                    "--qa",
+                    str(qa),
+                    "--source-dir",
+                    str(source_dir),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            bad_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "qa",
+                    "validate",
+                    "--qa",
+                    str(bad_qa),
+                    "--source-dir",
+                    str(source_dir),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("ragflow_grounded_qa_validate_report_v1", result.stdout)
+        self.assertIn("RAGFlow Grounded QA Validate Report", report_md_text)
+        self.assertEqual(bad_result.returncode, 1, bad_result.stdout)
+        self.assertIn("qa_item_missing_evidence", bad_result.stdout)
+
     def test_inspect_manifest_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manifest = Path(tmp) / "kb_manifest.json"

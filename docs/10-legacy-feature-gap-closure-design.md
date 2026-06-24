@@ -689,6 +689,11 @@ Capabilities:
 LLM-backed generation is optional. Deterministic validation of generated evidence is
 required before using generated QA in a benchmark gate.
 
+MVP `qa validate` is an offline exact-span checker. It accepts grounded QA JSON, requires
+question, answer, and evidence fields by default, and verifies that evidence spans occur
+verbatim in `--sources` or `--source-dir` inputs when source text is provided. It does not
+call an LLM, repair near matches, or mutate RAGFlow.
+
 ## Feature Design 15: Retrieval Pollution And Suppression Diagnostics
 
 ### Problem

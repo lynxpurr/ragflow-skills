@@ -827,7 +827,7 @@ Tasks:
 - [x] Add `ragflow-kb-build benchmark gate` and `benchmark summarize` wrappers around existing validation reports.
 - [x] Add root-cause hints for retrieval coverage, ranking, tag pollution, generation grounding, citation gaps, over-abstention, and cost/latency regressions.
 - [ ] Add `ragflow-kb-build qa generate` for grounded QA sets with optional LLM adapter.
-- [ ] Add `ragflow-kb-build qa validate` to reject ungrounded generated evidence before benchmark use.
+- [x] Add `ragflow-kb-build qa validate` to reject ungrounded generated evidence before benchmark use.
 - [ ] Add `ragflow-kb-build qa map-evidence` to map evidence spans onto chunk snapshots.
 - [ ] Add `ragflow-kb-build segment-metadata report`.
 - [ ] Add `ragflow-kb-build optimize --plan-only` for non-mutating experiment planning.

@@ -54,6 +54,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     summarize_metadata_for_documents,
     export_tagset_file,
     tagset_report_file,
+    validate_grounded_qa,
     wait_for_document_states,
 )
 from ragflow_skill_runtime.benchmark_governance import BenchmarkGovernanceError  # noqa: E402
@@ -438,6 +439,22 @@ def _run_benchmark_delta(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_qa_validate(args: argparse.Namespace) -> int:
+    try:
+        report = validate_grounded_qa(
+            qa_path=args.qa,
+            sources_path=args.sources,
+            source_dir=args.source_dir,
+            require_answer=not args.allow_missing_answer,
+        )
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow Grounded QA Validate Report"))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (BenchmarkGovernanceError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def build_inspect_handoff_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Inspect a Markdown handoff and optional rich sidecars")
     parser.add_argument("--handoff", required=True, help="Handoff directory containing doc_manifest.json")
@@ -608,6 +625,23 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_qa_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Validate grounded QA artifacts before benchmark use")
+    subparsers = parser.add_subparsers(dest="qa_command", required=True)
+
+    validate = subparsers.add_parser("validate", help="Validate grounded QA evidence spans")
+    validate.add_argument("--qa", required=True, help="Grounded QA JSON")
+    validate.add_argument("--sources", help="Optional source text JSON/Markdown file for exact evidence checks")
+    validate.add_argument("--source-dir", help="Optional directory of source text files for exact evidence checks")
+    validate.add_argument("--allow-missing-answer", action="store_true", help="Allow QA items without answers")
+    validate.add_argument("--report-json", help="Optional validate report JSON path")
+    validate.add_argument("--report-md", help="Optional validate report Markdown path")
+    validate.add_argument("--json", action="store_true", help="Emit JSON errors")
+    validate.set_defaults(func=_run_qa_validate)
+
+    return parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build a RAGFlow KB from Markdown")
     parser.add_argument("--input", help="Markdown file or directory")
@@ -648,6 +682,9 @@ def main(argv: list[str] | None = None) -> int:
         if command == "benchmark":
             benchmark_args = build_benchmark_parser().parse_args(command_args)
             return benchmark_args.func(benchmark_args)
+        if command == "qa":
+            qa_args = build_qa_parser().parse_args(command_args)
+            return qa_args.func(qa_args)
     args = build_parser().parse_args(actual_argv)
     return _run(args)
 

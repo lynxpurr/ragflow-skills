@@ -496,6 +496,35 @@ def _write_qrels(artifacts_dir: Path) -> Path:
     return qrels_path
 
 
+def _write_grounded_qa(artifacts_dir: Path) -> Path:
+    qa_path = artifacts_dir / "qa.json"
+    qa_path.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_grounded_qa_v1",
+                "items": [
+                    {
+                        "id": "qa-q1",
+                        "query_id": "q1",
+                        "question": "Where is the known term?",
+                        "answer": "This document contains a known term for portable validation.",
+                        "evidence": [
+                            {
+                                "document": "platform-smoke.md",
+                                "text": "This document contains a known term for portable validation.",
+                            }
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return qa_path
+
+
 def _write_benchmark_report(path: Path, *, mrr: float) -> Path:
     path.write_text(
         json.dumps(
@@ -1008,6 +1037,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
 
     benchmark_dir = artifacts_dir / "benchmark"
     qrels_path = _write_qrels(artifacts_dir)
+    qa_path = _write_grounded_qa(artifacts_dir)
     benchmark_import_result = _run_command(
         [
             sys.executable,
@@ -1018,6 +1048,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(queries_path),
             "--qrels",
             str(qrels_path),
+            "--qa",
+            str(qa_path),
             "--output",
             str(benchmark_dir),
             "--json",
@@ -1030,6 +1062,27 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         "kb benchmark import",
         benchmark_import_result,
         required_stdout='"schema": "ragflow_benchmark_import_report_v1"',
+    )
+    qa_validate_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "qa",
+            "validate",
+            "--qa",
+            str(benchmark_dir / "qa.json"),
+            "--source-dir",
+            str(input_dir),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb qa validate",
+        qa_validate_result,
+        required_stdout='"schema": "ragflow_grounded_qa_validate_report_v1"',
     )
     chunk_snapshot = artifacts_dir / "chunk_snapshot.json"
     chunk_snapshot_result = _run_command(
@@ -1262,6 +1315,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "benchmark" / "manifest.json",
         artifacts_dir / "benchmark" / "queries.json",
         artifacts_dir / "benchmark" / "qrels.json",
+        artifacts_dir / "benchmark" / "qa.json",
         artifacts_dir / "benchmark_current.json",
         artifacts_dir / "benchmark_baseline.json",
         artifacts_dir / "validation_report.json",
