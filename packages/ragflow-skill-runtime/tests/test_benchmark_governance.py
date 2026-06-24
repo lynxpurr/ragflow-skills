@@ -214,6 +214,47 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertEqual(gate["schema"], BENCHMARK_GATE_REPORT_SCHEMA)
         self.assertTrue(gate["ok"], gate["gate"])
 
+    def test_summarize_reports_root_cause_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_path = root / "benchmark_report.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "dataset": {"id": "ds-1", "name": "kb:test"},
+                        "benchmark": {
+                            "metrics": {
+                                "query_count": 2,
+                                "hit_rate": 0.5,
+                                "mrr": 0.25,
+                                "precision_at_k": 0.2,
+                                "recall_at_k": 0.5,
+                                "ndcg_at_k": 0.3,
+                                "map_at_k": 0.25,
+                                "empty_result_rate": 0.5,
+                                "supporting_document_coverage": 0.5,
+                                "tag_pollution_rate": 0.2,
+                                "grounded_answer_rate": 0.7,
+                                "citation_coverage": 0.4,
+                                "over_abstention_rate": 0.1,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = summarize_benchmark_report(report_path)
+
+        hint_codes = {hint["code"] for hint in summary["quality_hints"]}
+        self.assertIn("retrieval_coverage_gap", hint_codes)
+        self.assertIn("ranking_gap", hint_codes)
+        self.assertIn("tag_pollution", hint_codes)
+        self.assertIn("generation_grounding_gap", hint_codes)
+        self.assertIn("citation_gap", hint_codes)
+        self.assertIn("over_abstention", hint_codes)
+
     def test_trend_and_delta_reports_compare_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -273,6 +314,78 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertAlmostEqual(trend["delta"]["mrr"]["absolute"], 0.2)
         self.assertEqual(delta["schema"], BENCHMARK_DELTA_REPORT_SCHEMA)
         self.assertIn("mrr", delta["summary"]["improved"])
+
+    def test_trend_and_delta_reports_root_cause_regression_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline = root / "baseline.json"
+            current = root / "current.json"
+            baseline.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "benchmark": {
+                            "metrics": {
+                                "hit_rate": 1.0,
+                                "mrr": 0.9,
+                                "recall_at_k": 1.0,
+                                "ndcg_at_k": 0.9,
+                                "map_at_k": 0.9,
+                                "empty_result_rate": 0.0,
+                                "tag_pollution_rate": 0.0,
+                                "grounded_answer_rate": 1.0,
+                                "citation_coverage": 1.0,
+                                "over_abstention_rate": 0.0,
+                                "average_latency_ms": 100.0,
+                                "estimated_cost_usd": 0.01,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            current.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "dataset": {"id": "ds-1", "name": "kb:test"},
+                        "benchmark": {
+                            "metrics": {
+                                "hit_rate": 0.8,
+                                "mrr": 0.6,
+                                "recall_at_k": 0.8,
+                                "ndcg_at_k": 0.6,
+                                "map_at_k": 0.6,
+                                "empty_result_rate": 0.1,
+                                "tag_pollution_rate": 0.2,
+                                "grounded_answer_rate": 0.6,
+                                "citation_coverage": 0.5,
+                                "over_abstention_rate": 0.2,
+                                "average_latency_ms": 250.0,
+                                "estimated_cost_usd": 0.03,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            trend = trend_benchmark_reports(current_report_path=current, baseline_report_path=baseline)
+            delta = delta_benchmark_reports(current_report_path=current, baseline_report_path=baseline)
+
+        trend_codes = {hint["code"] for hint in trend["quality_hints"]}
+        delta_codes = {hint["code"] for hint in delta["quality_hints"]}
+        for code in {
+            "retrieval_coverage_gap",
+            "ranking_gap",
+            "tag_pollution",
+            "generation_grounding_gap",
+            "citation_gap",
+            "over_abstention",
+            "cost_or_latency_regression",
+        }:
+            self.assertIn(code, trend_codes)
+            self.assertIn(code, delta_codes)
 
 
 if __name__ == "__main__":

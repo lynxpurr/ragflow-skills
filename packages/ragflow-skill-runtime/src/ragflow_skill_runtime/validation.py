@@ -547,10 +547,9 @@ def load_benchmark_baseline(path: str | Path) -> dict[str, float]:
         raise ValidationError("baseline report does not contain benchmark metrics")
 
     metrics: dict[str, float] = {}
-    for key in BENCHMARK_METRIC_KEYS:
-        value = raw_metrics.get(key)
+    for key, value in raw_metrics.items():
         if isinstance(value, (int, float)):
-            metrics[key] = float(value)
+            metrics[str(key)] = float(value)
     if not metrics:
         raise ValidationError("baseline report does not contain supported benchmark metrics")
     return metrics

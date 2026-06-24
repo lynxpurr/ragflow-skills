@@ -652,6 +652,11 @@ Capabilities:
   `tag_pollution`, `generation_grounding_gap`, `citation_gap`, and
   `cost_or_latency_regression`.
 
+MVP root-cause hints are deterministic report annotations on `benchmark summarize`,
+`benchmark gate`, `benchmark trend`, and `benchmark delta`. They consume existing numeric
+metrics and baseline deltas only; they do not run live diagnostics, generate answers, or
+mutate RAGFlow.
+
 ## Feature Design 14: Grounded QA And Evidence Mapping
 
 ### Problem

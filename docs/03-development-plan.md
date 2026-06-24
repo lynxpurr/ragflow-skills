@@ -825,7 +825,7 @@ Tasks:
 - [x] Add `ragflow-kb-build benchmark trend` with baseline/current comparison thresholds.
 - [x] Add `ragflow-kb-build benchmark delta` for recall, nDCG, pollution, wrong-doc, empty-retrieval, cost, and latency changes.
 - [x] Add `ragflow-kb-build benchmark gate` and `benchmark summarize` wrappers around existing validation reports.
-- [ ] Add root-cause hints for retrieval coverage, ranking, tag pollution, generation grounding, citation gaps, over-abstention, and cost/latency regressions.
+- [x] Add root-cause hints for retrieval coverage, ranking, tag pollution, generation grounding, citation gaps, over-abstention, and cost/latency regressions.
 - [ ] Add `ragflow-kb-build qa generate` for grounded QA sets with optional LLM adapter.
 - [ ] Add `ragflow-kb-build qa validate` to reject ungrounded generated evidence before benchmark use.
 - [ ] Add `ragflow-kb-build qa map-evidence` to map evidence spans onto chunk snapshots.

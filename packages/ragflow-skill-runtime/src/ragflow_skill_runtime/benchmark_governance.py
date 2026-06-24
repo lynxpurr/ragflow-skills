@@ -752,41 +752,189 @@ def _benchmark_metrics(report: Mapping[str, Any]) -> dict[str, float]:
     }
 
 
-def _quality_hints(metrics: Mapping[str, float]) -> list[dict[str, str]]:
-    hints = []
+def _metric(metrics: Mapping[str, float], *keys: str) -> float | None:
+    for key in keys:
+        value = metrics.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
+
+
+def _hint(
+    code: str,
+    message: str,
+    recommendation: str,
+    *,
+    evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "code": code,
+        "message": message,
+        "recommendation": recommendation,
+    }
+    if evidence:
+        payload["evidence"] = dict(evidence)
+    return payload
+
+
+def _dedupe_hints(hints: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for hint in hints:
+        code = str(hint.get("code", ""))
+        message = str(hint.get("message", ""))
+        key = (code, message)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(dict(hint))
+    return deduped
+
+
+def _quality_hints(metrics: Mapping[str, float]) -> list[dict[str, Any]]:
+    hints: list[dict[str, Any]] = []
     if metrics.get("empty_result_rate", 0.0) > 0:
         hints.append(
-            {
-                "code": "empty_retrieval",
-                "message": "Some benchmark queries returned no chunks.",
-                "recommendation": "Check dataset parse status, routing, query language, and retrieval thresholds.",
-            }
+            _hint(
+                "empty_retrieval",
+                "Some benchmark queries returned no chunks.",
+                "Check dataset parse status, routing, query language, and retrieval thresholds.",
+                evidence={"empty_result_rate": metrics.get("empty_result_rate")},
+            )
         )
-    if metrics.get("hit_rate", 1.0) < 1.0:
+    if (
+        metrics.get("hit_rate", 1.0) < 1.0
+        or metrics.get("recall_at_k", 1.0) < 1.0
+        or metrics.get("supporting_document_coverage", 1.0) < 1.0
+    ):
         hints.append(
-            {
-                "code": "coverage_or_ranking_gap",
-                "message": "At least one query did not retrieve a judged relevant target.",
-                "recommendation": "Inspect qrels, chunk profiles, expected document names, and top-k/cutoff settings.",
-            }
+            _hint(
+                "retrieval_coverage_gap",
+                "At least one query did not retrieve all judged relevant targets.",
+                "Inspect qrels, chunk profiles, expected document names, parse status, routing, and top-k/cutoff settings.",
+                evidence={
+                    key: value
+                    for key, value in {
+                        "hit_rate": metrics.get("hit_rate"),
+                        "recall_at_k": metrics.get("recall_at_k"),
+                        "supporting_document_coverage": metrics.get("supporting_document_coverage"),
+                    }.items()
+                    if value is not None
+                },
+            )
         )
-    if metrics.get("mrr", 1.0) < metrics.get("hit_rate", 1.0):
+    if (
+        metrics.get("mrr", 1.0) < metrics.get("hit_rate", 1.0)
+        or metrics.get("ndcg_at_k", 1.0) < metrics.get("recall_at_k", 1.0)
+        or metrics.get("map_at_k", 1.0) < metrics.get("recall_at_k", 1.0)
+    ):
         hints.append(
-            {
-                "code": "ranking_gap",
-                "message": "Relevant evidence is present but not always ranked first.",
-                "recommendation": "Compare rerank settings, chunk granularity, and noisy bridge terms.",
-            }
+            _hint(
+                "ranking_gap",
+                "Relevant evidence is present but not consistently ranked early.",
+                "Compare rerank settings, chunk granularity, query wording, and noisy bridge terms.",
+                evidence={
+                    key: value
+                    for key, value in {
+                        "mrr": metrics.get("mrr"),
+                        "ndcg_at_k": metrics.get("ndcg_at_k"),
+                        "map_at_k": metrics.get("map_at_k"),
+                    }.items()
+                    if value is not None
+                },
+            )
         )
     if metrics.get("strict_chunk_recall_at_k", 1.0) < 1.0:
         hints.append(
-            {
-                "code": "strict_chunk_recall_gap",
-                "message": "Expected stable chunk evidence was not fully retrieved.",
-                "recommendation": "Inspect expected_chunks hashes, chunk boundaries, parser output, and retrieval top-k.",
-            }
+            _hint(
+                "strict_chunk_recall_gap",
+                "Expected stable chunk evidence was not fully retrieved.",
+                "Inspect expected_chunks hashes, chunk boundaries, parser output, and retrieval top-k.",
+                evidence={"strict_chunk_recall_at_k": metrics.get("strict_chunk_recall_at_k")},
+            )
         )
-    return hints
+    pollution = _metric(
+        metrics,
+        "tag_pollution_rate",
+        "pollution_rate",
+        "wrong_doc_rate",
+        "wrong_document_rate",
+        "pollution_cost",
+        "wrong_doc_cost",
+    )
+    if pollution and pollution > 0:
+        hints.append(
+            _hint(
+                "tag_pollution",
+                "Retrieved evidence includes wrong-document or pollution signals.",
+                "Review tag filters, source routing, bridge terms, and suppression candidates before tuning recall upward.",
+                evidence={"pollution_metric": pollution},
+            )
+        )
+    grounding = _metric(metrics, "grounded_answer_rate", "answer_grounding_rate", "answer_support_rate", "support_rate")
+    unsupported = _metric(metrics, "unsupported_answer_rate", "ungrounded_answer_rate")
+    if (grounding is not None and grounding < 1.0) or (unsupported is not None and unsupported > 0):
+        hints.append(
+            _hint(
+                "generation_grounding_gap",
+                "Generated answers are not fully supported by retrieved evidence.",
+                "Require grounded evidence spans, verify answer support checks, and keep ungrounded QA out of benchmark gates.",
+                evidence={
+                    key: value
+                    for key, value in {
+                        "grounding_rate": grounding,
+                        "unsupported_answer_rate": unsupported,
+                    }.items()
+                    if value is not None
+                },
+            )
+        )
+    citation_coverage = _metric(metrics, "citation_coverage", "citation_recall", "cited_evidence_rate")
+    citation_precision = _metric(metrics, "citation_precision", "valid_citation_rate")
+    invalid_citations = _metric(metrics, "invalid_citation_rate")
+    if (
+        (citation_coverage is not None and citation_coverage < 1.0)
+        or (citation_precision is not None and citation_precision < 1.0)
+        or (invalid_citations is not None and invalid_citations > 0)
+    ):
+        hints.append(
+            _hint(
+                "citation_gap",
+                "Citation coverage or validity is below target.",
+                "Audit cited evidence ranks, citation formatting, and unsupported cited or uncited answer spans.",
+                evidence={
+                    key: value
+                    for key, value in {
+                        "citation_coverage": citation_coverage,
+                        "citation_precision": citation_precision,
+                        "invalid_citation_rate": invalid_citations,
+                    }.items()
+                    if value is not None
+                },
+            )
+        )
+    over_abstention = _metric(metrics, "over_abstention_rate", "false_abstention_rate")
+    abstention = _metric(metrics, "abstention_rate")
+    if (over_abstention and over_abstention > 0) or (
+        abstention is not None and abstention > 0 and metrics.get("hit_rate", 0.0) >= 0.8
+    ):
+        hints.append(
+            _hint(
+                "over_abstention",
+                "The system abstained despite evidence being available.",
+                "Inspect confidence thresholds, answerability labels, and prompt instructions for excessive refusal behavior.",
+                evidence={
+                    key: value
+                    for key, value in {
+                        "over_abstention_rate": over_abstention,
+                        "abstention_rate": abstention,
+                        "hit_rate": metrics.get("hit_rate"),
+                    }.items()
+                    if value is not None
+                },
+            )
+        )
+    return _dedupe_hints(hints)
 
 
 def summarize_benchmark_report(report_path: str | Path) -> dict[str, Any]:
@@ -838,6 +986,12 @@ def gate_benchmark_report(
         "metrics": metrics,
         "baseline_delta": baseline_delta,
         "gate": gate_result,
+        "quality_hints": _dedupe_hints(
+            [
+                *_quality_hints(metrics),
+                *(_regression_hints(_delta_from_baseline_delta(metrics, baseline_delta)) if baseline_delta else []),
+            ]
+        ),
     }
 
 
@@ -869,38 +1023,180 @@ def _metric_delta(
     return deltas
 
 
-def _regression_hints(deltas: Mapping[str, Mapping[str, Any]]) -> list[dict[str, str]]:
-    hints = []
-    quality_metrics = (
+def _delta_from_baseline_delta(
+    current_metrics: Mapping[str, float],
+    baseline_delta: Mapping[str, float] | None,
+) -> dict[str, dict[str, float | str]]:
+    if not baseline_delta:
+        return {}
+    deltas: dict[str, dict[str, float | str]] = {}
+    for key, absolute in baseline_delta.items():
+        current = current_metrics.get(key)
+        if not isinstance(current, (int, float)):
+            continue
+        baseline = float(current) - float(absolute)
+        direction = "unchanged"
+        if absolute > 0:
+            direction = "up"
+        elif absolute < 0:
+            direction = "down"
+        deltas[key] = {
+            "baseline": baseline,
+            "current": float(current),
+            "absolute": float(absolute),
+            "relative": float(absolute) / baseline if baseline else None,
+            "direction": direction,
+        }
+    return deltas
+
+
+def _delta_evidence(metric: str, delta: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "metric": metric,
+        "baseline": delta.get("baseline"),
+        "current": delta.get("current"),
+        "absolute": delta.get("absolute"),
+    }
+
+
+def _regression_hints(deltas: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+    hints: list[dict[str, Any]] = []
+    coverage_metrics = (
         "hit_rate",
-        "mrr",
-        "precision_at_k",
         "recall_at_k",
-        "ndcg_at_k",
-        "map_at_k",
+        "precision_at_k",
+        "supporting_document_coverage",
         "strict_chunk_recall_at_k",
         "expected_chunk_hit_rate",
     )
-    for metric in quality_metrics:
+    ranking_metrics = ("mrr", "ndcg_at_k", "map_at_k", "expected_evidence_rank")
+    grounding_metrics = ("grounded_answer_rate", "answer_grounding_rate", "answer_support_rate", "support_rate")
+    citation_metrics = ("citation_coverage", "citation_recall", "cited_evidence_rate", "citation_precision", "valid_citation_rate")
+    pollution_metrics = ("tag_pollution_rate", "pollution_rate", "wrong_doc_rate", "wrong_document_rate", "pollution_cost", "wrong_doc_cost")
+    abstention_metrics = ("over_abstention_rate", "false_abstention_rate", "abstention_rate")
+    cost_latency_metrics = (
+        "latency_ms",
+        "average_latency_ms",
+        "p50_latency_ms",
+        "p95_latency_ms",
+        "p99_latency_ms",
+        "cost_usd",
+        "estimated_cost_usd",
+        "cost_per_query_usd",
+    )
+
+    for metric in coverage_metrics:
         delta = deltas.get(metric)
         if isinstance(delta, Mapping) and float(delta.get("absolute", 0.0)) < 0:
             hints.append(
-                {
-                    "code": f"{metric}_regression",
-                    "message": f"{metric} decreased versus baseline.",
-                    "recommendation": "Inspect changed profile settings, qrels coverage, routing, and retrieved evidence ordering.",
-                }
+                _hint(
+                    "retrieval_coverage_gap",
+                    f"{metric} decreased versus baseline.",
+                    "Inspect changed profile settings, qrels coverage, routing, parser output, and retrieval top-k.",
+                    evidence=_delta_evidence(metric, delta),
+                )
+            )
+    for metric in ranking_metrics:
+        delta = deltas.get(metric)
+        if not isinstance(delta, Mapping):
+            continue
+        absolute = float(delta.get("absolute", 0.0))
+        regressed = absolute < 0 if metric != "expected_evidence_rank" else absolute > 0
+        if regressed:
+            hints.append(
+                _hint(
+                    "ranking_gap",
+                    f"{metric} regressed versus baseline.",
+                    "Compare rerank settings, chunk granularity, noisy bridge terms, and changed retrieval thresholds.",
+                    evidence=_delta_evidence(metric, delta),
+                )
             )
     empty_delta = deltas.get("empty_result_rate")
     if isinstance(empty_delta, Mapping) and float(empty_delta.get("absolute", 0.0)) > 0:
         hints.append(
-            {
-                "code": "empty_result_regression",
-                "message": "empty_result_rate increased versus baseline.",
-                "recommendation": "Check parse completion, retrieval thresholds, route selection, and query language coverage.",
-            }
+            _hint(
+                "empty_retrieval",
+                "empty_result_rate increased versus baseline.",
+                "Check parse completion, retrieval thresholds, route selection, and query language coverage.",
+                evidence=_delta_evidence("empty_result_rate", empty_delta),
+            )
         )
-    return hints
+    for metric in pollution_metrics:
+        delta = deltas.get(metric)
+        if isinstance(delta, Mapping) and float(delta.get("absolute", 0.0)) > 0:
+            hints.append(
+                _hint(
+                    "tag_pollution",
+                    f"{metric} increased versus baseline.",
+                    "Review tag filters, wrong-document hits, source routing, bridge terms, and suppression candidates.",
+                    evidence=_delta_evidence(metric, delta),
+                )
+            )
+    for metric in grounding_metrics:
+        delta = deltas.get(metric)
+        if isinstance(delta, Mapping) and float(delta.get("absolute", 0.0)) < 0:
+            hints.append(
+                _hint(
+                    "generation_grounding_gap",
+                    f"{metric} decreased versus baseline.",
+                    "Validate grounded evidence spans and reject ungrounded generated QA before benchmark use.",
+                    evidence=_delta_evidence(metric, delta),
+                )
+            )
+    unsupported_delta = deltas.get("unsupported_answer_rate") or deltas.get("ungrounded_answer_rate")
+    if isinstance(unsupported_delta, Mapping) and float(unsupported_delta.get("absolute", 0.0)) > 0:
+        hints.append(
+            _hint(
+                "generation_grounding_gap",
+                "Unsupported answer rate increased versus baseline.",
+                "Inspect answer support checks, generated evidence spans, and prompt grounding instructions.",
+                evidence=_delta_evidence("unsupported_answer_rate", unsupported_delta),
+            )
+        )
+    for metric in citation_metrics:
+        delta = deltas.get(metric)
+        if isinstance(delta, Mapping) and float(delta.get("absolute", 0.0)) < 0:
+            hints.append(
+                _hint(
+                    "citation_gap",
+                    f"{metric} decreased versus baseline.",
+                    "Audit cited evidence ranks, citation formatting, and unsupported cited or uncited answer spans.",
+                    evidence=_delta_evidence(metric, delta),
+                )
+            )
+    invalid_delta = deltas.get("invalid_citation_rate")
+    if isinstance(invalid_delta, Mapping) and float(invalid_delta.get("absolute", 0.0)) > 0:
+        hints.append(
+            _hint(
+                "citation_gap",
+                "Invalid citation rate increased versus baseline.",
+                "Audit citation IDs, cited evidence ranks, and answer rendering templates.",
+                evidence=_delta_evidence("invalid_citation_rate", invalid_delta),
+            )
+        )
+    for metric in abstention_metrics:
+        delta = deltas.get(metric)
+        if isinstance(delta, Mapping) and float(delta.get("absolute", 0.0)) > 0:
+            hints.append(
+                _hint(
+                    "over_abstention",
+                    f"{metric} increased versus baseline.",
+                    "Inspect answerability labels, confidence thresholds, and refusal instructions.",
+                    evidence=_delta_evidence(metric, delta),
+                )
+            )
+    for metric in cost_latency_metrics:
+        delta = deltas.get(metric)
+        if isinstance(delta, Mapping) and float(delta.get("absolute", 0.0)) > 0:
+            hints.append(
+                _hint(
+                    "cost_or_latency_regression",
+                    f"{metric} increased versus baseline.",
+                    "Compare top-k, rerank, chunk count, model/provider settings, retry behavior, and caching.",
+                    evidence=_delta_evidence(metric, delta),
+                )
+            )
+    return _dedupe_hints(hints)
 
 
 def trend_benchmark_reports(
@@ -935,7 +1231,7 @@ def trend_benchmark_reports(
         "baseline_metrics": baseline_metrics,
         "delta": deltas,
         "gate": gate_result,
-        "quality_hints": _regression_hints(deltas),
+        "quality_hints": _dedupe_hints([*_quality_hints(current_metrics), *_regression_hints(deltas)]),
     }
 
 
@@ -968,7 +1264,7 @@ def delta_benchmark_reports(
             "regressed": sorted(regressed),
             "unchanged": sorted(unchanged),
         },
-        "quality_hints": _regression_hints(deltas),
+        "quality_hints": _dedupe_hints([*_quality_hints(current_metrics), *_regression_hints(deltas)]),
     }
 
 
