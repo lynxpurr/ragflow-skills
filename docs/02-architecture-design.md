@@ -219,11 +219,15 @@ ragflow:
   verify_ssl: true
 
 doc_to_md:
-  # Keep auto unless the MinerU protocol is confirmed.
+  # Keep auto unless a specific converter is required.
+  # Auto uses local mineru-cli first when available, then other configured backends.
   # Use mineru/mineru-agent for Agent API; use mineru-sync/mineru-local for sync multipart /parse.
   backend: auto
 
 mineru:
+  # Optional local CLI example: /opt/mineru/bin/mineru
+  cli_path: ${MINERU_CLI_PATH}
+  cli_backend: pipeline
   # Agent API example: https://mineru.net/api/v1/agent
   # Sync multipart example: http://mineru.internal:8777/api/v1
   base_url: https://mineru.net/api/v1/agent
@@ -249,12 +253,14 @@ Core environment variables:
 | `RAGFLOW_SKILL_RUNTIME_PATH` | Optional development-time source override for `ragflow_skill_runtime`. |
 | `RAGFLOW_LLM_BASE_URL` | Optional OpenAI-compatible LLM endpoint for script-owned synthesis. |
 | `RAGFLOW_LLM_API_KEY` | Optional LLM API key. |
-| `DOC_TO_MD_BACKEND` | Document converter backend: `auto`, `builtin`, `pandoc`, `remote`, or `mineru`. |
+| `DOC_TO_MD_BACKEND` | Document converter backend: `auto`, `builtin`, `pandoc`, `remote`, `mineru-cli`, `mineru`, `mineru-agent`, `mineru-sync`, or `mineru-local`. |
 | `DOC_TO_MD_REMOTE_URL` | Generic remote converter endpoint. |
 | `DOC_TO_MD_REMOTE_API_KEY` | Generic remote converter bearer token. |
 | `DOC_TO_MD_TIMEOUT` | Generic remote converter timeout in seconds. |
 | `MINERU_BASE_URL` | MinerU service base URL. Use an Agent API base for `mineru` / `mineru-agent`, or a sync multipart service root for `mineru-sync` / `mineru-local`. |
 | `MINERU_API_KEY` | MinerU API key. |
+| `MINERU_CLI_PATH` | Optional local MinerU CLI path. If omitted, `auto` can still discover `mineru` on `PATH`. |
+| `MINERU_CLI_BACKEND` | Optional local MinerU CLI backend passed with `-b`; defaults to `pipeline`. |
 | `MINERU_TIMEOUT` | MinerU parse timeout in seconds. |
 | `MINERU_POLL_INTERVAL` | MinerU parse polling interval in seconds. |
 | `MINERU_LANGUAGE` | MinerU language option. |
@@ -265,7 +271,7 @@ Core environment variables:
 
 No public script may default to `http://localhost:9380` unless the user asks for local mode or a config file explicitly declares it.
 
-Public skills do not start or supervise RAGFlow, MinerU, Pandoc workers, or query daemons. RAGFlow and MinerU are external services configured by endpoint and key. Pandoc is a local binary if installed on `PATH`; otherwise use MinerU or a generic remote converter.
+Public skills do not start or supervise RAGFlow, MinerU HTTP workers, Pandoc workers, or query daemons. RAGFlow and MinerU HTTP endpoints are external services configured by endpoint and key. Pandoc and `mineru-cli` are local binaries if installed or explicitly configured; otherwise use MinerU Agent API, MinerU sync API, or a generic remote converter.
 
 ## Thin Manifest Strategy
 

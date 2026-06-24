@@ -194,6 +194,28 @@ def _write_sample_input(work_root: Path) -> Path:
     return input_dir
 
 
+def _write_fake_mineru_cli(path: Path) -> Path:
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "out_dir = Path(args[args.index('-o') + 1])\n"
+        "source = Path(args[args.index('-p') + 1])\n"
+        "backend = args[args.index('-b') + 1]\n"
+        "images_dir = out_dir / 'images'\n"
+        "images_dir.mkdir(parents=True, exist_ok=True)\n"
+        "(images_dir / 'chart.jpg').write_bytes(b'fake image bytes')\n"
+        "(out_dir / (source.stem + '.md')).write_text(\n"
+        "    f'# MinerU CLI Acceptance\\n\\nConverted through mineru-cli backend={backend}.\\n\\n![chart](images/chart.jpg)\\n',\n"
+        "    encoding='utf-8',\n"
+        ")\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
 def _write_reports(payload: dict[str, Any], reports_dir: Path) -> dict[str, str]:
     reports_dir.mkdir(parents=True, exist_ok=True)
     report_json = reports_dir / "consumer-acceptance-report.json"
@@ -269,6 +291,53 @@ def _run_no_network_checks(
     _record_file_check(checks, "quality_report produced", quality_report)
     if quality_report.exists():
         produced.append(quality_report)
+
+    mineru_cli_input = work_root / "mineru-cli-input"
+    mineru_cli_input.mkdir(parents=True, exist_ok=True)
+    (mineru_cli_input / "sample.pdf").write_bytes(b"%PDF fake mineru cli acceptance")
+    mineru_cli_output = work_root / "mineru-cli-handoff"
+    fake_mineru_cli = _write_fake_mineru_cli(work_root / "mineru")
+    mineru_cli_result = _run_command(
+        [
+            python_executable,
+            str(convert_script),
+            "--input",
+            str(mineru_cli_input),
+            "--output",
+            str(mineru_cli_output),
+            "--backend",
+            "auto",
+            "--json",
+        ],
+        cwd=work_root,
+        env=_minimal_env(
+            {
+                **env,
+                "MINERU_CLI_PATH": str(fake_mineru_cli),
+                "MINERU_CLI_BACKEND": "pipeline",
+            }
+        ),
+    )
+    _record_command_check(checks, "doc-to-md mineru-cli auto", mineru_cli_result, required_output='"ok": true')
+    mineru_cli_manifest = mineru_cli_output / "doc_manifest.json"
+    _record_file_check(checks, "mineru-cli doc_manifest produced", mineru_cli_manifest)
+    if mineru_cli_manifest.exists():
+        produced.append(mineru_cli_manifest)
+    mineru_cli_image = mineru_cli_output / "documents" / "images" / "chart.jpg"
+    _record_file_check(checks, "mineru-cli local image asset copied", mineru_cli_image)
+    mineru_cli_quality = mineru_cli_output / "quality_report.json"
+    _record_file_check(checks, "mineru-cli quality_report produced", mineru_cli_quality)
+    if mineru_cli_quality.exists():
+        quality_status = json.loads(mineru_cli_quality.read_text(encoding="utf-8")).get("gate", {}).get("status")
+        checks.append(
+            {
+                "name": "mineru-cli quality gate passes with local image",
+                "ok": quality_status == "PASS",
+                "path": str(mineru_cli_quality),
+                "error": "" if quality_status == "PASS" else f"expected PASS, got {quality_status}",
+            }
+        )
+        produced.append(mineru_cli_quality)
 
     inspect_result = _run_command(
         [

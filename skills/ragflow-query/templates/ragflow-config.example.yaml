@@ -13,11 +13,15 @@ ragflow:
   verify_ssl: true
 
 doc_to_md:
-  # Keep auto unless the MinerU protocol is confirmed.
+  # Keep auto unless a specific converter is required.
+  # Auto uses local mineru-cli first when available, then other configured backends.
   # Use mineru/mineru-agent for Agent API; use mineru-sync/mineru-local for sync multipart /parse.
   backend: auto
 
 mineru:
+  # Optional local CLI example: /opt/mineru/bin/mineru
+  cli_path: ${MINERU_CLI_PATH}
+  cli_backend: pipeline
   # Agent API example: https://mineru.net/api/v1/agent
   # Sync multipart example: http://mineru.internal:8777/api/v1
   base_url: https://mineru.net/api/v1/agent

@@ -6,9 +6,11 @@ from pathlib import Path
 
 from ragflow_skill_runtime.doc_convert import (
     ConvertedDocument,
+    DEFAULT_MINERU_BASE_URL,
     DocConvertError,
     SourceDocument,
     convert_source_to_markdown,
+    copy_local_markdown_assets,
     discover_source_documents,
     extract_markdown_title,
     html_to_markdown,
@@ -66,6 +68,18 @@ class DocConvertTests(unittest.TestCase):
                 convert_source_to_markdown(
                     SourceDocument(path=path, source_path="note.txt"),
                     mode="passthrough",
+                )
+
+    def test_auto_does_not_call_default_mineru_service_without_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "paper.pdf"
+            path.write_bytes(b"%PDF fake")
+            with self.assertRaisesRegex(DocConvertError, "no converter available"):
+                convert_source_to_markdown(
+                    SourceDocument(path=path, source_path="paper.pdf"),
+                    backend="auto",
+                    mineru_base_url=DEFAULT_MINERU_BASE_URL,
+                    mineru_api_key=None,
                 )
 
     def test_safe_markdown_name_deduplicates(self) -> None:
@@ -146,6 +160,30 @@ class DocConvertTests(unittest.TestCase):
         self.assertEqual(report["gate"]["status"], BLOCKED)
         self.assertIn("image_missing", issue_types)
         self.assertIn("markdown_empty", issue_types)
+
+    def test_copy_local_markdown_assets_rewrites_absolute_temp_image(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mineru_root = root / "mineru-output"
+            mineru_images = mineru_root / "images"
+            mineru_images.mkdir(parents=True)
+            markdown_path = mineru_root / "paper.md"
+            image_path = mineru_images / "chart.jpg"
+            image_path.write_bytes(b"fake image bytes")
+            markdown_path.write_text(f"# Paper\n\n![chart]({image_path})\n", encoding="utf-8")
+            handoff_documents = root / "handoff" / "documents"
+
+            rewritten = copy_local_markdown_assets(
+                markdown_path.read_text(encoding="utf-8"),
+                markdown_path=markdown_path,
+                source_root=mineru_root,
+                asset_output_dir=handoff_documents,
+            )
+            copied = handoff_documents / "images" / "chart.jpg"
+            copied_exists = copied.is_file()
+
+        self.assertIn("![chart](images/chart.jpg)", rewritten)
+        self.assertTrue(copied_exists)
 
     def test_quality_report_marks_conversion_warning_for_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

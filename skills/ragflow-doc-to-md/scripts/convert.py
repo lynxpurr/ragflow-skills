@@ -55,6 +55,7 @@ BACKEND_CHOICES = {
     "builtin",
     "mineru",
     "mineru-agent",
+    "mineru-cli",
     "mineru-local",
     "mineru-sync",
     "pandoc",
@@ -210,6 +211,15 @@ def _run(args: argparse.Namespace) -> int:
                     mineru_api_key=_config_or_arg(args, "mineru_api_key", config.mineru.api_key),
                     mineru_timeout=mineru_timeout,
                     mineru_poll_interval=mineru_poll_interval,
+                    mineru_cli_path=_config_or_arg(args, "mineru_cli_path", config.mineru.cli_path),
+                    mineru_cli_backend=_config_or_arg(
+                        args,
+                        "mineru_cli_backend",
+                        config.mineru.cli_backend,
+                        "pipeline",
+                    )
+                    or "pipeline",
+                    asset_output_dir=markdown_path.parent,
                     mineru_language=_config_or_arg(args, "mineru_language", config.mineru.language, "ch") or "ch",
                     mineru_page_range=_config_or_arg(args, "mineru_page_range", config.mineru.page_range),
                     mineru_enable_table=_bool_config_or_arg(
@@ -415,6 +425,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mineru-api-key", help="MinerU API key; defaults to MINERU_API_KEY")
     parser.add_argument("--mineru-timeout", type=float, help="MinerU parse timeout in seconds; defaults to MINERU_TIMEOUT or 300")
     parser.add_argument("--mineru-poll-interval", type=float, help="MinerU parse polling interval; defaults to MINERU_POLL_INTERVAL or 3")
+    parser.add_argument("--mineru-cli-path", help="Local MinerU CLI path; defaults to MINERU_CLI_PATH, mineru.cli_path, or PATH lookup")
+    parser.add_argument("--mineru-cli-backend", help="Local MinerU CLI backend passed with -b; defaults to MINERU_CLI_BACKEND, mineru.cli_backend, or pipeline")
     parser.add_argument("--mineru-language", help="MinerU language option; defaults to MINERU_LANGUAGE or ch")
     parser.add_argument("--mineru-page-range", help="MinerU page range; defaults to MINERU_PAGE_RANGE")
     parser.add_argument("--mineru-enable-table", help="MinerU table parsing true/false; defaults to MINERU_ENABLE_TABLE or true")

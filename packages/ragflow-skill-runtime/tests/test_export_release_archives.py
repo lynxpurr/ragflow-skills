@@ -34,8 +34,11 @@ class ExportReleaseArchivesTests(unittest.TestCase):
             self.assertTrue(manifest_path.exists())
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(len(manifest["archives"]), 3)
+            self.assertEqual(manifest["dist"], "dist")
+            self.assertEqual(manifest["output_dir"], "artifacts")
             for item in manifest["archives"]:
-                archive = Path(item["archive"])
+                self.assertEqual(Path(item["archive"]).name, item["archive"])
+                archive = root / "artifacts" / item["archive"]
                 self.assertTrue(archive.exists(), item)
                 self.assertEqual(item["sha256"], sha256_file(archive))
 
@@ -49,7 +52,7 @@ class ExportReleaseArchivesTests(unittest.TestCase):
                 hygiene=True,
             )
             query_archive = next(
-                Path(item["archive"])
+                root / "artifacts" / item["archive"]
                 for item in payload["archives"]
                 if item["name"] == "ragflow-query"
             )

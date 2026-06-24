@@ -11,13 +11,14 @@ Inputs:
 
 - Existing Markdown via `--mode passthrough`.
 - Plain text and simple HTML via the built-in converter.
-- Office/PDF/EPUB-like formats through `--backend mineru`, `--backend pandoc` when pandoc is installed, or `--backend remote --remote-url ...`.
+- Office/PDF/EPUB-like formats through `--backend mineru-cli` for an installed local MinerU binary, `--backend mineru` for MinerU Agent API, `--backend mineru-sync` for synchronous multipart `/parse`, `--backend pandoc` when pandoc is installed, or `--backend remote --remote-url ...`.
 
 Command examples:
 
 ```bash
 python scripts/convert.py --input ./docs --output ./handoff --mode passthrough
 python scripts/convert.py --input ./raw --output ./handoff --backend builtin
+python scripts/convert.py --input ./raw --output ./handoff --backend mineru-cli --mineru-cli-path /opt/mineru/bin/mineru
 python scripts/convert.py --input ./raw --output ./handoff --backend mineru
 python scripts/convert.py --input ./raw --output ./handoff --backend remote --remote-url https://converter.example/api/convert
 python scripts/convert.py --config /path/to/ragflow-config.local.yaml --input ./raw --output ./handoff --json
@@ -29,6 +30,15 @@ python scripts/convert.py split --markdown ./handoff/documents/book.md --output 
 Use `templates/ragflow-config.example.yaml` as the shared config template. Put the real config in a stable host-agent config path, such as Hermes or OpenClaw config storage, and point scripts to it with `RAGFLOW_CONFIG` or `--config`. Do not put real keys in the skill folder.
 
 When a host agent should prepare config, run smoke checks, or perform end-to-end validation for the user, read `references/host-agent-setup.md` first. When an end user needs a copy-paste prompt to give their own host agent, use `references/user-onboarding-prompt.md`.
+
+Local MinerU CLI conversion can be configured through the host agent environment. `auto` uses this first for PDF/Office/image files when a CLI is available:
+
+```bash
+DOC_TO_MD_BACKEND=auto
+MINERU_CLI_PATH=/opt/mineru/bin/mineru
+MINERU_CLI_BACKEND=pipeline
+MINERU_TIMEOUT=300
+```
 
 MinerU Agent API conversion can be configured through the host agent environment:
 
@@ -66,6 +76,7 @@ Notes:
 - Use `--strict` when skipped files should fail the run.
 - Use `inspect` to regenerate a quality report from an existing handoff.
 - Use `segment-plan` before splitting long Markdown; use `split` when the user wants materialized `segments/*.md` that can be ingested as an ordinary Markdown directory.
+- The `mineru-cli` backend runs a local MinerU executable as `mineru -b <backend> -p <source> -o <temp-output>` and reads the Markdown file it produces. Set the path with `MINERU_CLI_PATH`, `mineru.cli_path`, or `--mineru-cli-path`; default CLI backend is `pipeline`.
 - The `mineru` and `mineru-agent` backends use the Agent parsing API shape: create parse task at `/parse/file`, upload to signed URL, poll `/parse/{task_id}`, then download Markdown.
 - The `mineru-sync` and `mineru-local` backends post multipart form data to `/parse` and expect Markdown text or JSON containing `markdown`, `content`, `text`, `result`, or `markdown_url`.
 - The remote backend expects JSON with `filename` and base64 `content_base64`, and returns `markdown` or `content`.

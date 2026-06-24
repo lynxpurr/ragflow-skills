@@ -52,12 +52,20 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertEqual(profile["config_mode"], "env")
         self.assertTrue(profile["ok"], profile)
         check_names = [item["name"] for item in profile["checks"]]
+        self.assertIn("doc-to-md mineru-cli auto backend", check_names)
+        self.assertIn("mineru-cli markdown produced", check_names)
+        self.assertIn("mineru-cli local image asset copied", check_names)
+        self.assertIn("mineru-cli quality gate passes with local image", check_names)
         self.assertIn("doc-to-md mineru env backend", check_names)
         self.assertIn("mineru service markdown produced", check_names)
         self.assertIn("doc-to-md mineru-sync env backend", check_names)
         self.assertIn("mineru-sync service markdown produced", check_names)
         self.assertTrue(
             any(path.endswith("mineru-handoff/doc_manifest.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("mineru-cli-handoff/doc_manifest.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
         self.assertTrue(

@@ -398,6 +398,7 @@ Tasks:
 - [x] Decide whether MinerU remains a generic remote converter contract in v1 or gets a named `mineru` adapter in v0.2. Decision: MinerU is a named service backend using `MINERU_*` config.
 - [x] Add `mineru` backend support to `ragflow-doc-to-md`.
 - [x] Add `mineru-sync` backend support for self-hosted synchronous multipart `/parse` services on localhost, LAN, VPN, or HTTPS.
+- [x] Add `mineru-cli` backend support for locally installed MinerU binaries and `auto` CLI preference.
 - [x] Add shared `templates/ragflow-config.example.yaml` to each public skill.
 - [x] Add `references/host-agent-setup.md` to each public skill so Hermes/OpenClaw-style agents can prepare config and E2E checks from the released skill itself.
 - [x] Support unified config files for `ragflow`, `doc_to_md`, and `mineru` sections.
@@ -485,11 +486,11 @@ Tasks:
 Exit criteria:
 
 - The prompt is included in every future public skill artifact.
-- The prompt instructs host agents to ask only for missing RAGFlow/MinerU endpoint and key values.
+- The prompt instructs host agents to ask only for missing RAGFlow/MinerU endpoint, key, or local CLI path values.
 - The prompt instructs host agents to keep secrets out of skill folders, repositories, release artifacts, and reports.
 - The prompt guides host agents through no-network smoke, optional MinerU conversion, and disposable RAGFlow live E2E.
-- MinerU onboarding distinguishes Agent API and synchronous multipart `/parse` services before choosing a backend.
-- Config templates default to `doc_to_md.backend: auto`; `mineru` and `mineru-sync` are opt-in after protocol compatibility is confirmed.
+- MinerU onboarding distinguishes local CLI, Agent API, and synchronous multipart `/parse` before choosing a backend.
+- Config templates default to `doc_to_md.backend: auto`; local `mineru-cli` is auto-preferred when available, while `mineru` and `mineru-sync` remain explicit options after protocol compatibility is confirmed.
 
 ## Phase 16: Document Quality and Segmentation MVP
 
@@ -654,6 +655,45 @@ Exit criteria:
   without live RAGFlow access.
 - The report distinguishes hard failures from review warnings.
 - Existing query output remains backward-compatible.
+
+## Phase 23: MinerU Local CLI Backend
+
+Goal: close the gap found by Hermes/OpenClaw validation where a host may have a working local MinerU CLI but no compatible MinerU HTTP service.
+
+Design update:
+
+- Original v0.1 design treated MinerU primarily as a configured external service. That remains correct for remote, LAN, VPN, and online MinerU deployments.
+- The revised design adds local CLI as a third equivalent execution mode: `mineru-cli` for local binaries, `mineru` / `mineru-agent` for Agent API, and `mineru-sync` / `mineru-local` for synchronous multipart `/parse`.
+- `doc_to_md.backend: auto` now prefers local `mineru-cli` for PDF/Office/image inputs when `MINERU_CLI_PATH`, `mineru.cli_path`, or `mineru` on `PATH` is available. If CLI is unavailable, existing configured backends remain available.
+- Local CLI is not a daemon and is not started or supervised by the skill. It is a user/host-provided binary invoked for one conversion run.
+
+Tasks:
+
+- [x] Add `mineru-cli` to `ragflow-doc-to-md` backend choices.
+- [x] Add runtime CLI discovery through explicit path, `MINERU_CLI_PATH`, config `mineru.cli_path`, and `PATH`.
+- [x] Add config fields `mineru.cli_path` and `mineru.cli_backend`, plus environment variables `MINERU_CLI_PATH` and `MINERU_CLI_BACKEND`.
+- [x] Implement local CLI conversion with `mineru -b <backend> -p <source> -o <temp-output>` and Markdown output discovery.
+- [x] Make `auto` prefer local CLI for PDF/Office/image inputs when available.
+- [x] Preserve explicit HTTP backends: `mineru` / `mineru-agent` and `mineru-sync` / `mineru-local`.
+- [x] Add unit/CLI tests with a fake MinerU executable.
+- [x] Add platform smoke coverage with a fake MinerU executable.
+- [x] Update shared config templates in all three public skills.
+- [x] Update host-agent setup references and onboarding prompt.
+- [x] Update architecture and CLI-agent integration docs.
+- [x] Run full release hardening gates after docs are synchronized.
+- [x] Ask Hermes/OpenClaw to forward-test a host with real local MinerU CLI, if available.
+- [x] Copy local assets referenced by MinerU CLI Markdown, such as `images/*.jpg`, into the final handoff before temporary output is deleted.
+- [x] Preserve safe relative image references and rewrite absolute temporary references to stable relative paths under `documents/images/`.
+- [x] Add CLI coverage proving a fake MinerU CLI Markdown file with local images produces a `PASS` quality gate.
+- [x] Rerun targeted tests, release hygiene, artifact export, consumer acceptance, and platform smoke after the asset-copy fix.
+
+Exit criteria:
+
+- A host with local MinerU can convert PDF/Office/image files without a local HTTP wrapper.
+- MinerU CLI handoffs include local Markdown image assets, so valid converted documents are not blocked by `image_missing`.
+- A host without local MinerU can still use Agent API, synchronous `/parse`, generic remote conversion, pandoc, or Markdown passthrough.
+- No public artifact contains machine-specific MinerU paths.
+- Existing v0.1 HTTP MinerU behavior remains backward-compatible.
 
 ## Definition of Done
 

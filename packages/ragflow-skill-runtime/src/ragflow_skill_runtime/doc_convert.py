@@ -6,17 +6,20 @@ import base64
 import hashlib
 import html
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html.parser import HTMLParser
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 from urllib import error, request
+from urllib.parse import unquote
 
 
 class DocConvertError(RuntimeError):
@@ -36,9 +39,27 @@ PANDOC_AUTO_EXTENSIONS = {
     ".org",
     ".tex",
 }
+MINERU_AUTO_EXTENSIONS = {
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".ppt",
+    ".pptx",
+    ".xls",
+    ".xlsx",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".bmp",
+    ".tif",
+    ".tiff",
+    ".webp",
+}
 DEFAULT_MINERU_BASE_URL = "https://mineru.net/api/v1/agent"
 MINERU_DONE_STATE = "done"
 MINERU_FAILED_STATE = "failed"
+MARKDOWN_IMAGE_RE = re.compile(r"(!\[[^\]]*]\()([^)]+)(\))")
+HTML_IMAGE_SRC_RE = re.compile(r"(<img\b[^>]*?\bsrc=[\"'])([^\"']+)([\"'][^>]*>)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -422,6 +443,14 @@ def _mineru_sync_parse_url(base_url: str) -> str:
     return f"{root}/parse"
 
 
+def _should_try_mineru_service_auto(base_url: str | None, api_key: str | None) -> bool:
+    if not base_url:
+        return False
+    if base_url.rstrip("/") == DEFAULT_MINERU_BASE_URL and not api_key:
+        return False
+    return True
+
+
 def mineru_agent_convert(
     source: SourceDocument,
     *,
@@ -563,6 +592,225 @@ def mineru_sync_convert(
     return markdown
 
 
+def resolve_mineru_cli_path(cli_path: str | None = None) -> str | None:
+    """Resolve a local MinerU CLI path from explicit config, environment, or PATH."""
+
+    candidate = cli_path or os.environ.get("MINERU_CLI_PATH") or None
+    if not candidate:
+        candidate = shutil.which("mineru")
+    if not candidate:
+        return None
+    if "/" not in candidate and "\\" not in candidate:
+        return shutil.which(candidate)
+
+    path = Path(candidate).expanduser()
+    if path.exists() and path.is_file():
+        return str(path.resolve())
+    return None
+
+
+def _short_process_detail(result: subprocess.CompletedProcess[str]) -> str:
+    detail = (result.stderr or result.stdout or "").strip()
+    if len(detail) > 1000:
+        return detail[:1000] + "..."
+    return detail
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_external_asset_reference(value: str) -> bool:
+    lowered = value.strip().lower()
+    return lowered.startswith(("http://", "https://", "data:", "#"))
+
+
+def _split_markdown_asset_target(raw: str) -> tuple[str, str, bool]:
+    value = raw.strip()
+    if not value:
+        return "", "", False
+    if value.startswith("<"):
+        end = value.find(">")
+        if end != -1:
+            return value[1:end], value[end + 1 :], True
+    match = re.match(r"(\S+)(.*)", value, flags=re.DOTALL)
+    if not match:
+        return value, "", False
+    return match.group(1), match.group(2), False
+
+
+def _safe_relative_asset_path(reference_path: str) -> PurePosixPath | None:
+    normalized = reference_path.replace("\\", "/").lstrip("./")
+    if not normalized:
+        return None
+    pure = PurePosixPath(normalized)
+    if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
+        return None
+    return pure
+
+
+def _local_asset_source_path(
+    reference_path: str,
+    *,
+    markdown_path: Path,
+    source_root: Path,
+) -> Path | None:
+    if _is_external_asset_reference(reference_path):
+        return None
+    decoded = unquote(reference_path.strip())
+    if not decoded:
+        return None
+    candidate = Path(decoded)
+    if not candidate.is_absolute():
+        candidate = markdown_path.parent / candidate
+    candidate = candidate.resolve()
+    source_root = source_root.resolve()
+    if not _is_relative_to(candidate, source_root):
+        return None
+    if not candidate.is_file():
+        return None
+    return candidate
+
+
+def _copy_local_markdown_asset(
+    reference_path: str,
+    *,
+    markdown_path: Path,
+    source_root: Path,
+    asset_output_dir: Path,
+) -> str | None:
+    source_path = _local_asset_source_path(
+        reference_path,
+        markdown_path=markdown_path,
+        source_root=source_root,
+    )
+    if not source_path:
+        return None
+
+    relative_target = None
+    if not Path(reference_path).is_absolute():
+        relative_target = _safe_relative_asset_path(reference_path)
+    if relative_target is None:
+        relative_target = PurePosixPath("images") / source_path.name
+
+    destination = asset_output_dir / Path(*relative_target.parts)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source_path.resolve() != destination.resolve():
+        shutil.copy2(source_path, destination)
+    return relative_target.as_posix()
+
+
+def copy_local_markdown_assets(
+    markdown: str,
+    *,
+    markdown_path: Path,
+    source_root: Path,
+    asset_output_dir: str | Path | None,
+) -> str:
+    """Copy local assets referenced by Markdown into a final handoff directory."""
+
+    if asset_output_dir is None:
+        return markdown
+    output_dir = Path(asset_output_dir)
+
+    def replace_markdown(match: re.Match[str]) -> str:
+        prefix, raw_target, suffix = match.groups()
+        target_path, target_suffix, angle_wrapped = _split_markdown_asset_target(raw_target)
+        copied = _copy_local_markdown_asset(
+            target_path,
+            markdown_path=markdown_path,
+            source_root=source_root,
+            asset_output_dir=output_dir,
+        )
+        if not copied:
+            return match.group(0)
+        replacement = f"<{copied}>{target_suffix}" if angle_wrapped else f"{copied}{target_suffix}"
+        return f"{prefix}{replacement}{suffix}"
+
+    def replace_html(match: re.Match[str]) -> str:
+        prefix, raw_target, suffix = match.groups()
+        copied = _copy_local_markdown_asset(
+            raw_target,
+            markdown_path=markdown_path,
+            source_root=source_root,
+            asset_output_dir=output_dir,
+        )
+        if not copied:
+            return match.group(0)
+        return f"{prefix}{copied}{suffix}"
+
+    markdown = MARKDOWN_IMAGE_RE.sub(replace_markdown, markdown)
+    return HTML_IMAGE_SRC_RE.sub(replace_html, markdown)
+
+
+def mineru_cli_convert(
+    source: SourceDocument,
+    *,
+    cli_path: str | None = None,
+    cli_backend: str | None = None,
+    timeout: float = 300.0,
+    asset_output_dir: str | Path | None = None,
+) -> str:
+    """Convert one file through an installed local MinerU CLI."""
+
+    if timeout <= 0:
+        raise DocConvertError("MinerU CLI timeout must be greater than zero")
+    resolved_cli = resolve_mineru_cli_path(cli_path)
+    if not resolved_cli:
+        hint = "MINERU_CLI_PATH, mineru.cli_path, or a mineru binary on PATH"
+        raise DocConvertError(f"mineru-cli backend requires {hint}")
+
+    backend = (cli_backend or "pipeline").strip() or "pipeline"
+    with tempfile.TemporaryDirectory(prefix="ragflow-skill-mineru-") as tmp:
+        output_dir = Path(tmp) / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        command = [
+            resolved_cli,
+            "-b",
+            backend,
+            "-p",
+            str(source.path),
+            "-o",
+            str(output_dir),
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise DocConvertError(f"MinerU CLI timed out after {timeout:g}s for {source.source_path}") from exc
+        except OSError as exc:
+            raise DocConvertError(f"MinerU CLI could not be executed: {exc}") from exc
+
+        if result.returncode != 0:
+            detail = _short_process_detail(result)
+            raise DocConvertError(f"MinerU CLI failed for {source.source_path}: {detail or result.returncode}")
+
+        markdown_files = sorted(
+            path for path in output_dir.rglob("*.md") if path.is_file()
+        )
+        if not markdown_files:
+            detail = _short_process_detail(result)
+            suffix = f": {detail}" if detail else ""
+            raise DocConvertError(f"MinerU CLI produced no Markdown output for {source.source_path}{suffix}")
+        markdown_file = markdown_files[0]
+        markdown = markdown_file.read_text(encoding="utf-8")
+        return copy_local_markdown_assets(
+            markdown,
+            markdown_path=markdown_file,
+            source_root=output_dir,
+            asset_output_dir=asset_output_dir,
+        )
+
+
 def pandoc_convert(source: SourceDocument) -> str:
     """Convert with an installed pandoc binary."""
 
@@ -593,6 +841,9 @@ def convert_source_to_markdown(
     mineru_api_key: str | None = None,
     mineru_timeout: float = 300.0,
     mineru_poll_interval: float = 3.0,
+    mineru_cli_path: str | None = None,
+    mineru_cli_backend: str | None = None,
+    asset_output_dir: str | Path | None = None,
     mineru_language: str = "ch",
     mineru_page_range: str | None = None,
     mineru_enable_table: bool = True,
@@ -614,6 +865,25 @@ def convert_source_to_markdown(
     if backend in {"auto", "builtin"} and suffix in HTML_EXTENSIONS:
         return html_to_markdown(source.path.read_text(encoding="utf-8")), warnings
 
+    should_try_mineru_cli = backend == "mineru-cli" or (
+        backend == "auto"
+        and suffix in MINERU_AUTO_EXTENSIONS
+        and resolve_mineru_cli_path(mineru_cli_path)
+    )
+    if should_try_mineru_cli:
+        try:
+            return mineru_cli_convert(
+                source,
+                cli_path=mineru_cli_path,
+                cli_backend=mineru_cli_backend,
+                timeout=mineru_timeout,
+                asset_output_dir=asset_output_dir,
+            ), warnings
+        except DocConvertError as exc:
+            if backend == "mineru-cli":
+                raise
+            warnings.append(str(exc))
+
     should_try_pandoc = backend == "pandoc" or (backend == "auto" and suffix in PANDOC_AUTO_EXTENSIONS)
     if should_try_pandoc:
         try:
@@ -632,6 +902,34 @@ def convert_source_to_markdown(
         ), warnings
     if backend == "remote" and not remote_url:
         raise DocConvertError("remote backend requires --remote-url")
+    if backend == "auto" and suffix in MINERU_AUTO_EXTENSIONS and _should_try_mineru_service_auto(
+        mineru_base_url,
+        mineru_api_key,
+    ):
+        if mineru_base_url.rstrip("/").endswith("/agent"):
+            return mineru_agent_convert(
+                source,
+                base_url=mineru_base_url,
+                api_key=mineru_api_key,
+                timeout=mineru_timeout,
+                poll_interval=mineru_poll_interval,
+                language=mineru_language,
+                page_range=mineru_page_range,
+                enable_table=mineru_enable_table,
+                is_ocr=mineru_is_ocr,
+                enable_formula=mineru_enable_formula,
+            ), warnings
+        return mineru_sync_convert(
+            source,
+            base_url=mineru_base_url,
+            api_key=mineru_api_key,
+            timeout=mineru_timeout,
+            language=mineru_language,
+            page_range=mineru_page_range,
+            enable_table=mineru_enable_table,
+            is_ocr=mineru_is_ocr,
+            enable_formula=mineru_enable_formula,
+        ), warnings
     if backend in {"mineru", "mineru-agent"}:
         return mineru_agent_convert(
             source,
@@ -664,7 +962,7 @@ def convert_source_to_markdown(
     attempted = f"; attempted fallback: {'; '.join(warnings)}" if warnings else ""
     raise DocConvertError(
         f"no converter available for {source.source_path} ({suffix or 'no extension'}); "
-        f"builtin supports {supported}, or configure pandoc/remote/mineru/mineru-sync backend{attempted}"
+        f"builtin supports {supported}, or configure pandoc/remote/mineru-cli/mineru/mineru-sync backend{attempted}"
     )
 
 

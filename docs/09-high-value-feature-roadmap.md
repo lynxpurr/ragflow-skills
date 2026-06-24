@@ -1,7 +1,7 @@
 # High-Value Feature Roadmap
 
 Status: active roadmap for v0.2+
-Date: 2026-06-23
+Date: 2026-06-24
 
 ## Objective
 
@@ -23,7 +23,8 @@ OpenClaw, Claude Code, opencode, and similar runners.
 The v0.1 public suite already provides:
 
 - `ragflow-doc-to-md`: Markdown passthrough, builtin text/HTML conversion, remote conversion,
-  MinerU Agent API backend, MinerU sync multipart backend, and `doc_manifest.json`.
+  local MinerU CLI backend, MinerU Agent API backend, MinerU sync multipart backend, and
+  `doc_manifest.json`.
 - `ragflow-kb-build`: Markdown discovery, RAGFlow dataset creation, document upload, parse
   trigger and polling, `kb_manifest.json`, inspect, and lightweight validation.
 - `ragflow-query`: direct retrieval, dataset resolution by ID/name/manifest, normalized chunk
@@ -34,6 +35,31 @@ The v0.1 public suite already provides:
 The missing high-value areas are not basic connectivity. They are quality gates, long-document
 handling, RAGFlow operational diagnostics, benchmark-grade validation, routing quality, and
 agentic observability.
+
+## Design Update: MinerU Execution Modes
+
+Hermes/OpenClaw validation found one gap in the original design: MinerU was documented mainly
+as a remote HTTP service, but controllable CLI-agent hosts may already have a working local
+MinerU binary. Requiring an HTTP wrapper around that binary adds avoidable failure points.
+
+The updated design treats MinerU as three execution modes:
+
+- `mineru-cli`: local one-shot CLI invocation, discovered from `MINERU_CLI_PATH`,
+  `mineru.cli_path`, or `mineru` on `PATH`.
+- `mineru` / `mineru-agent`: MinerU Agent API service.
+- `mineru-sync` / `mineru-local`: synchronous multipart `/parse` service.
+
+`doc_to_md.backend: auto` should prefer local `mineru-cli` for PDF/Office/image inputs when the
+CLI is available, then fall back to other configured conversion paths. Public artifacts still
+must not ship machine-specific CLI paths.
+
+Forward validation also exposed a handoff completeness issue: MinerU CLI may write Markdown that
+references local resources such as `images/*.jpg` inside the CLI output directory. The public
+handoff contract must therefore include referenced local assets, not just the Markdown text. The
+converter should copy local Markdown image assets from the MinerU output tree into the final
+`documents/` tree before deleting temporary files, preserve safe relative references such as
+`images/name.jpg`, and rewrite absolute temporary references to stable relative paths. Remote
+URLs and `data:` references remain untouched.
 
 ## Source Feature Inventory
 

@@ -56,7 +56,7 @@ Each profile performs the same no-network smoke:
 
 1. Build release artifacts into `dist/`.
 2. Run `ragflow-doc-to-md/scripts/convert.py` in passthrough mode and verify `doc_manifest.json`.
-3. For environment-config profiles, run `ragflow-doc-to-md` against fake MinerU services using `DOC_TO_MD_BACKEND=mineru` for Agent API and `DOC_TO_MD_BACKEND=mineru-sync` for synchronous multipart `/parse`.
+3. For environment-config profiles, run `ragflow-doc-to-md` against a fake local MinerU CLI with `DOC_TO_MD_BACKEND=auto`, a fake MinerU Agent API with `DOC_TO_MD_BACKEND=mineru`, and a fake synchronous multipart `/parse` service with `DOC_TO_MD_BACKEND=mineru-sync`.
 4. Run `ragflow-kb-build/scripts/build.py --dry-run` against the handoff manifest.
 5. Run `ragflow-kb-build/scripts/profile.py lint` against a public profile template.
 6. Create a fake `kb_manifest.json` for no-network query and validation smoke.
@@ -75,6 +75,7 @@ The fake client is intentional. The matrix should verify packaging and CLI behav
 | `No module named ragflow_skill_runtime` | Vendor directory missing or source path not set | Run `python3 tools/build_release.py --check`; verify `scripts/_vendor/ragflow_skill_runtime`. |
 | `RAGFlow base URL is required` | Platform did not provide CLI flags or `RAGFLOW_BASE_URL` | Set `--base-url` or export `RAGFLOW_BASE_URL`. |
 | `remote backend requires --remote-url` | Remote conversion was selected without `--remote-url` or `DOC_TO_MD_REMOTE_URL` | Pass `--remote-url` or export `DOC_TO_MD_REMOTE_URL`. |
+| `mineru-cli backend requires` | Local MinerU CLI conversion was selected but no binary was configured or found on `PATH` | Set `MINERU_CLI_PATH`, `mineru.cli_path`, or use another backend. |
 | `MinerU create-task response missing task_id` | `DOC_TO_MD_BACKEND=mineru` was pointed at a service that does not match the Agent parsing API contract | Use an Agent API endpoint, or set `DOC_TO_MD_BACKEND=mineru-sync` for synchronous multipart `/parse`. |
 | `manifest not found` | Handoff artifact path not preserved between steps | Pass absolute artifact paths or keep all steps in one workspace. |
 | `auto routing found no matching KB` | Routing config has no matching hints and no default KB | Add user-owned hints/defaults or pass explicit `--dataset-id`, `--kb`, or `--kb-manifest`. |

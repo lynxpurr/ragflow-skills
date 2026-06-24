@@ -52,9 +52,9 @@ Each public skill includes the same copy-paste onboarding prompt at:
 references/user-onboarding-prompt.md
 ```
 
-Use it when giving the skills to another user. They can paste the prompt into Hermes, OpenClaw, Claude Code, opencode, or a similar controllable CLI agent. The host agent will then read the skill docs, ask only for missing RAGFlow or MinerU service settings, create a safe local config, run no-network smoke checks, and optionally run a disposable live RAGFlow E2E after user approval.
+Use it when giving the skills to another user. They can paste the prompt into Hermes, OpenClaw, Claude Code, opencode, or a similar controllable CLI agent. The host agent will then read the skill docs, ask only for missing RAGFlow, MinerU service, or local MinerU CLI settings, create a safe local config, run no-network smoke checks, and optionally run a disposable live RAGFlow E2E after user approval.
 
-MinerU supports two protocols: `mineru` / `mineru-agent` for the MinerU Agent API, and `mineru-sync` / `mineru-local` for self-hosted synchronous multipart `/parse` services on localhost, LAN, VPN, or HTTPS.
+MinerU supports three execution paths: `mineru-cli` for a local installed MinerU binary, `mineru` / `mineru-agent` for the MinerU Agent API, and `mineru-sync` / `mineru-local` for self-hosted synchronous multipart `/parse` services on localhost, LAN, VPN, or HTTPS. In `auto`, local CLI is preferred when `MINERU_CLI_PATH`, `mineru.cli_path`, or `mineru` on `PATH` is available.
 
 The prompt is duplicated intentionally so each skill archive is self-contained. The canonical source copies are:
 

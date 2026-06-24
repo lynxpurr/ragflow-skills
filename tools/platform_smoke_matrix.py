@@ -180,6 +180,28 @@ def _write_input_doc(workspace: Path) -> Path:
     return input_dir
 
 
+def _write_fake_mineru_cli(path: Path) -> Path:
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "out_dir = Path(args[args.index('-o') + 1])\n"
+        "source = Path(args[args.index('-p') + 1])\n"
+        "backend = args[args.index('-b') + 1]\n"
+        "images_dir = out_dir / 'images'\n"
+        "images_dir.mkdir(parents=True, exist_ok=True)\n"
+        "(images_dir / 'chart.jpg').write_bytes(b'fake image bytes')\n"
+        "(out_dir / (source.stem + '.md')).write_text(\n"
+        "    f'# MinerU CLI Smoke\\n\\nConverted through mineru-cli backend={backend}.\\n\\n![chart](images/chart.jpg)\\n',\n"
+        "    encoding='utf-8',\n"
+        ")\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
 def _run_mineru_env_check(
     *,
     profile: PlatformProfile,
@@ -266,14 +288,36 @@ def _run_mineru_env_check(
 
     mineru_input = workspace / "mineru-input"
     mineru_output = workspace / "mineru-handoff"
+    mineru_cli_output = workspace / "mineru-cli-handoff"
     mineru_sync_output = workspace / "mineru-sync-handoff"
     mineru_input.mkdir(parents=True, exist_ok=True)
     (mineru_input / "mineru.pdf").write_bytes(b"%PDF mineru service smoke")
+    fake_mineru_cli = _write_fake_mineru_cli(workspace / "mineru")
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
+        mineru_cli_env = {
+            **env,
+            "DOC_TO_MD_BACKEND": "auto",
+            "MINERU_CLI_PATH": str(fake_mineru_cli),
+            "MINERU_CLI_BACKEND": "pipeline",
+            "MINERU_TIMEOUT": "5",
+        }
+        cli_result = _run_command(
+            [
+                sys.executable,
+                str(convert_script),
+                "--input",
+                str(mineru_input),
+                "--output",
+                str(mineru_cli_output),
+                "--json",
+            ],
+            cwd=workspace,
+            env=mineru_cli_env,
+        )
         mineru_env = {
             **env,
             "DOC_TO_MD_BACKEND": "mineru",
@@ -322,6 +366,12 @@ def _run_mineru_env_check(
 
     _record_command_check(
         checks,
+        "doc-to-md mineru-cli auto backend",
+        cli_result,
+        required_stdout='"ok": true',
+    )
+    _record_command_check(
+        checks,
         "doc-to-md mineru env backend",
         result,
         required_stdout='"ok": true',
@@ -342,6 +392,40 @@ def _run_mineru_env_check(
             "ok": ok,
             "returncode": 0 if ok else 1,
             "error": "" if ok else f"missing or invalid {markdown_path}",
+        }
+    )
+    cli_markdown_path = mineru_cli_output / "documents" / "mineru.md"
+    cli_ok = cli_markdown_path.exists() and "MinerU CLI Smoke" in cli_markdown_path.read_text(
+        encoding="utf-8"
+    )
+    checks.append(
+        {
+            "name": "mineru-cli markdown produced",
+            "ok": cli_ok,
+            "returncode": 0 if cli_ok else 1,
+            "error": "" if cli_ok else f"missing or invalid {cli_markdown_path}",
+        }
+    )
+    cli_image_path = mineru_cli_output / "documents" / "images" / "chart.jpg"
+    cli_image_ok = cli_image_path.exists()
+    checks.append(
+        {
+            "name": "mineru-cli local image asset copied",
+            "ok": cli_image_ok,
+            "returncode": 0 if cli_image_ok else 1,
+            "error": "" if cli_image_ok else f"missing {cli_image_path}",
+        }
+    )
+    cli_quality_path = mineru_cli_output / "quality_report.json"
+    cli_quality_status = None
+    if cli_quality_path.exists():
+        cli_quality_status = json.loads(cli_quality_path.read_text(encoding="utf-8")).get("gate", {}).get("status")
+    checks.append(
+        {
+            "name": "mineru-cli quality gate passes with local image",
+            "ok": cli_quality_status == "PASS",
+            "returncode": 0 if cli_quality_status == "PASS" else 1,
+            "error": "" if cli_quality_status == "PASS" else f"expected PASS, got {cli_quality_status}",
         }
     )
     sync_markdown_path = mineru_sync_output / "documents" / "mineru.md"
@@ -835,6 +919,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     artifact_files = [
         doc_manifest,
         mineru_doc_manifest,
+        workspace / "mineru-cli-handoff" / "doc_manifest.json",
         workspace / "mineru-sync-handoff" / "doc_manifest.json",
         kb_manifest,
         artifacts_dir / "query_direct.json",

@@ -56,6 +56,8 @@ class MineruConfig:
 
     base_url: str | None = None
     api_key: str | None = None
+    cli_path: str | None = None
+    cli_backend: str | None = None
     timeout: float | None = None
     poll_interval: float | None = None
     language: str | None = None
@@ -255,6 +257,8 @@ def _mineru_from_mapping(data: Mapping[str, Any]) -> MineruConfig:
     return MineruConfig(
         base_url=_pick(merged, "base_url", "mineru_base_url", "url"),
         api_key=_pick(merged, "api_key", "mineru_api_key"),
+        cli_path=_pick(merged, "cli_path", "mineru_cli_path"),
+        cli_backend=_pick(merged, "cli_backend", "mineru_cli_backend"),
         timeout=float(timeout) if timeout is not None else None,
         poll_interval=float(poll_interval) if poll_interval is not None else None,
         language=_pick(merged, "language"),
@@ -289,6 +293,8 @@ def _merge_mineru(base: MineruConfig, override: MineruConfig) -> MineruConfig:
     return MineruConfig(
         base_url=override.base_url or base.base_url,
         api_key=override.api_key or base.api_key,
+        cli_path=override.cli_path or base.cli_path,
+        cli_backend=override.cli_backend or base.cli_backend,
         timeout=override.timeout if override.timeout is not None else base.timeout,
         poll_interval=override.poll_interval if override.poll_interval is not None else base.poll_interval,
         language=override.language or base.language,
@@ -363,6 +369,8 @@ def load_skill_config(
         mineru=MineruConfig(
             base_url=env_map.get("MINERU_BASE_URL"),
             api_key=env_map.get("MINERU_API_KEY"),
+            cli_path=env_map.get("MINERU_CLI_PATH"),
+            cli_backend=env_map.get("MINERU_CLI_BACKEND"),
             timeout=float(env_map["MINERU_TIMEOUT"]) if env_map.get("MINERU_TIMEOUT") else None,
             poll_interval=float(env_map["MINERU_POLL_INTERVAL"])
             if env_map.get("MINERU_POLL_INTERVAL")

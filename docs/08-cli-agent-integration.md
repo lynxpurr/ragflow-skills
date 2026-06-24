@@ -76,11 +76,15 @@ ragflow:
   verify_ssl: true
 
 doc_to_md:
-  # Keep auto unless the MinerU protocol is confirmed.
+  # Keep auto unless a specific converter is required.
+  # Auto uses local mineru-cli first when available, then other configured backends.
   # Use mineru/mineru-agent for Agent API; use mineru-sync/mineru-local for sync multipart /parse.
   backend: auto
 
 mineru:
+  # Optional local CLI example: /opt/mineru/bin/mineru
+  cli_path: ${MINERU_CLI_PATH}
+  cli_backend: pipeline
   # Agent API example: https://mineru.net/api/v1/agent
   # Sync multipart example: http://mineru.internal:8777/api/v1
   base_url: https://mineru.net/api/v1/agent
@@ -108,10 +112,15 @@ Environment-only configuration remains supported:
 ```bash
 export RAGFLOW_BASE_URL=https://ragflow.example.test
 export RAGFLOW_API_KEY=...
-# Use mineru for MinerU Agent API, or mineru-sync for sync multipart /parse.
-export DOC_TO_MD_BACKEND=mineru
-export MINERU_BASE_URL=https://mineru.net/api/v1/agent
-export MINERU_API_KEY=...
+# Keep auto when a local MinerU CLI should be preferred.
+export DOC_TO_MD_BACKEND=auto
+export MINERU_CLI_PATH=/opt/mineru/bin/mineru
+export MINERU_CLI_BACKEND=pipeline
+
+# Or use mineru for MinerU Agent API, or mineru-sync for sync multipart /parse.
+# export DOC_TO_MD_BACKEND=mineru
+# export MINERU_BASE_URL=https://mineru.net/api/v1/agent
+# export MINERU_API_KEY=...
 ```
 
 Do not commit local config files or real credentials. Use `${ENV_VAR}` placeholders in shared config files when possible.
@@ -126,7 +135,23 @@ RAGFlow may be reachable through:
 
 Public scripts do not start or manage RAGFlow. They only call an explicitly configured endpoint.
 
-Pandoc is treated as a local binary on `PATH`. MinerU is treated as a remote service by default and is configured through the shared config file or `MINERU_*` environment variables. The `mineru` and `mineru-agent` backends expect the MinerU Agent API protocol: create a task at `/parse/file`, upload to the returned URL, poll `/parse/{task_id}`, then download Markdown. The `mineru-sync` and `mineru-local` backends support self-hosted synchronous multipart `/parse` services on localhost, LAN, VPN, or HTTPS.
+Pandoc and `mineru-cli` are treated as local binaries. Configure MinerU CLI with `MINERU_CLI_PATH`, `mineru.cli_path`, or `mineru` on `PATH`; `MINERU_CLI_BACKEND` defaults to `pipeline`. MinerU HTTP services are configured through the shared config file or `MINERU_*` environment variables. The `mineru` and `mineru-agent` backends expect the MinerU Agent API protocol: create a task at `/parse/file`, upload to the returned URL, poll `/parse/{task_id}`, then download Markdown. The `mineru-sync` and `mineru-local` backends support self-hosted synchronous multipart `/parse` services on localhost, LAN, VPN, or HTTPS.
+
+### MinerU CLI Localization
+
+When a host agent needs to locate a local MinerU binary, use progressive discovery:
+
+1. `MINERU_CLI_PATH` environment variable — user-specified absolute path.
+2. `mineru.cli_path` in the loaded RAGFlow config file.
+3. `command -v mineru` — works only if the MinerU virtual environment is active and on `PATH`.
+4. Broad filesystem search as a last resort:
+   ```bash
+   find ~/tools ~/.local/bin ~/bin /opt -name 'mineru' -type f 2>/dev/null
+   ```
+   MinerU is commonly installed inside a dedicated virtual environment (`~/tools/mineru/bin/mineru`, `~/mineru/.venv/bin/mineru`). These paths are invisible to `command -v` and `pip list` when the venv is not active, and `import mineru`/`import magic_pdf` may fail with a different system Python.
+5. Verify the found binary with `--version` before use.
+
+Do not conclude "MinerU CLI not found" until step 4 has been attempted. The initial negative from `command -v` alone is insufficient — venv isolation is the common case, not the exception.
 
 ## Document To Markdown
 
@@ -140,7 +165,18 @@ python ragflow-doc-to-md/scripts/convert.py \
   --json
 ```
 
-Remote converter:
+MinerU local CLI:
+
+```bash
+python ragflow-doc-to-md/scripts/convert.py \
+  --input ./raw \
+  --output ./handoff \
+  --backend mineru-cli \
+  --mineru-cli-path /opt/mineru/bin/mineru \
+  --json
+```
+
+MinerU service converter:
 
 ```bash
 python ragflow-doc-to-md/scripts/convert.py \
@@ -150,7 +186,7 @@ python ragflow-doc-to-md/scripts/convert.py \
   --json
 ```
 
-The `mineru` backend uses the Agent parsing API shape: create a parse task, upload the local file to the returned signed URL, poll the task, and download the returned Markdown URL. Use `--backend mineru-sync` for synchronous multipart `/parse` services.
+The `mineru-cli` backend runs `mineru -b <backend> -p <source> -o <temp-output>` and reads the produced Markdown. The `mineru` backend uses the Agent parsing API shape: create a parse task, upload the local file to the returned signed URL, poll the task, and download the returned Markdown URL. Use `--backend mineru-sync` for synchronous multipart `/parse` services.
 
 Generic remote converter:
 

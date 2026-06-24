@@ -25,6 +25,51 @@ def _env() -> dict[str, str]:
     return env
 
 
+def _write_fake_mineru_cli(path: Path) -> Path:
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "out_dir = Path(args[args.index('-o') + 1])\n"
+        "source = Path(args[args.index('-p') + 1])\n"
+        "backend = args[args.index('-b') + 1]\n"
+        "out_dir.mkdir(parents=True, exist_ok=True)\n"
+        "(out_dir / (source.stem + '.md')).write_text(\n"
+        "    f'# MinerU CLI\\n\\nbackend={backend}\\nsource={source.name}\\n',\n"
+        "    encoding='utf-8',\n"
+        ")\n"
+        "log = os.environ.get('FAKE_MINERU_LOG')\n"
+        "if log:\n"
+        "    Path(log).write_text('\\n'.join(args), encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
+def _write_fake_mineru_cli_with_image(path: Path) -> Path:
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "from pathlib import Path\n"
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "out_dir = Path(args[args.index('-o') + 1])\n"
+        "source = Path(args[args.index('-p') + 1])\n"
+        "images_dir = out_dir / 'images'\n"
+        "images_dir.mkdir(parents=True, exist_ok=True)\n"
+        "(images_dir / 'chart.jpg').write_bytes(b'fake image bytes')\n"
+        "(out_dir / (source.stem + '.md')).write_text(\n"
+        "    '# MinerU CLI Assets\\n\\n![chart](images/chart.jpg)\\n',\n"
+        "    encoding='utf-8',\n"
+        ")\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
 class DocConvertCliTests(unittest.TestCase):
     def test_convert_passthrough_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -395,6 +440,129 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertIn(b'name="language"', body)
         self.assertIn(b"en", body)
 
+    def test_convert_mineru_cli_backend_from_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "handoff"
+            fake_cli = _write_fake_mineru_cli(root / "mineru")
+            fake_log = root / "mineru-args.log"
+            input_dir.mkdir()
+            (input_dir / "paper.pdf").write_bytes(b"%PDF fake cli")
+            env = _env()
+            env.update(
+                {
+                    "DOC_TO_MD_BACKEND": "mineru-cli",
+                    "MINERU_CLI_PATH": str(fake_cli),
+                    "MINERU_CLI_BACKEND": "pipeline",
+                    "FAKE_MINERU_LOG": str(fake_log),
+                }
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=env,
+            )
+
+            markdown = (output_dir / "documents" / "paper.md").read_text(encoding="utf-8")
+            log_text = fake_log.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("# MinerU CLI", markdown)
+        self.assertIn("backend=pipeline", markdown)
+        self.assertIn("-b\npipeline", log_text)
+        self.assertIn("-p", log_text)
+
+    def test_convert_mineru_cli_copies_local_image_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "handoff"
+            fake_cli = _write_fake_mineru_cli_with_image(root / "mineru")
+            input_dir.mkdir()
+            (input_dir / "paper.pdf").write_bytes(b"%PDF fake cli image")
+            env = _env()
+            env.update(
+                {
+                    "DOC_TO_MD_BACKEND": "mineru-cli",
+                    "MINERU_CLI_PATH": str(fake_cli),
+                }
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=env,
+            )
+
+            markdown = (output_dir / "documents" / "paper.md").read_text(encoding="utf-8")
+            quality_report = json.loads((output_dir / "quality_report.json").read_text(encoding="utf-8"))
+            manifest = json.loads((output_dir / "doc_manifest.json").read_text(encoding="utf-8"))
+            image_exists = (output_dir / "documents" / "images" / "chart.jpg").is_file()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("![chart](images/chart.jpg)", markdown)
+        self.assertTrue(image_exists)
+        self.assertEqual(quality_report["gate"]["status"], "PASS")
+        self.assertEqual(manifest["quality_gate"]["status"], "PASS")
+
+    def test_convert_auto_prefers_mineru_cli_for_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "handoff"
+            fake_cli = _write_fake_mineru_cli(root / "mineru")
+            input_dir.mkdir()
+            (input_dir / "paper.pdf").write_bytes(b"%PDF fake auto cli")
+            env = _env()
+            env.update(
+                {
+                    "DOC_TO_MD_BACKEND": "auto",
+                    "MINERU_CLI_PATH": str(fake_cli),
+                    "MINERU_CLI_BACKEND": "pipeline",
+                }
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=env,
+            )
+
+            markdown = (output_dir / "documents" / "paper.md").read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("# MinerU CLI", markdown)
+        self.assertIn("source=paper.pdf", markdown)
+
     def test_convert_mineru_backend_from_config_file(self) -> None:
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
@@ -653,6 +821,7 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertIn("--remote-url", result.stdout)
         self.assertIn("--remote-timeout", result.stdout)
         self.assertIn("--mineru-base-url", result.stdout)
+        self.assertIn("--mineru-cli-path", result.stdout)
         self.assertIn("--quality-report-name", result.stdout)
         self.assertIn("segment-plan", result.stdout)
         self.assertIn("--strict", result.stdout)

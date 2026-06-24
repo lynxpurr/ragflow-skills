@@ -66,6 +66,8 @@ class ConfigTests(unittest.TestCase):
                 "mineru:\n"
                 "  base_url: https://mineru.example.test/api/v1/agent\n"
                 "  api_key: ${MINERU_API_KEY}\n"
+                "  cli_path: ${MINERU_CLI_PATH}\n"
+                "  cli_backend: pipeline\n"
                 "  timeout: 123\n"
                 "  enable_table: true\n",
                 encoding="utf-8",
@@ -75,12 +77,15 @@ class ConfigTests(unittest.TestCase):
                 env={
                     "RAGFLOW_API_KEY": "ragflow-secret",
                     "MINERU_API_KEY": "mineru-secret",
+                    "MINERU_CLI_PATH": "/opt/mineru/bin/mineru",
                 },
             )
 
         self.assertEqual(data["ragflow"]["api_key"], "ragflow-secret")
         self.assertEqual(data["doc_to_md"]["backend"], "mineru")
         self.assertEqual(data["mineru"]["api_key"], "mineru-secret")
+        self.assertEqual(data["mineru"]["cli_path"], "/opt/mineru/bin/mineru")
+        self.assertEqual(data["mineru"]["cli_backend"], "pipeline")
         self.assertEqual(data["mineru"]["timeout"], 123)
         self.assertTrue(data["mineru"]["enable_table"])
 
@@ -98,6 +103,8 @@ class ConfigTests(unittest.TestCase):
                 "  backend: remote\n"
                 "mineru:\n"
                 "  base_url: https://mineru.example.test/api/v1/agent\n"
+                "  cli_path: /opt/mineru/bin/mineru\n"
+                "  cli_backend: pipeline\n"
                 "  timeout: 300\n",
                 encoding="utf-8",
             )
@@ -121,7 +128,20 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.doc_to_md.backend, "mineru")
         self.assertEqual(config.mineru.base_url, "https://mineru.example.test/api/v1/agent")
         self.assertEqual(config.mineru.api_key, "local-mineru-key")
+        self.assertEqual(config.mineru.cli_path, "/opt/mineru/bin/mineru")
+        self.assertEqual(config.mineru.cli_backend, "pipeline")
         self.assertEqual(config.mineru.timeout, 120)
+
+    def test_load_skill_config_reads_mineru_cli_from_environment(self) -> None:
+        config = load_skill_config(
+            env={
+                "MINERU_CLI_PATH": "/opt/mineru/bin/mineru",
+                "MINERU_CLI_BACKEND": "pipeline",
+            }
+        )
+
+        self.assertEqual(config.mineru.cli_path, "/opt/mineru/bin/mineru")
+        self.assertEqual(config.mineru.cli_backend, "pipeline")
 
     def test_environment_overrides_verify_ssl(self) -> None:
         config = load_config(

@@ -22,6 +22,32 @@ python3 tools/live_integration_check.py
 
 Run these commands sequentially. Several release tools rebuild `dist/`, so parallel execution can corrupt an in-progress check.
 
+### MinerU CLI Acceptance Gate
+
+When a local MinerU CLI is available, verify the auto-discovery path:
+
+```bash
+MINERU_CLI_PATH=/path/to/mineru \
+MINERU_CLI_BACKEND=pipeline \
+python3 skills/ragflow-doc-to-md/scripts/convert.py \
+  --input <test-file> \
+  --output /tmp/ragflow-mineru-cli-real-test \
+  --backend auto \
+  --json
+```
+
+Confirm:
+- `doc_manifest.json` is produced.
+- `documents/*.md` exists and is non-empty.
+- `quality_report.json` exists.
+- The output identifies `backend: mineru-cli` (not falling through to builtin passthrough).
+
+If no MinerU CLI is available on the test host, `consumer_acceptance.py` still validates the CLI path through a fake MinerU binary — this proves packaging correctness. Real end-to-end CLI conversion should be run on a host with `mineru` installed before tagging the release.
+
+### MinerU CLI Discovery Lesson (2026-06-24)
+
+`command -v mineru` alone is not a reliable existence check. MinerU is commonly installed inside a dedicated virtual environment (`~/tools/mineru/bin/mineru`, `~/.venv/mineru/bin/mineru`) that is invisible to the system PATH, `pip list`, and `import mineru` from the system Python interpreter. Always fall through to a broad filesystem search before reporting "not found." See `docs/08-cli-agent-integration.md#mineru-cli-localization` for the progressive discovery protocol.
+
 The hygiene check rebuilds `dist/` and verifies:
 
 - only the three public skills are present in the release artifact;
