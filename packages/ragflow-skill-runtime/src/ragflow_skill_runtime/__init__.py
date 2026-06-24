@@ -111,6 +111,8 @@ from .observability import (
 )
 from .ragflow_client import RAGFlowClient
 from .profiles import (
+    ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA,
+    ENRICHMENT_EXPERIMENT_REPORT_SCHEMA,
     ChunkProfile,
     ProfileError,
     ProfileIssue,
@@ -119,8 +121,11 @@ from .profiles import (
     compare_validation_reports,
     explain_profile,
     lint_profile,
+    load_enrichment_experiment_matrix,
     load_profile,
+    plan_enrichment_experiments,
     recommend_profile,
+    render_enrichment_experiment_markdown,
     render_profile_compare_markdown,
     render_profile_lint_markdown,
 )
@@ -325,6 +330,8 @@ __all__ = [
     "CITATION_AUDIT_SCHEMA",
     "CANDIDATE_PROFILE_SET_SCHEMA",
     "EvidenceWeight",
+    "ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA",
+    "ENRICHMENT_EXPERIMENT_REPORT_SCHEMA",
     "GROUNDED_QA_EVIDENCE_MAP_REPORT_SCHEMA",
     "GROUNDED_QA_EVIDENCE_MAP_SCHEMA",
     "GROUNDED_QA_GENERATE_REPORT_SCHEMA",
@@ -390,6 +397,7 @@ __all__ = [
     "lint_tagset_file",
     "lint_tagset_payload",
     "load_doc_manifest_payload",
+    "load_enrichment_experiment_matrix",
     "make_kb_manifest_payload",
     "make_assistant_profile_payload",
     "make_assistant_test_plan_payload",
@@ -405,6 +413,7 @@ __all__ = [
     "materialize_segments",
     "merge_metadata_payloads",
     "plan_markdown_segmentation",
+    "plan_enrichment_experiments",
     "preflight_benchmark_dataset",
     "probe_ragflow_client",
     "postprocess_handoff",
@@ -432,6 +441,7 @@ __all__ = [
     "normalize_document_state",
     "resolve_dataset_ids",
     "render_diagnostic_markdown",
+    "render_enrichment_experiment_markdown",
     "render_benchmark_governance_markdown",
     "render_citation_audit_markdown",
     "render_best_profile_markdown",

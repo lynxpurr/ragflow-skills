@@ -1358,6 +1358,33 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         profile_lint_result,
         required_stdout='"schema": "ragflow_profile_lint_report_v1"',
     )
+    profile_experiment_result = _run_command(
+        [
+            sys.executable,
+            str(profile_script),
+            "experiment",
+            "--base-profile",
+            str(PROFILE_PATH),
+            "--set",
+            "auto_keywords=0,3",
+            "--set",
+            "auto_questions=0",
+            "--set",
+            "retrieval.top_k=3,5",
+            "--candidate-set",
+            str(artifacts_dir / "candidate_profile_set.json"),
+            "--report-md",
+            str(artifacts_dir / "profile_experiment_matrix.md"),
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb profile experiment",
+        profile_experiment_result,
+        required_stdout='"schema": "ragflow_enrichment_experiment_report_v1"',
+    )
 
     query_script = script_root / "ragflow-query" / "scripts" / "query.py"
     routing_config = artifacts_dir / "routing_config.json"
@@ -1472,6 +1499,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_diagnostic.md",
         artifacts_dir / "route_test.md",
         artifacts_dir / "profile_lint.md",
+        artifacts_dir / "candidate_profile_set.json",
+        artifacts_dir / "profile_experiment_matrix.md",
         artifacts_dir / "metadata.template.json",
         artifacts_dir / "tagset.template.json",
         artifacts_dir / "benchmark" / "manifest.json",

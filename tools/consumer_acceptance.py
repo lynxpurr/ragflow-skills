@@ -752,6 +752,40 @@ def _run_no_network_checks(
     if recommended_profile.exists():
         produced.append(recommended_profile)
 
+    profile_experiment_candidate_set = work_root / "candidate_profile_set.json"
+    profile_experiment_md = work_root / "profile_experiment_matrix.md"
+    profile_experiment_result = _run_command(
+        [
+            python_executable,
+            str(profile_script),
+            "experiment",
+            "--base-profile",
+            str(profile),
+            "--set",
+            "auto_keywords=0,3",
+            "--set",
+            "auto_questions=0",
+            "--set",
+            "retrieval.top_k=3,5",
+            "--candidate-set",
+            str(profile_experiment_candidate_set),
+            "--report-md",
+            str(profile_experiment_md),
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build profile experiment",
+        profile_experiment_result,
+        required_output='"schema": "ragflow_enrichment_experiment_report_v1"',
+    )
+    if profile_experiment_candidate_set.exists():
+        produced.append(profile_experiment_candidate_set)
+    if profile_experiment_md.exists():
+        produced.append(profile_experiment_md)
+
     validate_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "validate.py")
     benchmark_manifest = work_root / "benchmark_kb_manifest.json"
     benchmark_queries = work_root / "benchmark_queries.json"

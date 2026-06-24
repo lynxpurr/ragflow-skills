@@ -7,12 +7,16 @@ from pathlib import Path
 
 from ragflow_skill_runtime.profiles import (
     ChunkProfile,
+    ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA,
+    ENRICHMENT_EXPERIMENT_REPORT_SCHEMA,
     ProfileError,
     compare_validation_reports,
     explain_profile,
     lint_profile,
+    plan_enrichment_experiments,
     load_profile,
     recommend_profile,
+    render_enrichment_experiment_markdown,
     render_profile_compare_markdown,
     render_profile_lint_markdown,
 )
@@ -152,6 +156,53 @@ class ProfileTests(unittest.TestCase):
 
         self.assertEqual(report["winner"]["path"], str(strong))
         self.assertIn("Profile Compare", render_profile_compare_markdown(report))
+
+    def test_plan_enrichment_experiments_expands_matrix(self) -> None:
+        base = ChunkProfile.from_dict(
+            {
+                "profile_id": "base-en",
+                "chunk_size": 768,
+                "chunk_overlap": 96,
+                "parser_config": {
+                    "chunk_token_num": 768,
+                    "auto_keywords": 0,
+                    "auto_questions": 0,
+                    "__language__": "English",
+                },
+            }
+        )
+        matrix = {
+            "schema": ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA,
+            "name": "enrichment-smoke",
+            "fixed": {
+                "retrieval.top_k": 3,
+                "retrieval.vsw": 0.2,
+                "retrieval.rerank": True,
+                "tag_kb_ids": ["tag-placeholder"],
+            },
+            "dimensions": {
+                "auto_keywords": [0, 3],
+                "auto_questions": [0, 2],
+                "retrieval.similarity_threshold": [0.01],
+            },
+        }
+
+        report = plan_enrichment_experiments(base_profile=base, matrix=matrix, profile_id_prefix="phase27")
+
+        self.assertEqual(report["schema"], ENRICHMENT_EXPERIMENT_REPORT_SCHEMA)
+        self.assertTrue(report["ok"], report["issues"])
+        self.assertEqual(report["summary"]["candidate_profile_count"], 4)
+        self.assertEqual(report["summary"]["mutation_steps"], 0)
+        self.assertEqual(report["candidate_profile_set"]["schema"], "ragflow_candidate_profile_set_v1")
+        self.assertEqual(len(report["candidate_profile_set"]["profiles"]), 4)
+        issue_codes = {issue["code"] for issue in report["issues"]}
+        self.assertIn("llm_backed_enrichment_enabled", issue_codes)
+        self.assertIn("low_threshold_pollution_risk", issue_codes)
+        self.assertIn("rerank_latency_risk", issue_codes)
+        self.assertIn("user_tag_kb_ids", issue_codes)
+        profile_ids = {item["profile_id"] for item in report["experiments"]}
+        self.assertEqual(len(profile_ids), 4)
+        self.assertIn("RAGFlow Enrichment Experiment Matrix", render_enrichment_experiment_markdown(report))
 
 
 if __name__ == "__main__":

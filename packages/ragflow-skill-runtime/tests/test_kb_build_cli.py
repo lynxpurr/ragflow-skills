@@ -1694,6 +1694,60 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["winner"]["path"], str(second))
         self.assertIn("Profile Compare", compare_report_text)
 
+    def test_profile_experiment_via_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            matrix = root / "matrix.json"
+            candidate_set = root / "candidate_profile_set.json"
+            report_json = root / "experiment_report.json"
+            report_md = root / "experiment_report.md"
+            matrix.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_enrichment_experiment_matrix_v1",
+                        "name": "phase27-smoke",
+                        "fixed": {"retrieval.top_k": 3},
+                        "dimensions": {
+                            "auto_keywords": [0, 3],
+                            "auto_questions": [0],
+                            "retrieval.similarity_threshold": [0.01],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROFILE_SCRIPT),
+                    "experiment",
+                    "--base-profile",
+                    str(PROFILE_PATH),
+                    "--matrix",
+                    str(matrix),
+                    "--candidate-set",
+                    str(candidate_set),
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+            candidate_payload = json.loads(candidate_set.read_text(encoding="utf-8"))
+            report_text = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(payload["schema"], "ragflow_enrichment_experiment_report_v1")
+        self.assertEqual(payload["summary"]["candidate_profile_count"], 2)
+        self.assertEqual(candidate_payload["schema"], "ragflow_candidate_profile_set_v1")
+        self.assertIn("llm_backed_enrichment_enabled", {issue["code"] for issue in payload["issues"]})
+        self.assertIn("RAGFlow Enrichment Experiment Matrix", report_text)
+
     def test_validate_regression_requires_queries_without_network(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manifest = Path(tmp) / "kb_manifest.json"

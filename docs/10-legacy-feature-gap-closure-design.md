@@ -463,6 +463,15 @@ Add `profile experiment` or integrate into `optimize`:
 Reports should show quality, parse time, query latency, empty-result rate, and warnings
 about cost or slow paths.
 
+MVP `profile experiment` is offline and non-mutating. It reads a base chunk profile and a
+`ragflow_enrichment_experiment_matrix_v1`, expands enrichment dimensions into inline
+`ragflow_candidate_profile_set_v1` profiles for `optimize --profile-set`, and records
+retrieval-only settings such as `top_k`, `threshold`, `vsw`, rerank switches, and
+user-owned `tag_kb_ids` as local experiment metadata. The report warns about slow or
+LLM-backed paths such as auto keyword/question enrichment, rerank, high `top_k`, and low
+thresholds. It does not build KBs, run validation, call rerankers, or ship private tag
+IDs in public fixtures.
+
 Enrichment reports should also call out pollution risk:
 
 - tag pollution rate;

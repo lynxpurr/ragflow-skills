@@ -26,11 +26,15 @@ def bootstrap_runtime() -> None:
 bootstrap_runtime()
 
 from ragflow_skill_runtime import (  # noqa: E402
+    ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA,
     compare_validation_reports,
     explain_profile,
     lint_profile,
+    load_enrichment_experiment_matrix,
     load_profile,
+    plan_enrichment_experiments,
     recommend_profile,
+    render_enrichment_experiment_markdown,
     render_profile_compare_markdown,
     render_profile_lint_markdown,
 )
@@ -97,8 +101,59 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_cli_value(value: str) -> Any:
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def _parse_set_spec(value: str) -> tuple[str, list[Any]]:
+    if "=" not in value:
+        raise ProfileError("--set values must use key=value1,value2 syntax")
+    key, raw_values = value.split("=", 1)
+    key = key.strip()
+    if not key:
+        raise ProfileError("--set key must not be empty")
+    raw_values = raw_values.strip()
+    if raw_values.startswith("["):
+        parsed = _parse_cli_value(raw_values)
+        if not isinstance(parsed, list):
+            raise ProfileError("--set JSON value must be a list when it starts with [")
+        return key, parsed
+    return key, [_parse_cli_value(part.strip()) for part in raw_values.split(",") if part.strip()]
+
+
+def _cmd_experiment(args: argparse.Namespace) -> int:
+    matrix = (
+        load_enrichment_experiment_matrix(args.matrix)
+        if args.matrix
+        else {"schema": ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA, "dimensions": {}}
+    )
+    if args.name:
+        matrix["name"] = args.name
+    dimensions = matrix.setdefault("dimensions", {})
+    if not isinstance(dimensions, dict):
+        raise ProfileError("experiment matrix dimensions must be an object")
+    for spec in args.set or []:
+        key, values = _parse_set_spec(spec)
+        dimensions[key] = values
+
+    payload = plan_enrichment_experiments(
+        base_profile=load_profile(args.base_profile),
+        matrix=matrix,
+        profile_id_prefix=args.profile_id_prefix,
+        max_experiments=args.max_experiments,
+    )
+    _write_json(args.report_json, payload)
+    _write_json(args.candidate_set, payload["candidate_profile_set"])
+    _write_text(args.report_md, render_enrichment_experiment_markdown(payload))
+    _dump_json(payload)
+    return 0 if payload["ok"] else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Lint, explain, recommend, and compare RAGFlow chunk profiles")
+    parser = argparse.ArgumentParser(description="Lint, explain, recommend, compare, and plan RAGFlow chunk profiles")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     lint = subparsers.add_parser("lint", help="Lint a chunk profile")
@@ -130,6 +185,18 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--report-json", help="Optional JSON report output path")
     compare.add_argument("--report-md", help="Optional Markdown report output path")
     compare.set_defaults(func=_cmd_compare)
+
+    experiment = subparsers.add_parser("experiment", help="Plan offline enrichment experiment profiles")
+    experiment.add_argument("--base-profile", required=True, help="Base profile JSON/YAML path")
+    experiment.add_argument("--matrix", help="ragflow_enrichment_experiment_matrix_v1 JSON/YAML")
+    experiment.add_argument("--set", action="append", default=[], help="Add/override a dimension as key=value1,value2; may be repeated")
+    experiment.add_argument("--name", help="Optional experiment matrix name")
+    experiment.add_argument("--profile-id-prefix", help="Prefix for generated candidate profile ids")
+    experiment.add_argument("--max-experiments", type=int, default=64, help="Maximum matrix expansion size")
+    experiment.add_argument("--candidate-set", help="Optional ragflow_candidate_profile_set_v1 output path")
+    experiment.add_argument("--report-json", help="Optional experiment report JSON output path")
+    experiment.add_argument("--report-md", help="Optional experiment report Markdown path")
+    experiment.set_defaults(func=_cmd_experiment)
     return parser
 
 

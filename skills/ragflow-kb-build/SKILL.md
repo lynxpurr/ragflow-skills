@@ -57,6 +57,7 @@ python scripts/profile.py lint --profile ./templates/default-en-768.json --repor
 python scripts/profile.py explain --profile ./templates/default-zh-512.json
 python scripts/profile.py recommend --language en --doc-type manual --output ./run/recommended-profile.json
 python scripts/profile.py compare --report ./run/profile-a-validation.json --report ./run/profile-b-validation.json --report-md ./run/profile_compare.md
+python scripts/profile.py experiment --base-profile ./templates/default-en-768.json --set auto_keywords=0,3 --set auto_questions=0,2 --set retrieval.top_k=3,5 --candidate-set ./run/candidate_profile_set.json --report-md ./run/profile_experiment_matrix.md
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level smoke
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level regression --queries ./templates/validation-queries.example.json --report-md ./run/validation.md
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level benchmark --queries ./templates/benchmark-queries.example.json --qrels ./templates/qrels.example.json --chunk-snapshot ./run/chunk_snapshot.json --gate-config ./templates/benchmark-gate.example.json --report-md ./run/benchmark.md
@@ -88,6 +89,7 @@ Notes:
 - Use `probe.py` to check safe RAGFlow API compatibility before live build operations.
 - Use `diagnose.py` to explain manifest, parse-state, duplicate-name, short-ID, and zero-chunk symptoms without private database access.
 - Use `profile.py lint/explain/recommend/compare` to review chunk profiles before upload and compare validation reports after profile experiments.
+- Use `profile.py experiment` to expand an offline enrichment experiment matrix into a local candidate profile set for `optimize --profile-set`; it records retrieval settings and warns about slow or LLM-backed enrichment without touching RAGFlow.
 - `validate.py` supports `smoke`, `regression`, and `benchmark`; regression requires a query set, and benchmark requires both a query set and qrels.
 - Query sets are small JSON files with `question`, optional `min_chunks`, `expected_terms`, and `expected_documents`.
 - Benchmark qrels are small JSON files mapping query IDs to relevant documents/chunks; qrels can include `expected_chunks` that match live chunk IDs or stable chunk snapshot hashes. Chunk snapshots include content/provenance coverage and per-document chunk distribution. Benchmark reports include hit rate, MRR, precision@k, recall@k, nDCG@k, MAP@k, empty-result rate, strict chunk recall when applicable, query-type breakdown, optional gate checks, and optional baseline deltas.
