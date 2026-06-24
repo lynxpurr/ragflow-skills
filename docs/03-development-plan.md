@@ -830,14 +830,14 @@ Tasks:
 - [x] Add `ragflow-kb-build qa validate` to reject ungrounded generated evidence before benchmark use.
 - [x] Add `ragflow-kb-build qa map-evidence` to map evidence spans onto chunk snapshots.
 - [x] Add `ragflow-kb-build segment-metadata report`.
-- [ ] Add `ragflow-kb-build optimize --plan-only` for non-mutating experiment planning.
-- [ ] Add candidate profile set loading from files, directories, and generated recommendations.
-- [ ] Add disposable KB naming conventions and collision checks.
+- [x] Add `ragflow-kb-build optimize --plan-only` for non-mutating experiment planning.
+- [x] Add candidate profile set loading from files, directories, and generated recommendations.
+- [x] Add disposable KB naming conventions and collision checks.
 - [ ] Require `--execute` before creating any experiment KB.
 - [ ] Build each candidate profile into an isolated disposable KB.
 - [ ] Run benchmark validation for each candidate.
 - [ ] Run `diagnose` automatically for failed builds or zero-chunk cases.
-- [ ] Produce `optimization_plan.json`.
+- [x] Produce `optimization_plan.json`.
 - [ ] Produce `profile_experiment_results.json`.
 - [ ] Produce `best_profile_report.md` with metric tradeoffs and recommendation rationale.
 - [ ] Add `cleanup_plan.json` and exact-confirmation cleanup execution.

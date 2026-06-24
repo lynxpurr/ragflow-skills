@@ -968,6 +968,8 @@ raise SystemExit(code)
     qa_evidence_map = work_root / "qa_evidence_map.json"
     qa_evidence_map_md = work_root / "qa_evidence_map.md"
     segment_metadata_md = work_root / "segment_metadata.md"
+    optimization_plan = work_root / "optimization_plan.json"
+    optimization_plan_md = work_root / "optimization_plan.md"
     benchmark_import_result = _run_command(
         [
             python_executable,
@@ -1067,6 +1069,47 @@ raise SystemExit(code)
         "kb-build segment-metadata report",
         segment_metadata_result,
         required_output='"schema": "ragflow_segment_metadata_report_v1"',
+    )
+    optimize_plan_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "optimize",
+            "--plan-only",
+            "--doc-manifest",
+            str(doc_manifest),
+            "--kb-name",
+            "kb:consumer-acceptance",
+            "--profile",
+            str(recommended_profile),
+            "--recommendation",
+            "zh:notes",
+            "--benchmark-manifest",
+            str(benchmark_dir / "manifest.json"),
+            "--metadata",
+            str(metadata_merged),
+            "--chunk-snapshot",
+            str(benchmark_chunk_snapshot),
+            "--gate-config",
+            str(benchmark_gate),
+            "--baseline-report",
+            str(baseline_benchmark_report_json),
+            "--run-id",
+            "acceptance",
+            "--output",
+            str(optimization_plan),
+            "--report-md",
+            str(optimization_plan_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build optimize plan-only",
+        optimize_plan_result,
+        required_output='"schema": "ragflow_optimization_plan_v1"',
     )
     benchmark_preflight_result = _run_command(
         [
@@ -1228,6 +1271,8 @@ raise SystemExit(code)
         qa_evidence_map,
         qa_evidence_map_md,
         segment_metadata_md,
+        optimization_plan,
+        optimization_plan_md,
         benchmark_preflight_md,
         benchmark_sample_md,
         benchmark_summary_md,

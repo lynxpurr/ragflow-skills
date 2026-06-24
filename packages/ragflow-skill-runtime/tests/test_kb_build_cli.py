@@ -992,6 +992,84 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("ragflow_segment_metadata_report_v1", result.stdout)
         self.assertIn("RAGFlow Segment Metadata Report", report_md_text)
 
+    def test_optimize_plan_only_subcommand_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "sample.md").write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "candidate-a",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                        "parser_config": {
+                            "chunk_token_num": 512,
+                            "auto_keywords": 0,
+                            "auto_questions": 0,
+                            "__language__": "English",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            benchmark_manifest = root / "benchmark_manifest.json"
+            output = root / "optimization_plan.json"
+            report_md = root / "optimization_plan.md"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            benchmark_manifest.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_benchmark_manifest_v1",
+                        "artifacts": {"queries": "queries.json", "qrels": "qrels.json"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "--plan-only",
+                    "--input",
+                    str(docs),
+                    "--kb-name",
+                    "kb:optimize",
+                    "--profile",
+                    str(profile),
+                    "--recommendation",
+                    "en:manual",
+                    "--benchmark-manifest",
+                    str(benchmark_manifest),
+                    "--run-id",
+                    "testrun",
+                    "--output",
+                    str(output),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+            report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("ragflow_optimization_plan_v1", result.stdout)
+        self.assertEqual(payload["summary"]["candidate_count"], 2)
+        self.assertFalse(payload["mutation_allowed"])
+        self.assertIn("RAGFlow Optimization Plan", report_md_text)
+
     def test_inspect_manifest_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manifest = Path(tmp) / "kb_manifest.json"

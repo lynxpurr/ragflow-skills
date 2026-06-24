@@ -1172,6 +1172,42 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         benchmark_preflight_result,
         required_stdout='"schema": "ragflow_benchmark_preflight_report_v1"',
     )
+    optimization_plan = artifacts_dir / "optimization_plan.json"
+    optimize_plan_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "optimize",
+            "--plan-only",
+            "--doc-manifest",
+            str(doc_manifest),
+            "--kb-name",
+            "kb:platform-smoke",
+            "--profile",
+            str(PROFILE_PATH),
+            "--recommendation",
+            "zh:notes",
+            "--benchmark-manifest",
+            str(benchmark_dir / "manifest.json"),
+            "--metadata",
+            str(metadata_template),
+            "--chunk-snapshot",
+            str(chunk_snapshot),
+            "--run-id",
+            "platform",
+            "--output",
+            str(optimization_plan),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb optimize plan-only",
+        optimize_plan_result,
+        required_stdout='"schema": "ragflow_optimization_plan_v1"',
+    )
     benchmark_sample_dir = artifacts_dir / "benchmark-sample"
     benchmark_sample_result = _run_command(
         [
@@ -1364,6 +1400,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "benchmark" / "qa.json",
         artifacts_dir / "qa_evidence_map.json",
         artifacts_dir / "segment_metadata_report.json",
+        artifacts_dir / "optimization_plan.json",
         artifacts_dir / "benchmark_current.json",
         artifacts_dir / "benchmark_baseline.json",
         artifacts_dir / "validation_report.json",

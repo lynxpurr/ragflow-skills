@@ -376,6 +376,12 @@ The optimization loop should be able to consume benchmark lifecycle artifacts fr
 Design 13, including imported public benchmarks, generated QA sets, prior trend baselines,
 and delta reports.
 
+MVP `optimize --plan-only` creates an offline `ragflow_optimization_plan_v1` without
+creating disposable KBs. It loads candidate profiles from explicit files,
+directories, `ragflow_candidate_profile_set_v1` files, and generated recommendations,
+resolves benchmark manifest artifacts, lints candidate profiles, assigns disposable KB
+names, and reports naming collisions before any live execution is allowed.
+
 ## Feature Design 5: Chunk Snapshot And Strict Chunk Recall
 
 ### Problem

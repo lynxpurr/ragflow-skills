@@ -41,6 +41,7 @@ python scripts/build.py snapshot-chunks --input ./run/benchmark_report.json --ou
 python scripts/build.py qa validate --qa ./run/benchmark/qa.json --source-dir ./handoff --report-md ./run/qa_validate.md
 python scripts/build.py qa map-evidence --qa ./run/benchmark/qa.json --chunk-snapshot ./run/chunk_snapshot.json --output ./run/qa_evidence_map.json --report-md ./run/qa_evidence_map.md
 python scripts/build.py segment-metadata report --chunk-snapshot ./run/chunk_snapshot.json --metadata ./run/metadata.merged.json --segmentation-plan ./run/segmentation_plan.json --report-md ./run/segment_metadata.md
+python scripts/build.py optimize --plan-only --doc-manifest ./handoff/doc_manifest.json --kb-name kb:example --profile ./profiles/default.json --recommendation en:manual --benchmark-manifest ./run/benchmark/manifest.json --output ./run/optimization_plan.json --report-md ./run/optimization_plan.md
 python scripts/append.py --kb-manifest ./run/kb_manifest.json --input ./new-markdown --output ./run/append_plan.json
 python scripts/append.py --kb-manifest ./run/kb_manifest.json --input ./new-markdown --live-preview --config /path/to/ragflow-config.local.yaml
 python scripts/append.py --kb-manifest ./run/kb_manifest.json --input ./new-markdown --execute --config /path/to/ragflow-config.local.yaml
@@ -75,6 +76,7 @@ Notes:
 - Use `qa validate` before feeding generated QA into benchmark gates; it checks required questions, answers, evidence spans, and exact source-span grounding when `--sources` or `--source-dir` is provided.
 - Use `qa map-evidence` after `snapshot-chunks` to map exact QA evidence spans onto chunk snapshot IDs and stable hashes for strict `expected_chunks` qrels.
 - Use `segment-metadata report` to measure document metadata and segment provenance coverage in chunk snapshots before relying on segment-aware benchmark analysis.
+- Use `optimize --plan-only` to load candidate profiles, resolve benchmark artifacts, lint candidates, and plan disposable KB experiment names without creating or deleting anything in RAGFlow.
 - Use `append.py` without `--execute` first; it creates an append plan and does not mutate RAGFlow. `--execute` uploads only planned new files and parses only the newly uploaded document IDs.
 - Use `cleanup.py` without `--execute` first; deletion requires `--execute`, an exact `--confirm-dataset-id`, and the matching `--confirm-kb-name` when the name is known.
 - Use `probe.py` to check safe RAGFlow API compatibility before live build operations.

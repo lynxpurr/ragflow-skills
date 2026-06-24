@@ -29,6 +29,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     BuildError,
     HandoffError,
     RAGFlowClient,
+    create_optimization_plan,
     discover_markdown_documents,
     inspect_rich_handoff,
     load_config,
@@ -49,6 +50,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_benchmark_governance_markdown,
     sample_benchmark_dataset,
     segment_metadata_report_file,
+    render_optimization_plan_markdown,
     snapshot_chunks,
     summarize_benchmark_report,
     trend_benchmark_reports,
@@ -487,6 +489,50 @@ def _run_segment_metadata_report(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_optimize(args: argparse.Namespace) -> int:
+    try:
+        if args.execute:
+            raise ProfileError("optimize --execute is not implemented yet; use --plan-only for offline planning")
+        if not args.plan_only:
+            raise ProfileError("optimize currently requires --plan-only")
+        doc_manifest = load_doc_manifest(args.doc_manifest) if args.doc_manifest else None
+        _guard_quality_gate(doc_manifest, allow_blocked=args.allow_blocked)
+        docs = discover_markdown_documents(
+            input_path=args.input,
+            doc_manifest=doc_manifest,
+            manifest_base_path=args.doc_manifest,
+        )
+        plan = create_optimization_plan(
+            kb_name=args.kb_name,
+            document_paths=[doc.path for doc in docs],
+            input_path=args.input,
+            doc_manifest_path=args.doc_manifest,
+            profile_paths=args.profile,
+            profile_dirs=args.profile_dir,
+            profile_set_paths=args.profile_set,
+            recommendations=args.recommendation,
+            benchmark_manifest_path=args.benchmark_manifest,
+            queries_path=args.queries,
+            qrels_path=args.qrels,
+            qa_path=args.qa,
+            metadata_path=args.metadata,
+            tagset_path=args.tagset,
+            chunk_snapshot_path=args.chunk_snapshot,
+            gate_config_path=args.gate_config,
+            baseline_report_path=args.baseline_report,
+            artifact_dir=args.artifact_dir,
+            run_id=args.run_id,
+            top_k=args.top_k,
+            metric_cutoff=args.metric_cutoff,
+        )
+        _write_json_file(args.output, plan)
+        _write_text_file(args.report_md, render_optimization_plan_markdown(plan))
+        _dump_json(plan)
+        return 0 if plan["ok"] else 1
+    except (BuildError, ProfileError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def build_inspect_handoff_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Inspect a Markdown handoff and optional rich sidecars")
     parser.add_argument("--handoff", required=True, help="Handoff directory containing doc_manifest.json")
@@ -699,6 +745,38 @@ def build_segment_metadata_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_optimize_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Plan RAGFlow profile optimization experiments")
+    parser.add_argument("--plan-only", action="store_true", help="Create an offline optimization plan without mutating RAGFlow")
+    parser.add_argument("--execute", action="store_true", help="Reserved for future live optimization execution")
+    parser.add_argument("--input", help="Markdown file or directory")
+    parser.add_argument("--doc-manifest", help="Path to doc_manifest.json")
+    parser.add_argument("--kb-name", required=True, help="Base RAGFlow dataset name used for disposable KB naming")
+    parser.add_argument("--allow-blocked", action="store_true", help="Allow planning with a BLOCKED doc_manifest quality gate")
+    parser.add_argument("--profile", action="append", default=[], help="Candidate profile JSON/YAML path; may be repeated")
+    parser.add_argument("--profile-dir", action="append", default=[], help="Directory of candidate profile JSON/YAML files; may be repeated")
+    parser.add_argument("--profile-set", action="append", default=[], help="ragflow_candidate_profile_set_v1 JSON/YAML; may be repeated")
+    parser.add_argument("--recommendation", action="append", default=[], help="Generated candidate as language:doc_type, e.g. en:manual")
+    parser.add_argument("--benchmark-manifest", help="Benchmark manifest.json produced by benchmark import/sample")
+    parser.add_argument("--queries", help="Benchmark queries JSON when no manifest is provided")
+    parser.add_argument("--qrels", help="Benchmark qrels JSON when no manifest is provided")
+    parser.add_argument("--qa", help="Optional grounded QA JSON")
+    parser.add_argument("--metadata", help="Optional ragflow_metadata_v1 file used by build/validation")
+    parser.add_argument("--tagset", help="Optional tagset reference recorded in the plan")
+    parser.add_argument("--chunk-snapshot", help="Optional ragflow_chunk_snapshot_v1 for strict chunk recall")
+    parser.add_argument("--gate-config", help="Optional benchmark gate threshold JSON")
+    parser.add_argument("--baseline-report", help="Optional previous benchmark report JSON")
+    parser.add_argument("--artifact-dir", default="optimization-artifacts", help="Planned experiment artifact directory")
+    parser.add_argument("--run-id", help="Optional disposable KB run id; defaults to a deterministic hash")
+    parser.add_argument("--top-k", type=int, default=3, help="Planned benchmark validation top_k")
+    parser.add_argument("--metric-cutoff", type=int, help="Optional planned benchmark metric cutoff")
+    parser.add_argument("--output", default="optimization_plan.json", help="Output ragflow_optimization_plan_v1 JSON")
+    parser.add_argument("--report-md", help="Optional optimization plan Markdown path")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    parser.set_defaults(func=_run_optimize)
+    return parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build a RAGFlow KB from Markdown")
     parser.add_argument("--input", help="Markdown file or directory")
@@ -745,6 +823,9 @@ def main(argv: list[str] | None = None) -> int:
         if command == "segment-metadata":
             segment_metadata_args = build_segment_metadata_parser().parse_args(command_args)
             return segment_metadata_args.func(segment_metadata_args)
+        if command == "optimize":
+            optimize_args = build_optimize_parser().parse_args(command_args)
+            return optimize_args.func(optimize_args)
     args = build_parser().parse_args(actual_argv)
     return _run(args)
 
