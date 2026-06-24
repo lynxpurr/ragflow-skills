@@ -800,7 +800,10 @@ class KbBuildCliTests(unittest.TestCase):
             )
             qa = root / "qa.json"
             bad_qa = root / "bad_qa.json"
+            chunk_snapshot = root / "chunk_snapshot.json"
+            evidence_map = root / "qa_evidence_map.json"
             report_md = root / "qa_validate.md"
+            map_report_md = root / "qa_evidence_map.md"
             qa.write_text(
                 json.dumps(
                     {
@@ -824,6 +827,24 @@ class KbBuildCliTests(unittest.TestCase):
             )
             bad_qa.write_text(
                 json.dumps({"items": [{"id": "qa-2", "question": "What is missing?", "answer": "Evidence."}]}),
+                encoding="utf-8",
+            )
+            chunk_snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "chunks": [
+                            {
+                                "id": "chunk-1",
+                                "stable_hash": "sha256:" + "b" * 64,
+                                "content": "The answer is grounded in this source sentence.",
+                                "document_name": "source.md",
+                                "chunk_id": "chunk-a",
+                                "aliases": ["chunk-a"],
+                            }
+                        ],
+                    }
+                ),
                 encoding="utf-8",
             )
 
@@ -863,13 +884,41 @@ class KbBuildCliTests(unittest.TestCase):
                 check=False,
                 env=_env(),
             )
+            map_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "qa",
+                    "map-evidence",
+                    "--qa",
+                    str(qa),
+                    "--chunk-snapshot",
+                    str(chunk_snapshot),
+                    "--output",
+                    str(evidence_map),
+                    "--report-md",
+                    str(map_report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
             report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+            map_report_md_text = map_report_md.read_text(encoding="utf-8") if map_report_md.exists() else ""
+            evidence_map_payload = json.loads(evidence_map.read_text(encoding="utf-8")) if evidence_map.exists() else {}
 
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("ragflow_grounded_qa_validate_report_v1", result.stdout)
         self.assertIn("RAGFlow Grounded QA Validate Report", report_md_text)
         self.assertEqual(bad_result.returncode, 1, bad_result.stdout)
         self.assertIn("qa_item_missing_evidence", bad_result.stdout)
+        self.assertEqual(map_result.returncode, 0, map_result.stdout)
+        self.assertIn("ragflow_grounded_qa_evidence_map_report_v1", map_result.stdout)
+        self.assertIn("RAGFlow QA Evidence Map Report", map_report_md_text)
+        self.assertEqual(evidence_map_payload["schema"], "ragflow_grounded_qa_evidence_map_v1")
+        self.assertEqual(evidence_map_payload["items"][0]["expected_chunks"], ["sha256:" + "b" * 64])
 
     def test_inspect_manifest_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

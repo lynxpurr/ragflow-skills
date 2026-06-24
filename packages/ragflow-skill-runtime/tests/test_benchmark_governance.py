@@ -14,10 +14,13 @@ from ragflow_skill_runtime.benchmark_governance import (
     BENCHMARK_SUMMARY_REPORT_SCHEMA,
     BENCHMARK_TREND_REPORT_SCHEMA,
     CHUNK_SNAPSHOT_REPORT_SCHEMA,
+    GROUNDED_QA_EVIDENCE_MAP_REPORT_SCHEMA,
+    GROUNDED_QA_EVIDENCE_MAP_SCHEMA,
     GROUNDED_QA_VALIDATE_REPORT_SCHEMA,
     delta_benchmark_reports,
     gate_benchmark_report,
     import_benchmark_dataset,
+    map_grounded_qa_evidence,
     preflight_benchmark_dataset,
     sample_benchmark_dataset,
     snapshot_chunks,
@@ -158,6 +161,104 @@ class BenchmarkGovernanceTests(unittest.TestCase):
             [issue["code"] for issue in report["issues"]],
             ["qa_item_missing_evidence", "evidence_span_not_found"],
         )
+
+    def test_map_grounded_qa_evidence_to_chunk_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chunks = root / "chunks.json"
+            snapshot = root / "chunk_snapshot.json"
+            qa = root / "qa.json"
+            output = root / "qa_evidence_map.json"
+            chunks.write_text(
+                json.dumps(
+                    {
+                        "chunks": [
+                            {
+                                "content": "The mapped evidence sentence appears in this chunk.",
+                                "document_name": "source.md",
+                                "chunk_id": "chunk-a",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            snapshot_chunks(input_path=chunks, output_path=snapshot, include_content=True)
+            stable_hash = json.loads(snapshot.read_text(encoding="utf-8"))["chunks"][0]["stable_hash"]
+            qa.write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "id": "qa-1",
+                                "query_id": "q1",
+                                "question": "What evidence is mapped?",
+                                "answer": "The mapped evidence sentence.",
+                                "evidence": [
+                                    {
+                                        "document": "source.md",
+                                        "text": "The mapped evidence sentence appears in this chunk.",
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = map_grounded_qa_evidence(qa_path=qa, chunk_snapshot_path=snapshot, output_path=output)
+            evidence_map = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(report["schema"], GROUNDED_QA_EVIDENCE_MAP_REPORT_SCHEMA)
+        self.assertTrue(report["ok"], report["issues"])
+        self.assertEqual(evidence_map["schema"], GROUNDED_QA_EVIDENCE_MAP_SCHEMA)
+        self.assertEqual(evidence_map["summary"]["mapped_span_count"], 1)
+        self.assertEqual(evidence_map["items"][0]["expected_chunks"], [stable_hash])
+
+    def test_map_grounded_qa_evidence_reports_unmapped_spans(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snapshot = root / "chunk_snapshot.json"
+            qa = root / "qa.json"
+            output = root / "qa_evidence_map.json"
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "chunks": [
+                            {
+                                "id": "chunk-1",
+                                "stable_hash": "sha256:" + "a" * 64,
+                                "content": "A different sentence.",
+                                "document_name": "source.md",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            qa.write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "id": "qa-1",
+                                "question": "What is missing?",
+                                "answer": "Missing.",
+                                "evidence": [{"document": "source.md", "text": "This span is absent."}],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = map_grounded_qa_evidence(qa_path=qa, chunk_snapshot_path=snapshot, output_path=output)
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["summary"]["unmapped_span_count"], 1)
+        self.assertEqual(report["issues"][0]["code"], "evidence_span_unmapped")
 
     def test_sample_benchmark_dataset_is_deterministic_and_filters_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

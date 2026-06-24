@@ -828,7 +828,7 @@ Tasks:
 - [x] Add root-cause hints for retrieval coverage, ranking, tag pollution, generation grounding, citation gaps, over-abstention, and cost/latency regressions.
 - [ ] Add `ragflow-kb-build qa generate` for grounded QA sets with optional LLM adapter.
 - [x] Add `ragflow-kb-build qa validate` to reject ungrounded generated evidence before benchmark use.
-- [ ] Add `ragflow-kb-build qa map-evidence` to map evidence spans onto chunk snapshots.
+- [x] Add `ragflow-kb-build qa map-evidence` to map evidence spans onto chunk snapshots.
 - [ ] Add `ragflow-kb-build segment-metadata report`.
 - [ ] Add `ragflow-kb-build optimize --plan-only` for non-mutating experiment planning.
 - [ ] Add candidate profile set loading from files, directories, and generated recommendations.

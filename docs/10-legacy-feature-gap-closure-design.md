@@ -694,6 +694,11 @@ question, answer, and evidence fields by default, and verifies that evidence spa
 verbatim in `--sources` or `--source-dir` inputs when source text is provided. It does not
 call an LLM, repair near matches, or mutate RAGFlow.
 
+MVP `qa map-evidence` maps exact QA evidence spans onto `ragflow_chunk_snapshot_v1`
+chunks using `content` or `content_preview`, and exports per-item `expected_chunks`
+references from stable hashes or chunk IDs. It is deterministic and offline; it does not
+repair near matches or query RAGFlow.
+
 ## Feature Design 15: Retrieval Pollution And Suppression Diagnostics
 
 ### Problem

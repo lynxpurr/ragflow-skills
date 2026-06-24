@@ -32,6 +32,8 @@ BENCHMARK_QUERIES_SCHEMA = "ragflow_benchmark_queries_v1"
 BENCHMARK_QRELS_SCHEMA = "ragflow_benchmark_qrels_v1"
 GROUNDED_QA_SCHEMA = "ragflow_grounded_qa_v1"
 GROUNDED_QA_VALIDATE_REPORT_SCHEMA = "ragflow_grounded_qa_validate_report_v1"
+GROUNDED_QA_EVIDENCE_MAP_SCHEMA = "ragflow_grounded_qa_evidence_map_v1"
+GROUNDED_QA_EVIDENCE_MAP_REPORT_SCHEMA = "ragflow_grounded_qa_evidence_map_report_v1"
 BENCHMARK_IMPORT_REPORT_SCHEMA = "ragflow_benchmark_import_report_v1"
 BENCHMARK_SAMPLE_REPORT_SCHEMA = "ragflow_benchmark_sample_report_v1"
 BENCHMARK_PREFLIGHT_REPORT_SCHEMA = "ragflow_benchmark_preflight_report_v1"
@@ -477,6 +479,251 @@ def validate_grounded_qa(
             "source_count": len(sources),
             "require_answer": require_answer,
         },
+        "issues": [issue.to_dict() for issue in issues],
+    }
+
+
+def _snapshot_text(item: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    for key in ("content", "content_preview"):
+        value = _clean_string(item.get(key))
+        if value:
+            return value, key
+    return None, None
+
+
+def _snapshot_document_aliases(item: Mapping[str, Any]) -> set[str]:
+    aliases: set[str] = set()
+    for key in ("document", "document_name", "document_id", "source", "source_path", "path", "file", "filename"):
+        value = _clean_string(item.get(key))
+        aliases.update(_source_ref_keys(value))
+    return aliases
+
+
+def _snapshot_candidate_chunks(chunks: list[Mapping[str, Any]], document_ref: str | None) -> list[Mapping[str, Any]]:
+    keys = _source_ref_keys(document_ref)
+    if not keys:
+        return []
+    return [chunk for chunk in chunks if keys.intersection(_snapshot_document_aliases(chunk))]
+
+
+def _snapshot_expected_chunk_ref(item: Mapping[str, Any]) -> str | None:
+    stable_hash = _clean_string(item.get("stable_hash"))
+    if stable_hash:
+        return stable_hash
+    content_sha256 = _clean_string(item.get("content_sha256"))
+    if content_sha256:
+        return content_sha256 if content_sha256.startswith("sha256:") else f"sha256:{content_sha256}"
+    return _clean_string(item.get("chunk_id")) or _clean_string(item.get("id"))
+
+
+def _snapshot_chunk_match(item: Mapping[str, Any], *, span: str) -> dict[str, Any] | None:
+    text, text_field = _snapshot_text(item)
+    if not text or text_field is None:
+        return None
+    span_start = text.find(span)
+    if span_start < 0:
+        return None
+    aliases = item.get("aliases")
+    return {
+        "snapshot_id": item.get("id"),
+        "stable_hash": item.get("stable_hash"),
+        "content_sha256": item.get("content_sha256"),
+        "chunk_id": item.get("chunk_id"),
+        "document_name": item.get("document_name"),
+        "document_id": item.get("document_id"),
+        "expected_chunk": _snapshot_expected_chunk_ref(item),
+        "match_field": text_field,
+        "span_start": span_start,
+        "span_end": span_start + len(span),
+        "aliases": aliases if isinstance(aliases, list) else [],
+    }
+
+
+def _find_evidence_chunk_matches(
+    *,
+    chunks: list[Mapping[str, Any]],
+    span: str,
+    document_ref: str | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    candidates = _snapshot_candidate_chunks(chunks, document_ref)
+    if candidates:
+        matches = [match for chunk in candidates if (match := _snapshot_chunk_match(chunk, span=span))]
+        if matches:
+            return matches, False
+    matches = [match for chunk in chunks if (match := _snapshot_chunk_match(chunk, span=span))]
+    return matches, bool(document_ref and candidates and matches)
+
+
+def map_grounded_qa_evidence(
+    *,
+    qa_path: str | Path,
+    chunk_snapshot_path: str | Path,
+    output_path: str | Path,
+) -> dict[str, Any]:
+    """Map grounded QA evidence spans onto a chunk snapshot."""
+
+    try:
+        snapshot = load_chunk_snapshot(chunk_snapshot_path)
+    except ValidationError as exc:
+        raise BenchmarkGovernanceError(str(exc)) from exc
+
+    payload = _qa_payload(qa_path)
+    raw_items = payload.get("items")
+    raw_chunks = snapshot.get("chunks")
+    chunks = [item for item in raw_chunks if isinstance(item, Mapping)] if isinstance(raw_chunks, list) else []
+    issues: list[BenchmarkGovernanceIssue] = []
+    evidence_span_count = 0
+    mapped_span_count = 0
+    match_count = 0
+    item_error_ids: set[str] = set()
+    mapped_items: list[dict[str, Any]] = []
+
+    if not chunks:
+        issues.append(
+            BenchmarkGovernanceIssue("error", "chunk_snapshot_empty", "chunk snapshot does not contain any chunks", "chunk_snapshot")
+        )
+    if chunks and not any(_snapshot_text(chunk)[0] for chunk in chunks):
+        issues.append(
+            BenchmarkGovernanceIssue(
+                "error",
+                "chunk_snapshot_missing_text",
+                "chunk snapshot chunks must include content or content_preview for evidence mapping",
+                "chunk_snapshot.chunks",
+            )
+        )
+    if not isinstance(raw_items, list):
+        issues.append(BenchmarkGovernanceIssue("error", "qa_items_invalid", "qa items must be a list", "items"))
+        raw_items = []
+    if not raw_items:
+        issues.append(BenchmarkGovernanceIssue("error", "qa_empty", "qa file does not contain any items", "items"))
+
+    for item_index, raw_item in enumerate(raw_items):
+        field_prefix = f"items[{item_index}]"
+        if not isinstance(raw_item, Mapping):
+            item_id = f"item-{item_index + 1}"
+            item_error_ids.add(item_id)
+            issues.append(
+                BenchmarkGovernanceIssue("error", "qa_item_invalid", "qa item must be a JSON object", field_prefix)
+            )
+            continue
+
+        item_id = _qa_item_identifier(raw_item, item_index)
+        evidence_items = _qa_evidence_items(raw_item)
+        item_expected_chunks: set[str] = set()
+        evidence_mappings: list[dict[str, Any]] = []
+        if not evidence_items:
+            item_error_ids.add(item_id)
+            issues.append(
+                BenchmarkGovernanceIssue(
+                    "error",
+                    "qa_item_missing_evidence",
+                    "qa item must include evidence spans before they can be mapped",
+                    f"{field_prefix}.evidence",
+                )
+            )
+
+        for evidence_index, evidence in enumerate(evidence_items):
+            evidence_field = f"{field_prefix}.evidence[{evidence_index}]"
+            span = _evidence_span_text(evidence)
+            document_ref = _evidence_document_ref(evidence)
+            if not span:
+                item_error_ids.add(item_id)
+                issues.append(
+                    BenchmarkGovernanceIssue(
+                        "error",
+                        "evidence_span_missing",
+                        "evidence item must include non-empty text, quote, span, content, or evidence",
+                        evidence_field,
+                    )
+                )
+                continue
+
+            evidence_span_count += 1
+            matches, document_mismatch = _find_evidence_chunk_matches(
+                chunks=chunks,
+                span=span,
+                document_ref=document_ref,
+            )
+            expected_chunks = sorted(
+                {str(match["expected_chunk"]) for match in matches if match.get("expected_chunk")}
+            )
+            item_expected_chunks.update(expected_chunks)
+            if matches:
+                mapped_span_count += 1
+                match_count += len(matches)
+                if document_mismatch:
+                    issues.append(
+                        BenchmarkGovernanceIssue(
+                            "warning",
+                            "evidence_document_mismatch",
+                            "evidence span was mapped to a chunk outside the referenced document",
+                            evidence_field,
+                        )
+                    )
+            else:
+                item_error_ids.add(item_id)
+                issues.append(
+                    BenchmarkGovernanceIssue(
+                        "error",
+                        "evidence_span_unmapped",
+                        "evidence span was not found in the chunk snapshot",
+                        evidence_field,
+                        "Regenerate the chunk snapshot with content, check chunk boundaries, or refresh the QA evidence.",
+                    )
+                )
+
+            evidence_mappings.append(
+                {
+                    "index": evidence_index,
+                    "text": span,
+                    "document": document_ref,
+                    "mapped": bool(matches),
+                    "expected_chunks": expected_chunks,
+                    "matches": matches,
+                }
+            )
+
+        mapped_items.append(
+            {
+                "id": item_id,
+                "query_id": _first_string(raw_item, ("query_id", "query", "validation_query_id")),
+                "question": _first_string(raw_item, ("question", "query", "prompt", "input")),
+                "expected_chunks": sorted(item_expected_chunks),
+                "evidence": evidence_mappings,
+            }
+        )
+
+    summary = {
+        **_issue_counts(issues),
+        "item_count": len(raw_items),
+        "invalid_item_count": len(item_error_ids),
+        "evidence_span_count": evidence_span_count,
+        "mapped_span_count": mapped_span_count,
+        "unmapped_span_count": max(0, evidence_span_count - mapped_span_count),
+        "match_count": match_count,
+        "chunk_count": len(chunks),
+    }
+    artifact = {
+        "schema": GROUNDED_QA_EVIDENCE_MAP_SCHEMA,
+        "created_at": _now(),
+        "qa": str(qa_path),
+        "chunk_snapshot": str(chunk_snapshot_path),
+        "summary": summary,
+        "items": mapped_items,
+        "issues": [issue.to_dict() for issue in issues],
+    }
+    _write_json(output_path, artifact)
+
+    return {
+        "ok": _ok(issues),
+        "schema": GROUNDED_QA_EVIDENCE_MAP_REPORT_SCHEMA,
+        "evidence_map": str(output_path),
+        "artifacts": {
+            "qa": str(qa_path),
+            "chunk_snapshot": str(chunk_snapshot_path),
+            "output": str(output_path),
+        },
+        "summary": summary,
         "issues": [issue.to_dict() for issue in issues],
     }
 

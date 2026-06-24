@@ -39,6 +39,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     make_kb_manifest_payload,
     make_metadata_template_payload,
     make_tagset_template_payload,
+    map_grounded_qa_evidence,
     merge_metadata_payloads,
     render_handoff_inspection_markdown,
     render_governance_markdown,
@@ -455,6 +456,21 @@ def _run_qa_validate(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_qa_map_evidence(args: argparse.Namespace) -> int:
+    try:
+        report = map_grounded_qa_evidence(
+            qa_path=args.qa,
+            chunk_snapshot_path=args.chunk_snapshot,
+            output_path=args.output,
+        )
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow QA Evidence Map Report"))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (BenchmarkGovernanceError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def build_inspect_handoff_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Inspect a Markdown handoff and optional rich sidecars")
     parser.add_argument("--handoff", required=True, help="Handoff directory containing doc_manifest.json")
@@ -638,6 +654,15 @@ def build_qa_parser() -> argparse.ArgumentParser:
     validate.add_argument("--report-md", help="Optional validate report Markdown path")
     validate.add_argument("--json", action="store_true", help="Emit JSON errors")
     validate.set_defaults(func=_run_qa_validate)
+
+    map_evidence = subparsers.add_parser("map-evidence", help="Map QA evidence spans onto a chunk snapshot")
+    map_evidence.add_argument("--qa", required=True, help="Grounded QA JSON")
+    map_evidence.add_argument("--chunk-snapshot", required=True, help="ragflow_chunk_snapshot_v1 JSON")
+    map_evidence.add_argument("--output", required=True, help="Output ragflow_grounded_qa_evidence_map_v1 JSON")
+    map_evidence.add_argument("--report-json", help="Optional map-evidence report JSON path")
+    map_evidence.add_argument("--report-md", help="Optional map-evidence report Markdown path")
+    map_evidence.add_argument("--json", action="store_true", help="Emit JSON errors")
+    map_evidence.set_defaults(func=_run_qa_map_evidence)
 
     return parser
 
