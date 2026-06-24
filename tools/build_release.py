@@ -148,6 +148,8 @@ if not trace_json.exists() or "RAGFlow Query Trace" not in trace_md.read_text(en
 query_output = Path(__file__).parent / "query_output.json"
 audit_json = Path(__file__).parent / "citation_audit.json"
 audit_md = Path(__file__).parent / "citation_audit.md"
+diagnostic_json = Path(__file__).parent / "query_diagnostic.json"
+diagnostic_md = Path(__file__).parent / "query_diagnostic.md"
 query_output.write_text(json.dumps(payloads[1], ensure_ascii=False, indent=2), encoding="utf-8")
 from io import StringIO
 import contextlib
@@ -170,7 +172,30 @@ if audit_code != 0:
 audit_payload = json.loads(stdout.getvalue())
 if not audit_payload.get("ok") or not audit_json.exists() or not audit_md.exists():
     raise SystemExit(4)
-print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload}}, ensure_ascii=False))
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    diagnostic_code = module.main([
+        "diagnose-result",
+        "--query-output",
+        str(query_output),
+        "--trace-json",
+        str(trace_json),
+        "--citation-audit",
+        str(audit_json),
+        "--expected-term",
+        "release",
+        "--report-json",
+        str(diagnostic_json),
+        "--report-md",
+        str(diagnostic_md),
+        "--json",
+    ])
+if diagnostic_code != 0:
+    raise SystemExit(diagnostic_code)
+diagnostic_payload = json.loads(stdout.getvalue())
+if not diagnostic_payload.get("ok") or not diagnostic_json.exists() or not diagnostic_md.exists():
+    raise SystemExit(5)
+print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload}}, ensure_ascii=False))
 """,
             encoding="utf-8",
         )

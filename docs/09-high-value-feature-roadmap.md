@@ -596,6 +596,27 @@ Implementation note:
   numeric citations such as `[1]`. LLM-owned synthesis, planning, and provider configuration remain
   deferred.
 
+### Phase 19: Query Diagnostics
+
+Goal: turn saved query artifacts into one concise diagnosis for weak retrieval, route fallback,
+evidence quality, and citation stability.
+
+Tasks:
+
+- [x] Define `ragflow_query_diagnostic_report_v1`.
+- [x] Add offline `ragflow-query diagnose-result`.
+- [x] Detect zero chunks, low top similarity, and low top evidence score.
+- [x] Detect missing expected terms when users provide `--expected-term`.
+- [x] Surface trace warnings and default-route selection.
+- [x] Surface citation-audit errors and warnings.
+- [x] Add JSON and Markdown diagnostic reports.
+- [x] Add release, clean-consumer, and platform-smoke coverage.
+
+Exit criteria:
+
+- Host agents can take `query.json`, `query_trace.json`, and `citation_audit.json` artifacts and
+  explain the most likely retrieval or answer-grounding issue without calling RAGFlow again.
+
 ## Recommended Implementation Order
 
 1. Phase 13 quality gate and segmentation.
@@ -604,6 +625,7 @@ Implementation note:
 4. Phase 16 profile engineering.
 5. Phase 17 neutral routing.
 6. Phase 18 agentic observability and optional synthesis.
+7. Phase 19 query diagnostics.
 
 This order starts with deterministic, low-secret, high-safety features before adding routing and
 LLM-dependent behavior.

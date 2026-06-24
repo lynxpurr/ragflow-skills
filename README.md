@@ -156,6 +156,19 @@ python skills/ragflow-query/scripts/query.py audit-citations \
   --report-md ./run/citation_audit.md
 ```
 
+Use `diagnose-result` to combine saved query output, trace, and citation audit into one offline
+diagnostic report:
+
+```bash
+python skills/ragflow-query/scripts/query.py diagnose-result \
+  --query-output ./run/query.json \
+  --trace-json ./run/query_trace.json \
+  --citation-audit ./run/citation_audit.json \
+  --expected-term "important concept" \
+  --report-json ./run/query_diagnostic.json \
+  --report-md ./run/query_diagnostic.md
+```
+
 This remains retrieval-only: no LLM key is required and script-owned synthesis is still deferred.
 
 ## Validation

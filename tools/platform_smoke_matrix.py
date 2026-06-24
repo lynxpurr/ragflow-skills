@@ -524,7 +524,31 @@ audit_payload = json.loads(stdout.getvalue())
 if not audit_payload.get("ok"):
     raise SystemExit(6)
 
-print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload}}, ensure_ascii=False))
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    diagnostic_code = module.main([
+        "diagnose-result",
+        "--query-output",
+        str(artifacts_dir / "query_host_assisted.json"),
+        "--trace-json",
+        str(artifacts_dir / "query_trace.json"),
+        "--citation-audit",
+        str(artifacts_dir / "citation_audit.json"),
+        "--expected-term",
+        "known term",
+        "--report-json",
+        str(artifacts_dir / "query_diagnostic.json"),
+        "--report-md",
+        str(artifacts_dir / "query_diagnostic.md"),
+        "--json",
+    ])
+if diagnostic_code != 0:
+    raise SystemExit(diagnostic_code)
+diagnostic_payload = json.loads(stdout.getvalue())
+if not diagnostic_payload.get("ok"):
+    raise SystemExit(7)
+
+print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload}}, ensure_ascii=False))
 """,
         encoding="utf-8",
     )
@@ -819,6 +843,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_trace.md",
         artifacts_dir / "citation_audit.json",
         artifacts_dir / "citation_audit.md",
+        artifacts_dir / "query_diagnostic.json",
+        artifacts_dir / "query_diagnostic.md",
         artifacts_dir / "route_test.md",
         artifacts_dir / "profile_lint.md",
         artifacts_dir / "validation_report.json",

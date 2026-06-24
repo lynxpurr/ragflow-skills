@@ -655,6 +655,8 @@ raise SystemExit(code)
     query_output = work_root / "query_output.json"
     citation_audit_json = work_root / "citation_audit.json"
     citation_audit_md = work_root / "citation_audit.md"
+    query_diagnostic_json = work_root / "query_diagnostic.json"
+    query_diagnostic_md = work_root / "query_diagnostic.md"
     query_output.write_text(
         json.dumps(
             {
@@ -702,6 +704,37 @@ raise SystemExit(code)
         produced.append(citation_audit_json)
     if citation_audit_md.exists():
         produced.append(citation_audit_md)
+
+    query_diagnostic = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "diagnose-result",
+            "--query-output",
+            str(query_output),
+            "--citation-audit",
+            str(citation_audit_json),
+            "--expected-term",
+            "release",
+            "--report-json",
+            str(query_diagnostic_json),
+            "--report-md",
+            str(query_diagnostic_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query diagnostic report",
+        query_diagnostic,
+        required_output='"schema": "ragflow_query_diagnostic_report_v1"',
+    )
+    if query_diagnostic_json.exists():
+        produced.append(query_diagnostic_json)
+    if query_diagnostic_md.exists():
+        produced.append(query_diagnostic_md)
 
     missing_config = _run_command(
         [

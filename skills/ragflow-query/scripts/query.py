@@ -35,6 +35,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     RoutingError,
     audit_citations,
     build_query_trace,
+    diagnose_query_result,
     evidence_from_query_payload,
     load_route_test_queries,
     load_config,
@@ -42,6 +43,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     load_routing_config,
     normalize_retrieval_response,
     render_citation_audit_markdown,
+    render_query_diagnostic_markdown,
     render_query_trace_markdown,
     render_route_test_markdown,
     resolve_dataset_ids,
@@ -286,6 +288,34 @@ def _audit_citations(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _diagnose_result(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        trace = _read_json(args.trace_json) if args.trace_json else None
+        if trace is not None and not isinstance(trace, dict):
+            raise ValueError("trace JSON must be an object")
+        citation_audit = _read_json(args.citation_audit) if args.citation_audit else None
+        if citation_audit is not None and not isinstance(citation_audit, dict):
+            raise ValueError("citation audit JSON must be an object")
+        report = diagnose_query_result(
+            query_payload,
+            trace=trace,
+            citation_audit=citation_audit,
+            expected_terms=args.expected_term,
+            min_similarity=args.min_similarity,
+            min_evidence_score=args.min_evidence_score,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_diagnostic_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _add_runtime_options(parser: argparse.ArgumentParser, *, suppress_defaults: bool = False) -> None:
     default = argparse.SUPPRESS if suppress_defaults else None
     parser.add_argument("--config", default=default, help="Path to JSON or simple YAML config")
@@ -328,6 +358,18 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--report-md", help="Optional Markdown report output path")
     audit.add_argument("--json", action="store_true", help="Emit JSON report")
     audit.set_defaults(func=_audit_citations)
+
+    diagnose = sub.add_parser("diagnose-result", help="Diagnose a saved query result")
+    diagnose.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    diagnose.add_argument("--trace-json", help="Optional query trace JSON from --trace-json")
+    diagnose.add_argument("--citation-audit", help="Optional citation audit JSON")
+    diagnose.add_argument("--expected-term", action="append", default=[], help="Expected term; repeatable")
+    diagnose.add_argument("--min-similarity", type=float, default=0.15)
+    diagnose.add_argument("--min-evidence-score", type=float, default=0.2)
+    diagnose.add_argument("--report-json", help="Optional JSON report output path")
+    diagnose.add_argument("--report-md", help="Optional Markdown report output path")
+    diagnose.add_argument("--json", action="store_true", help="Emit JSON report")
+    diagnose.set_defaults(func=_diagnose_result)
 
     ask = sub.add_parser("ask", help="Ask a question against RAGFlow")
     _add_runtime_options(ask, suppress_defaults=True)

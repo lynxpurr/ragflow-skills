@@ -5,8 +5,10 @@ import unittest
 from ragflow_skill_runtime.observability import (
     audit_citations,
     build_query_trace,
+    diagnose_query_result,
     evidence_from_query_payload,
     render_citation_audit_markdown,
+    render_query_diagnostic_markdown,
     render_query_trace_markdown,
     weight_evidence,
 )
@@ -92,6 +94,43 @@ class ObservabilityTests(unittest.TestCase):
 
         self.assertEqual(evidence[0]["rank"], 1)
         self.assertEqual(evidence[0]["document_name"], "runtime.md")
+
+    def test_diagnose_query_result_reports_weak_retrieval(self) -> None:
+        payload = {
+            "question": "portable runtime",
+            "mode": "direct",
+            "dataset_ids": ["ds-1"],
+            "chunks": [
+                {
+                    "content": "Unrelated chunk.",
+                    "similarity": 0.05,
+                    "document_name": "notes.md",
+                }
+            ],
+        }
+        trace = {"warnings": ["retrieval returned weak evidence"], "route": None}
+        audit = {
+            "metrics": {
+                "invalid_citation_count": 0,
+                "warnings": 1,
+            }
+        }
+
+        report = diagnose_query_result(
+            payload,
+            trace=trace,
+            citation_audit=audit,
+            expected_terms=["portable"],
+            min_similarity=0.2,
+            min_evidence_score=0.7,
+        )
+        markdown = render_query_diagnostic_markdown(report)
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["status"], "REVIEW")
+        self.assertGreaterEqual(report["summary"]["warnings"], 3)
+        self.assertIn("missing_expected_terms", {issue["code"] for issue in report["issues"]})
+        self.assertIn("RAGFlow Query Diagnostic", markdown)
 
 
 if __name__ == "__main__":

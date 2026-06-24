@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "schema": "ragflow_query_diagnostic_report_v1",
+  "status": "PASS",
+  "summary": {
+    "chunk_count": 1,
+    "evidence_count": 1,
+    "top_similarity": 0.92,
+    "top_evidence_score": 0.885,
+    "issue_count": 0,
+    "errors": 0,
+    "warnings": 0,
+    "infos": 0
+  },
+  "question": "What does this knowledge base say about the project?",
+  "mode": "agentic",
+  "dataset_ids": [
+    "dataset-id"
+  ],
+  "thresholds": {
+    "min_similarity": 0.15,
+    "min_evidence_score": 0.2
+  },
+  "issues": []
+}

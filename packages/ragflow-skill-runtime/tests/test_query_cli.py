@@ -181,6 +181,8 @@ class QueryCliTests(unittest.TestCase):
             query_output = root / "query.json"
             audit_json = root / "audit.json"
             audit_md = root / "audit.md"
+            diagnostic_json = root / "diagnostic.json"
+            diagnostic_md = root / "diagnostic.md"
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 code = module.main(
@@ -225,6 +227,28 @@ class QueryCliTests(unittest.TestCase):
                 )
             audit_payload = json.loads(stdout.getvalue())
 
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                diagnostic_code = module.main(
+                    [
+                        "diagnose-result",
+                        "--query-output",
+                        str(query_output),
+                        "--trace-json",
+                        str(trace_json),
+                        "--citation-audit",
+                        str(audit_json),
+                        "--expected-term",
+                        "answer",
+                        "--report-json",
+                        str(diagnostic_json),
+                        "--report-md",
+                        str(diagnostic_md),
+                        "--json",
+                    ]
+                )
+            diagnostic_payload = json.loads(stdout.getvalue())
+
             self.assertEqual(code, 0, query_output.read_text(encoding="utf-8"))
             self.assertIn("evidence", payload)
             self.assertIn("trace", payload)
@@ -235,6 +259,11 @@ class QueryCliTests(unittest.TestCase):
             self.assertTrue(audit_payload["ok"])
             self.assertTrue(audit_json.exists())
             self.assertIn("RAGFlow Citation Audit", audit_md.read_text(encoding="utf-8"))
+            self.assertEqual(diagnostic_code, 0)
+            self.assertTrue(diagnostic_payload["ok"])
+            self.assertEqual(diagnostic_payload["schema"], "ragflow_query_diagnostic_report_v1")
+            self.assertTrue(diagnostic_json.exists())
+            self.assertIn("RAGFlow Query Diagnostic", diagnostic_md.read_text(encoding="utf-8"))
 
     def test_route_commands_use_routing_config(self) -> None:
         module = load_query_module()

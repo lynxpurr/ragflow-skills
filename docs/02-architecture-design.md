@@ -427,12 +427,24 @@ python scripts/query.py audit-citations \
   --answer-file ./answer.md \
   --report-json ./citation_audit.json \
   --report-md ./citation_audit.md
+
+python scripts/query.py diagnose-result \
+  --query-output ./query.json \
+  --trace-json ./query_trace.json \
+  --citation-audit ./citation_audit.json \
+  --expected-term "important concept" \
+  --report-json ./query_diagnostic.json \
+  --report-md ./query_diagnostic.md
 ```
 
 `ragflow_query_trace_v1` records selected mode, dataset IDs, route details when present, retrieval
 parameters, timing, zero-result warnings, and evidence weights. `ragflow_citation_audit_v1` checks
 simple numeric citations such as `[1]` against retrieved evidence. Both reports are redaction-safe
 and do not require an LLM key.
+
+`ragflow_query_diagnostic_report_v1` combines saved query output, trace, and citation audit into a
+single offline report. It classifies hard failures such as zero chunks or invalid citations as
+`FAIL`, weaker evidence or missing expected terms as `REVIEW`, and clean runs as `PASS`.
 
 Current gap:
 

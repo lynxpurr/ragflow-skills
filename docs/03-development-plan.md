@@ -36,6 +36,7 @@ Completed foundations:
 - High-value roadmap Phase 16 profile engineering MVP
 - High-value roadmap Phase 17 neutral routing MVP
 - High-value roadmap Phase 18 agentic observability MVP
+- High-value roadmap Phase 19 query diagnostics MVP
 
 Partially completed:
 
@@ -630,6 +631,29 @@ Exit criteria:
 - Host agents can preserve trace artifacts for weak retrieval debugging.
 - Host-generated answers can be checked against retrieved evidence using simple numeric citations such as `[1]`.
 - Existing direct, auto, and host-assisted query paths remain backward-compatible.
+
+## Phase 22: Query Diagnostics MVP
+
+Goal: give host agents a single offline report for explaining weak query results and unstable
+host-generated answers.
+
+Tasks:
+
+- [x] Add `ragflow_query_diagnostic_report_v1`.
+- [x] Add `ragflow-query diagnose-result`.
+- [x] Diagnose zero chunks, low similarity, low evidence score, and missing expected terms.
+- [x] Include trace warnings and default-route signals when trace artifacts are supplied.
+- [x] Include citation-audit errors and warnings when audit artifacts are supplied.
+- [x] Add JSON and Markdown diagnostic reports.
+- [x] Add public example diagnostic payload.
+- [x] Add unit, CLI, release-build, clean-consumer, and platform-smoke coverage.
+
+Exit criteria:
+
+- A host agent can diagnose saved `query.json`, `query_trace.json`, and `citation_audit.json`
+  without live RAGFlow access.
+- The report distinguishes hard failures from review warnings.
+- Existing query output remains backward-compatible.
 
 ## Definition of Done
 

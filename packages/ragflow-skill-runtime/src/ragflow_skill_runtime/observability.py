@@ -11,6 +11,7 @@ from .retrieval import NormalizedChunk
 
 TRACE_SCHEMA = "ragflow_query_trace_v1"
 CITATION_AUDIT_SCHEMA = "ragflow_citation_audit_v1"
+QUERY_DIAGNOSTIC_SCHEMA = "ragflow_query_diagnostic_report_v1"
 
 _STOPWORDS = {
     "a",
@@ -373,6 +374,206 @@ def render_citation_audit_markdown(report: Mapping[str, Any]) -> str:
         f"- citation_count: `{metrics.get('citation_count', 0)}`",
         f"- invalid_citation_count: `{metrics.get('invalid_citation_count', 0)}`",
         f"- warnings: `{metrics.get('warnings', 0)}`",
+        "",
+        "## Issues",
+        "",
+    ]
+    issues = report.get("issues", [])
+    if not issues:
+        lines.append("- None")
+    else:
+        for issue in issues:
+            if not isinstance(issue, Mapping):
+                continue
+            lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    return "\n".join(lines) + "\n"
+
+
+def _severity_status(issues: Sequence[Mapping[str, Any]]) -> str:
+    if any(issue.get("severity") == "error" for issue in issues):
+        return "FAIL"
+    if any(issue.get("severity") == "warning" for issue in issues):
+        return "REVIEW"
+    return "PASS"
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _append_issue(
+    issues: list[dict[str, Any]],
+    *,
+    severity: str,
+    code: str,
+    message: str,
+    detail: Mapping[str, Any] | None = None,
+) -> None:
+    item = {"severity": severity, "code": code, "message": message}
+    if detail:
+        item["detail"] = dict(detail)
+    issues.append(item)
+
+
+def diagnose_query_result(
+    query_payload: Mapping[str, Any],
+    *,
+    trace: Mapping[str, Any] | None = None,
+    citation_audit: Mapping[str, Any] | None = None,
+    expected_terms: Sequence[str] | None = None,
+    min_similarity: float = 0.15,
+    min_evidence_score: float = 0.2,
+) -> dict[str, Any]:
+    """Diagnose weak retrieval, routing, evidence, and citation symptoms offline."""
+
+    chunks = [item for item in query_payload.get("chunks", []) if isinstance(item, Mapping)]
+    evidence = evidence_from_query_payload(query_payload)
+    issues: list[dict[str, Any]] = []
+    if not chunks:
+        _append_issue(
+            issues,
+            severity="error",
+            code="zero_chunks",
+            message="query returned zero chunks",
+        )
+    if not evidence and chunks:
+        _append_issue(
+            issues,
+            severity="warning",
+            code="missing_evidence_weights",
+            message="query output has chunks but no evidence weights could be derived",
+        )
+
+    top_similarity = _as_float(chunks[0].get("similarity")) if chunks else None
+    if top_similarity is not None and top_similarity < min_similarity:
+        _append_issue(
+            issues,
+            severity="warning",
+            code="low_top_similarity",
+            message="top retrieval similarity is below threshold",
+            detail={"top_similarity": top_similarity, "min_similarity": min_similarity},
+        )
+
+    top_evidence_score = _as_float(evidence[0].get("score")) if evidence else None
+    if top_evidence_score is not None and top_evidence_score < min_evidence_score:
+        _append_issue(
+            issues,
+            severity="warning",
+            code="low_evidence_score",
+            message="top evidence score is below threshold",
+            detail={"top_evidence_score": top_evidence_score, "min_evidence_score": min_evidence_score},
+        )
+
+    expected = [term for term in (expected_terms or []) if str(term).strip()]
+    if expected:
+        combined = "\n".join(str(chunk.get("content") or "") for chunk in chunks).lower()
+        missing = [term for term in expected if term.lower() not in combined]
+        if missing:
+            _append_issue(
+                issues,
+                severity="warning",
+                code="missing_expected_terms",
+                message="retrieved chunks do not contain all expected terms",
+                detail={"missing_terms": missing},
+            )
+
+    if trace:
+        trace_warnings = [str(item) for item in trace.get("warnings", []) if str(item)]
+        for warning in trace_warnings:
+            _append_issue(
+                issues,
+                severity="warning",
+                code="trace_warning",
+                message=warning,
+            )
+        route = trace.get("route")
+        if isinstance(route, Mapping):
+            selected = route.get("selected")
+            if isinstance(selected, Mapping) and selected.get("reason") == "default":
+                _append_issue(
+                    issues,
+                    severity="warning",
+                    code="route_default_used",
+                    message="auto routing used the default KB instead of a hint match",
+                    detail={"kb": selected.get("name"), "dataset_id": selected.get("dataset_id")},
+                )
+
+    if citation_audit:
+        metrics = citation_audit.get("metrics", {}) if isinstance(citation_audit.get("metrics"), Mapping) else {}
+        if metrics.get("invalid_citation_count", 0):
+            _append_issue(
+                issues,
+                severity="error",
+                code="invalid_citations",
+                message="citation audit found invalid citation references",
+                detail={"invalid_citation_count": metrics.get("invalid_citation_count")},
+            )
+        if metrics.get("warnings", 0):
+            _append_issue(
+                issues,
+                severity="warning",
+                code="citation_audit_warnings",
+                message="citation audit reported warnings",
+                detail={"warnings": metrics.get("warnings")},
+            )
+
+    document_names = [
+        str(chunk.get("document_name"))
+        for chunk in chunks
+        if isinstance(chunk.get("document_name"), str) and chunk.get("document_name")
+    ]
+    duplicate_documents = sorted({name for name in document_names if document_names.count(name) > 1})
+    if duplicate_documents:
+        _append_issue(
+            issues,
+            severity="info",
+            code="duplicate_source_documents",
+            message="multiple retrieved chunks came from the same document",
+            detail={"documents": duplicate_documents},
+        )
+
+    status = _severity_status(issues)
+    return {
+        "ok": status != "FAIL",
+        "schema": QUERY_DIAGNOSTIC_SCHEMA,
+        "status": status,
+        "summary": {
+            "chunk_count": len(chunks),
+            "evidence_count": len(evidence),
+            "top_similarity": top_similarity,
+            "top_evidence_score": top_evidence_score,
+            "issue_count": len(issues),
+            "errors": sum(1 for issue in issues if issue["severity"] == "error"),
+            "warnings": sum(1 for issue in issues if issue["severity"] == "warning"),
+            "infos": sum(1 for issue in issues if issue["severity"] == "info"),
+        },
+        "question": query_payload.get("question"),
+        "mode": query_payload.get("mode"),
+        "dataset_ids": query_payload.get("dataset_ids", []),
+        "thresholds": {
+            "min_similarity": min_similarity,
+            "min_evidence_score": min_evidence_score,
+        },
+        "issues": issues,
+    }
+
+
+def render_query_diagnostic_markdown(report: Mapping[str, Any]) -> str:
+    """Render a Markdown query diagnostic report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Query Diagnostic",
+        "",
+        f"- ok: `{str(report.get('ok', False)).lower()}`",
+        f"- status: `{report.get('status', '')}`",
+        f"- chunk_count: `{summary.get('chunk_count', 0)}`",
+        f"- evidence_count: `{summary.get('evidence_count', 0)}`",
+        f"- top_similarity: `{summary.get('top_similarity', '')}`",
+        f"- top_evidence_score: `{summary.get('top_evidence_score', '')}`",
         "",
         "## Issues",
         "",
