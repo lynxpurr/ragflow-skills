@@ -33,8 +33,18 @@ The v0.1 public suite already provides:
   export archives, and artifact-level security checks.
 
 The missing high-value areas are not basic connectivity. They are quality gates, long-document
-handling, RAGFlow operational diagnostics, benchmark-grade validation, routing quality, and
-agentic observability.
+handling, RAGFlow operational diagnostics, benchmark lifecycle governance, routing quality,
+retrieval pollution diagnostics, query orchestration safety, and agentic observability.
+
+Second-pass gap closure for the remaining legacy capabilities is captured in
+`docs/10-legacy-feature-gap-closure-design.md`. That follow-up design covers rich handoff
+packages, metadata/tagset governance, benchmark import/trend/delta gates, grounded QA,
+evidence mapping, optimization loops, strict chunk recall, retrieval pollution diagnostics,
+multi-KB fusion, route-gap diagnosis, query rewrite, query orchestration safety, experimental
+agentic synthesis, generation evaluation, runtime/model-provider capability checks,
+fallback coverage, contract gates, installed-artifact smoke, compatibility/naming policy,
+KB topology advice, routing activation, handoff retrieval hints, assistant profiles,
+parser telemetry, runtime resilience, and skill-suite drift checks.
 
 ## Design Update: MinerU Execution Modes
 
@@ -70,13 +80,28 @@ The earlier systems contain several valuable ideas that are worth migrating in n
 | RAGFlux | document quality reports and gate status | `ragflow-doc-to-md inspect` |
 | RAGFlux | large package segmentation and materialized segments | `ragflow-doc-to-md segment` |
 | RAGFlux | richer handoff package with hashes, artifacts, and downstream hints | optional package mode |
+| RAGFlux | retrieval hints with section boundaries, table artifacts, keyword/question candidates, and profile-search hints | rich handoff sidecars |
+| RAGFlux | assistant retrieval/prompt guidance and staged test plans | assistant profile and assistant test plan |
 | RAGFlow KB Ops | RAGFlow API pitfall handling and diagnostics | `ragflow-kb-build probe/diagnose` |
+| RAGFlow KB Ops | KB create/merge/split decision frameworks and domain splitting methodology | `ragflow-kb-build topology ...` |
+| RAGFlow KB Ops | new-KB routing activation checks | `ragflow-kb-build activation-plan` and `ragflow-query route-activation-check` |
+| RAGFlow KB Ops | parser performance phase telemetry and KB health diagnostics | `ragflow-kb-build parse-report` and `health-report` |
 | RAGFlow KB Ops | append/rebuild safety for large KBs | `ragflow-kb-build append/rebuild` |
 | RAGFlow KB Ops | qrels metrics, benchmark gates, trend/delta reports | `ragflow-kb-build validate --level benchmark` |
+| RAGFlow KB Ops | benchmark import, preflight, trend, delta, root-cause reports | `ragflow-kb-build benchmark ...` |
+| RAGFlow KB Ops | grounded QA generation, evidence-to-chunk mapping, segment metadata metrics | `ragflow-kb-build qa ...` and strict recall |
 | RAGFlow KB Ops | chunk profile linting, comparison, and optimization | `ragflow-kb-build profile ...` |
 | RAGFlow KB Ops | metadata enrichment and tagset governance | optional metadata/tagset commands |
+| RAGFlow KB Ops | tag/source pollution and suppression candidate reports | `ragflow-kb-build suppression-report` |
+| RAGFlow KB Ops | real acceptance dry-run command manifests and fallback coverage | acceptance and runtime resilience gates |
+| RAGFlow KB Ops | local embedding/rerank provider checks and rebuild warnings | model-provider probes |
 | smart-query | routing hints, route regression, route A/B methodology | `ragflow-query route` and `--mode auto` |
+| smart-query | hint-gap diagnosis, English hint coverage, regex priority and boundary checks | `ragflow-query route-diagnose` and route reports |
+| smart-query | cross-language A/B, BM25 pollution analysis, optional external rerank comparison | `ragflow-query pollution-report` and `rerank-ab` |
+| smart-query | cross-machine endpoint patterns | redacted endpoint reports and host-agent setup checks |
 | agentic-rag | planning, reflection, citation audit, cost and trace logs | optional agentic query layer |
+| agentic-rag | intent routing, clarification/rejection states, conversation context enrichment | `ragflow-query intent ...` and `session ...` |
+| RAGFlux release process | connector contract gate, installed package smoke, rename rollback policy | release hygiene, contract, and compatibility gates |
 
 Do not migrate private KB names, private corpora, personal paths, private service assumptions,
 dedao-specific flows, direct MySQL/ES repair scripts, or long-running daemons as required defaults.
@@ -655,6 +680,14 @@ Exit criteria:
 
 This order starts with deterministic, low-secret, high-safety features before adding routing and
 LLM-dependent behavior.
+
+Second-pass work should follow `docs/03-development-plan.md` Phase 24 through Phase 35. Those
+phases extend this first roadmap with rich handoff packages, benchmark governance, pollution
+diagnostics, route-gap diagnosis, query orchestration safety, runtime/model-provider probes,
+fallback coverage, contract gates, installed-artifact smoke, KB topology advice, routing
+activation, assistant profiles, parser telemetry, and suite drift checks.
+Use `docs/10-legacy-feature-gap-closure-design.md` as the detailed design source and its
+Spec Coding Map as the feature-to-phase checklist for AI-assisted implementation.
 
 ## Open Questions
 

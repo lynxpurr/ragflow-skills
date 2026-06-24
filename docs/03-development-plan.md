@@ -695,6 +695,444 @@ Exit criteria:
 - No public artifact contains machine-specific MinerU paths.
 - Existing v0.1 HTTP MinerU behavior remains backward-compatible.
 
+## Spec Coding Rules For Phase 24-35
+
+The detailed design source for Phase 24 through Phase 35 is
+`docs/10-legacy-feature-gap-closure-design.md`. Use that document's Spec Coding Map to
+connect each feature design to its owning skill, command surface, schemas, and required
+test gates.
+
+Phase dependency groups:
+
+- Phase 24-26 are the document and evaluation-contract foundation. They should establish
+  rich handoff sidecars, metadata/tagset schemas, benchmark lifecycle artifacts, grounded
+  QA, strict chunk recall, and optimization planning before query-time experiments rely on
+  those reports.
+- Phase 27-30 are the retrieval and query-quality layer. They should consume benchmark,
+  route, trace, and chunk artifacts rather than inventing parallel report formats.
+- Phase 31-33 are runtime and release-governance hardening. They can be developed in
+  parallel with feature work, but they must pass before any new release candidate that
+  exposes the Phase 24-30 command surfaces.
+- Phase 34-35 are post-ingest productization and health telemetry. They should reuse
+  rich handoff retrieval hints, routing reports, diagnostics, and sanitized report helpers.
+
+Per-phase implementation checklist:
+
+- [ ] Add or update versioned runtime schemas and dataclasses first.
+- [ ] Add neutral fixtures with placeholder KB names, placeholder endpoints, and fake keys only.
+- [ ] Add CLI command surfaces with `--help`, JSON output, and report file options when relevant.
+- [ ] Add non-mutating plan/dry-run behavior before any live RAGFlow mutation.
+- [ ] Add deterministic unit tests and CLI tests before live-service tests.
+- [ ] Add or update consumer acceptance and platform smoke checks when command surfaces or release artifacts change.
+- [ ] Update `SKILL.md` only with concise routing instructions; put detailed workflows in `references/` or repo docs.
+- [ ] Update shared templates/references in all three skills when a shared config or onboarding rule changes.
+- [ ] Run `git diff --check`, `tools/release_hygiene_check.py`, and a sensitive-pattern scan for public-release safety.
+
+Consistency rules:
+
+- `doc_manifest.json`, `kb_manifest.json`, existing validation reports, and current
+  `ragflow-query ask --mode direct|auto|agentic --host-assisted` behavior remain
+  backward-compatible unless a future major schema version is explicitly planned.
+- Rich handoff sidecars are optional inputs for `ragflow-kb-build`; plain v0.1 handoffs
+  must continue to work.
+- Assistant profiles, topology advice, activation plans, suppression candidates, and
+  parser health reports are review artifacts. They must not silently mutate RAGFlow chat
+  assistants, route configs, tags, or user content.
+- Public commands must not perform direct DB, Redis, Docker, systemd, or Elasticsearch
+  repair. They may diagnose and recommend operator actions.
+- Any LLM-backed feature must be opt-in, traceable, and covered by deterministic offline
+  fallback tests.
+
+## Phase 24: Rich Handoff 2.0 And Markdown Post-Processing
+
+Goal: migrate the strongest RAGFlux package and cleanup ideas without replacing the
+portable `doc_manifest.json` contract.
+
+Design reference:
+
+- `docs/10-legacy-feature-gap-closure-design.md`
+
+Tasks:
+
+- [ ] Add `ragflow_handoff_package_v1` runtime schema for optional package sidecars.
+- [ ] Add `ragflow_document_metadata_v1` for source metadata, source hash, locale, and document-level hints.
+- [ ] Add `ragflow_artifact_index_v1` for images, tables, raw artifacts, and copied asset hashes.
+- [ ] Add `ragflow_profile_suggestions_v1` for advisory profile recommendations.
+- [ ] Add `ragflow_retrieval_hints_v1` for section boundaries, table artifacts, keyword candidates, question candidates, and quality risks.
+- [ ] Add `ragflow_assistant_profile_v1` and `ragflow_assistant_test_plan_v1` as optional review sidecars.
+- [ ] Add source inventory fields for source format, MIME hint, size, sha256, and language hint.
+- [ ] Add `ragflow-doc-to-md package --rich` while keeping plain `doc_manifest.json` as default.
+- [ ] Generate `metadata.json`, `package_readme.md`, and artifact index files in rich mode.
+- [ ] Generate optional `retrieval_hints.json`, `assistant_profile.json`, and `assistant_test_plan.json` in rich mode.
+- [ ] Add `ragflow-kb-build inspect-handoff` to summarize manifest and optional sidecars before upload.
+- [ ] Add deterministic Markdown post-processing profiles: `none`, `safe`, `ocr`, and `chunk-markers`.
+- [ ] Emit `postprocess_report.json` with changed line counts, rule IDs, and warnings.
+- [ ] Make destructive Markdown rewriting require an explicit output path or `--write`.
+- [ ] Add unit tests for sidecar schemas, artifact hashing, and post-processing rule reports.
+- [ ] Add CLI, consumer acceptance, and platform smoke coverage for rich handoff mode.
+- [ ] Update public `SKILL.md`, config templates if needed, and host-agent references.
+
+Exit criteria:
+
+- A plain v0.1 handoff still builds without reading any sidecars.
+- A rich handoff can be inspected offline and contains hashes, metadata, artifacts, and profile suggestions.
+- Retrieval hints and assistant profiles are reviewable sidecars, not hidden runtime behavior.
+- Markdown post-processing is deterministic, reportable, and opt-in.
+- No rich package sidecar contains personal paths, private service endpoints, or real secrets.
+
+## Phase 25: Metadata And Tagset Governance MVP
+
+Goal: provide a neutral public replacement for old KB Ops metadata and tag discipline.
+
+Tasks:
+
+- [ ] Add `ragflow_metadata_v1` runtime schema with safe public fields.
+- [ ] Add `ragflow_tagset_v1` runtime schema for RAGFlow tag preparation.
+- [ ] Add `ragflow-kb-build metadata lint`.
+- [ ] Add `ragflow-kb-build metadata merge` for combining handoff metadata, user metadata, and path-derived metadata.
+- [ ] Add `ragflow-kb-build metadata generate-template` for user-editable starter files.
+- [ ] Add `ragflow-kb-build tagset lint`.
+- [ ] Add `ragflow-kb-build tagset export` for RAGFlow-compatible CSV/JSON outputs.
+- [ ] Add `ragflow-kb-build tagset report` for coverage, duplicates, and orphan tag warnings.
+- [ ] Wire metadata summaries into build and validation reports without changing default upload behavior.
+- [ ] Add optional LLM-assisted metadata generation as a deferred adapter, not as the MVP default.
+- [ ] Add offline tests for schema validation, merge precedence, and redaction.
+- [ ] Add sample public metadata and tagset templates with placeholder-only values.
+
+Exit criteria:
+
+- A user can lint and merge document metadata without RAGFlow access.
+- A user can export a tagset report without private KB names or private corpora.
+- AI-generated metadata, if later enabled, is clearly marked advisory and never used as a security boundary.
+
+## Phase 26: Benchmark Governance, Optimization Loop, And Strict Chunk Recall
+
+Goal: turn existing profile, benchmark, probe, diagnose, append, and cleanup commands into a
+guided profile optimization workflow with benchmark lifecycle governance.
+
+Tasks:
+
+- [ ] Add `ragflow-kb-build benchmark import` for public or user-local benchmark formats.
+- [ ] Generate normalized benchmark `manifest.json`, `queries.json`, `qrels.json`, `qa.json`, and source hashes.
+- [ ] Support deterministic benchmark sampling with seed and strategy fields.
+- [ ] Add `ragflow-kb-build benchmark preflight`.
+- [ ] Add `ragflow-kb-build benchmark trend` with baseline/current comparison thresholds.
+- [ ] Add `ragflow-kb-build benchmark delta` for recall, nDCG, pollution, wrong-doc, empty-retrieval, cost, and latency changes.
+- [ ] Add `ragflow-kb-build benchmark gate` and `benchmark summarize` wrappers around existing validation reports.
+- [ ] Add root-cause hints for retrieval coverage, ranking, tag pollution, generation grounding, citation gaps, over-abstention, and cost/latency regressions.
+- [ ] Add `ragflow-kb-build qa generate` for grounded QA sets with optional LLM adapter.
+- [ ] Add `ragflow-kb-build qa validate` to reject ungrounded generated evidence before benchmark use.
+- [ ] Add `ragflow-kb-build qa map-evidence` to map evidence spans onto chunk snapshots.
+- [ ] Add `ragflow-kb-build segment-metadata report`.
+- [ ] Add `ragflow-kb-build optimize --plan-only` for non-mutating experiment planning.
+- [ ] Add candidate profile set loading from files, directories, and generated recommendations.
+- [ ] Add disposable KB naming conventions and collision checks.
+- [ ] Require `--execute` before creating any experiment KB.
+- [ ] Build each candidate profile into an isolated disposable KB.
+- [ ] Run benchmark validation for each candidate.
+- [ ] Run `diagnose` automatically for failed builds or zero-chunk cases.
+- [ ] Produce `optimization_plan.json`.
+- [ ] Produce `profile_experiment_results.json`.
+- [ ] Produce `best_profile_report.md` with metric tradeoffs and recommendation rationale.
+- [ ] Add `cleanup_plan.json` and exact-confirmation cleanup execution.
+- [ ] Add `ragflow-kb-build snapshot-chunks`.
+- [ ] Add chunk snapshot schema with stable content hashes.
+- [ ] Extend qrels to support `expected_chunks`.
+- [ ] Add strict chunk recall, expected chunk hit rate, expected evidence rank, evidence mapping confidence, segment metadata coverage, and chunk coverage metrics.
+- [ ] Add unit tests with fake RAGFlow clients and deterministic chunk snapshots.
+- [ ] Add live disposable tests gated by credentials and explicit confirmation.
+
+Exit criteria:
+
+- Users can import, preflight, summarize, trend, and delta benchmark runs with public schemas.
+- Users can compare multiple profiles with repeatable reports.
+- Mutating optimization never runs without explicit execution flags.
+- Chunk-level recall can be measured even when RAGFlow chunk IDs are unstable.
+- Generated QA must be grounded before it can feed a benchmark gate.
+- All disposable KBs are either cleaned up or reported with dataset IDs for manual cleanup.
+
+## Phase 27: Retrieval Enrichment Experiments
+
+Goal: make enrichment knobs such as keywords, questions, tags, rerank, and retrieval params
+testable through public reports instead of private ad hoc scripts, including pollution and
+suppression diagnostics.
+
+Tasks:
+
+- [ ] Add an experiment matrix schema for retrieval enrichment settings.
+- [ ] Support experiments for `auto_keywords`, `auto_questions`, and parser enrichment options.
+- [ ] Support user-provided `tag_kb_ids` experiments without shipping private tag IDs.
+- [ ] Support retrieval parameter sweeps for `vsw`, `threshold`, `top_k`, and rerank flags.
+- [ ] Include query latency, parse time, empty-result rate, and benchmark quality metrics in reports.
+- [ ] Warn when an experiment enables slow or LLM-backed RAGFlow paths.
+- [ ] Add tag pollution rate, wrong-document rate, expected-tag hit rate, and unexpected-tag hit rate metrics.
+- [ ] Add `ragflow-kb-build suppression-report` for bridge-term, source, and tag suppression candidates.
+- [ ] Add risk scoring for low-risk suppression and high-risk allowed-tag review candidates.
+- [ ] Add `ragflow-query pollution-report` for likely BM25 translation/keyword pollution symptoms.
+- [ ] Add `ragflow-query rerank-ab` to compare RAGFlow ordering with optional external reranker output.
+- [ ] Keep suppression candidates as review artifacts, not automatic deletes or hidden filters.
+- [ ] Integrate enrichment experiments into `optimize` or add `profile experiment`.
+- [ ] Add no-network tests with fake reports.
+- [ ] Add live tests only for disposable KBs and explicit user approval.
+
+Exit criteria:
+
+- Users can explain whether enrichment improved retrieval quality or only increased cost/latency.
+- Users can distinguish recall gaps from pollution, bridge-term, source-boundary, or rerank-ordering problems.
+- Enrichment experiments are reproducible from public config files.
+- No private tagset, model provider, or KB naming assumptions are shipped.
+
+## Phase 28: Multi-KB Fusion And Query Rewrite MVP
+
+Goal: migrate the highest-value smart-query and agentic-rag retrieval ideas while keeping raw
+evidence output available without an LLM key.
+
+Tasks:
+
+- [ ] Add `ragflow_fusion_report_v1`.
+- [ ] Add `ragflow-query ask --fusion rrf`.
+- [ ] Add `ragflow-query fusion` for explicit multi-KB result merging.
+- [ ] Add `ragflow-query fusion-test` with offline fixture coverage.
+- [ ] Normalize per-KB scores and preserve original score components.
+- [ ] Deduplicate near-identical chunks across KBs.
+- [ ] Add reciprocal rank fusion with explainable rank contributions.
+- [ ] Preserve source KB, document, chunk ID/hash, and route metadata in output.
+- [ ] Add `ragflow-query rewrite`.
+- [ ] Add `ask --rewrite simple`, `ask --rewrite translate`, and `ask --rewrite hyde`.
+- [ ] Add `ask --multi-query queries.json`.
+- [ ] Ensure generated queries are always recorded in trace output.
+- [ ] Keep original query retrieval visible in outputs.
+- [ ] Add deterministic offline rewrite stubs for tests.
+- [ ] Gate LLM-backed rewrite/HyDE behind explicit LLM config.
+
+Exit criteria:
+
+- Multi-KB fusion works without an LLM key.
+- Fusion reports explain why each evidence chunk was ranked.
+- Query rewrite is opt-in, traceable, and never hides the original query.
+
+## Phase 29: Routing Quality Upgrade
+
+Goal: bring the useful routing discipline from smart-query into the public suite without
+shipping private route tables or private centroids.
+
+Tasks:
+
+- [ ] Add `ragflow-query route-report`.
+- [ ] Report hint coverage, missing route tests, ambiguous patterns, and low-confidence routes.
+- [ ] Add `ragflow-query route-diagnose`.
+- [ ] Classify route failures as missing hint, regex-order issue, priority conflict, acceptable ambiguity, missing KB config, or low-confidence semantic fallback.
+- [ ] Add regex ordering and substring-conflict checks.
+- [ ] Add word-boundary checks for short English names, acronyms, and product terms.
+- [ ] Add English hint coverage reporting by category and KB.
+- [ ] Add comprehensive route-test categories: exact, fuzzy, short query, long query, mixed-language, negative, substring conflict, wildcard shadowing.
+- [ ] Report per-KB retrieval parameter coverage and missing defaults.
+- [ ] Add optional centroid index schema generated from user-owned KB snapshots or manifests.
+- [ ] Add `ragflow-query centroid build --plan-only` with user-owned snapshots or KB manifests.
+- [ ] Add bounded centroid build execution with `--batch-size`, checkpoint, resume, and dynamic embedding config.
+- [ ] Add centroid scoring as a tie-breaker after explicit hints and user-specified KBs.
+- [ ] Add route regression summaries by category, locale, and negative-query class.
+- [ ] Add cross-language A/B reports for retrieval setting changes, including zero-result rate, chunk count delta, top-1 stability, similarity delta, and latency.
+- [ ] Add benchmark-derived retrieval parameter suggestions.
+- [ ] Add config linting for `kb_routing_hints` versus per-KB descriptive `hints` confusion.
+- [ ] Add tests proving no private routing examples are embedded in public fixtures.
+
+Exit criteria:
+
+- Users can assess whether their routing config is complete and stable.
+- Centroid routing is optional and user-generated.
+- Cross-language and route-hint changes are backed by A/B or route-test reports.
+- Public artifacts contain only neutral route examples and placeholder KB names.
+
+## Phase 30: Query Orchestration Safety, Experimental Agentic Synthesis, And Generation Evaluation
+
+Goal: add safe query orchestration and an opt-in agentic layer while preserving
+host-assisted evidence as the default recommended workflow.
+
+Tasks:
+
+- [ ] Add `ragflow_query_intent_v1` and `ragflow_query_route_decision_v1`.
+- [ ] Add `ragflow-query intent classify`.
+- [ ] Add `ragflow-query intent route`.
+- [ ] Classify `knowledge_query`, `comparison`, `clarification_needed`, and `out_of_scope`.
+- [ ] Return confidence and low-confidence disclaimers in structured JSON.
+- [ ] Add normalized retrieval statuses: `success`, `empty`, `low_quality`, `needs_refinement`, `clarification`, `rejected`, `error`, `timeout`, and `partial`.
+- [ ] Add `ragflow_query_session_v1`.
+- [ ] Add `ragflow-query session enrich`.
+- [ ] Add `ragflow-query session inspect`.
+- [ ] Implement deterministic pronoun/follow-up detection for recent session context.
+- [ ] Enforce session turn count and token budget limits.
+- [ ] Add `ragflow_agentic_plan_v1` and `ragflow_agentic_trace_v1`.
+- [ ] Add `ragflow-query agentic-plan`.
+- [ ] Add `ragflow-query agentic-answer` behind explicit LLM config.
+- [ ] Implement query complexity classification with deterministic fallback.
+- [ ] Implement bounded query decomposition and sub-query retrieval.
+- [ ] Implement optional reflection with a strict iteration budget.
+- [ ] Synthesize answers only from retrieved evidence.
+- [ ] Emit citations compatible with `audit-citations`.
+- [ ] Emit latency, token, model, and estimated cost traces.
+- [ ] Add `ragflow-query evaluate-answer`.
+- [ ] Add deterministic answer checks for citation presence, citation reachability, unsupported-claim warnings, and abstention behavior.
+- [ ] Add optional LLM/RAGAS-style backend as a deferred adapter.
+- [ ] Add offline unit tests and fixture traces.
+
+Exit criteria:
+
+- Query orchestration can ask for clarification or reject out-of-scope requests without calling a generation model.
+- Session enrichment is bounded, inspectable, and disabled unless session input is provided.
+- Experimental agentic answer generation is disabled unless the user explicitly configures it.
+- Host-assisted evidence remains backward-compatible.
+- Generated answers can be evaluated with deterministic checks before any optional LLM evaluator is used.
+
+## Phase 31: Runtime Resilience And Sanitized Reports
+
+Goal: harden long-running live workflows, fallback behavior, runtime capability checks, and
+report redaction.
+
+Tasks:
+
+- [ ] Add `ragflow-doc-to-md backend probe`.
+- [ ] Classify conversion backends as `available`, `missing`, `wrong_protocol`, `timeout`, or `not_configured`.
+- [ ] Add optional `ragflow-doc-to-md backend warmup` for tiny user-approved converter fixtures.
+- [ ] Add timeout cleanup and leftover-process reporting for local CLI/process-backed conversion attempts.
+- [ ] Preserve image fallback as `PASS_WITH_REVIEW` with source image retained when OCR/conversion is unavailable.
+- [ ] Add `ragflow-kb-build model-providers probe`.
+- [ ] Probe configured RAGFlow embedding/rerank provider registration and request shape when credentials are present.
+- [ ] Warn when an embedding model change requires KB rebuild or re-parse.
+- [ ] Add fake endpoint tests for empty-input embedding/rerank adapter behavior.
+- [ ] Add `ragflow-query endpoint-report` for local/LAN/VPN/HTTPS endpoint classification and redacted reachability summaries.
+- [ ] Add `ragflow-query fallback-test`.
+- [ ] Cover LLM unavailable, malformed LLM JSON, network timeout, partial failure, direct retrieval fallback, and fallback metrics.
+- [ ] Add retry/backoff policy helpers with retry budgets recorded in traces.
+- [ ] Add token-bucket rate limiter for RAGFlow and optional LLM calls.
+- [ ] Add circuit-breaker state for repeated service failures during a run.
+- [ ] Add read-only cache helpers for list/probe operations.
+- [ ] Add cache keys that include query text, dataset IDs, route/rewrite/fusion params, top-k, threshold, and relevant config version.
+- [ ] Add cache stats and invalidation reports.
+- [ ] Add metrics collector for counters, gauges, and latency histograms with p50/p95/p99 summaries.
+- [ ] Add checkpoint/resume helpers for bounded long-running jobs such as centroid build, benchmark import, optimize, and report generation.
+- [ ] Add partial-failure report schemas for timeout, partial, and skipped profiles.
+- [ ] Add a shared report sanitizer for API keys, bearer tokens, configured private hosts, home paths, and local config paths.
+- [ ] Add `--redaction-report` to relevant commands.
+- [ ] Extend release hygiene to scan generated reports and examples.
+- [ ] Add acceptance fixtures that intentionally include fake secrets and verify redaction.
+- [ ] Add documentation for host agents explaining where sanitized reports should be stored.
+
+Exit criteria:
+
+- Runtime probes explain host readiness without installing services or supervising daemons.
+- Fallback behavior is measurable and covered by acceptance fixtures.
+- Model-provider probes distinguish service reachability from RAGFlow usability.
+- Long-running live workflows fail with clear partial reports instead of silent or noisy failures.
+- Bounded batch jobs can resume without duplicating completed work.
+- Generated reports are safe to attach to issues or release validation summaries after redaction.
+- Release artifacts and examples continue to contain only placeholders.
+
+## Phase 32: Skill Suite Review And Drift Control
+
+Goal: turn the old two-pass skill review methodology into an offline release check for the
+three public skills.
+
+Tasks:
+
+- [ ] Add `tools/release_hygiene_check.py --suite-review`.
+- [ ] Validate `SKILL.md` frontmatter in all three public skills.
+- [ ] Detect stale references to removed, private, or old-skill names.
+- [ ] Detect shared reference/template drift across the three skills.
+- [ ] Detect broken relative links in `SKILL.md` and `references/`.
+- [ ] Detect trigger/description overlap that could confuse host-agent skill selection.
+- [ ] Detect version/date drift between docs, release manifest, and skill metadata.
+- [ ] Detect repeated warnings that should be centralized in a single reference.
+- [ ] Detect accidental naming drift from old or experimental product names.
+- [ ] Validate compatibility references for deprecated aliases and schema names.
+- [ ] Add fixture coverage for intentional drift, broken links, duplicate shared docs, and private references.
+
+Exit criteria:
+
+- A release candidate can prove the three public skills are structurally aligned.
+- Suite review runs offline and never scans private old skill folders by default.
+- Drift findings are actionable and do not require loading large project docs into `SKILL.md`.
+
+## Phase 33: Contract, Packaging, And Compatibility Gates
+
+Goal: make release readiness cover installed artifacts, handoff contracts, command manifests,
+schema identity, and rename compatibility.
+
+Tasks:
+
+- [ ] Add a contract fixture gate from `ragflow-doc-to-md` rich/plain handoff into `ragflow-kb-build --dry-run`.
+- [ ] Add installed archive smoke for every exported skill tarball, separate from source-tree smoke.
+- [ ] Add command-manifest dry-run support for live acceptance flows.
+- [ ] Include local configuration checks, redacted command arrays, expected artifacts, mutation labels, and cleanup notes in command manifests.
+- [ ] Add schema identity checks for `doc_manifest`, `kb_manifest`, quality, benchmark, query, trace, diagnostic, and route reports.
+- [ ] Add compatibility facade checks for deprecated command aliases or schema names when aliases exist.
+- [ ] Add explicit rename policy documentation for CLI aliases, schema migration, docs updates, downstream gates, release notes, and rollback plan.
+- [ ] Add release hygiene checks for accidental public rename drift.
+- [ ] Add acceptance fixtures proving the command manifest does not leak secrets or private paths.
+- [ ] Add forward-test prompt templates for Hermes/OpenClaw to validate installed artifacts from release archives.
+
+Exit criteria:
+
+- Release candidates prove that public archives work after installation, not only from the source tree.
+- Handoff contracts between the three skills are validated with neutral fixtures.
+- Live acceptance can be reviewed from a redacted dry-run command manifest before mutation.
+- Public naming/schema changes cannot slip in without compatibility and rollback planning.
+
+## Phase 34: KB Topology, Routing Activation, And Assistant Profiles
+
+Goal: help users decide create/merge/split/activate workflows and prepare post-ingest
+assistant tests without mutating user-owned routing config automatically.
+
+Tasks:
+
+- [ ] Add `kb_topology_advice_v1`.
+- [ ] Add `kb_split_plan_v1`.
+- [ ] Add `kb_activation_plan_v1`.
+- [ ] Add `ragflow-kb-build topology advise`.
+- [ ] Add create-vs-merge signals: terminology independence, minimum useful corpus size, future-growth hint, semantic overlap, and anchor query pairs.
+- [ ] Add split signals: cross-domain chunk count, ambiguous-term score, dominant-document share, and domain-purity warnings.
+- [ ] Add `ragflow-kb-build topology split-plan`.
+- [ ] Add `ragflow-kb-build activation-plan`.
+- [ ] Check content completeness, document count, chunk count, route config registration, hint coverage, optional centroid availability, and route-test readiness.
+- [ ] Add `ragflow-query route-activation-check`.
+- [ ] Consume rich-handoff `retrieval_hints.json` when present for keyword/question candidates and route-test starter suggestions.
+- [ ] Add `ragflow-query assistant-profile recommend`.
+- [ ] Recommend assistant retrieval settings such as similarity threshold, vector/BM25 weight, top-k, quote/citation settings, and no-answer policy.
+- [ ] Add `ragflow-query assistant-test-plan`.
+- [ ] Generate staged assistant tests for exact numeric facts, OCR/image facts, logical flow, paraphrase, summary, and negative/boundary questions.
+- [ ] Keep all topology, activation, routing, and assistant outputs as plans or sidecars unless the user explicitly edits their config.
+- [ ] Add offline tests with neutral KB names and synthetic route configs.
+
+Exit criteria:
+
+- Users can decide whether a new corpus should become a new KB, merge into an existing KB, or be split before upload.
+- A newly built KB can produce a routing activation plan without private route tables.
+- Assistant profiles and test plans can be reviewed by a host agent without mutating RAGFlow chat settings.
+
+## Phase 35: Parser Performance And KB Health Telemetry
+
+Goal: explain slow parsing, fragile parser settings, stale count fields, and KB health risks
+without direct DB/Redis repair.
+
+Tasks:
+
+- [ ] Add `ragflow-kb-build parse-report`.
+- [ ] Summarize document parse states, parse errors, and chunk counts.
+- [ ] Report parse phase timings when RAGFlow exposes progress messages or the user supplies logs.
+- [ ] Warn about expensive parser settings such as `auto_questions`, excessive `auto_keywords`, visual layout recognition on large Markdown, image/table context size, and unsupported parser keys.
+- [ ] Compare KB detail counts with document-list counts to detect stale or lazy list fields.
+- [ ] Add `ragflow-kb-build health-report`.
+- [ ] Summarize embedding model distribution across selected KBs.
+- [ ] Summarize zero-document, zero-chunk, stale-parse, and route-activation risks.
+- [ ] Include parser performance recommendations as API/config-level suggestions only.
+- [ ] Add tests proving public commands do not execute DB, Redis, Docker, or system-service repair.
+
+Exit criteria:
+
+- Users can distinguish parse success from slow-path or fragile parser configuration.
+- KB health reports explain route activation, model distribution, and chunk completeness risks.
+- Public reports can recommend private-operator checks without performing private repairs.
+
 ## Definition of Done
 
 The public suite is ready for first external use when:
