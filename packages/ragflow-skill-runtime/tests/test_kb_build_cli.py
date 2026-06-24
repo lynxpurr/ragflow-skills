@@ -242,6 +242,18 @@ class KbBuildCliTests(unittest.TestCase):
                 json.dumps({"schema": "ragflow_artifact_index_v1", "artifact_count": 0}),
                 encoding="utf-8",
             )
+            (handoff / "retrieval_hints.json").write_text(
+                json.dumps({"schema": "ragflow_retrieval_hints_v1", "section_boundaries": [{"title": "Sample"}]}),
+                encoding="utf-8",
+            )
+            (handoff / "assistant_profile.json").write_text(
+                json.dumps({"schema": "ragflow_assistant_profile_v1", "profile_id": "handoff-review-default"}),
+                encoding="utf-8",
+            )
+            (handoff / "assistant_test_plan.json").write_text(
+                json.dumps({"schema": "ragflow_assistant_test_plan_v1", "test_count": 1, "cases": []}),
+                encoding="utf-8",
+            )
             report_md = Path(tmp) / "handoff_inspection.md"
 
             result = subprocess.run(
@@ -267,6 +279,8 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["handoff"]["document_count"], 1)
         self.assertTrue(payload["handoff"]["sidecars"]["metadata"]["exists"])
+        self.assertEqual(payload["handoff"]["retrieval_hint_count"], 1)
+        self.assertEqual(payload["handoff"]["assistant_test_count"], 1)
         self.assertIn("RAGFlow Handoff Inspection", report_md_text)
 
     def test_inspect_manifest_via_subprocess(self) -> None:

@@ -185,6 +185,9 @@ class DocConvertCliTests(unittest.TestCase):
             metadata = json.loads((output_dir / "metadata.json").read_text(encoding="utf-8"))
             artifact_index = json.loads((output_dir / "artifact_index.json").read_text(encoding="utf-8"))
             suggestions = json.loads((output_dir / "profile_suggestions.json").read_text(encoding="utf-8"))
+            retrieval_hints = json.loads((output_dir / "retrieval_hints.json").read_text(encoding="utf-8"))
+            assistant_profile = json.loads((output_dir / "assistant_profile.json").read_text(encoding="utf-8"))
+            assistant_test_plan = json.loads((output_dir / "assistant_test_plan.json").read_text(encoding="utf-8"))
             readme_exists = (output_dir / "package_readme.md").exists()
 
         self.assertEqual(convert_result.returncode, 0, convert_result.stderr)
@@ -195,6 +198,9 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(metadata["schema"], "ragflow_document_metadata_v1")
         self.assertEqual(artifact_index["schema"], "ragflow_artifact_index_v1")
         self.assertEqual(suggestions["schema"], "ragflow_profile_suggestions_v1")
+        self.assertEqual(retrieval_hints["schema"], "ragflow_retrieval_hints_v1")
+        self.assertEqual(assistant_profile["schema"], "ragflow_assistant_profile_v1")
+        self.assertEqual(assistant_test_plan["schema"], "ragflow_assistant_test_plan_v1")
         self.assertTrue(readme_exists)
 
     def test_postprocess_single_markdown_cli(self) -> None:

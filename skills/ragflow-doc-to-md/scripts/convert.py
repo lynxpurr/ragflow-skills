@@ -388,6 +388,9 @@ def _run_package(args: argparse.Namespace) -> int:
             metadata_name=args.metadata_name,
             artifact_index_name=args.artifact_index_name,
             profile_suggestions_name=args.profile_suggestions_name,
+            retrieval_hints_name=args.retrieval_hints_name,
+            assistant_profile_name=args.assistant_profile_name,
+            assistant_test_plan_name=args.assistant_test_plan_name,
             package_readme_name=args.package_readme_name,
         )
         _dump_json({"ok": True, "package": payload})
@@ -465,6 +468,9 @@ def build_package_parser() -> argparse.ArgumentParser:
     parser.add_argument("--metadata-name", default="metadata.json", help="Metadata sidecar name")
     parser.add_argument("--artifact-index-name", default="artifact_index.json", help="Artifact index sidecar name")
     parser.add_argument("--profile-suggestions-name", default="profile_suggestions.json", help="Profile suggestions sidecar name")
+    parser.add_argument("--retrieval-hints-name", default="retrieval_hints.json", help="Retrieval hints sidecar name")
+    parser.add_argument("--assistant-profile-name", default="assistant_profile.json", help="Assistant profile sidecar name")
+    parser.add_argument("--assistant-test-plan-name", default="assistant_test_plan.json", help="Assistant test plan sidecar name")
     parser.add_argument("--package-readme-name", default="package_readme.md", help="Package README sidecar name")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     return parser

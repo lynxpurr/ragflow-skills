@@ -780,15 +780,23 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         package_result,
         required_stdout='"schema": "ragflow_handoff_package_v1"',
     )
-    rich_metadata = handoff_dir / "metadata.json"
-    checks.append(
-        {
-            "name": "rich handoff metadata produced",
-            "ok": rich_metadata.exists(),
-            "returncode": 0 if rich_metadata.exists() else 1,
-            "error": "" if rich_metadata.exists() else f"missing {rich_metadata}",
-        }
-    )
+    for rich_name in (
+        "metadata.json",
+        "artifact_index.json",
+        "profile_suggestions.json",
+        "retrieval_hints.json",
+        "assistant_profile.json",
+        "assistant_test_plan.json",
+    ):
+        rich_path = handoff_dir / rich_name
+        checks.append(
+            {
+                "name": f"rich handoff {rich_name} produced",
+                "ok": rich_path.exists(),
+                "returncode": 0 if rich_path.exists() else 1,
+                "error": "" if rich_path.exists() else f"missing {rich_path}",
+            }
+        )
     postprocess_dir = workspace / "postprocessed-handoff"
     postprocess_result = _run_command(
         [

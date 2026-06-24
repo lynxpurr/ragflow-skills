@@ -306,7 +306,15 @@ def _run_no_network_checks(
         env=env,
     )
     _record_command_check(checks, "doc-to-md rich handoff package", package_result, required_output='"schema": "ragflow_handoff_package_v1"')
-    for rich_name in ("metadata.json", "artifact_index.json", "profile_suggestions.json", "package_readme.md"):
+    for rich_name in (
+        "metadata.json",
+        "artifact_index.json",
+        "profile_suggestions.json",
+        "retrieval_hints.json",
+        "assistant_profile.json",
+        "assistant_test_plan.json",
+        "package_readme.md",
+    ):
         rich_path = handoff_dir / rich_name
         _record_file_check(checks, f"rich handoff {rich_name} produced", rich_path)
         if rich_path.exists():

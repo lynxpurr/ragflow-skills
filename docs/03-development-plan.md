@@ -758,12 +758,12 @@ Tasks:
 - [x] Add `ragflow_document_metadata_v1` for source metadata, source hash, locale, and document-level hints.
 - [x] Add `ragflow_artifact_index_v1` for images, tables, raw artifacts, and copied asset hashes.
 - [x] Add `ragflow_profile_suggestions_v1` for advisory profile recommendations.
-- [ ] Add `ragflow_retrieval_hints_v1` for section boundaries, table artifacts, keyword candidates, question candidates, and quality risks.
-- [ ] Add `ragflow_assistant_profile_v1` and `ragflow_assistant_test_plan_v1` as optional review sidecars.
-- [ ] Add source inventory fields for source format, MIME hint, size, sha256, and language hint.
+- [x] Add `ragflow_retrieval_hints_v1` for section boundaries, table artifacts, keyword candidates, question candidates, and quality risks.
+- [x] Add `ragflow_assistant_profile_v1` and `ragflow_assistant_test_plan_v1` as optional review sidecars.
+- [x] Add source inventory fields for source format, MIME hint, size, sha256, and language hint.
 - [x] Add `ragflow-doc-to-md package --rich` while keeping plain `doc_manifest.json` as default.
 - [x] Generate `metadata.json`, `package_readme.md`, and artifact index files in rich mode.
-- [ ] Generate optional `retrieval_hints.json`, `assistant_profile.json`, and `assistant_test_plan.json` in rich mode.
+- [x] Generate optional `retrieval_hints.json`, `assistant_profile.json`, and `assistant_test_plan.json` in rich mode.
 - [x] Add `ragflow-kb-build inspect-handoff` to summarize manifest and optional sidecars before upload.
 - [x] Add deterministic Markdown post-processing profiles: `none`, `safe`, `ocr`, and `chunk-markers`.
 - [x] Emit `postprocess_report.json` with changed line counts, rule IDs, and warnings.
