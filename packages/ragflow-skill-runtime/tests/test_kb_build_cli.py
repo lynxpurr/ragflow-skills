@@ -1105,6 +1105,43 @@ class KbBuildCliTests(unittest.TestCase):
             for index, candidate in enumerate(payload.get("candidates", [])):
                 validation_report = Path(candidate["artifacts"]["validation_report"])
                 validation_report.parent.mkdir(parents=True, exist_ok=True)
+                if index == 0:
+                    kb_manifest = Path(candidate["artifacts"]["kb_manifest"])
+                    kb_manifest.write_text(
+                        json.dumps(
+                            {
+                                "version": "0.1",
+                                "dataset": {"id": "0123456789abcdef", "name": candidate["disposable_kb_name"]},
+                                "documents": [{"document_id": "doc-0123456789abcdef", "status": "done", "chunk_count": 0}],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    validation_report.write_text(
+                        json.dumps(
+                            {
+                                "ok": False,
+                                "level": "benchmark",
+                                "metrics": {"pass_rate": 0.0, "empty_results": 1},
+                                "cases": [{"id": "q1", "passed": False, "chunk_count": 0}],
+                                "benchmark": {
+                                    "metrics": {
+                                        "hit_rate": 0.0,
+                                        "mrr": 0.0,
+                                        "precision_at_k": 0.0,
+                                        "recall_at_k": 0.0,
+                                        "ndcg_at_k": 0.0,
+                                        "map_at_k": 0.0,
+                                        "strict_chunk_recall_at_k": 0.0,
+                                        "expected_chunk_hit_rate": 0.0,
+                                        "empty_result_rate": 1.0,
+                                    }
+                                },
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    continue
                 score = 1.0 if index == 1 else 0.6
                 validation_report.write_text(
                     json.dumps(
@@ -1155,11 +1192,18 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("ragflow_optimization_plan_v1", result.stdout)
         self.assertEqual(payload["summary"]["candidate_count"], 2)
         self.assertFalse(payload["mutation_allowed"])
+        self.assertFalse(payload["mutation_guard"]["mutation_commands_enabled"])
+        self.assertIsNone(payload["candidates"][0]["commands"]["build"])
+        self.assertFalse(payload["candidates"][0]["mutation_commands"]["build"]["enabled"])
         self.assertIn("RAGFlow Optimization Plan", report_md_text)
         self.assertEqual(summary_result.returncode, 0, summary_result.stdout)
         self.assertIn("ragflow_profile_experiment_results_v1", summary_result.stdout)
         self.assertEqual(results_payload["summary"]["result_count"], 2)
+        self.assertEqual(results_payload["summary"]["diagnostic_required_count"], 1)
+        self.assertEqual(results_payload["summary"]["diagnostic_report_count"], 1)
+        self.assertIn("document_zero_chunks", results_payload["diagnostics"][0]["summary"]["issue_types"])
         self.assertIn("RAGFlow Best Profile Report", best_md_text)
+        self.assertIn("## Diagnostics", best_md_text)
 
     def test_optimize_cleanup_plan_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

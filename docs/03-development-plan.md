@@ -834,10 +834,10 @@ Tasks:
 - [x] Add `ragflow-kb-build optimize --plan-only` for non-mutating experiment planning.
 - [x] Add candidate profile set loading from files, directories, and generated recommendations.
 - [x] Add disposable KB naming conventions and collision checks.
-- [ ] Require `--execute` before creating any experiment KB.
+- [x] Require `--execute` before creating any experiment KB.
 - [ ] Build each candidate profile into an isolated disposable KB.
 - [ ] Run benchmark validation for each candidate.
-- [ ] Run `diagnose` automatically for failed builds or zero-chunk cases.
+- [x] Run `diagnose` automatically for failed builds or zero-chunk cases.
 - [x] Produce `optimization_plan.json`.
 - [x] Produce `profile_experiment_results.json`.
 - [x] Produce `best_profile_report.md` with metric tradeoffs and recommendation rationale.

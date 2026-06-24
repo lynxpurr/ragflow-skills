@@ -381,9 +381,16 @@ creating disposable KBs. It loads candidate profiles from explicit files,
 directories, `ragflow_candidate_profile_set_v1` files, and generated recommendations,
 resolves benchmark manifest artifacts, lints candidate profiles, assigns disposable KB
 names, and reports naming collisions before any live execution is allowed.
+Plan-only output includes disabled mutation command templates under `mutation_commands`;
+ordinary `commands` do not contain an enabled disposable-KB build command, so experiment
+KB creation remains gated on a future explicit `optimize --execute` path.
 MVP `optimize summarize` then reads the plan plus existing validation reports and
 produces `ragflow_profile_experiment_results_v1` plus a Markdown best-profile report with
-metric tradeoffs and recommendation rationale. It does not build KBs or run validation.
+metric tradeoffs and recommendation rationale. When a candidate validation report is
+missing, failed, or has zero retrieved chunks, summarize runs local non-live diagnostics
+from the candidate `kb_manifest.json` when available, writes the planned
+`diagnostic_report.json`, and records pending diagnose commands when the manifest is not
+available yet. It does not build KBs or run validation.
 MVP `optimize cleanup-plan` reads the optimization plan and any available candidate
 `kb_manifest.json` files, then produces a non-mutating `ragflow_optimization_cleanup_plan_v1`.
 Targets with dataset IDs include exact-confirmation cleanup commands; targets without

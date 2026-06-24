@@ -12,6 +12,7 @@ from typing import Any, Iterable, Mapping
 
 from .benchmark_governance import BenchmarkGovernanceError, preflight_benchmark_dataset, resolve_benchmark_artifacts
 from .config import ConfigError, read_config_file
+from .diagnostics import DIAGNOSTIC_REPORT_SCHEMA, diagnose_kb_manifest
 from .manifests import ManifestError, load_kb_manifest
 from .profiles import ChunkProfile, ProfileError, lint_profile, load_profile, recommend_profile
 
@@ -438,6 +439,16 @@ def _validate_command(
     return command
 
 
+def _disabled_mutation_command(command: list[str], *, reason: str) -> dict[str, Any]:
+    return {
+        "command": command,
+        "mutation": True,
+        "requires_execute": True,
+        "enabled": False,
+        "reason": reason,
+    }
+
+
 def create_optimization_plan(
     *,
     kb_name: str,
@@ -600,7 +611,7 @@ def create_optimization_plan(
                 "artifacts": candidate_artifacts,
                 "commands": {
                     "write_generated_profile": None if candidate.get("path") else ["write-json", candidate_artifacts["profile"]],
-                    "build": build_command,
+                    "build": None,
                     "validate": validate_command,
                     "diagnose": [
                         "python3",
@@ -619,6 +630,12 @@ def create_optimization_plan(
                         candidate_artifacts["cleanup_plan"],
                     ],
                 },
+                "mutation_commands": {
+                    "build": _disabled_mutation_command(
+                        build_command,
+                        reason="Disposable KB creation is disabled in plan-only output and requires optimize --execute.",
+                    )
+                },
             }
         )
 
@@ -629,6 +646,12 @@ def create_optimization_plan(
         "created_at": _now(),
         "mode": "plan-only",
         "mutation_allowed": False,
+        "mutation_guard": {
+            "execute_required": True,
+            "execute_flag": "--execute",
+            "mutation_commands_enabled": False,
+            "disabled_reason": "Plan-only output records mutation command templates but does not enable experiment KB creation.",
+        },
         "run_id": actual_run_id,
         "base_kb_name": kb_name,
         "inputs": {
@@ -654,6 +677,7 @@ def create_optimization_plan(
             "document_count": len(documents),
             "planned_experiment_count": len(plan_candidates),
             "mutation_steps": 0,
+            "blocked_mutation_command_count": len(plan_candidates),
         },
         "candidates": plan_candidates,
         "steps": [
@@ -735,6 +759,119 @@ def _validation_report_metrics(report: Mapping[str, Any]) -> dict[str, float]:
     return metrics
 
 
+def _validation_zero_chunk_count(report: Mapping[str, Any]) -> int:
+    metrics = report.get("metrics") if isinstance(report.get("metrics"), Mapping) else {}
+    metric_empty = metrics.get("empty_results")
+    count = int(metric_empty) if isinstance(metric_empty, int) and not isinstance(metric_empty, bool) else 0
+    case_count = 0
+    for case in report.get("cases", []) if isinstance(report.get("cases"), list) else []:
+        if isinstance(case, Mapping) and case.get("chunk_count") == 0:
+            case_count += 1
+    return max(count, case_count)
+
+
+def _validation_diagnostic_reasons(report: Mapping[str, Any]) -> list[str]:
+    reasons = []
+    if report.get("ok") is False:
+        reasons.append("validation_failed")
+    if _validation_zero_chunk_count(report) > 0:
+        reasons.append("zero_chunks")
+    benchmark = report.get("benchmark") if isinstance(report.get("benchmark"), Mapping) else {}
+    benchmark_metrics = benchmark.get("metrics") if isinstance(benchmark.get("metrics"), Mapping) else {}
+    empty_rate = benchmark_metrics.get("empty_result_rate")
+    if isinstance(empty_rate, (int, float)) and not isinstance(empty_rate, bool) and empty_rate > 0:
+        reasons.append("empty_retrieval")
+    return sorted(set(reasons))
+
+
+def _diagnostic_command(candidate: Mapping[str, Any]) -> list[str] | None:
+    commands = candidate.get("commands") if isinstance(candidate.get("commands"), Mapping) else {}
+    command = commands.get("diagnose")
+    return list(command) if isinstance(command, list) else None
+
+
+def _diagnostic_summary(report: Mapping[str, Any]) -> dict[str, Any]:
+    issues = [issue for issue in report.get("issues", []) if isinstance(issue, Mapping)] if isinstance(report.get("issues"), list) else []
+    recommendations = [str(issue.get("recommendation")) for issue in issues if issue.get("recommendation")]
+    issue_types = [str(issue.get("issue_type") or issue.get("code")) for issue in issues if issue.get("issue_type") or issue.get("code")]
+    summary = report.get("summary") if isinstance(report.get("summary"), Mapping) else {}
+    return {
+        "schema": report.get("schema"),
+        "ok": bool(report.get("ok")),
+        "summary": dict(summary),
+        "issue_types": issue_types,
+        "recommendations": recommendations[:5],
+    }
+
+
+def _candidate_diagnostic(
+    candidate: Mapping[str, Any],
+    *,
+    reason_codes: list[str],
+    issues: list[OptimizationIssue],
+    field: str,
+) -> dict[str, Any]:
+    artifacts = candidate.get("artifacts") if isinstance(candidate.get("artifacts"), Mapping) else {}
+    report_path = Path(artifacts["diagnostic_report"]) if isinstance(artifacts.get("diagnostic_report"), str) else None
+    manifest_path = Path(artifacts["kb_manifest"]) if isinstance(artifacts.get("kb_manifest"), str) else None
+    payload: dict[str, Any] = {
+        "required": bool(reason_codes),
+        "reason_codes": reason_codes,
+        "report_path": str(report_path) if report_path else None,
+        "report_available": False,
+        "generated": False,
+        "summary": None,
+        "command": _diagnostic_command(candidate),
+    }
+    if not reason_codes:
+        return payload
+
+    if report_path and report_path.exists():
+        try:
+            diagnostic_report = _read_json_mapping(report_path, label="diagnostic report")
+        except ProfileError as exc:
+            issues.append(OptimizationIssue("warning", "diagnostic_report_invalid", str(exc), field))
+            return payload
+        if diagnostic_report.get("schema") != DIAGNOSTIC_REPORT_SCHEMA:
+            issues.append(
+                OptimizationIssue(
+                    "warning",
+                    "diagnostic_report_schema_invalid",
+                    f"diagnostic report schema should be {DIAGNOSTIC_REPORT_SCHEMA}",
+                    field,
+                )
+            )
+        payload["report_available"] = True
+        payload["summary"] = _diagnostic_summary(diagnostic_report)
+        return payload
+
+    if not manifest_path or not manifest_path.exists():
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                "diagnostic_manifest_missing",
+                "candidate needs diagnostics but its KB manifest is not available yet",
+                field,
+                "Build the candidate or provide its kb_manifest.json, then rerun optimize summarize.",
+            )
+        )
+        return payload
+
+    try:
+        diagnostic_report = diagnose_kb_manifest(load_kb_manifest(manifest_path))
+    except (ManifestError, OSError) as exc:
+        issues.append(OptimizationIssue("warning", "diagnostic_manifest_invalid", str(exc), field))
+        return payload
+
+    if report_path:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(diagnostic_report, ensure_ascii=False, indent=2), encoding="utf-8")
+        payload["report_available"] = True
+        payload["generated"] = True
+    payload["summary"] = _diagnostic_summary(diagnostic_report)
+    return payload
+
+
 def _result_tradeoffs(result: Mapping[str, Any], winner: Mapping[str, Any]) -> list[str]:
     metrics = result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
     winner_metrics = winner.get("metrics") if isinstance(winner.get("metrics"), Mapping) else {}
@@ -805,6 +942,7 @@ def summarize_optimization_results(
         )
 
     results = []
+    diagnostics = []
     for index, candidate in enumerate(candidates):
         if not isinstance(candidate, Mapping):
             continue
@@ -822,13 +960,77 @@ def summarize_optimization_results(
                     f"candidates[{index}].validation_report",
                 )
             )
+            diagnostic = _candidate_diagnostic(
+                candidate,
+                reason_codes=["validation_report_missing"],
+                issues=issues,
+                field=f"candidates[{index}].artifacts.kb_manifest",
+            )
+            diagnostics.append(
+                {
+                    "profile_id": candidate.get("profile_id"),
+                    "disposable_kb_name": candidate.get("disposable_kb_name"),
+                    **diagnostic,
+                }
+            )
+            continue
+        if not report_path.exists():
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "validation_report_missing",
+                    f"validation report not found: {report_path}",
+                    f"candidates[{index}].validation_report",
+                )
+            )
+            diagnostic = _candidate_diagnostic(
+                candidate,
+                reason_codes=["validation_report_missing"],
+                issues=issues,
+                field=f"candidates[{index}].artifacts.kb_manifest",
+            )
+            diagnostics.append(
+                {
+                    "profile_id": candidate.get("profile_id"),
+                    "disposable_kb_name": candidate.get("disposable_kb_name"),
+                    **diagnostic,
+                }
+            )
             continue
         try:
             report = _read_json_mapping(report_path, label="validation report")
         except ProfileError as exc:
             issues.append(OptimizationIssue("error", "validation_report_invalid", str(exc), f"candidates[{index}].validation_report"))
+            diagnostic = _candidate_diagnostic(
+                candidate,
+                reason_codes=["validation_report_invalid"],
+                issues=issues,
+                field=f"candidates[{index}].artifacts.kb_manifest",
+            )
+            diagnostics.append(
+                {
+                    "profile_id": candidate.get("profile_id"),
+                    "disposable_kb_name": candidate.get("disposable_kb_name"),
+                    **diagnostic,
+                }
+            )
             continue
         metrics = _validation_report_metrics(report)
+        reason_codes = _validation_diagnostic_reasons(report)
+        diagnostic = _candidate_diagnostic(
+            candidate,
+            reason_codes=reason_codes,
+            issues=issues,
+            field=f"candidates[{index}].artifacts.kb_manifest",
+        )
+        if diagnostic["required"]:
+            diagnostics.append(
+                {
+                    "profile_id": candidate.get("profile_id"),
+                    "disposable_kb_name": candidate.get("disposable_kb_name"),
+                    **diagnostic,
+                }
+            )
         results.append(
             {
                 "profile_id": candidate.get("profile_id"),
@@ -839,6 +1041,7 @@ def summarize_optimization_results(
                 "dataset": report.get("dataset", {}),
                 "metrics": metrics,
                 "score": metrics["score"],
+                "diagnostics": diagnostic,
                 "source": candidate.get("source", {}),
             }
         )
@@ -858,6 +1061,7 @@ def summarize_optimization_results(
         rationale = []
 
     issue_summary = _issue_counts(issues)
+    diagnostic_report_count = sum(1 for item in diagnostics if item.get("report_available"))
     return {
         "ok": _ok(issues),
         "schema": PROFILE_EXPERIMENT_RESULTS_SCHEMA,
@@ -868,6 +1072,12 @@ def summarize_optimization_results(
             "candidate_count": len(candidates),
             "result_count": len(results),
             "best_profile_id": winner.get("profile_id") if winner else None,
+            "failed_candidate_count": sum(1 for item in results if item.get("ok") is False),
+            "zero_chunk_candidate_count": sum(
+                1 for item in diagnostics if "zero_chunks" in (item.get("reason_codes") if isinstance(item.get("reason_codes"), list) else [])
+            ),
+            "diagnostic_required_count": len(diagnostics),
+            "diagnostic_report_count": diagnostic_report_count,
         },
         "recommendation": {
             "profile_id": winner.get("profile_id") if winner else None,
@@ -877,6 +1087,7 @@ def summarize_optimization_results(
         },
         "winner": winner,
         "candidates": ranked,
+        "diagnostics": diagnostics,
         "issues": [issue.to_dict() for issue in issues],
     }
 
@@ -1161,6 +1372,21 @@ def render_best_profile_markdown(results: Mapping[str, Any]) -> str:
         for item in candidate.get("tradeoffs", []) if isinstance(candidate.get("tradeoffs"), list) else []:
             lines.append(f"- {item}")
         lines.append("")
+    diagnostics = results.get("diagnostics") if isinstance(results.get("diagnostics"), list) else []
+    if diagnostics:
+        lines.extend(["## Diagnostics", "", "| profile | reasons | report | generated | issue types |", "|---|---|---|---:|---|"])
+        for item in diagnostics:
+            if not isinstance(item, Mapping):
+                continue
+            summary = item.get("summary") if isinstance(item.get("summary"), Mapping) else {}
+            issue_types = summary.get("issue_types") if isinstance(summary.get("issue_types"), list) else []
+            reason_codes = item.get("reason_codes") if isinstance(item.get("reason_codes"), list) else []
+            lines.append(
+                f"| `{item.get('profile_id')}` | {', '.join(str(reason) for reason in reason_codes) or '-'} | "
+                f"`{item.get('report_path') or '-'}` | `{str(bool(item.get('generated'))).lower()}` | "
+                f"{', '.join(str(issue) for issue in issue_types) or '-'} |"
+            )
+        lines.append("")
     if results.get("issues"):
         lines.extend(["## Issues", "", "| severity | code | field | message |", "|---|---|---|---|"])
         for issue in results.get("issues", []) if isinstance(results.get("issues"), list) else []:
@@ -1174,12 +1400,14 @@ def render_optimization_plan_markdown(plan: Mapping[str, Any]) -> str:
     """Render a compact Markdown view of an optimization plan."""
 
     summary = plan.get("summary", {}) if isinstance(plan.get("summary"), Mapping) else {}
+    mutation_guard = plan.get("mutation_guard") if isinstance(plan.get("mutation_guard"), Mapping) else {}
     lines = [
         "# RAGFlow Optimization Plan",
         "",
         f"- Status: `{'passed' if plan.get('ok') else 'failed'}`",
         f"- Mode: `{plan.get('mode', 'plan-only')}`",
         f"- Mutates RAGFlow: `{str(bool(plan.get('mutation_allowed'))).lower()}`",
+        f"- Mutation commands enabled: `{str(bool(mutation_guard.get('mutation_commands_enabled'))).lower()}`",
         f"- Run ID: `{plan.get('run_id')}`",
         f"- Base KB name: `{plan.get('base_kb_name')}`",
         f"- Candidates: `{summary.get('candidate_count', 0)}`",
