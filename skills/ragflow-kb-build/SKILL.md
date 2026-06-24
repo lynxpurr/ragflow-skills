@@ -38,6 +38,7 @@ python scripts/build.py benchmark gate --report ./run/benchmark_report.json --ga
 python scripts/build.py benchmark trend --report ./run/benchmark_report.json --baseline-report ./run/baseline_benchmark_report.json --gate-config ./templates/benchmark-gate.example.json --report-md ./run/benchmark_trend.md
 python scripts/build.py benchmark delta --report ./run/benchmark_report.json --baseline-report ./run/baseline_benchmark_report.json --report-md ./run/benchmark_delta.md
 python scripts/build.py snapshot-chunks --input ./run/benchmark_report.json --output ./run/chunk_snapshot.json --report-md ./run/chunk_snapshot.md
+python scripts/build.py qa generate --source-dir ./handoff --output ./run/benchmark/qa.generated.json --count 20 --report-md ./run/qa_generate.md
 python scripts/build.py qa validate --qa ./run/benchmark/qa.json --source-dir ./handoff --report-md ./run/qa_validate.md
 python scripts/build.py qa map-evidence --qa ./run/benchmark/qa.json --chunk-snapshot ./run/chunk_snapshot.json --output ./run/qa_evidence_map.json --report-md ./run/qa_evidence_map.md
 python scripts/build.py segment-metadata report --chunk-snapshot ./run/chunk_snapshot.json --metadata ./run/metadata.merged.json --segmentation-plan ./run/segmentation_plan.json --report-md ./run/segment_metadata.md
@@ -75,8 +76,9 @@ Notes:
 - Use `metadata` and `tagset` subcommands to prepare advisory public metadata and tag reports offline. Metadata summaries can be attached to build reports with `--metadata`; default upload behavior is unchanged.
 - Use `benchmark import/sample/preflight/summarize/gate` and `snapshot-chunks` for offline benchmark lifecycle checks around `validate.py --level benchmark`; these commands do not touch RAGFlow.
 - Benchmark summarize/gate/trend/delta reports include deterministic root-cause hints for coverage, ranking, pollution, grounding, citation, abstention, and cost/latency regressions when matching metrics are present.
+- Use `qa generate` to create a deterministic, offline grounded QA scaffold from exact source spans; it does not call an LLM or mutate RAGFlow.
 - Use `qa validate` before feeding generated QA into benchmark gates; it checks required questions, answers, evidence spans, and exact source-span grounding when `--sources` or `--source-dir` is provided.
-- Use `qa map-evidence` after `snapshot-chunks` to map exact QA evidence spans onto chunk snapshot IDs and stable hashes for strict `expected_chunks` qrels.
+- Use `qa map-evidence` after `snapshot-chunks` to map exact QA evidence spans onto chunk snapshot IDs and stable hashes for strict `expected_chunks` qrels; the report includes deterministic mapping confidence and mapped chunk coverage.
 - Use `segment-metadata report` to measure document metadata and segment provenance coverage in chunk snapshots before relying on segment-aware benchmark analysis.
 - Use `optimize --plan-only` to load candidate profiles, resolve benchmark artifacts, lint candidates, and plan disposable KB experiment names without creating or deleting anything in RAGFlow.
 - Use `optimize summarize` after candidate validation reports exist; it ranks profile results and writes a best-profile report without building or validating live KBs.
@@ -88,4 +90,4 @@ Notes:
 - Use `profile.py lint/explain/recommend/compare` to review chunk profiles before upload and compare validation reports after profile experiments.
 - `validate.py` supports `smoke`, `regression`, and `benchmark`; regression requires a query set, and benchmark requires both a query set and qrels.
 - Query sets are small JSON files with `question`, optional `min_chunks`, `expected_terms`, and `expected_documents`.
-- Benchmark qrels are small JSON files mapping query IDs to relevant documents/chunks; qrels can include `expected_chunks` that match live chunk IDs or stable chunk snapshot hashes. Benchmark reports include hit rate, MRR, precision@k, recall@k, nDCG@k, MAP@k, empty-result rate, strict chunk recall when applicable, query-type breakdown, optional gate checks, and optional baseline deltas.
+- Benchmark qrels are small JSON files mapping query IDs to relevant documents/chunks; qrels can include `expected_chunks` that match live chunk IDs or stable chunk snapshot hashes. Chunk snapshots include content/provenance coverage and per-document chunk distribution. Benchmark reports include hit rate, MRR, precision@k, recall@k, nDCG@k, MAP@k, empty-result rate, strict chunk recall when applicable, query-type breakdown, optional gate checks, and optional baseline deltas.

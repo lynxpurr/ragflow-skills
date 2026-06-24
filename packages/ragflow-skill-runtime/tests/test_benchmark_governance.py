@@ -16,9 +16,11 @@ from ragflow_skill_runtime.benchmark_governance import (
     CHUNK_SNAPSHOT_REPORT_SCHEMA,
     GROUNDED_QA_EVIDENCE_MAP_REPORT_SCHEMA,
     GROUNDED_QA_EVIDENCE_MAP_SCHEMA,
+    GROUNDED_QA_GENERATE_REPORT_SCHEMA,
     GROUNDED_QA_VALIDATE_REPORT_SCHEMA,
     delta_benchmark_reports,
     gate_benchmark_report,
+    generate_grounded_qa,
     import_benchmark_dataset,
     map_grounded_qa_evidence,
     preflight_benchmark_dataset,
@@ -88,6 +90,11 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertEqual(report["schema"], CHUNK_SNAPSHOT_REPORT_SCHEMA)
         self.assertEqual(snapshot["schema"], "ragflow_chunk_snapshot_v1")
         self.assertEqual(snapshot["summary"]["chunk_count"], 1)
+        self.assertEqual(snapshot["summary"]["content_coverage"], 1.0)
+        self.assertEqual(snapshot["summary"]["document_name_coverage"], 1.0)
+        self.assertEqual(snapshot["summary"]["chunk_id_coverage"], 1.0)
+        self.assertEqual(snapshot["document_coverage"][0]["document_name"], "source.md")
+        self.assertEqual(snapshot["document_coverage"][0]["chunk_count"], 1)
         self.assertTrue(snapshot["chunks"][0]["stable_hash"].startswith("sha256:"))
         self.assertIn("chunk-a", snapshot["chunks"][0]["aliases"])
 
@@ -129,6 +136,34 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertTrue(report["ok"], report["issues"])
         self.assertEqual(report["summary"]["item_count"], 1)
         self.assertEqual(report["summary"]["grounded_span_count"], 1)
+
+    def test_generate_grounded_qa_from_source_spans(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "sources"
+            source_dir.mkdir()
+            source = source_dir / "source.md"
+            output = root / "qa.json"
+            source.write_text(
+                "# Runtime Notes\n\nThe deterministic generator copies this exact evidence sentence for validation.\n",
+                encoding="utf-8",
+            )
+
+            report = generate_grounded_qa(
+                source_dir=source_dir,
+                output_path=output,
+                count=1,
+                min_span_chars=20,
+            )
+            qa_payload = json.loads(output.read_text(encoding="utf-8"))
+            validate_report = validate_grounded_qa(qa_path=output, source_dir=source_dir)
+
+        self.assertEqual(report["schema"], GROUNDED_QA_GENERATE_REPORT_SCHEMA)
+        self.assertTrue(report["ok"], report["issues"])
+        self.assertEqual(report["summary"]["item_count"], 1)
+        self.assertEqual(qa_payload["schema"], "ragflow_grounded_qa_v1")
+        self.assertEqual(qa_payload["items"][0]["answer"], qa_payload["items"][0]["evidence"][0]["text"])
+        self.assertTrue(validate_report["ok"], validate_report["issues"])
 
     def test_validate_grounded_qa_rejects_missing_or_unmatched_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -214,7 +249,12 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertTrue(report["ok"], report["issues"])
         self.assertEqual(evidence_map["schema"], GROUNDED_QA_EVIDENCE_MAP_SCHEMA)
         self.assertEqual(evidence_map["summary"]["mapped_span_count"], 1)
+        self.assertEqual(evidence_map["summary"]["evidence_mapping_coverage"], 1.0)
+        self.assertEqual(evidence_map["summary"]["evidence_mapping_confidence"], 1.0)
+        self.assertEqual(evidence_map["summary"]["mapped_chunk_coverage"], 1.0)
         self.assertEqual(evidence_map["items"][0]["expected_chunks"], [stable_hash])
+        self.assertEqual(evidence_map["items"][0]["evidence"][0]["document_match_status"], "document_match")
+        self.assertEqual(evidence_map["items"][0]["evidence"][0]["mapping_confidence"], 1.0)
 
     def test_map_grounded_qa_evidence_reports_unmapped_spans(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -258,6 +298,7 @@ class BenchmarkGovernanceTests(unittest.TestCase):
 
         self.assertFalse(report["ok"])
         self.assertEqual(report["summary"]["unmapped_span_count"], 1)
+        self.assertEqual(report["summary"]["evidence_mapping_confidence"], 0.0)
         self.assertEqual(report["issues"][0]["code"], "evidence_span_unmapped")
 
     def test_sample_benchmark_dataset_is_deterministic_and_filters_artifacts(self) -> None:

@@ -1063,6 +1063,32 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         benchmark_import_result,
         required_stdout='"schema": "ragflow_benchmark_import_report_v1"',
     )
+    qa_generated = artifacts_dir / "qa.generated.json"
+    qa_generate_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "qa",
+            "generate",
+            "--source-dir",
+            str(input_dir),
+            "--output",
+            str(qa_generated),
+            "--count",
+            "1",
+            "--min-span-chars",
+            "20",
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb qa generate",
+        qa_generate_result,
+        required_stdout='"schema": "ragflow_grounded_qa_generate_report_v1"',
+    )
     qa_validate_result = _run_command(
         [
             sys.executable,
@@ -1452,6 +1478,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "benchmark" / "queries.json",
         artifacts_dir / "benchmark" / "qrels.json",
         artifacts_dir / "benchmark" / "qa.json",
+        artifacts_dir / "qa.generated.json",
         artifacts_dir / "qa_evidence_map.json",
         artifacts_dir / "segment_metadata_report.json",
         artifacts_dir / "optimization_plan.json",

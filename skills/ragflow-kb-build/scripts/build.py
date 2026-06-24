@@ -62,6 +62,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     summarize_metadata_for_documents,
     export_tagset_file,
     tagset_report_file,
+    generate_grounded_qa,
     validate_grounded_qa,
     wait_for_document_states,
 )
@@ -463,6 +464,26 @@ def _run_qa_validate(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_qa_generate(args: argparse.Namespace) -> int:
+    try:
+        report = generate_grounded_qa(
+            output_path=args.output,
+            sources_path=args.sources,
+            source_dir=args.source_dir,
+            count=args.count,
+            strategy=args.strategy,
+            seed=args.seed,
+            min_span_chars=args.min_span_chars,
+            max_span_chars=args.max_span_chars,
+        )
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow Grounded QA Generate Report"))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (BenchmarkGovernanceError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _run_qa_map_evidence(args: argparse.Namespace) -> int:
     try:
         report = map_grounded_qa_evidence(
@@ -738,8 +759,22 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
 
 
 def build_qa_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Validate grounded QA artifacts before benchmark use")
+    parser = argparse.ArgumentParser(description="Generate and validate grounded QA artifacts before benchmark use")
     subparsers = parser.add_subparsers(dest="qa_command", required=True)
+
+    generate = subparsers.add_parser("generate", help="Generate deterministic grounded QA from source spans")
+    generate.add_argument("--sources", help="Optional source text JSON/Markdown file")
+    generate.add_argument("--source-dir", help="Optional directory of source text files")
+    generate.add_argument("--output", required=True, help="Output ragflow_grounded_qa_v1 JSON")
+    generate.add_argument("--count", type=int, default=20, help="Maximum QA items to generate")
+    generate.add_argument("--strategy", choices=("first", "random"), default="first", help="Source span selection strategy")
+    generate.add_argument("--seed", type=int, default=0, help="Deterministic seed for random strategy")
+    generate.add_argument("--min-span-chars", type=int, default=40, help="Minimum evidence span length")
+    generate.add_argument("--max-span-chars", type=int, default=240, help="Maximum evidence span length")
+    generate.add_argument("--report-json", help="Optional generate report JSON path")
+    generate.add_argument("--report-md", help="Optional generate report Markdown path")
+    generate.add_argument("--json", action="store_true", help="Emit JSON errors")
+    generate.set_defaults(func=_run_qa_generate)
 
     validate = subparsers.add_parser("validate", help="Validate grounded QA evidence spans")
     validate.add_argument("--qa", required=True, help="Grounded QA JSON")

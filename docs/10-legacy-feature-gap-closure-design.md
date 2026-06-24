@@ -408,9 +408,10 @@ ragflow-kb-build snapshot-chunks
 MVP snapshot export is offline and non-mutating. It accepts a validation/retrieval JSON
 report or local Markdown input and emits `ragflow_chunk_snapshot_v1` with
 `sha256:normalized-content-v1` stable hashes, source hashes, original chunk IDs when
-present, and aliases for strict qrels. `validate --level benchmark --chunk-snapshot`
-can then match `expected_chunks` against either the live chunk ID or the stable content
-hash, so chunk-level recall remains measurable when RAGFlow chunk IDs are unstable.
+present, aliases for strict qrels, chunk coverage fields, and per-document chunk
+distribution. `validate --level benchmark --chunk-snapshot` can then match
+`expected_chunks` against either the live chunk ID or the stable content hash, so
+chunk-level recall remains measurable when RAGFlow chunk IDs are unstable.
 
 Add validation metrics:
 
@@ -702,6 +703,12 @@ Capabilities:
 LLM-backed generation is optional. Deterministic validation of generated evidence is
 required before using generated QA in a benchmark gate.
 
+MVP `qa generate` is an offline deterministic scaffold generator. It reads `--sources`
+or `--source-dir`, extracts exact source spans, and emits `ragflow_grounded_qa_v1`
+items whose answers and evidence are copied verbatim from the source text. It supports
+bounded counts, deterministic random selection, and source-span length limits. It does
+not call an LLM, synthesize paraphrases, repair near matches, or mutate RAGFlow.
+
 MVP `qa validate` is an offline exact-span checker. It accepts grounded QA JSON, requires
 question, answer, and evidence fields by default, and verifies that evidence spans occur
 verbatim in `--sources` or `--source-dir` inputs when source text is provided. It does not
@@ -709,8 +716,9 @@ call an LLM, repair near matches, or mutate RAGFlow.
 
 MVP `qa map-evidence` maps exact QA evidence spans onto `ragflow_chunk_snapshot_v1`
 chunks using `content` or `content_preview`, and exports per-item `expected_chunks`
-references from stable hashes or chunk IDs. It is deterministic and offline; it does not
-repair near matches or query RAGFlow.
+references from stable hashes or chunk IDs. It also reports evidence mapping coverage,
+deterministic mapping confidence, and mapped chunk coverage. It is deterministic and
+offline; it does not repair near matches or query RAGFlow.
 
 MVP `segment-metadata report` measures document metadata matches, segment-like document
 paths, explicit segment hints, and segmentation-plan coverage in chunk snapshots. It is an

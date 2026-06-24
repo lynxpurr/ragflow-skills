@@ -800,8 +800,10 @@ class KbBuildCliTests(unittest.TestCase):
             )
             qa = root / "qa.json"
             bad_qa = root / "bad_qa.json"
+            generated_qa = root / "generated_qa.json"
             chunk_snapshot = root / "chunk_snapshot.json"
             evidence_map = root / "qa_evidence_map.json"
+            generate_report_md = root / "qa_generate.md"
             report_md = root / "qa_validate.md"
             map_report_md = root / "qa_evidence_map.md"
             qa.write_text(
@@ -848,6 +850,29 @@ class KbBuildCliTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
+            generate_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "qa",
+                    "generate",
+                    "--source-dir",
+                    str(source_dir),
+                    "--output",
+                    str(generated_qa),
+                    "--count",
+                    "1",
+                    "--min-span-chars",
+                    "20",
+                    "--report-md",
+                    str(generate_report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
             result = subprocess.run(
                 [
                     sys.executable,
@@ -905,10 +930,17 @@ class KbBuildCliTests(unittest.TestCase):
                 check=False,
                 env=_env(),
             )
+            generated_payload = json.loads(generated_qa.read_text(encoding="utf-8")) if generated_qa.exists() else {}
+            generate_report_md_text = generate_report_md.read_text(encoding="utf-8") if generate_report_md.exists() else ""
             report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
             map_report_md_text = map_report_md.read_text(encoding="utf-8") if map_report_md.exists() else ""
             evidence_map_payload = json.loads(evidence_map.read_text(encoding="utf-8")) if evidence_map.exists() else {}
 
+        self.assertEqual(generate_result.returncode, 0, generate_result.stdout)
+        self.assertIn("ragflow_grounded_qa_generate_report_v1", generate_result.stdout)
+        self.assertIn("RAGFlow Grounded QA Generate Report", generate_report_md_text)
+        self.assertEqual(generated_payload["schema"], "ragflow_grounded_qa_v1")
+        self.assertEqual(len(generated_payload["items"]), 1)
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("ragflow_grounded_qa_validate_report_v1", result.stdout)
         self.assertIn("RAGFlow Grounded QA Validate Report", report_md_text)
@@ -919,6 +951,8 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("RAGFlow QA Evidence Map Report", map_report_md_text)
         self.assertEqual(evidence_map_payload["schema"], "ragflow_grounded_qa_evidence_map_v1")
         self.assertEqual(evidence_map_payload["items"][0]["expected_chunks"], ["sha256:" + "b" * 64])
+        self.assertEqual(evidence_map_payload["summary"]["evidence_mapping_coverage"], 1.0)
+        self.assertEqual(evidence_map_payload["summary"]["evidence_mapping_confidence"], 1.0)
 
     def test_segment_metadata_report_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

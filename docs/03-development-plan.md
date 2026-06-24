@@ -826,7 +826,8 @@ Tasks:
 - [x] Add `ragflow-kb-build benchmark delta` for recall, nDCG, pollution, wrong-doc, empty-retrieval, cost, and latency changes.
 - [x] Add `ragflow-kb-build benchmark gate` and `benchmark summarize` wrappers around existing validation reports.
 - [x] Add root-cause hints for retrieval coverage, ranking, tag pollution, generation grounding, citation gaps, over-abstention, and cost/latency regressions.
-- [ ] Add `ragflow-kb-build qa generate` for grounded QA sets with optional LLM adapter.
+- [x] Add deterministic offline `ragflow-kb-build qa generate` for grounded QA scaffolds.
+- [ ] Add optional LLM adapter for grounded QA generation.
 - [x] Add `ragflow-kb-build qa validate` to reject ungrounded generated evidence before benchmark use.
 - [x] Add `ragflow-kb-build qa map-evidence` to map evidence spans onto chunk snapshots.
 - [x] Add `ragflow-kb-build segment-metadata report`.
@@ -846,7 +847,7 @@ Tasks:
 - [x] Add chunk snapshot schema with stable content hashes.
 - [x] Extend qrels to support `expected_chunks`.
 - [x] Add strict chunk recall, expected chunk hit rate, and expected evidence rank metrics.
-- [ ] Add evidence mapping confidence, segment metadata coverage, and chunk coverage metrics.
+- [x] Add evidence mapping confidence, segment metadata coverage, and chunk coverage metrics.
 - [x] Add unit tests with fake RAGFlow clients and deterministic chunk snapshots.
 - [ ] Add live disposable tests gated by credentials and explicit confirmation.
 

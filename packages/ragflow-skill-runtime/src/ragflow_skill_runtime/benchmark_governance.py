@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import random
+import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +32,7 @@ BENCHMARK_MANIFEST_SCHEMA = "ragflow_benchmark_manifest_v1"
 BENCHMARK_QUERIES_SCHEMA = "ragflow_benchmark_queries_v1"
 BENCHMARK_QRELS_SCHEMA = "ragflow_benchmark_qrels_v1"
 GROUNDED_QA_SCHEMA = "ragflow_grounded_qa_v1"
+GROUNDED_QA_GENERATE_REPORT_SCHEMA = "ragflow_grounded_qa_generate_report_v1"
 GROUNDED_QA_VALIDATE_REPORT_SCHEMA = "ragflow_grounded_qa_validate_report_v1"
 GROUNDED_QA_EVIDENCE_MAP_SCHEMA = "ragflow_grounded_qa_evidence_map_v1"
 GROUNDED_QA_EVIDENCE_MAP_REPORT_SCHEMA = "ragflow_grounded_qa_evidence_map_report_v1"
@@ -99,6 +101,12 @@ def _issue_counts(issues: Iterable[BenchmarkGovernanceIssue]) -> dict[str, int]:
 
 def _ok(issues: Iterable[BenchmarkGovernanceIssue]) -> bool:
     return not any(issue.severity == "error" for issue in issues)
+
+
+def _rate(count: int | float, total: int | float) -> float:
+    if not total:
+        return 0.0
+    return round(float(count) / float(total), 4)
 
 
 def _flatten_qrels(qrels: Mapping[str, list[BenchmarkQrel]]) -> list[dict[str, Any]]:
@@ -271,6 +279,207 @@ def _load_source_texts(
     if (sources_path or source_dir) and not sources:
         raise BenchmarkGovernanceError("no source text files were found")
     return sources
+
+
+def _source_title(source: _SourceText) -> str:
+    for line in source.text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            title = stripped.lstrip("#").strip()
+            if title:
+                return title[:80]
+    stem = Path(source.name).stem
+    return (stem or source.name or "source")[:80]
+
+
+def _evidence_line_candidates(text: str, *, max_span_chars: int) -> list[str]:
+    candidates: list[str] = []
+    in_code_fence = False
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("```"):
+            in_code_fence = not in_code_fence
+            continue
+        if in_code_fence:
+            continue
+        if stripped.startswith("#") or stripped.startswith("!"):
+            continue
+        if re.fullmatch(r"[-*_=\s]{3,}", stripped):
+            continue
+        if re.fullmatch(r"\|?[\s:|.-]+\|?", stripped):
+            continue
+        if len(stripped) <= max_span_chars:
+            candidates.append(stripped)
+            continue
+        pieces = [piece.strip() for piece in re.split(r"(?<=[.!?。！？])\s+", stripped) if piece.strip()]
+        for piece in pieces:
+            if len(piece) <= max_span_chars:
+                candidates.append(piece)
+            else:
+                candidates.append(piece[:max_span_chars].rstrip())
+    return candidates
+
+
+def _span_topic(span: str) -> str:
+    terms = re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}|[\u4e00-\u9fff]{2,}", span)
+    if terms:
+        return " ".join(terms[:5])[:80]
+    return "the cited evidence"
+
+
+def _generate_question(*, source: _SourceText, span: str) -> str:
+    title = _source_title(source)
+    topic = _span_topic(span)
+    return f"What does {title} state about {topic}?"
+
+
+def _qa_candidate_spans(
+    sources: list[_SourceText],
+    *,
+    min_span_chars: int,
+    max_span_chars: int,
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for source in sources:
+        for span in _evidence_line_candidates(source.text, max_span_chars=max_span_chars):
+            if len(span) < min_span_chars:
+                continue
+            key = (_source_key(source.name), span.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append({"source": source, "span": span})
+    return candidates
+
+
+def generate_grounded_qa(
+    *,
+    output_path: str | Path,
+    sources_path: str | Path | None = None,
+    source_dir: str | Path | None = None,
+    count: int = 20,
+    strategy: str = "first",
+    seed: int = 0,
+    min_span_chars: int = 40,
+    max_span_chars: int = 240,
+) -> dict[str, Any]:
+    """Generate a deterministic, offline grounded QA scaffold from source spans."""
+
+    issues: list[BenchmarkGovernanceIssue] = []
+    if not sources_path and not source_dir:
+        issues.append(
+            BenchmarkGovernanceIssue(
+                "error",
+                "qa_generate_sources_missing",
+                "provide --sources or --source-dir for deterministic QA generation",
+                "sources",
+            )
+        )
+        sources: list[_SourceText] = []
+    else:
+        sources = _load_source_texts(sources_path=sources_path, source_dir=source_dir)
+
+    if count <= 0:
+        issues.append(BenchmarkGovernanceIssue("error", "qa_generate_count_invalid", "count must be positive", "count"))
+    if min_span_chars <= 0:
+        issues.append(
+            BenchmarkGovernanceIssue("error", "qa_generate_min_span_invalid", "min span chars must be positive", "min_span_chars")
+        )
+    if max_span_chars < min_span_chars:
+        issues.append(
+            BenchmarkGovernanceIssue(
+                "error",
+                "qa_generate_span_range_invalid",
+                "max span chars must be greater than or equal to min span chars",
+                "max_span_chars",
+            )
+        )
+    if strategy not in {"first", "random"}:
+        issues.append(BenchmarkGovernanceIssue("error", "qa_generate_strategy_invalid", "strategy must be first or random", "strategy"))
+
+    candidates = [] if issues else _qa_candidate_spans(sources, min_span_chars=min_span_chars, max_span_chars=max_span_chars)
+    if not candidates and not any(issue.severity == "error" for issue in issues):
+        issues.append(
+            BenchmarkGovernanceIssue(
+                "error",
+                "qa_generate_candidates_empty",
+                "no source spans met the QA generation length constraints",
+                "sources",
+                "Lower --min-span-chars or provide source files with complete prose sentences.",
+            )
+        )
+    if strategy == "random" and candidates:
+        rng = random.Random(seed)
+        rng.shuffle(candidates)
+
+    selected = candidates[: max(0, count)]
+    items = []
+    for index, candidate in enumerate(selected, start=1):
+        source = candidate["source"]
+        span = str(candidate["span"])
+        item_id = f"qa-{index:04d}"
+        items.append(
+            {
+                "id": item_id,
+                "query_id": item_id,
+                "question": _generate_question(source=source, span=span),
+                "answer": span,
+                "evidence": [
+                    {
+                        "document": source.name,
+                        "text": span,
+                    }
+                ],
+                "metadata": {
+                    "generator": "deterministic_source_span_v1",
+                    "source": source.name,
+                    "source_path": source.path,
+                    "strategy": strategy,
+                },
+            }
+        )
+
+    qa_payload = {
+        "schema": GROUNDED_QA_SCHEMA,
+        "created_at": _now(),
+        "metadata": {
+            "generator": "deterministic_source_span_v1",
+            "strategy": strategy,
+            "seed": seed,
+            "requested_count": count,
+            "min_span_chars": min_span_chars,
+            "max_span_chars": max_span_chars,
+        },
+        "items": items,
+    }
+    _write_json(output_path, qa_payload)
+
+    summary = {
+        **_issue_counts(issues),
+        "source_count": len(sources),
+        "candidate_span_count": len(candidates),
+        "item_count": len(items),
+        "requested_count": count,
+        "strategy": strategy,
+        "seed": seed,
+        "min_span_chars": min_span_chars,
+        "max_span_chars": max_span_chars,
+    }
+    return {
+        "ok": _ok(issues),
+        "schema": GROUNDED_QA_GENERATE_REPORT_SCHEMA,
+        "grounded_qa": str(output_path),
+        "artifacts": {
+            "sources": str(sources_path) if sources_path else None,
+            "source_dir": str(source_dir) if source_dir else None,
+            "output": str(output_path),
+        },
+        "summary": summary,
+        "issues": [issue.to_dict() for issue in issues],
+    }
 
 
 def _qa_item_identifier(item: Mapping[str, Any], index: int) -> str:
@@ -544,14 +753,37 @@ def _find_evidence_chunk_matches(
     chunks: list[Mapping[str, Any]],
     span: str,
     document_ref: str | None,
-) -> tuple[list[dict[str, Any]], bool]:
+) -> tuple[list[dict[str, Any]], str]:
     candidates = _snapshot_candidate_chunks(chunks, document_ref)
     if candidates:
         matches = [match for chunk in candidates if (match := _snapshot_chunk_match(chunk, span=span))]
         if matches:
-            return matches, False
+            return matches, "document_match"
     matches = [match for chunk in chunks if (match := _snapshot_chunk_match(chunk, span=span))]
-    return matches, bool(document_ref and candidates and matches)
+    if not matches:
+        return matches, "unmapped"
+    if document_ref and candidates:
+        return matches, "document_mismatch"
+    if document_ref:
+        return matches, "document_unmatched"
+    return matches, "no_document_ref"
+
+
+def _evidence_mapping_confidence(*, match_count: int, document_status: str) -> float:
+    if match_count <= 0:
+        return 0.0
+    if document_status == "document_match":
+        base = 1.0
+    elif document_status == "no_document_ref":
+        base = 0.85
+    elif document_status == "document_unmatched":
+        base = 0.65
+    elif document_status == "document_mismatch":
+        base = 0.5
+    else:
+        base = 0.0
+    ambiguity_penalty = min(0.25, max(0, match_count - 1) * 0.05)
+    return round(max(0.0, base - ambiguity_penalty), 4)
 
 
 def map_grounded_qa_evidence(
@@ -575,6 +807,9 @@ def map_grounded_qa_evidence(
     evidence_span_count = 0
     mapped_span_count = 0
     match_count = 0
+    mapping_confidence_sum = 0.0
+    mapped_confidence_sum = 0.0
+    mapped_expected_chunks: set[str] = set()
     item_error_ids: set[str] = set()
     mapped_items: list[dict[str, Any]] = []
 
@@ -610,6 +845,9 @@ def map_grounded_qa_evidence(
         item_id = _qa_item_identifier(raw_item, item_index)
         evidence_items = _qa_evidence_items(raw_item)
         item_expected_chunks: set[str] = set()
+        item_confidence_sum = 0.0
+        item_span_count = 0
+        item_mapped_span_count = 0
         evidence_mappings: list[dict[str, Any]] = []
         if not evidence_items:
             item_error_ids.add(item_id)
@@ -639,24 +877,43 @@ def map_grounded_qa_evidence(
                 continue
 
             evidence_span_count += 1
-            matches, document_mismatch = _find_evidence_chunk_matches(
+            item_span_count += 1
+            matches, document_status = _find_evidence_chunk_matches(
                 chunks=chunks,
                 span=span,
                 document_ref=document_ref,
             )
+            mapping_confidence = _evidence_mapping_confidence(
+                match_count=len(matches),
+                document_status=document_status,
+            )
+            mapping_confidence_sum += mapping_confidence
+            item_confidence_sum += mapping_confidence
             expected_chunks = sorted(
                 {str(match["expected_chunk"]) for match in matches if match.get("expected_chunk")}
             )
             item_expected_chunks.update(expected_chunks)
+            mapped_expected_chunks.update(expected_chunks)
             if matches:
                 mapped_span_count += 1
+                item_mapped_span_count += 1
                 match_count += len(matches)
-                if document_mismatch:
+                mapped_confidence_sum += mapping_confidence
+                if document_status == "document_mismatch":
                     issues.append(
                         BenchmarkGovernanceIssue(
                             "warning",
                             "evidence_document_mismatch",
                             "evidence span was mapped to a chunk outside the referenced document",
+                            evidence_field,
+                        )
+                    )
+                elif document_status == "document_unmatched":
+                    issues.append(
+                        BenchmarkGovernanceIssue(
+                            "warning",
+                            "evidence_document_unmatched",
+                            "evidence span was mapped, but the referenced document was not found in the chunk snapshot",
                             evidence_field,
                         )
                     )
@@ -678,6 +935,9 @@ def map_grounded_qa_evidence(
                     "text": span,
                     "document": document_ref,
                     "mapped": bool(matches),
+                    "mapping_confidence": mapping_confidence,
+                    "document_match_status": document_status,
+                    "match_count": len(matches),
                     "expected_chunks": expected_chunks,
                     "matches": matches,
                 }
@@ -689,6 +949,13 @@ def map_grounded_qa_evidence(
                 "query_id": _first_string(raw_item, ("query_id", "query", "validation_query_id")),
                 "question": _first_string(raw_item, ("question", "query", "prompt", "input")),
                 "expected_chunks": sorted(item_expected_chunks),
+                "summary": {
+                    "evidence_span_count": item_span_count,
+                    "mapped_span_count": item_mapped_span_count,
+                    "mapping_coverage": _rate(item_mapped_span_count, item_span_count),
+                    "mapping_confidence": _rate(item_confidence_sum, item_span_count),
+                    "expected_chunk_count": len(item_expected_chunks),
+                },
                 "evidence": evidence_mappings,
             }
         )
@@ -701,6 +968,11 @@ def map_grounded_qa_evidence(
         "mapped_span_count": mapped_span_count,
         "unmapped_span_count": max(0, evidence_span_count - mapped_span_count),
         "match_count": match_count,
+        "evidence_mapping_coverage": _rate(mapped_span_count, evidence_span_count),
+        "evidence_mapping_confidence": _rate(mapping_confidence_sum, evidence_span_count),
+        "mapped_span_confidence": _rate(mapped_confidence_sum, mapped_span_count),
+        "mapped_chunk_count": len(mapped_expected_chunks),
+        "mapped_chunk_coverage": _rate(len(mapped_expected_chunks), len(chunks)),
         "chunk_count": len(chunks),
     }
     artifact = {
@@ -845,6 +1117,28 @@ def _chunk_snapshot_item(
     return {key: value for key, value in item.items() if value not in (None, [], "")}
 
 
+def _document_chunk_coverage(chunks: list[NormalizedChunk]) -> list[dict[str, Any]]:
+    documents: dict[str, dict[str, Any]] = {}
+    for chunk in chunks:
+        document_name = chunk.document_name or "<unknown>"
+        item = documents.setdefault(
+            document_name,
+            {
+                "document_name": document_name,
+                "document_id": chunk.document_id,
+                "chunk_count": 0,
+                "content_char_count": 0,
+            },
+        )
+        item["chunk_count"] += 1
+        item["content_char_count"] += len(chunk.content)
+        if not item.get("document_id") and chunk.document_id:
+            item["document_id"] = chunk.document_id
+    for item in documents.values():
+        item["average_chunk_chars"] = round(item["content_char_count"] / item["chunk_count"], 2) if item["chunk_count"] else 0.0
+    return sorted(documents.values(), key=lambda item: (item["document_name"], item.get("document_id") or ""))
+
+
 def snapshot_chunks(
     *,
     input_path: str | Path,
@@ -861,6 +1155,7 @@ def snapshot_chunks(
 
     seen: set[str] = set()
     snapshot_items: list[dict[str, Any]] = []
+    unique_chunks: list[NormalizedChunk] = []
     duplicate_hashes = 0
     for chunk in chunks:
         stable_hash = stable_chunk_hash(chunk)
@@ -868,8 +1163,17 @@ def snapshot_chunks(
             duplicate_hashes += 1
             continue
         seen.add(stable_hash)
+        unique_chunks.append(chunk)
         snapshot_items.append(_chunk_snapshot_item(chunk, index=len(snapshot_items), include_content=include_content))
 
+    chunk_count = len(snapshot_items)
+    chunks_with_content = sum(1 for chunk in unique_chunks if chunk.content.strip())
+    chunks_with_document_name = sum(1 for chunk in unique_chunks if chunk.document_name)
+    chunks_with_document_id = sum(1 for chunk in unique_chunks if chunk.document_id)
+    chunks_with_dataset_id = sum(1 for chunk in unique_chunks if chunk.dataset_id)
+    chunks_with_chunk_id = sum(1 for chunk in unique_chunks if chunk.chunk_id)
+    content_char_count = sum(len(chunk.content) for chunk in unique_chunks)
+    document_coverage = _document_chunk_coverage(unique_chunks)
     snapshot = {
         "schema": CHUNK_SNAPSHOT_SCHEMA,
         "created_at": _now(),
@@ -877,12 +1181,25 @@ def snapshot_chunks(
         "description": description,
         "hash_algorithm": CHUNK_HASH_ALGORITHM,
         "summary": {
-            "chunk_count": len(snapshot_items),
+            "chunk_count": chunk_count,
             "source_chunk_count": len(chunks),
             "duplicate_stable_hash_count": duplicate_hashes,
             "document_count": len({item.get("document_name") for item in snapshot_items if item.get("document_name")}),
+            "chunks_with_content": chunks_with_content,
+            "chunks_with_document_name": chunks_with_document_name,
+            "chunks_with_document_id": chunks_with_document_id,
+            "chunks_with_dataset_id": chunks_with_dataset_id,
+            "chunks_with_chunk_id": chunks_with_chunk_id,
+            "content_coverage": _rate(chunks_with_content, chunk_count),
+            "document_name_coverage": _rate(chunks_with_document_name, chunk_count),
+            "document_id_coverage": _rate(chunks_with_document_id, chunk_count),
+            "dataset_id_coverage": _rate(chunks_with_dataset_id, chunk_count),
+            "chunk_id_coverage": _rate(chunks_with_chunk_id, chunk_count),
+            "content_char_count": content_char_count,
+            "average_chunk_chars": round(content_char_count / chunk_count, 2) if chunk_count else 0.0,
         },
         "source_hashes": _source_hashes(source_paths),
+        "document_coverage": document_coverage,
         "chunks": snapshot_items,
     }
     _write_json(output_path, snapshot)
@@ -891,6 +1208,7 @@ def snapshot_chunks(
         "schema": CHUNK_SNAPSHOT_REPORT_SCHEMA,
         "chunk_snapshot": str(output_path),
         "summary": dict(snapshot["summary"]),
+        "document_coverage": document_coverage,
         "source_hashes": snapshot["source_hashes"],
     }
 

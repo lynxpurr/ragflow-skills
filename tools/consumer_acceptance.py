@@ -964,6 +964,8 @@ raise SystemExit(code)
     benchmark_gate_md = work_root / "benchmark_gate.md"
     benchmark_trend_md = work_root / "benchmark_trend.md"
     benchmark_delta_md = work_root / "benchmark_delta.md"
+    qa_generated = work_root / "qa.generated.json"
+    qa_generate_md = work_root / "qa_generate.md"
     qa_validate_md = work_root / "qa_validate.md"
     qa_evidence_map = work_root / "qa_evidence_map.json"
     qa_evidence_map_md = work_root / "qa_evidence_map.md"
@@ -1000,6 +1002,33 @@ raise SystemExit(code)
         "kb-build benchmark import",
         benchmark_import_result,
         required_output='"schema": "ragflow_benchmark_import_report_v1"',
+    )
+    qa_generate_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "qa",
+            "generate",
+            "--source-dir",
+            str(input_dir),
+            "--output",
+            str(qa_generated),
+            "--count",
+            "1",
+            "--min-span-chars",
+            "20",
+            "--report-md",
+            str(qa_generate_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build qa generate",
+        qa_generate_result,
+        required_output='"schema": "ragflow_grounded_qa_generate_report_v1"',
     )
     qa_validate_result = _run_command(
         [
@@ -1321,6 +1350,8 @@ raise SystemExit(code)
         benchmark_chunk_snapshot,
         benchmark_chunk_snapshot_md,
         benchmark_import_md,
+        qa_generated,
+        qa_generate_md,
         qa_validate_md,
         qa_evidence_map,
         qa_evidence_map_md,
