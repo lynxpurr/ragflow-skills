@@ -381,6 +381,9 @@ creating disposable KBs. It loads candidate profiles from explicit files,
 directories, `ragflow_candidate_profile_set_v1` files, and generated recommendations,
 resolves benchmark manifest artifacts, lints candidate profiles, assigns disposable KB
 names, and reports naming collisions before any live execution is allowed.
+MVP `optimize summarize` then reads the plan plus existing validation reports and
+produces `ragflow_profile_experiment_results_v1` plus a Markdown best-profile report with
+metric tradeoffs and recommendation rationale. It does not build KBs or run validation.
 
 ## Feature Design 5: Chunk Snapshot And Strict Chunk Recall
 

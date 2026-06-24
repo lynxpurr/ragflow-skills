@@ -838,8 +838,8 @@ Tasks:
 - [ ] Run benchmark validation for each candidate.
 - [ ] Run `diagnose` automatically for failed builds or zero-chunk cases.
 - [x] Produce `optimization_plan.json`.
-- [ ] Produce `profile_experiment_results.json`.
-- [ ] Produce `best_profile_report.md` with metric tradeoffs and recommendation rationale.
+- [x] Produce `profile_experiment_results.json`.
+- [x] Produce `best_profile_report.md` with metric tradeoffs and recommendation rationale.
 - [ ] Add `cleanup_plan.json` and exact-confirmation cleanup execution.
 - [x] Add `ragflow-kb-build snapshot-chunks`.
 - [x] Add chunk snapshot schema with stable content hashes.

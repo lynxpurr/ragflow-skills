@@ -1018,8 +1018,11 @@ class KbBuildCliTests(unittest.TestCase):
             queries = root / "queries.json"
             qrels = root / "qrels.json"
             benchmark_manifest = root / "benchmark_manifest.json"
+            artifact_dir = root / "opt-artifacts"
             output = root / "optimization_plan.json"
             report_md = root / "optimization_plan.md"
+            results_json = root / "profile_experiment_results.json"
+            best_md = root / "best_profile_report.md"
             queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
             qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
             benchmark_manifest.write_text(
@@ -1050,6 +1053,8 @@ class KbBuildCliTests(unittest.TestCase):
                     str(benchmark_manifest),
                     "--run-id",
                     "testrun",
+                    "--artifact-dir",
+                    str(artifact_dir),
                     "--output",
                     str(output),
                     "--report-md",
@@ -1063,12 +1068,64 @@ class KbBuildCliTests(unittest.TestCase):
             )
             payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
             report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+            for index, candidate in enumerate(payload.get("candidates", [])):
+                validation_report = Path(candidate["artifacts"]["validation_report"])
+                validation_report.parent.mkdir(parents=True, exist_ok=True)
+                score = 1.0 if index == 1 else 0.6
+                validation_report.write_text(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "level": "benchmark",
+                            "metrics": {"pass_rate": score},
+                            "benchmark": {
+                                "metrics": {
+                                    "hit_rate": score,
+                                    "mrr": score,
+                                    "precision_at_k": score,
+                                    "recall_at_k": score,
+                                    "ndcg_at_k": score,
+                                    "map_at_k": score,
+                                    "strict_chunk_recall_at_k": score,
+                                    "expected_chunk_hit_rate": score,
+                                    "empty_result_rate": 0.0,
+                                }
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            summary_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "summarize",
+                    "--plan",
+                    str(output),
+                    "--output",
+                    str(results_json),
+                    "--report-md",
+                    str(best_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            results_payload = json.loads(results_json.read_text(encoding="utf-8")) if results_json.exists() else {}
+            best_md_text = best_md.read_text(encoding="utf-8") if best_md.exists() else ""
 
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("ragflow_optimization_plan_v1", result.stdout)
         self.assertEqual(payload["summary"]["candidate_count"], 2)
         self.assertFalse(payload["mutation_allowed"])
         self.assertIn("RAGFlow Optimization Plan", report_md_text)
+        self.assertEqual(summary_result.returncode, 0, summary_result.stdout)
+        self.assertIn("ragflow_profile_experiment_results_v1", summary_result.stdout)
+        self.assertEqual(results_payload["summary"]["result_count"], 2)
+        self.assertIn("RAGFlow Best Profile Report", best_md_text)
 
     def test_inspect_manifest_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -970,6 +970,8 @@ raise SystemExit(code)
     segment_metadata_md = work_root / "segment_metadata.md"
     optimization_plan = work_root / "optimization_plan.json"
     optimization_plan_md = work_root / "optimization_plan.md"
+    profile_experiment_results = work_root / "profile_experiment_results.json"
+    best_profile_report_md = work_root / "best_profile_report.md"
     benchmark_import_result = _run_command(
         [
             python_executable,
@@ -1110,6 +1112,33 @@ raise SystemExit(code)
         "kb-build optimize plan-only",
         optimize_plan_result,
         required_output='"schema": "ragflow_optimization_plan_v1"',
+    )
+    optimize_summary_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "optimize",
+            "summarize",
+            "--plan",
+            str(optimization_plan),
+            "--report",
+            str(benchmark_report_json),
+            "--report",
+            str(baseline_benchmark_report_json),
+            "--output",
+            str(profile_experiment_results),
+            "--report-md",
+            str(best_profile_report_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build optimize summarize",
+        optimize_summary_result,
+        required_output='"schema": "ragflow_profile_experiment_results_v1"',
     )
     benchmark_preflight_result = _run_command(
         [
@@ -1273,6 +1302,8 @@ raise SystemExit(code)
         segment_metadata_md,
         optimization_plan,
         optimization_plan_md,
+        profile_experiment_results,
+        best_profile_report_md,
         benchmark_preflight_md,
         benchmark_sample_md,
         benchmark_summary_md,

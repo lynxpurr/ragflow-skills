@@ -1257,6 +1257,35 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         benchmark_delta_result,
         required_stdout='"schema": "ragflow_benchmark_delta_report_v1"',
     )
+    profile_experiment_results = artifacts_dir / "profile_experiment_results.json"
+    best_profile_report = artifacts_dir / "best_profile_report.md"
+    optimize_summary_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "optimize",
+            "summarize",
+            "--plan",
+            str(optimization_plan),
+            "--report",
+            str(current_benchmark_report),
+            "--report",
+            str(baseline_benchmark_report),
+            "--output",
+            str(profile_experiment_results),
+            "--report-md",
+            str(best_profile_report),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb optimize summarize",
+        optimize_summary_result,
+        required_stdout='"schema": "ragflow_profile_experiment_results_v1"',
+    )
 
     profile_script = script_root / "ragflow-kb-build" / "scripts" / "profile.py"
     profile_lint_result = _run_command(
@@ -1401,6 +1430,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "qa_evidence_map.json",
         artifacts_dir / "segment_metadata_report.json",
         artifacts_dir / "optimization_plan.json",
+        artifacts_dir / "profile_experiment_results.json",
+        artifacts_dir / "best_profile_report.md",
         artifacts_dir / "benchmark_current.json",
         artifacts_dir / "benchmark_baseline.json",
         artifacts_dir / "validation_report.json",

@@ -17,6 +17,7 @@ from .profiles import ChunkProfile, ProfileError, lint_profile, load_profile, re
 
 CANDIDATE_PROFILE_SET_SCHEMA = "ragflow_candidate_profile_set_v1"
 OPTIMIZATION_PLAN_SCHEMA = "ragflow_optimization_plan_v1"
+PROFILE_EXPERIMENT_RESULTS_SCHEMA = "ragflow_profile_experiment_results_v1"
 PROFILE_FILE_SUFFIXES = {".json", ".yaml", ".yml"}
 
 
@@ -59,6 +60,19 @@ def _read_mapping(path: str | Path) -> dict[str, Any]:
             raise ProfileError(str(exc)) from exc
     if not isinstance(data, dict):
         raise ProfileError(f"profile set must be an object: {source}")
+    return data
+
+
+def _read_json_mapping(path: str | Path, *, label: str) -> dict[str, Any]:
+    source = Path(path)
+    try:
+        data = json.loads(source.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ProfileError(f"{label} not found: {source}") from exc
+    except json.JSONDecodeError as exc:
+        raise ProfileError(f"{label} is not valid JSON: {source}") from exc
+    if not isinstance(data, dict):
+        raise ProfileError(f"{label} must be a JSON object: {source}")
     return data
 
 
@@ -682,6 +696,242 @@ def create_optimization_plan(
         ],
         "issues": [issue.to_dict() for issue in issues],
     }
+
+
+def _metric_value(metrics: Mapping[str, Any], key: str) -> float:
+    value = metrics.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value)
+
+
+def _validation_report_metrics(report: Mapping[str, Any]) -> dict[str, float]:
+    top_metrics = report.get("metrics") if isinstance(report.get("metrics"), Mapping) else {}
+    benchmark = report.get("benchmark") if isinstance(report.get("benchmark"), Mapping) else {}
+    benchmark_metrics = benchmark.get("metrics") if isinstance(benchmark.get("metrics"), Mapping) else {}
+    metrics = {
+        "pass_rate": _metric_value(top_metrics, "pass_rate"),
+        "hit_rate": _metric_value(benchmark_metrics, "hit_rate"),
+        "mrr": _metric_value(benchmark_metrics, "mrr"),
+        "precision_at_k": _metric_value(benchmark_metrics, "precision_at_k"),
+        "recall_at_k": _metric_value(benchmark_metrics, "recall_at_k"),
+        "ndcg_at_k": _metric_value(benchmark_metrics, "ndcg_at_k"),
+        "map_at_k": _metric_value(benchmark_metrics, "map_at_k"),
+        "strict_chunk_recall_at_k": _metric_value(benchmark_metrics, "strict_chunk_recall_at_k"),
+        "expected_chunk_hit_rate": _metric_value(benchmark_metrics, "expected_chunk_hit_rate"),
+        "empty_result_rate": _metric_value(benchmark_metrics, "empty_result_rate"),
+    }
+    metrics["score"] = (
+        (metrics["pass_rate"] * 0.30)
+        + (metrics["hit_rate"] * 0.20)
+        + (metrics["mrr"] * 0.20)
+        + (metrics["ndcg_at_k"] * 0.15)
+        + (metrics["strict_chunk_recall_at_k"] * 0.10)
+        + (metrics["expected_chunk_hit_rate"] * 0.05)
+        - (metrics["empty_result_rate"] * 0.10)
+    )
+    return metrics
+
+
+def _result_tradeoffs(result: Mapping[str, Any], winner: Mapping[str, Any]) -> list[str]:
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
+    winner_metrics = winner.get("metrics") if isinstance(winner.get("metrics"), Mapping) else {}
+    tradeoffs = []
+    if metrics.get("score", 0.0) < winner_metrics.get("score", 0.0):
+        tradeoffs.append("Lower composite score than the recommended profile.")
+    if metrics.get("hit_rate", 0.0) < winner_metrics.get("hit_rate", 0.0):
+        tradeoffs.append("Lower hit rate indicates weaker retrieval coverage.")
+    if metrics.get("mrr", 0.0) < winner_metrics.get("mrr", 0.0):
+        tradeoffs.append("Lower MRR indicates relevant evidence appears later in the ranking.")
+    if metrics.get("strict_chunk_recall_at_k", 0.0) < winner_metrics.get("strict_chunk_recall_at_k", 0.0):
+        tradeoffs.append("Lower strict chunk recall indicates expected chunks are missed more often.")
+    if metrics.get("empty_result_rate", 0.0) > winner_metrics.get("empty_result_rate", 0.0):
+        tradeoffs.append("Higher empty-result rate increases answerability risk.")
+    if not tradeoffs:
+        tradeoffs.append("Best observed balance across the configured benchmark metrics.")
+    return tradeoffs
+
+
+def _recommendation_rationale(winner: Mapping[str, Any], ranked: list[Mapping[str, Any]]) -> list[str]:
+    metrics = winner.get("metrics") if isinstance(winner.get("metrics"), Mapping) else {}
+    rationale = [
+        f"Selected `{winner.get('profile_id')}` because it has the highest composite score ({metrics.get('score', 0.0):.4f})."
+    ]
+    if metrics.get("hit_rate", 0.0) >= max((item.get("metrics", {}).get("hit_rate", 0.0) for item in ranked), default=0.0):
+        rationale.append("It ties or leads retrieval hit rate across the candidate set.")
+    if metrics.get("mrr", 0.0) >= max((item.get("metrics", {}).get("mrr", 0.0) for item in ranked), default=0.0):
+        rationale.append("It ties or leads ranking quality by MRR.")
+    if metrics.get("strict_chunk_recall_at_k", 0.0) > 0:
+        rationale.append("It preserves expected-chunk evidence according to strict chunk recall.")
+    if metrics.get("empty_result_rate", 0.0) == 0:
+        rationale.append("It did not produce empty retrievals in the provided benchmark report.")
+    return rationale
+
+
+def summarize_optimization_results(
+    *,
+    plan_path: str | Path,
+    report_paths: Iterable[str | Path] | None = None,
+) -> dict[str, Any]:
+    """Summarize completed profile experiment validation reports without live execution."""
+
+    plan = _read_json_mapping(plan_path, label="optimization plan")
+    issues: list[OptimizationIssue] = []
+    if plan.get("schema") != OPTIMIZATION_PLAN_SCHEMA:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "optimization_plan_schema_invalid",
+                f"optimization plan schema must be {OPTIMIZATION_PLAN_SCHEMA}",
+                "schema",
+            )
+        )
+    candidates = plan.get("candidates", [])
+    if not isinstance(candidates, list) or not candidates:
+        issues.append(OptimizationIssue("error", "optimization_plan_candidates_missing", "optimization plan has no candidates", "candidates"))
+        candidates = []
+
+    explicit_reports = [Path(path) for path in report_paths or []]
+    if explicit_reports and len(explicit_reports) > len(candidates):
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                "extra_validation_reports_ignored",
+                "more validation reports were provided than plan candidates",
+                "reports",
+            )
+        )
+
+    results = []
+    for index, candidate in enumerate(candidates):
+        if not isinstance(candidate, Mapping):
+            continue
+        artifact_report = None
+        artifacts = candidate.get("artifacts") if isinstance(candidate.get("artifacts"), Mapping) else {}
+        if isinstance(artifacts.get("validation_report"), str):
+            artifact_report = Path(artifacts["validation_report"])
+        report_path = explicit_reports[index] if index < len(explicit_reports) else artifact_report
+        if not report_path:
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "validation_report_missing",
+                    "no validation report path is available for candidate",
+                    f"candidates[{index}].validation_report",
+                )
+            )
+            continue
+        try:
+            report = _read_json_mapping(report_path, label="validation report")
+        except ProfileError as exc:
+            issues.append(OptimizationIssue("error", "validation_report_invalid", str(exc), f"candidates[{index}].validation_report"))
+            continue
+        metrics = _validation_report_metrics(report)
+        results.append(
+            {
+                "profile_id": candidate.get("profile_id"),
+                "disposable_kb_name": candidate.get("disposable_kb_name"),
+                "profile": candidate.get("profile", {}),
+                "report_path": str(report_path),
+                "ok": bool(report.get("ok")),
+                "dataset": report.get("dataset", {}),
+                "metrics": metrics,
+                "score": metrics["score"],
+                "source": candidate.get("source", {}),
+            }
+        )
+
+    if not results:
+        issues.append(OptimizationIssue("error", "validation_reports_missing", "no usable validation reports were found", "reports"))
+
+    ranked = sorted(results, key=lambda item: (item["score"], str(item.get("profile_id"))), reverse=True)
+    for rank, item in enumerate(ranked, start=1):
+        item["rank"] = rank
+    winner = ranked[0] if ranked else None
+    if winner:
+        rationale = _recommendation_rationale(winner, ranked)
+        for item in ranked:
+            item["tradeoffs"] = _result_tradeoffs(item, winner)
+    else:
+        rationale = []
+
+    issue_summary = _issue_counts(issues)
+    return {
+        "ok": _ok(issues),
+        "schema": PROFILE_EXPERIMENT_RESULTS_SCHEMA,
+        "created_at": _now(),
+        "plan": str(plan_path),
+        "summary": {
+            **issue_summary,
+            "candidate_count": len(candidates),
+            "result_count": len(results),
+            "best_profile_id": winner.get("profile_id") if winner else None,
+        },
+        "recommendation": {
+            "profile_id": winner.get("profile_id") if winner else None,
+            "disposable_kb_name": winner.get("disposable_kb_name") if winner else None,
+            "score": winner.get("score") if winner else None,
+            "rationale": rationale,
+        },
+        "winner": winner,
+        "candidates": ranked,
+        "issues": [issue.to_dict() for issue in issues],
+    }
+
+
+def render_best_profile_markdown(results: Mapping[str, Any]) -> str:
+    """Render profile experiment results as a best-profile report."""
+
+    recommendation = results.get("recommendation") if isinstance(results.get("recommendation"), Mapping) else {}
+    summary = results.get("summary") if isinstance(results.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Best Profile Report",
+        "",
+        f"- Status: `{'passed' if results.get('ok') else 'failed'}`",
+        f"- Recommended profile: `{recommendation.get('profile_id') or '-'}`",
+        f"- Candidate results: `{summary.get('result_count', 0)}`",
+        f"- Errors: `{summary.get('errors', 0)}`",
+        f"- Warnings: `{summary.get('warnings', 0)}`",
+        "",
+        "## Rationale",
+        "",
+    ]
+    for item in recommendation.get("rationale", []) if isinstance(recommendation.get("rationale"), list) else []:
+        lines.append(f"- {item}")
+    lines.extend(
+        [
+            "",
+            "## Ranking",
+            "",
+            "| rank | profile | score | hit_rate | mrr | ndcg@k | strict_chunk_recall | empty_rate |",
+            "|---:|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for candidate in results.get("candidates", []) if isinstance(results.get("candidates"), list) else []:
+        if not isinstance(candidate, Mapping):
+            continue
+        metrics = candidate.get("metrics") if isinstance(candidate.get("metrics"), Mapping) else {}
+        lines.append(
+            f"| {candidate.get('rank', 0)} | `{candidate.get('profile_id')}` | {metrics.get('score', 0.0):.4f} | "
+            f"{metrics.get('hit_rate', 0.0):.4f} | {metrics.get('mrr', 0.0):.4f} | "
+            f"{metrics.get('ndcg_at_k', 0.0):.4f} | {metrics.get('strict_chunk_recall_at_k', 0.0):.4f} | "
+            f"{metrics.get('empty_result_rate', 0.0):.4f} |"
+        )
+    lines.extend(["", "## Tradeoffs", ""])
+    for candidate in results.get("candidates", []) if isinstance(results.get("candidates"), list) else []:
+        if not isinstance(candidate, Mapping):
+            continue
+        lines.append(f"### {candidate.get('profile_id')}")
+        for item in candidate.get("tradeoffs", []) if isinstance(candidate.get("tradeoffs"), list) else []:
+            lines.append(f"- {item}")
+        lines.append("")
+    if results.get("issues"):
+        lines.extend(["## Issues", "", "| severity | code | field | message |", "|---|---|---|---|"])
+        for issue in results.get("issues", []) if isinstance(results.get("issues"), list) else []:
+            if isinstance(issue, Mapping):
+                lines.append(f"| {issue.get('severity')} | `{issue.get('code')}` | {issue.get('field', '-')} | {issue.get('message')} |")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def render_optimization_plan_markdown(plan: Mapping[str, Any]) -> str:

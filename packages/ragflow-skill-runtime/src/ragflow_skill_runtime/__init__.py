@@ -127,9 +127,12 @@ from .profiles import (
 from .optimization import (
     CANDIDATE_PROFILE_SET_SCHEMA,
     OPTIMIZATION_PLAN_SCHEMA,
+    PROFILE_EXPERIMENT_RESULTS_SCHEMA,
     create_optimization_plan,
     load_candidate_profile_set,
+    render_best_profile_markdown,
     render_optimization_plan_markdown,
+    summarize_optimization_results,
 )
 from .kb_build import (
     BuildDocument,
@@ -326,6 +329,7 @@ __all__ = [
     "METADATA_LINT_REPORT_SCHEMA",
     "METADATA_MERGE_REPORT_SCHEMA",
     "OPTIMIZATION_PLAN_SCHEMA",
+    "PROFILE_EXPERIMENT_RESULTS_SCHEMA",
     "QueryResult",
     "RAGFLOW_METADATA_SCHEMA",
     "RAGFLOW_TAGSET_SCHEMA",
@@ -421,6 +425,7 @@ __all__ = [
     "render_diagnostic_markdown",
     "render_benchmark_governance_markdown",
     "render_citation_audit_markdown",
+    "render_best_profile_markdown",
     "render_optimization_plan_markdown",
     "render_query_diagnostic_markdown",
     "render_quality_markdown",
@@ -445,6 +450,7 @@ __all__ = [
     "stable_chunk_hash",
     "stable_content_hash",
     "summarize_benchmark_report",
+    "summarize_optimization_results",
     "summarize_metadata_for_documents",
     "tagset_report_file",
     "tagset_report_payload",

@@ -47,11 +47,13 @@ from ragflow_skill_runtime import (  # noqa: E402
     gate_benchmark_report,
     import_benchmark_dataset,
     preflight_benchmark_dataset,
+    render_best_profile_markdown,
     render_benchmark_governance_markdown,
     sample_benchmark_dataset,
     segment_metadata_report_file,
     render_optimization_plan_markdown,
     snapshot_chunks,
+    summarize_optimization_results,
     summarize_benchmark_report,
     trend_benchmark_reports,
     delta_benchmark_reports,
@@ -533,6 +535,20 @@ def _run_optimize(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_optimize_summarize(args: argparse.Namespace) -> int:
+    try:
+        results = summarize_optimization_results(
+            plan_path=args.plan,
+            report_paths=args.report,
+        )
+        _write_json_file(args.output, results)
+        _write_text_file(args.report_md, render_best_profile_markdown(results))
+        _dump_json(results)
+        return 0 if results["ok"] else 1
+    except (ProfileError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def build_inspect_handoff_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Inspect a Markdown handoff and optional rich sidecars")
     parser.add_argument("--handoff", required=True, help="Handoff directory containing doc_manifest.json")
@@ -777,6 +793,17 @@ def build_optimize_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_optimize_summarize_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Summarize profile optimization validation reports")
+    parser.add_argument("--plan", required=True, help="ragflow_optimization_plan_v1 JSON")
+    parser.add_argument("--report", action="append", default=[], help="Validation report JSON; defaults to paths in the plan")
+    parser.add_argument("--output", default="profile_experiment_results.json", help="Output ragflow_profile_experiment_results_v1 JSON")
+    parser.add_argument("--report-md", default="best_profile_report.md", help="Output best profile Markdown report")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    parser.set_defaults(func=_run_optimize_summarize)
+    return parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build a RAGFlow KB from Markdown")
     parser.add_argument("--input", help="Markdown file or directory")
@@ -824,6 +851,9 @@ def main(argv: list[str] | None = None) -> int:
             segment_metadata_args = build_segment_metadata_parser().parse_args(command_args)
             return segment_metadata_args.func(segment_metadata_args)
         if command == "optimize":
+            if command_args and command_args[0] == "summarize":
+                optimize_summary_args = build_optimize_summarize_parser().parse_args(command_args[1:])
+                return optimize_summary_args.func(optimize_summary_args)
             optimize_args = build_optimize_parser().parse_args(command_args)
             return optimize_args.func(optimize_args)
     args = build_parser().parse_args(actual_argv)
