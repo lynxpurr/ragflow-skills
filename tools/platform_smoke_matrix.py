@@ -789,6 +789,38 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "error": "" if rich_metadata.exists() else f"missing {rich_metadata}",
         }
     )
+    postprocess_dir = workspace / "postprocessed-handoff"
+    postprocess_result = _run_command(
+        [
+            sys.executable,
+            str(convert_script),
+            "postprocess",
+            "--doc-manifest",
+            str(doc_manifest),
+            "--profile",
+            "safe",
+            "--output",
+            str(postprocess_dir),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "doc-to-md postprocess safe",
+        postprocess_result,
+        required_stdout='"schema": "doc_postprocess_report_v1"',
+    )
+    postprocess_report = postprocess_dir / "postprocess_report.json"
+    checks.append(
+        {
+            "name": "postprocess report produced",
+            "ok": postprocess_report.exists(),
+            "returncode": 0 if postprocess_report.exists() else 1,
+            "error": "" if postprocess_report.exists() else f"missing {postprocess_report}",
+        }
+    )
     mineru_doc_manifest = _run_mineru_env_check(
         profile=profile,
         convert_script=convert_script,

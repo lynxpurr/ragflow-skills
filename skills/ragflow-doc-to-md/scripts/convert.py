@@ -32,6 +32,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     DEFAULT_SOFT_MAX_CHARS,
     DocConvertError,
     DocQualityError,
+    DocPostprocessError,
     DocSegmentError,
     QualityDocument,
     convert_source_to_markdown,
@@ -45,6 +46,8 @@ from ragflow_skill_runtime import (  # noqa: E402
     make_quality_report_payload,
     materialize_segments,
     plan_markdown_segmentation,
+    postprocess_handoff,
+    postprocess_single_markdown,
     quality_documents_from_manifest,
     render_quality_markdown,
     safe_markdown_name,
@@ -393,6 +396,32 @@ def _run_package(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_postprocess(args: argparse.Namespace) -> int:
+    try:
+        if bool(args.markdown) == bool(args.doc_manifest):
+            raise DocPostprocessError("provide exactly one of --markdown or --doc-manifest")
+        if args.markdown:
+            report = postprocess_single_markdown(
+                args.markdown,
+                profile=args.profile,
+                output_path=args.output,
+                write=args.write,
+                report_json=args.report_json,
+            )
+        else:
+            report = postprocess_handoff(
+                args.doc_manifest,
+                profile=args.profile,
+                output_dir=args.output,
+                write=args.write,
+                report_json=args.report_json,
+            )
+        _dump_json({"ok": True, "postprocess_report": report})
+        return 0
+    except (DocPostprocessError, OSError, UnicodeDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _add_segmentation_threshold_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--soft-max-chars", type=int, default=DEFAULT_SOFT_MAX_CHARS)
     parser.add_argument("--hard-max-chars", type=int, default=DEFAULT_HARD_MAX_CHARS)
@@ -437,6 +466,18 @@ def build_package_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact-index-name", default="artifact_index.json", help="Artifact index sidecar name")
     parser.add_argument("--profile-suggestions-name", default="profile_suggestions.json", help="Profile suggestions sidecar name")
     parser.add_argument("--package-readme-name", default="package_readme.md", help="Package README sidecar name")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    return parser
+
+
+def build_postprocess_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Apply deterministic Markdown post-processing profiles")
+    parser.add_argument("--markdown", help="Single Markdown file to post-process")
+    parser.add_argument("--doc-manifest", help="Process every Markdown file referenced by a doc_manifest")
+    parser.add_argument("--profile", choices=["none", "safe", "ocr", "chunk-markers"], default="safe")
+    parser.add_argument("--output", help="Output file for --markdown or output handoff directory for --doc-manifest")
+    parser.add_argument("--write", action="store_true", help="Rewrite the source Markdown file(s) in place")
+    parser.add_argument("--report-json", help="Optional postprocess_report.json output path")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     return parser
 
@@ -487,6 +528,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_split(build_split_parser().parse_args(command_args))
         if command == "package":
             return _run_package(build_package_parser().parse_args(command_args))
+        if command == "postprocess":
+            return _run_postprocess(build_postprocess_parser().parse_args(command_args))
     return _run(build_parser().parse_args(actual_argv))
 
 

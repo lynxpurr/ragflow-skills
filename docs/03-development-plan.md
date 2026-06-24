@@ -765,12 +765,13 @@ Tasks:
 - [x] Generate `metadata.json`, `package_readme.md`, and artifact index files in rich mode.
 - [ ] Generate optional `retrieval_hints.json`, `assistant_profile.json`, and `assistant_test_plan.json` in rich mode.
 - [x] Add `ragflow-kb-build inspect-handoff` to summarize manifest and optional sidecars before upload.
-- [ ] Add deterministic Markdown post-processing profiles: `none`, `safe`, `ocr`, and `chunk-markers`.
-- [ ] Emit `postprocess_report.json` with changed line counts, rule IDs, and warnings.
-- [ ] Make destructive Markdown rewriting require an explicit output path or `--write`.
+- [x] Add deterministic Markdown post-processing profiles: `none`, `safe`, `ocr`, and `chunk-markers`.
+- [x] Emit `postprocess_report.json` with changed line counts, rule IDs, and warnings.
+- [x] Make destructive Markdown rewriting require an explicit output path or `--write`.
 - [x] Add unit tests for sidecar schemas and artifact hashing.
-- [ ] Add unit tests for post-processing rule reports.
+- [x] Add unit tests for post-processing rule reports.
 - [x] Add CLI, consumer acceptance, and platform smoke coverage for rich handoff mode.
+- [x] Add CLI, consumer acceptance, and platform smoke coverage for Markdown post-processing.
 - [x] Update public `SKILL.md`, config templates if needed, and host-agent references.
 
 Exit criteria:

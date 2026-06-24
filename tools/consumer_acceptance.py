@@ -378,6 +378,32 @@ def _run_no_network_checks(
     if inspect_report.exists():
         produced.append(inspect_report)
 
+    postprocess_dir = work_root / "postprocessed-handoff"
+    postprocess_result = _run_command(
+        [
+            python_executable,
+            str(convert_script),
+            "postprocess",
+            "--doc-manifest",
+            str(doc_manifest),
+            "--profile",
+            "safe",
+            "--output",
+            str(postprocess_dir),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(checks, "doc-to-md postprocess safe", postprocess_result, required_output='"schema": "doc_postprocess_report_v1"')
+    postprocess_report = postprocess_dir / "postprocess_report.json"
+    _record_file_check(checks, "postprocess_report produced", postprocess_report)
+    if postprocess_report.exists():
+        produced.append(postprocess_report)
+    postprocessed_manifest = postprocess_dir / "doc_manifest.json"
+    if postprocessed_manifest.exists():
+        produced.append(postprocessed_manifest)
+
     long_markdown = work_root / "long.md"
     long_markdown.write_text("# One\n" + ("a" * 70) + "\n# Two\n" + ("b" * 70) + "\n", encoding="utf-8")
     segmentation_plan = work_root / "segmentation_plan.json"

@@ -197,6 +197,88 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(suggestions["schema"], "ragflow_profile_suggestions_v1")
         self.assertTrue(readme_exists)
 
+    def test_postprocess_single_markdown_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "messy.md"
+            output = root / "clean.md"
+            report = root / "postprocess_report.json"
+            markdown.write_text("#Title\n\n\nBody", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "postprocess",
+                    "--markdown",
+                    str(markdown),
+                    "--profile",
+                    "safe",
+                    "--output",
+                    str(output),
+                    "--report-json",
+                    str(report),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            cleaned = output.read_text(encoding="utf-8")
+            report_payload = json.loads(report.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("# Title\n\nBody\n", cleaned)
+        self.assertEqual(report_payload["schema"], "doc_postprocess_report_v1")
+        self.assertTrue(json.loads(result.stdout)["ok"])
+
+    def test_postprocess_doc_manifest_cli_writes_handoff_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            handoff = root / "handoff"
+            docs = handoff / "documents"
+            docs.mkdir(parents=True)
+            (docs / "sample.md").write_text("#Title\n\n\nBody", encoding="utf-8")
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [{"source_path": "sample.md", "markdown_path": "documents/sample.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output = root / "processed"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "postprocess",
+                    "--doc-manifest",
+                    str(manifest),
+                    "--profile",
+                    "safe",
+                    "--output",
+                    str(output),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            cleaned = (output / "documents" / "sample.md").read_text(encoding="utf-8")
+            report = json.loads((output / "postprocess_report.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("# Title\n\nBody\n", cleaned)
+            self.assertEqual(report["schema"], "doc_postprocess_report_v1")
+            self.assertTrue((output / "doc_manifest.json").is_file())
+
     def test_convert_builtin_html(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

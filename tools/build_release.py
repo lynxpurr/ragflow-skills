@@ -224,6 +224,7 @@ def run_release_check(dist_dir: Path = DIST_DIR) -> int:
         [sys.executable, str(dist_dir / "ragflow-query" / "scripts" / "query.py"), "--help"],
         [sys.executable, str(dist_dir / "ragflow-doc-to-md" / "scripts" / "convert.py"), "--help"],
         [sys.executable, str(dist_dir / "ragflow-doc-to-md" / "scripts" / "convert.py"), "package", "--help"],
+        [sys.executable, str(dist_dir / "ragflow-doc-to-md" / "scripts" / "convert.py"), "postprocess", "--help"],
         [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "build.py"), "--help"],
         [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "build.py"), "inspect-handoff", "--help"],
         [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "inspect_kb.py"), "--help"],

@@ -26,6 +26,7 @@ python scripts/convert.py inspect --doc-manifest ./handoff/doc_manifest.json --r
 python scripts/convert.py segment-plan --markdown ./handoff/documents/book.md --output ./handoff/segmentation_plan.json
 python scripts/convert.py split --markdown ./handoff/documents/book.md --output ./handoff/segments --plan-output ./handoff/segmentation_plan.json
 python scripts/convert.py package --handoff ./handoff --rich
+python scripts/convert.py postprocess --doc-manifest ./handoff/doc_manifest.json --profile safe --output ./handoff-clean
 ```
 
 Use `templates/ragflow-config.example.yaml` as the shared config template. Put the real config in a stable host-agent config path, such as Hermes or OpenClaw config storage, and point scripts to it with `RAGFLOW_CONFIG` or `--config`. Do not put real keys in the skill folder.
@@ -73,6 +74,7 @@ Notes:
 
 - The output directory contains `documents/*.md`, `doc_manifest.json`, and `quality_report.json`.
 - Use `package --rich` when the handoff should carry optional audit sidecars such as `metadata.json`, `artifact_index.json`, `profile_suggestions.json`, and `package_readme.md`.
+- Use `postprocess` with profiles `none`, `safe`, `ocr`, or `chunk-markers` when Markdown needs deterministic cleanup before ingestion. Use `--output` for non-destructive writes; `--write` is required for in-place rewrites.
 - `doc_manifest.json` uses `source_root: "."`, so downstream `ragflow-kb-build` can consume it after the handoff directory moves.
 - `quality_gate.status` is written into `doc_manifest.json`; `ragflow-kb-build` blocks `BLOCKED` handoffs unless the user passes `--allow-blocked`.
 - Use `--strict` when skipped files should fail the run.
