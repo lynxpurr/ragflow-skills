@@ -12,12 +12,14 @@ from typing import Any, Iterable, Mapping
 
 from .benchmark_governance import BenchmarkGovernanceError, preflight_benchmark_dataset, resolve_benchmark_artifacts
 from .config import ConfigError, read_config_file
+from .manifests import ManifestError, load_kb_manifest
 from .profiles import ChunkProfile, ProfileError, lint_profile, load_profile, recommend_profile
 
 
 CANDIDATE_PROFILE_SET_SCHEMA = "ragflow_candidate_profile_set_v1"
 OPTIMIZATION_PLAN_SCHEMA = "ragflow_optimization_plan_v1"
 PROFILE_EXPERIMENT_RESULTS_SCHEMA = "ragflow_profile_experiment_results_v1"
+OPTIMIZATION_CLEANUP_PLAN_SCHEMA = "ragflow_optimization_cleanup_plan_v1"
 PROFILE_FILE_SUFFIXES = {".json", ".yaml", ".yml"}
 
 
@@ -877,6 +879,240 @@ def summarize_optimization_results(
         "candidates": ranked,
         "issues": [issue.to_dict() for issue in issues],
     }
+
+
+def _cleanup_command(
+    *,
+    cleanup_script: str,
+    kb_manifest_path: str | None,
+    cleanup_plan_path: str | None,
+    execute: bool,
+    dataset_id: str | None = None,
+    dataset_name: str | None = None,
+    config_path: str | Path | None = None,
+) -> list[str] | None:
+    if not kb_manifest_path and not dataset_id:
+        return None
+    command = ["python3", cleanup_script]
+    if kb_manifest_path:
+        command.extend(["--kb-manifest", kb_manifest_path])
+    elif dataset_id:
+        command.extend(["--dataset-id", dataset_id])
+        if dataset_name:
+            command.extend(["--kb-name", dataset_name])
+    if cleanup_plan_path:
+        command.extend(["--output", cleanup_plan_path])
+    if execute:
+        if not dataset_id:
+            return None
+        command.append("--execute")
+        command.extend(["--confirm-dataset-id", dataset_id])
+        if dataset_name:
+            command.extend(["--confirm-kb-name", dataset_name])
+        if config_path:
+            command.extend(["--config", str(config_path)])
+    return command
+
+
+def create_optimization_cleanup_plan(
+    *,
+    plan_path: str | Path,
+    cleanup_script: str = "scripts/cleanup.py",
+    config_path: str | Path | None = None,
+    require_manifests: bool = False,
+) -> dict[str, Any]:
+    """Create a non-mutating cleanup plan for disposable optimization KBs."""
+
+    plan = _read_json_mapping(plan_path, label="optimization plan")
+    issues: list[OptimizationIssue] = []
+    if plan.get("schema") != OPTIMIZATION_PLAN_SCHEMA:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "optimization_plan_schema_invalid",
+                f"optimization plan schema must be {OPTIMIZATION_PLAN_SCHEMA}",
+                "schema",
+            )
+        )
+
+    candidates = plan.get("candidates", [])
+    if not isinstance(candidates, list) or not candidates:
+        issues.append(OptimizationIssue("error", "optimization_plan_candidates_missing", "optimization plan has no candidates", "candidates"))
+        candidates = []
+
+    targets: list[dict[str, Any]] = []
+    ready_count = 0
+    pending_count = 0
+    invalid_count = 0
+
+    for index, candidate in enumerate(candidates):
+        if not isinstance(candidate, Mapping):
+            issues.append(OptimizationIssue("error", "optimization_candidate_invalid", "optimization candidate must be an object", f"candidates[{index}]"))
+            invalid_count += 1
+            continue
+
+        artifacts = candidate.get("artifacts") if isinstance(candidate.get("artifacts"), Mapping) else {}
+        kb_manifest_path = artifacts.get("kb_manifest") if isinstance(artifacts.get("kb_manifest"), str) else None
+        cleanup_plan_path = artifacts.get("cleanup_plan") if isinstance(artifacts.get("cleanup_plan"), str) else None
+        profile_id = str(candidate.get("profile_id") or f"candidate-{index + 1}")
+        disposable_name = str(candidate.get("disposable_kb_name") or "")
+        dataset_id: str | None = None
+        dataset_name: str | None = disposable_name or None
+        status = "pending_manifest"
+
+        if not kb_manifest_path:
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "cleanup_manifest_path_missing",
+                    "candidate does not include an artifacts.kb_manifest path",
+                    f"candidates[{index}].artifacts.kb_manifest",
+                )
+            )
+            status = "invalid_manifest"
+            invalid_count += 1
+        else:
+            manifest_path = Path(kb_manifest_path)
+            if not manifest_path.exists():
+                severity = "error" if require_manifests else "warning"
+                issues.append(
+                    OptimizationIssue(
+                        severity,
+                        "cleanup_manifest_missing",
+                        f"candidate KB manifest is not available yet: {manifest_path}",
+                        f"candidates[{index}].artifacts.kb_manifest",
+                        "Build the disposable KB first, then regenerate the cleanup plan before executing cleanup.",
+                    )
+                )
+                pending_count += 1
+            else:
+                try:
+                    manifest = load_kb_manifest(manifest_path)
+                except ManifestError as exc:
+                    issues.append(
+                        OptimizationIssue(
+                            "error",
+                            "cleanup_manifest_invalid",
+                            str(exc),
+                            f"candidates[{index}].artifacts.kb_manifest",
+                        )
+                    )
+                    status = "invalid_manifest"
+                    invalid_count += 1
+                else:
+                    dataset_id = manifest.dataset.id
+                    dataset_name = manifest.dataset.name
+                    status = "ready"
+                    ready_count += 1
+                    if disposable_name and dataset_name != disposable_name:
+                        issues.append(
+                            OptimizationIssue(
+                                "warning",
+                                "cleanup_dataset_name_mismatch",
+                                "KB manifest dataset name does not match the planned disposable KB name",
+                                f"candidates[{index}].disposable_kb_name",
+                                "Confirm the target KB name before executing cleanup.",
+                            )
+                        )
+
+        target = {
+            "profile_id": profile_id,
+            "disposable_kb_name": disposable_name or None,
+            "status": status,
+            "action": "delete_dataset",
+            "kb_manifest": kb_manifest_path,
+            "cleanup_plan": cleanup_plan_path,
+            "target": {
+                "dataset_id": dataset_id,
+                "dataset_name": dataset_name,
+            },
+            "required_confirmation": {
+                "confirm_dataset_id": dataset_id,
+                "confirm_kb_name": dataset_name,
+            },
+            "commands": {
+                "preview": _cleanup_command(
+                    cleanup_script=cleanup_script,
+                    kb_manifest_path=kb_manifest_path,
+                    cleanup_plan_path=cleanup_plan_path,
+                    execute=False,
+                    dataset_id=dataset_id,
+                    dataset_name=dataset_name,
+                ),
+                "execute": _cleanup_command(
+                    cleanup_script=cleanup_script,
+                    kb_manifest_path=kb_manifest_path,
+                    cleanup_plan_path=cleanup_plan_path,
+                    execute=True,
+                    dataset_id=dataset_id,
+                    dataset_name=dataset_name,
+                    config_path=config_path,
+                ),
+            },
+        }
+        targets.append(target)
+
+    issue_summary = _issue_counts(issues)
+    return {
+        "ok": _ok(issues),
+        "schema": OPTIMIZATION_CLEANUP_PLAN_SCHEMA,
+        "created_at": _now(),
+        "plan": str(plan_path),
+        "mode": "cleanup-plan",
+        "mutation_allowed": False,
+        "execute": False,
+        "dry_run": True,
+        "requires_exact_confirmation": True,
+        "summary": {
+            **issue_summary,
+            "candidate_count": len(candidates),
+            "target_count": len(targets),
+            "ready_target_count": ready_count,
+            "pending_target_count": pending_count,
+            "invalid_target_count": invalid_count,
+        },
+        "targets": targets,
+        "issues": [issue.to_dict() for issue in issues],
+    }
+
+
+def render_optimization_cleanup_plan_markdown(plan: Mapping[str, Any]) -> str:
+    """Render an optimization cleanup plan as Markdown."""
+
+    summary = plan.get("summary") if isinstance(plan.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Optimization Cleanup Plan",
+        "",
+        f"- Status: `{'passed' if plan.get('ok') else 'failed'}`",
+        f"- Mutates RAGFlow: `{str(bool(plan.get('mutation_allowed'))).lower()}`",
+        f"- Requires exact confirmation: `{str(bool(plan.get('requires_exact_confirmation'))).lower()}`",
+        f"- Targets: `{summary.get('target_count', 0)}`",
+        f"- Ready targets: `{summary.get('ready_target_count', 0)}`",
+        f"- Pending targets: `{summary.get('pending_target_count', 0)}`",
+        f"- Errors: `{summary.get('errors', 0)}`",
+        f"- Warnings: `{summary.get('warnings', 0)}`",
+        "",
+        "## Targets",
+        "",
+        "| profile | status | dataset id | KB name | manifest |",
+        "|---|---|---|---|---|",
+    ]
+    for target in plan.get("targets", []) if isinstance(plan.get("targets"), list) else []:
+        if not isinstance(target, Mapping):
+            continue
+        target_payload = target.get("target") if isinstance(target.get("target"), Mapping) else {}
+        lines.append(
+            f"| `{target.get('profile_id')}` | `{target.get('status')}` | "
+            f"`{target_payload.get('dataset_id') or '-'}` | `{target_payload.get('dataset_name') or '-'}` | "
+            f"`{target.get('kb_manifest') or '-'}` |"
+        )
+
+    lines.extend(["", "## Issues", "", "| severity | code | field | message |", "|---|---|---|---|"])
+    for issue in plan.get("issues", []) if isinstance(plan.get("issues"), list) else []:
+        if isinstance(issue, Mapping):
+            lines.append(f"| {issue.get('severity')} | `{issue.get('code')}` | {issue.get('field', '-')} | {issue.get('message')} |")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def render_best_profile_markdown(results: Mapping[str, Any]) -> str:

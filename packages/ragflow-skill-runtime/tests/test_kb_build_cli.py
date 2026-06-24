@@ -1127,6 +1127,113 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(results_payload["summary"]["result_count"], 2)
         self.assertIn("RAGFlow Best Profile Report", best_md_text)
 
+    def test_optimize_cleanup_plan_subcommand_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "sample.md").write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "cleanup-profile",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                        "parser_config": {
+                            "chunk_token_num": 512,
+                            "auto_keywords": 0,
+                            "auto_questions": 0,
+                            "__language__": "English",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            optimization_plan = root / "optimization_plan.json"
+            cleanup_plan = root / "cleanup_plan.json"
+            cleanup_md = root / "cleanup_plan.md"
+            artifact_dir = root / "opt-artifacts"
+
+            plan_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "--plan-only",
+                    "--input",
+                    str(docs),
+                    "--kb-name",
+                    "kb:optimize-cleanup",
+                    "--profile",
+                    str(profile),
+                    "--queries",
+                    str(queries),
+                    "--qrels",
+                    str(qrels),
+                    "--run-id",
+                    "cleanup",
+                    "--artifact-dir",
+                    str(artifact_dir),
+                    "--output",
+                    str(optimization_plan),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            plan_payload = json.loads(optimization_plan.read_text(encoding="utf-8")) if optimization_plan.exists() else {}
+            candidate = plan_payload["candidates"][0]
+            kb_manifest = Path(candidate["artifacts"]["kb_manifest"])
+            kb_manifest.parent.mkdir(parents=True, exist_ok=True)
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "0123456789abcdef", "name": candidate["disposable_kb_name"]},
+                        "documents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            cleanup_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "cleanup-plan",
+                    "--plan",
+                    str(optimization_plan),
+                    "--output",
+                    str(cleanup_plan),
+                    "--report-md",
+                    str(cleanup_md),
+                    "--config",
+                    str(root / "ragflow.yaml"),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            cleanup_payload = json.loads(cleanup_plan.read_text(encoding="utf-8")) if cleanup_plan.exists() else {}
+            cleanup_md_text = cleanup_md.read_text(encoding="utf-8") if cleanup_md.exists() else ""
+
+        self.assertEqual(plan_result.returncode, 0, plan_result.stdout)
+        self.assertEqual(cleanup_result.returncode, 0, cleanup_result.stdout)
+        self.assertIn("ragflow_optimization_cleanup_plan_v1", cleanup_result.stdout)
+        self.assertEqual(cleanup_payload["summary"]["ready_target_count"], 1)
+        self.assertIn("--confirm-dataset-id", cleanup_payload["targets"][0]["commands"]["execute"])
+        self.assertIn("RAGFlow Optimization Cleanup Plan", cleanup_md_text)
+
     def test_inspect_manifest_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manifest = Path(tmp) / "kb_manifest.json"

@@ -29,6 +29,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     BuildError,
     HandoffError,
     RAGFlowClient,
+    create_optimization_cleanup_plan,
     create_optimization_plan,
     discover_markdown_documents,
     inspect_rich_handoff,
@@ -49,6 +50,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     preflight_benchmark_dataset,
     render_best_profile_markdown,
     render_benchmark_governance_markdown,
+    render_optimization_cleanup_plan_markdown,
     sample_benchmark_dataset,
     segment_metadata_report_file,
     render_optimization_plan_markdown,
@@ -549,6 +551,22 @@ def _run_optimize_summarize(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_optimize_cleanup_plan(args: argparse.Namespace) -> int:
+    try:
+        plan = create_optimization_cleanup_plan(
+            plan_path=args.plan,
+            cleanup_script=args.cleanup_script,
+            config_path=args.config,
+            require_manifests=args.require_manifests,
+        )
+        _write_json_file(args.output, plan)
+        _write_text_file(args.report_md, render_optimization_cleanup_plan_markdown(plan))
+        _dump_json(plan)
+        return 0 if plan["ok"] else 1
+    except (ProfileError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def build_inspect_handoff_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Inspect a Markdown handoff and optional rich sidecars")
     parser.add_argument("--handoff", required=True, help="Handoff directory containing doc_manifest.json")
@@ -804,6 +822,19 @@ def build_optimize_summarize_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_optimize_cleanup_plan_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Create a non-mutating cleanup plan for profile optimization KBs")
+    parser.add_argument("--plan", required=True, help="ragflow_optimization_plan_v1 JSON")
+    parser.add_argument("--output", default="cleanup_plan.json", help="Output ragflow_optimization_cleanup_plan_v1 JSON")
+    parser.add_argument("--report-md", help="Optional optimization cleanup plan Markdown path")
+    parser.add_argument("--cleanup-script", default="scripts/cleanup.py", help="Cleanup script path recorded in generated commands")
+    parser.add_argument("--config", help="Optional runtime config path recorded in generated execute commands")
+    parser.add_argument("--require-manifests", action="store_true", help="Fail when candidate kb_manifest files are not available yet")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    parser.set_defaults(func=_run_optimize_cleanup_plan)
+    return parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build a RAGFlow KB from Markdown")
     parser.add_argument("--input", help="Markdown file or directory")
@@ -854,6 +885,9 @@ def main(argv: list[str] | None = None) -> int:
             if command_args and command_args[0] == "summarize":
                 optimize_summary_args = build_optimize_summarize_parser().parse_args(command_args[1:])
                 return optimize_summary_args.func(optimize_summary_args)
+            if command_args and command_args[0] == "cleanup-plan":
+                optimize_cleanup_args = build_optimize_cleanup_plan_parser().parse_args(command_args[1:])
+                return optimize_cleanup_args.func(optimize_cleanup_args)
             optimize_args = build_optimize_parser().parse_args(command_args)
             return optimize_args.func(optimize_args)
     args = build_parser().parse_args(actual_argv)

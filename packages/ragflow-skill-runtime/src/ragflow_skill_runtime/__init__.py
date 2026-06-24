@@ -126,11 +126,14 @@ from .profiles import (
 )
 from .optimization import (
     CANDIDATE_PROFILE_SET_SCHEMA,
+    OPTIMIZATION_CLEANUP_PLAN_SCHEMA,
     OPTIMIZATION_PLAN_SCHEMA,
     PROFILE_EXPERIMENT_RESULTS_SCHEMA,
+    create_optimization_cleanup_plan,
     create_optimization_plan,
     load_candidate_profile_set,
     render_best_profile_markdown,
+    render_optimization_cleanup_plan_markdown,
     render_optimization_plan_markdown,
     summarize_optimization_results,
 )
@@ -328,6 +331,7 @@ __all__ = [
     "QUERY_DIAGNOSTIC_SCHEMA",
     "METADATA_LINT_REPORT_SCHEMA",
     "METADATA_MERGE_REPORT_SCHEMA",
+    "OPTIMIZATION_CLEANUP_PLAN_SCHEMA",
     "OPTIMIZATION_PLAN_SCHEMA",
     "PROFILE_EXPERIMENT_RESULTS_SCHEMA",
     "QueryResult",
@@ -353,6 +357,7 @@ __all__ = [
     "build_query_trace",
     "compare_validation_reports",
     "convert_source_to_markdown",
+    "create_optimization_cleanup_plan",
     "create_optimization_plan",
     "create_rich_handoff_package",
     "diagnose_query_result",
@@ -426,6 +431,7 @@ __all__ = [
     "render_benchmark_governance_markdown",
     "render_citation_audit_markdown",
     "render_best_profile_markdown",
+    "render_optimization_cleanup_plan_markdown",
     "render_optimization_plan_markdown",
     "render_query_diagnostic_markdown",
     "render_quality_markdown",

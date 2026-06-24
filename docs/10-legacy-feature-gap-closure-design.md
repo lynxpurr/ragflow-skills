@@ -384,6 +384,10 @@ names, and reports naming collisions before any live execution is allowed.
 MVP `optimize summarize` then reads the plan plus existing validation reports and
 produces `ragflow_profile_experiment_results_v1` plus a Markdown best-profile report with
 metric tradeoffs and recommendation rationale. It does not build KBs or run validation.
+MVP `optimize cleanup-plan` reads the optimization plan and any available candidate
+`kb_manifest.json` files, then produces a non-mutating `ragflow_optimization_cleanup_plan_v1`.
+Targets with dataset IDs include exact-confirmation cleanup commands; targets without
+manifests stay pending until disposable KB execution creates the manifests.
 
 ## Feature Design 5: Chunk Snapshot And Strict Chunk Recall
 

@@ -840,7 +840,8 @@ Tasks:
 - [x] Produce `optimization_plan.json`.
 - [x] Produce `profile_experiment_results.json`.
 - [x] Produce `best_profile_report.md` with metric tradeoffs and recommendation rationale.
-- [ ] Add `cleanup_plan.json` and exact-confirmation cleanup execution.
+- [x] Add `optimize cleanup-plan` for non-mutating `cleanup_plan.json` generation with exact-confirmation commands.
+- [ ] Add exact-confirmation cleanup execution for optimization disposable KBs.
 - [x] Add `ragflow-kb-build snapshot-chunks`.
 - [x] Add chunk snapshot schema with stable content hashes.
 - [x] Extend qrels to support `expected_chunks`.

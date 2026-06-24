@@ -6,11 +6,14 @@ import unittest
 from pathlib import Path
 
 from ragflow_skill_runtime.optimization import (
+    OPTIMIZATION_CLEANUP_PLAN_SCHEMA,
     OPTIMIZATION_PLAN_SCHEMA,
     PROFILE_EXPERIMENT_RESULTS_SCHEMA,
+    create_optimization_cleanup_plan,
     create_optimization_plan,
     load_candidate_profile_set,
     render_best_profile_markdown,
+    render_optimization_cleanup_plan_markdown,
     render_optimization_plan_markdown,
     summarize_optimization_results,
 )
@@ -177,6 +180,89 @@ class OptimizationTests(unittest.TestCase):
         self.assertTrue(results["ok"], results["issues"])
         self.assertEqual(results["recommendation"]["profile_id"], "strong-profile")
         self.assertIn("RAGFlow Best Profile Report", render_best_profile_markdown(results))
+
+    def test_create_optimization_cleanup_plan_with_ready_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            _write_profile(profile, "cleanup-profile")
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[profile],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            candidate = plan["candidates"][0]
+            kb_manifest = Path(candidate["artifacts"]["kb_manifest"])
+            kb_manifest.parent.mkdir(parents=True, exist_ok=True)
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {
+                            "id": "0123456789abcdef",
+                            "name": candidate["disposable_kb_name"],
+                        },
+                        "documents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            plan_path = root / "optimization_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+            cleanup = create_optimization_cleanup_plan(plan_path=plan_path, config_path=root / "ragflow.yaml")
+
+        self.assertEqual(cleanup["schema"], OPTIMIZATION_CLEANUP_PLAN_SCHEMA)
+        self.assertTrue(cleanup["ok"], cleanup["issues"])
+        self.assertFalse(cleanup["mutation_allowed"])
+        self.assertEqual(cleanup["summary"]["ready_target_count"], 1)
+        target = cleanup["targets"][0]
+        self.assertEqual(target["required_confirmation"]["confirm_dataset_id"], "0123456789abcdef")
+        self.assertIn("--confirm-dataset-id", target["commands"]["execute"])
+        self.assertIn("--config", target["commands"]["execute"])
+        self.assertIn("RAGFlow Optimization Cleanup Plan", render_optimization_cleanup_plan_markdown(cleanup))
+
+    def test_create_optimization_cleanup_plan_warns_when_manifests_are_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            _write_profile(profile, "pending-profile")
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[profile],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            plan_path = root / "optimization_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+            cleanup = create_optimization_cleanup_plan(plan_path=plan_path)
+
+        self.assertTrue(cleanup["ok"], cleanup["issues"])
+        self.assertEqual(cleanup["summary"]["warnings"], 1)
+        self.assertEqual(cleanup["summary"]["pending_target_count"], 1)
+        self.assertIsNone(cleanup["targets"][0]["commands"]["execute"])
 
 
 if __name__ == "__main__":

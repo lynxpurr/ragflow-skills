@@ -1208,6 +1208,31 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         optimize_plan_result,
         required_stdout='"schema": "ragflow_optimization_plan_v1"',
     )
+    optimization_cleanup_plan = artifacts_dir / "optimization_cleanup_plan.json"
+    optimization_cleanup_plan_md = artifacts_dir / "optimization_cleanup_plan.md"
+    optimize_cleanup_plan_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "optimize",
+            "cleanup-plan",
+            "--plan",
+            str(optimization_plan),
+            "--output",
+            str(optimization_cleanup_plan),
+            "--report-md",
+            str(optimization_cleanup_plan_md),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb optimize cleanup-plan",
+        optimize_cleanup_plan_result,
+        required_stdout='"schema": "ragflow_optimization_cleanup_plan_v1"',
+    )
     benchmark_sample_dir = artifacts_dir / "benchmark-sample"
     benchmark_sample_result = _run_command(
         [
@@ -1430,6 +1455,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "qa_evidence_map.json",
         artifacts_dir / "segment_metadata_report.json",
         artifacts_dir / "optimization_plan.json",
+        artifacts_dir / "optimization_cleanup_plan.json",
+        artifacts_dir / "optimization_cleanup_plan.md",
         artifacts_dir / "profile_experiment_results.json",
         artifacts_dir / "best_profile_report.md",
         artifacts_dir / "benchmark_current.json",

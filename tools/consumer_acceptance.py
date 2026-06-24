@@ -970,6 +970,8 @@ raise SystemExit(code)
     segment_metadata_md = work_root / "segment_metadata.md"
     optimization_plan = work_root / "optimization_plan.json"
     optimization_plan_md = work_root / "optimization_plan.md"
+    optimization_cleanup_plan = work_root / "optimization_cleanup_plan.json"
+    optimization_cleanup_plan_md = work_root / "optimization_cleanup_plan.md"
     profile_experiment_results = work_root / "profile_experiment_results.json"
     best_profile_report_md = work_root / "best_profile_report.md"
     benchmark_import_result = _run_command(
@@ -1112,6 +1114,29 @@ raise SystemExit(code)
         "kb-build optimize plan-only",
         optimize_plan_result,
         required_output='"schema": "ragflow_optimization_plan_v1"',
+    )
+    optimize_cleanup_plan_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "optimize",
+            "cleanup-plan",
+            "--plan",
+            str(optimization_plan),
+            "--output",
+            str(optimization_cleanup_plan),
+            "--report-md",
+            str(optimization_cleanup_plan_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build optimize cleanup-plan",
+        optimize_cleanup_plan_result,
+        required_output='"schema": "ragflow_optimization_cleanup_plan_v1"',
     )
     optimize_summary_result = _run_command(
         [
@@ -1302,6 +1327,8 @@ raise SystemExit(code)
         segment_metadata_md,
         optimization_plan,
         optimization_plan_md,
+        optimization_cleanup_plan,
+        optimization_cleanup_plan_md,
         profile_experiment_results,
         best_profile_report_md,
         benchmark_preflight_md,
