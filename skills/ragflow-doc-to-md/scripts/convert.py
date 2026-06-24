@@ -35,8 +35,10 @@ from ragflow_skill_runtime import (  # noqa: E402
     DocSegmentError,
     QualityDocument,
     convert_source_to_markdown,
+    create_rich_handoff_package,
     discover_source_documents,
     extract_markdown_title,
+    HandoffError,
     load_doc_manifest_payload,
     load_skill_config,
     make_doc_manifest_payload,
@@ -373,6 +375,24 @@ def _run_split(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_package(args: argparse.Namespace) -> int:
+    try:
+        if not args.rich:
+            raise HandoffError("package currently supports only --rich")
+        payload = create_rich_handoff_package(
+            handoff_root=args.handoff,
+            doc_manifest_name=args.manifest_name,
+            metadata_name=args.metadata_name,
+            artifact_index_name=args.artifact_index_name,
+            profile_suggestions_name=args.profile_suggestions_name,
+            package_readme_name=args.package_readme_name,
+        )
+        _dump_json({"ok": True, "package": payload})
+        return 0
+    except (HandoffError, OSError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _add_segmentation_threshold_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--soft-max-chars", type=int, default=DEFAULT_SOFT_MAX_CHARS)
     parser.add_argument("--hard-max-chars", type=int, default=DEFAULT_HARD_MAX_CHARS)
@@ -405,6 +425,19 @@ def build_split_parser() -> argparse.ArgumentParser:
     parser.add_argument("--plan-output", help="Optional segmentation_plan.json output path")
     parser.add_argument("--force", action="store_true", help="Allow writing into a non-empty output directory")
     _add_segmentation_threshold_args(parser)
+    return parser
+
+
+def build_package_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Create optional rich handoff sidecars beside a doc_manifest")
+    parser.add_argument("--handoff", required=True, help="Handoff directory containing doc_manifest.json")
+    parser.add_argument("--rich", action="store_true", help="Generate rich package sidecars")
+    parser.add_argument("--manifest-name", default="doc_manifest.json", help="Doc manifest name under the handoff directory")
+    parser.add_argument("--metadata-name", default="metadata.json", help="Metadata sidecar name")
+    parser.add_argument("--artifact-index-name", default="artifact_index.json", help="Artifact index sidecar name")
+    parser.add_argument("--profile-suggestions-name", default="profile_suggestions.json", help="Profile suggestions sidecar name")
+    parser.add_argument("--package-readme-name", default="package_readme.md", help="Package README sidecar name")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     return parser
 
 
@@ -452,6 +485,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_segment_plan(build_segment_plan_parser().parse_args(command_args))
         if command == "split":
             return _run_split(build_split_parser().parse_args(command_args))
+        if command == "package":
+            return _run_package(build_package_parser().parse_args(command_args))
     return _run(build_parser().parse_args(actual_argv))
 
 

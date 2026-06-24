@@ -27,12 +27,15 @@ bootstrap_runtime()
 
 from ragflow_skill_runtime import (  # noqa: E402
     BuildError,
+    HandoffError,
     RAGFlowClient,
     discover_markdown_documents,
+    inspect_rich_handoff,
     load_config,
     load_doc_manifest,
     load_profile,
     make_kb_manifest_payload,
+    render_handoff_inspection_markdown,
     wait_for_document_states,
 )
 from ragflow_skill_runtime.config import ConfigError  # noqa: E402
@@ -157,6 +160,36 @@ def _run(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_inspect_handoff(args: argparse.Namespace) -> int:
+    try:
+        report = inspect_rich_handoff(
+            handoff_root=args.handoff,
+            doc_manifest_name=args.manifest_name,
+        )
+        if args.report_json:
+            report_json = Path(args.report_json)
+            report_json.parent.mkdir(parents=True, exist_ok=True)
+            report_json.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        if args.report_md:
+            report_md = Path(args.report_md)
+            report_md.parent.mkdir(parents=True, exist_ok=True)
+            report_md.write_text(render_handoff_inspection_markdown(report), encoding="utf-8")
+        _dump_json({"ok": True, "handoff": report})
+        return 0
+    except (HandoffError, OSError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
+def build_inspect_handoff_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Inspect a Markdown handoff and optional rich sidecars")
+    parser.add_argument("--handoff", required=True, help="Handoff directory containing doc_manifest.json")
+    parser.add_argument("--manifest-name", default="doc_manifest.json", help="Doc manifest name under the handoff directory")
+    parser.add_argument("--report-json", help="Optional JSON inspection report path")
+    parser.add_argument("--report-md", help="Optional Markdown inspection report path")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    return parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build a RAGFlow KB from Markdown")
     parser.add_argument("--input", help="Markdown file or directory")
@@ -178,7 +211,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    actual_argv = list(sys.argv[1:] if argv is None else argv)
+    if actual_argv:
+        command = actual_argv[0]
+        command_args = actual_argv[1:]
+        if command == "inspect-handoff":
+            return _run_inspect_handoff(build_inspect_handoff_parser().parse_args(command_args))
+    args = build_parser().parse_args(actual_argv)
     return _run(args)
 
 

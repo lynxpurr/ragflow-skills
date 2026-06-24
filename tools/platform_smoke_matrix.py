@@ -761,6 +761,34 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     )
     _record_command_check(checks, "doc-to-md passthrough", convert_result, required_stdout='"ok": true')
     doc_manifest = handoff_dir / "doc_manifest.json"
+    package_result = _run_command(
+        [
+            sys.executable,
+            str(convert_script),
+            "package",
+            "--handoff",
+            str(handoff_dir),
+            "--rich",
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "doc-to-md rich handoff package",
+        package_result,
+        required_stdout='"schema": "ragflow_handoff_package_v1"',
+    )
+    rich_metadata = handoff_dir / "metadata.json"
+    checks.append(
+        {
+            "name": "rich handoff metadata produced",
+            "ok": rich_metadata.exists(),
+            "returncode": 0 if rich_metadata.exists() else 1,
+            "error": "" if rich_metadata.exists() else f"missing {rich_metadata}",
+        }
+    )
     mineru_doc_manifest = _run_mineru_env_check(
         profile=profile,
         convert_script=convert_script,
@@ -795,6 +823,24 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         env=env,
     )
     _record_command_check(checks, "kb-build dry-run", build_result, required_stdout='"dry_run": true')
+    inspect_handoff_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "inspect-handoff",
+            "--handoff",
+            str(handoff_dir),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build inspect rich handoff",
+        inspect_handoff_result,
+        required_stdout='"schema": "ragflow_handoff_inspection_v1"',
+    )
 
     profile_script = script_root / "ragflow-kb-build" / "scripts" / "profile.py"
     profile_lint_result = _run_command(

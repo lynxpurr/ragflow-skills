@@ -754,23 +754,24 @@ Design reference:
 
 Tasks:
 
-- [ ] Add `ragflow_handoff_package_v1` runtime schema for optional package sidecars.
-- [ ] Add `ragflow_document_metadata_v1` for source metadata, source hash, locale, and document-level hints.
-- [ ] Add `ragflow_artifact_index_v1` for images, tables, raw artifacts, and copied asset hashes.
-- [ ] Add `ragflow_profile_suggestions_v1` for advisory profile recommendations.
+- [x] Add `ragflow_handoff_package_v1` runtime schema for optional package sidecars.
+- [x] Add `ragflow_document_metadata_v1` for source metadata, source hash, locale, and document-level hints.
+- [x] Add `ragflow_artifact_index_v1` for images, tables, raw artifacts, and copied asset hashes.
+- [x] Add `ragflow_profile_suggestions_v1` for advisory profile recommendations.
 - [ ] Add `ragflow_retrieval_hints_v1` for section boundaries, table artifacts, keyword candidates, question candidates, and quality risks.
 - [ ] Add `ragflow_assistant_profile_v1` and `ragflow_assistant_test_plan_v1` as optional review sidecars.
 - [ ] Add source inventory fields for source format, MIME hint, size, sha256, and language hint.
-- [ ] Add `ragflow-doc-to-md package --rich` while keeping plain `doc_manifest.json` as default.
-- [ ] Generate `metadata.json`, `package_readme.md`, and artifact index files in rich mode.
+- [x] Add `ragflow-doc-to-md package --rich` while keeping plain `doc_manifest.json` as default.
+- [x] Generate `metadata.json`, `package_readme.md`, and artifact index files in rich mode.
 - [ ] Generate optional `retrieval_hints.json`, `assistant_profile.json`, and `assistant_test_plan.json` in rich mode.
-- [ ] Add `ragflow-kb-build inspect-handoff` to summarize manifest and optional sidecars before upload.
+- [x] Add `ragflow-kb-build inspect-handoff` to summarize manifest and optional sidecars before upload.
 - [ ] Add deterministic Markdown post-processing profiles: `none`, `safe`, `ocr`, and `chunk-markers`.
 - [ ] Emit `postprocess_report.json` with changed line counts, rule IDs, and warnings.
 - [ ] Make destructive Markdown rewriting require an explicit output path or `--write`.
-- [ ] Add unit tests for sidecar schemas, artifact hashing, and post-processing rule reports.
-- [ ] Add CLI, consumer acceptance, and platform smoke coverage for rich handoff mode.
-- [ ] Update public `SKILL.md`, config templates if needed, and host-agent references.
+- [x] Add unit tests for sidecar schemas and artifact hashing.
+- [ ] Add unit tests for post-processing rule reports.
+- [x] Add CLI, consumer acceptance, and platform smoke coverage for rich handoff mode.
+- [x] Update public `SKILL.md`, config templates if needed, and host-agent references.
 
 Exit criteria:
 

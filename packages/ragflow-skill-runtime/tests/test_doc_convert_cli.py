@@ -143,6 +143,60 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([doc.path.name for doc in docs], ["alpha.md"])
 
+    def test_package_rich_creates_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "handoff"
+            input_dir.mkdir()
+            (input_dir / "alpha.md").write_text("# Alpha\n\nBody\n", encoding="utf-8")
+
+            convert_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                    "--mode",
+                    "passthrough",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            package_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "package",
+                    "--handoff",
+                    str(output_dir),
+                    "--rich",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            metadata = json.loads((output_dir / "metadata.json").read_text(encoding="utf-8"))
+            artifact_index = json.loads((output_dir / "artifact_index.json").read_text(encoding="utf-8"))
+            suggestions = json.loads((output_dir / "profile_suggestions.json").read_text(encoding="utf-8"))
+            readme_exists = (output_dir / "package_readme.md").exists()
+
+        self.assertEqual(convert_result.returncode, 0, convert_result.stderr)
+        self.assertEqual(package_result.returncode, 0, package_result.stderr)
+        payload = json.loads(package_result.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["package"]["schema"], "ragflow_handoff_package_v1")
+        self.assertEqual(metadata["schema"], "ragflow_document_metadata_v1")
+        self.assertEqual(artifact_index["schema"], "ragflow_artifact_index_v1")
+        self.assertEqual(suggestions["schema"], "ragflow_profile_suggestions_v1")
+        self.assertTrue(readme_exists)
+
     def test_convert_builtin_html(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

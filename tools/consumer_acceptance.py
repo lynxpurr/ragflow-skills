@@ -292,6 +292,26 @@ def _run_no_network_checks(
     if quality_report.exists():
         produced.append(quality_report)
 
+    package_result = _run_command(
+        [
+            python_executable,
+            str(convert_script),
+            "package",
+            "--handoff",
+            str(handoff_dir),
+            "--rich",
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(checks, "doc-to-md rich handoff package", package_result, required_output='"schema": "ragflow_handoff_package_v1"')
+    for rich_name in ("metadata.json", "artifact_index.json", "profile_suggestions.json", "package_readme.md"):
+        rich_path = handoff_dir / rich_name
+        _record_file_check(checks, f"rich handoff {rich_name} produced", rich_path)
+        if rich_path.exists():
+            produced.append(rich_path)
+
     mineru_cli_input = work_root / "mineru-cli-input"
     mineru_cli_input.mkdir(parents=True, exist_ok=True)
     (mineru_cli_input / "sample.pdf").write_bytes(b"%PDF fake mineru cli acceptance")
@@ -460,6 +480,25 @@ def _run_no_network_checks(
         env=env,
     )
     _record_command_check(checks, "kb-build dry-run", build_result, required_output='"dry_run": true')
+
+    inspect_handoff_report = work_root / "handoff_inspection.md"
+    inspect_handoff_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "inspect-handoff",
+            "--handoff",
+            str(handoff_dir),
+            "--report-md",
+            str(inspect_handoff_report),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(checks, "kb-build inspect rich handoff", inspect_handoff_result, required_output='"schema": "ragflow_handoff_inspection_v1"')
+    if inspect_handoff_report.exists():
+        produced.append(inspect_handoff_report)
 
     profile_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "profile.py")
     profile_lint_result = _run_command(

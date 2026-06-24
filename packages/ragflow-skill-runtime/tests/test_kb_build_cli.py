@@ -216,6 +216,59 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("--no-wait", result.stdout)
         self.assertIn("--parse-timeout", result.stdout)
 
+    def test_inspect_handoff_via_build_subcommand(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = Path(tmp) / "handoff"
+            docs_dir = handoff / "documents"
+            docs_dir.mkdir(parents=True)
+            (docs_dir / "sample.md").write_text("# Sample\n\nBody\n", encoding="utf-8")
+            (handoff / "doc_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "quality_report": "quality_report.json",
+                        "documents": [{"source_path": "sample.md", "markdown_path": "documents/sample.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (handoff / "quality_report.json").write_text(
+                json.dumps({"schema": "doc_quality_report_v1", "gate": {"status": "PASS"}}),
+                encoding="utf-8",
+            )
+            (handoff / "metadata.json").write_text(json.dumps({"schema": "ragflow_document_metadata_v1"}), encoding="utf-8")
+            (handoff / "artifact_index.json").write_text(
+                json.dumps({"schema": "ragflow_artifact_index_v1", "artifact_count": 0}),
+                encoding="utf-8",
+            )
+            report_md = Path(tmp) / "handoff_inspection.md"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "inspect-handoff",
+                    "--handoff",
+                    str(handoff),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["handoff"]["document_count"], 1)
+        self.assertTrue(payload["handoff"]["sidecars"]["metadata"]["exists"])
+        self.assertIn("RAGFlow Handoff Inspection", report_md_text)
+
     def test_inspect_manifest_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manifest = Path(tmp) / "kb_manifest.json"
