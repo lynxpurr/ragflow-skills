@@ -427,28 +427,74 @@ def recommend_profile(
     )
 
 
+def _number_from(mapping: Mapping[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
+
+
+def _first_number(mappings: list[Mapping[str, Any]], *keys: str) -> float | None:
+    for mapping in mappings:
+        value = _number_from(mapping, *keys)
+        if value is not None:
+            return value
+    return None
+
+
+def _empty_result_rate(metrics: Mapping[str, Any], benchmark_metrics: Mapping[str, Any]) -> float:
+    direct = _first_number([benchmark_metrics, metrics], "empty_result_rate", "empty_rate")
+    if direct is not None:
+        return direct
+    empty_results = _number_from(metrics, "empty_results")
+    total = _number_from(metrics, "total", "query_count")
+    if empty_results is not None and total and total > 0:
+        return empty_results / total
+    return 0.0
+
+
 def _report_score(report: Mapping[str, Any]) -> tuple[float, dict[str, Any]]:
     metrics = report.get("metrics") if isinstance(report.get("metrics"), Mapping) else {}
     benchmark = report.get("benchmark") if isinstance(report.get("benchmark"), Mapping) else {}
     benchmark_metrics = benchmark.get("metrics") if isinstance(benchmark.get("metrics"), Mapping) else {}
-    pass_rate = float(metrics.get("pass_rate", 0.0)) if isinstance(metrics.get("pass_rate"), (int, float)) else 0.0
-    mrr = float(benchmark_metrics.get("mrr", 0.0)) if isinstance(benchmark_metrics.get("mrr"), (int, float)) else 0.0
-    ndcg = (
-        float(benchmark_metrics.get("ndcg_at_k", 0.0))
-        if isinstance(benchmark_metrics.get("ndcg_at_k"), (int, float))
-        else 0.0
-    )
-    hit_rate = (
-        float(benchmark_metrics.get("hit_rate", 0.0))
-        if isinstance(benchmark_metrics.get("hit_rate"), (int, float))
-        else 0.0
-    )
-    score = (pass_rate * 0.4) + (hit_rate * 0.25) + (mrr * 0.2) + (ndcg * 0.15)
+    metadata = report.get("metadata") if isinstance(report.get("metadata"), Mapping) else {}
+    timing = report.get("timing") if isinstance(report.get("timing"), Mapping) else {}
+    pass_rate = _number_from(metrics, "pass_rate") or 0.0
+    mrr = _number_from(benchmark_metrics, "mrr") or 0.0
+    ndcg = _number_from(benchmark_metrics, "ndcg_at_k") or 0.0
+    hit_rate = _number_from(benchmark_metrics, "hit_rate") or 0.0
+    empty_rate = _empty_result_rate(metrics, benchmark_metrics)
+    average_chunks = _number_from(metrics, "average_chunks", "avg_chunks") or 0.0
+    query_latency_ms = _first_number(
+        [benchmark_metrics, metrics, timing, metadata],
+        "query_latency_ms",
+        "average_query_latency_ms",
+        "avg_query_latency_ms",
+        "latency_ms",
+        "duration_ms",
+    ) or 0.0
+    parse_time_ms = _first_number(
+        [metrics, timing, metadata],
+        "parse_time_ms",
+        "parse_duration_ms",
+        "average_parse_time_ms",
+        "avg_parse_time_ms",
+    ) or 0.0
+    benchmark_quality = (hit_rate + mrr + ndcg) / 3
+    score = (pass_rate * 0.38) + (hit_rate * 0.25) + (mrr * 0.20) + (ndcg * 0.12) - (empty_rate * 0.05)
     return score, {
         "pass_rate": pass_rate,
         "hit_rate": hit_rate,
         "mrr": mrr,
         "ndcg_at_k": ndcg,
+        "empty_result_rate": empty_rate,
+        "average_chunks": average_chunks,
+        "query_latency_ms": query_latency_ms,
+        "parse_time_ms": parse_time_ms,
+        "benchmark_quality_score": benchmark_quality,
         "score": score,
     }
 
@@ -842,15 +888,17 @@ def render_profile_compare_markdown(report: Mapping[str, Any]) -> str:
     lines = [
         "# RAGFlow Profile Compare Report",
         "",
-        "| rank | path | score | pass_rate | hit_rate | mrr | ndcg@k |",
-        "|---:|---|---:|---:|---:|---:|---:|",
+        "| rank | path | score | pass_rate | hit_rate | mrr | ndcg@k | empty_rate | latency_ms | parse_ms |",
+        "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for index, item in enumerate(report.get("candidates", []), start=1):
         metrics = item.get("metrics", {})
         lines.append(
             f"| {index} | `{item.get('path')}` | {item.get('score', 0):.4f} | "
             f"{metrics.get('pass_rate', 0):.4f} | {metrics.get('hit_rate', 0):.4f} | "
-            f"{metrics.get('mrr', 0):.4f} | {metrics.get('ndcg_at_k', 0):.4f} |"
+            f"{metrics.get('mrr', 0):.4f} | {metrics.get('ndcg_at_k', 0):.4f} | "
+            f"{metrics.get('empty_result_rate', 0):.4f} | {metrics.get('query_latency_ms', 0):.1f} | "
+            f"{metrics.get('parse_time_ms', 0):.1f} |"
         )
     lines.append("")
     return "\n".join(lines)

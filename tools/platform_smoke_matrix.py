@@ -553,6 +553,50 @@ def _write_benchmark_report(path: Path, *, mrr: float) -> Path:
     return path
 
 
+def _write_suppression_input(path: Path) -> Path:
+    path.write_text(
+        json.dumps(
+            {
+                "ok": False,
+                "level": "benchmark",
+                "dataset": {"id": "ds-platform-smoke", "name": "kb:platform-smoke"},
+                "cases": [
+                    {
+                        "id": "q1",
+                        "question": "Where is the known term?",
+                        "passed": False,
+                        "document_hits": ["platform-smoke.md"],
+                        "metadata": {"type": "fact", "allowed_tags": ["example-tag"]},
+                        "top_chunks": [
+                            {
+                                "content": "Known bridge term appears in an unrelated finance source.",
+                                "document_name": "finance.md",
+                                "document_id": "doc-finance",
+                                "chunk_id": "wrong-1",
+                                "raw": {
+                                    "content_with_weight": "Known bridge term appears in an unrelated finance source.",
+                                    "docnm_kwd": "finance.md",
+                                    "doc_id": "doc-finance",
+                                    "id": "wrong-1",
+                                    "tags": ["example-tag", "finance"],
+                                },
+                            }
+                        ],
+                    }
+                ],
+                "benchmark": {
+                    "metrics": {"wrong_document_rate": 1.0, "tag_pollution_rate": 1.0},
+                    "per_query": [{"id": "q1", "wrong_document_count": 1, "unexpected_tag_count": 1}],
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def _runtime_args(profile: PlatformProfile) -> list[str]:
     if profile.config_mode == "env":
         return []
@@ -1177,6 +1221,30 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         segment_metadata_result,
         required_stdout='"schema": "ragflow_segment_metadata_report_v1"',
     )
+    suppression_input = _write_suppression_input(artifacts_dir / "suppression_input.json")
+    suppression_report = artifacts_dir / "suppression_report.json"
+    suppression_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "suppression-report",
+            "--report",
+            str(suppression_input),
+            "--tagset",
+            str(tagset_template),
+            "--report-json",
+            str(suppression_report),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb suppression-report",
+        suppression_result,
+        required_stdout='"schema": "ragflow_suppression_report_v1"',
+    )
     benchmark_preflight_result = _run_command(
         [
             sys.executable,
@@ -1510,6 +1578,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "qa.generated.json",
         artifacts_dir / "qa_evidence_map.json",
         artifacts_dir / "segment_metadata_report.json",
+        artifacts_dir / "suppression_report.json",
         artifacts_dir / "optimization_plan.json",
         artifacts_dir / "optimization_cleanup_plan.json",
         artifacts_dir / "optimization_cleanup_plan.md",

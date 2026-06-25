@@ -872,16 +872,16 @@ Tasks:
 - [x] Support experiments for `auto_keywords`, `auto_questions`, and parser enrichment options.
 - [x] Support user-provided `tag_kb_ids` experiments without shipping private tag IDs.
 - [x] Support retrieval parameter sweeps for `vsw`, `threshold`, `top_k`, and rerank flags.
-- [ ] Include query latency, parse time, empty-result rate, and benchmark quality metrics in reports.
+- [x] Include query latency, parse time, empty-result rate, and benchmark quality metrics in reports.
 - [x] Warn when an experiment enables slow or LLM-backed RAGFlow paths.
-- [ ] Add tag pollution rate, wrong-document rate, expected-tag hit rate, and unexpected-tag hit rate metrics.
-- [ ] Add `ragflow-kb-build suppression-report` for bridge-term, source, and tag suppression candidates.
-- [ ] Add risk scoring for low-risk suppression and high-risk allowed-tag review candidates.
+- [x] Add tag pollution rate, wrong-document rate, expected-tag hit rate, and unexpected-tag hit rate metrics.
+- [x] Add `ragflow-kb-build suppression-report` for bridge-term, source, and tag suppression candidates.
+- [x] Add risk scoring for low-risk suppression and high-risk allowed-tag review candidates.
 - [ ] Add `ragflow-query pollution-report` for likely BM25 translation/keyword pollution symptoms.
 - [ ] Add `ragflow-query rerank-ab` to compare RAGFlow ordering with optional external reranker output.
-- [ ] Keep suppression candidates as review artifacts, not automatic deletes or hidden filters.
+- [x] Keep suppression candidates as review artifacts, not automatic deletes or hidden filters.
 - [x] Integrate enrichment experiments into `optimize` or add `profile experiment`.
-- [ ] Add no-network tests with fake reports.
+- [x] Add no-network tests with fake reports.
 - [ ] Add live tests only for disposable KBs and explicit user approval.
 
 Exit criteria:

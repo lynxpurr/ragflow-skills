@@ -8,7 +8,9 @@ from pathlib import Path
 from ragflow_skill_runtime.validation import (
     BenchmarkGate,
     CHUNK_SNAPSHOT_SCHEMA,
+    ValidationCaseResult,
     ValidationQuery,
+    ValidationReport,
     attach_benchmark_evaluation,
     evaluate_query_result,
     load_benchmark_gate,
@@ -95,6 +97,41 @@ class ValidationTests(unittest.TestCase):
         self.assertTrue(report.ok)
         self.assertEqual(report.metrics()["pass_rate"], 1.0)
         self.assertIn("q1", render_markdown_report(report))
+
+    def test_validation_report_raw_chunks_are_opt_in(self) -> None:
+        chunks = normalize_retrieval_response(
+            {
+                "data": {
+                    "chunks": [
+                        {
+                            "content_with_weight": "Known answer with policy tag.",
+                            "docnm_kwd": "source.md",
+                            "id": "chunk-a",
+                            "tags": ["policy"],
+                        }
+                    ]
+                }
+            }
+        )
+        report = ValidationReport(
+            level="regression",
+            dataset_id="ds-1",
+            dataset_name="kb:test",
+            cases=[
+                ValidationCaseResult(
+                    query=ValidationQuery(id="q1", question="Known?"),
+                    passed=True,
+                    chunk_count=1,
+                    chunks=chunks,
+                )
+            ],
+        )
+
+        default_payload = report.to_dict()
+        raw_payload = report.to_dict(include_raw=True)
+
+        self.assertNotIn("raw", default_payload["cases"][0]["top_chunks"][0])
+        self.assertEqual(raw_payload["cases"][0]["top_chunks"][0]["raw"]["tags"], ["policy"])
 
     def test_load_benchmark_qrels_from_explicit_list(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -249,6 +286,76 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(benchmark["metrics"]["expected_chunk_hit_rate"], 1.0)
         self.assertEqual(benchmark["per_query"][0]["matched_expected_chunks"], 1)
         self.assertTrue(benchmark["gate"]["ok"])
+
+    def test_benchmark_reports_pollution_and_tag_metrics(self) -> None:
+        chunks = normalize_retrieval_response(
+            {
+                "data": {
+                    "chunks": [
+                        {
+                            "content": "Expected evidence body",
+                            "document_name": "source.md",
+                            "tags": ["policy"],
+                        },
+                        {
+                            "content": "Unrelated evidence body",
+                            "document_name": "other.md",
+                            "metadata": {"tags": ["finance"]},
+                        },
+                    ]
+                }
+            }
+        )
+        report = run_retrieval_validation(
+            FakeValidationClient(),
+            level="benchmark",
+            dataset_id="ds-1",
+            dataset_name="kb:test",
+            queries=[
+                ValidationQuery(
+                    id="q1",
+                    question="Known",
+                    expected_documents=["source.md"],
+                    metadata={"type": "fact", "expected_tags": ["policy"], "allowed_tags": ["policy"]},
+                )
+            ],
+            top_k=2,
+        )
+        report = type(report)(
+            level=report.level,
+            dataset_id=report.dataset_id,
+            dataset_name=report.dataset_name,
+            cases=[
+                type(report.cases[0])(
+                    query=report.cases[0].query,
+                    passed=True,
+                    chunk_count=len(chunks),
+                    chunks=chunks,
+                )
+            ],
+        )
+
+        benchmarked = attach_benchmark_evaluation(
+            report,
+            qrels={"q1": load_benchmark_qrels_dict_item("source.md")},
+            cutoff=2,
+        )
+        benchmark = benchmarked.to_dict()["benchmark"]
+        metrics = benchmark["metrics"]
+        per_query = benchmark["per_query"][0]
+        markdown = render_markdown_report(benchmarked)
+
+        self.assertEqual(metrics["wrong_document_rate"], 0.5)
+        self.assertEqual(metrics["tag_pollution_rate"], 0.5)
+        self.assertEqual(metrics["expected_tag_hit_rate"], 1.0)
+        self.assertEqual(metrics["unexpected_tag_hit_rate"], 1.0)
+        self.assertEqual(metrics["wrong_document_count"], 1)
+        self.assertEqual(metrics["polluted_tagged_chunk_count"], 1)
+        self.assertEqual(metrics["unexpected_tag_count"], 1)
+        self.assertEqual(per_query["wrong_document_count"], 1)
+        self.assertEqual(per_query["unexpected_tag_count"], 1)
+        self.assertIn("Wrong-document rate", markdown)
+        self.assertIn("Tag pollution rate", markdown)
 
     def test_benchmark_gate_failure_marks_report_failed(self) -> None:
         report = run_retrieval_validation(

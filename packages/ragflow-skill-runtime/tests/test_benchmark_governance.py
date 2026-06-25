@@ -18,6 +18,7 @@ from ragflow_skill_runtime.benchmark_governance import (
     GROUNDED_QA_EVIDENCE_MAP_SCHEMA,
     GROUNDED_QA_GENERATE_REPORT_SCHEMA,
     GROUNDED_QA_VALIDATE_REPORT_SCHEMA,
+    SUPPRESSION_REPORT_SCHEMA,
     delta_benchmark_reports,
     gate_benchmark_report,
     generate_grounded_qa,
@@ -27,6 +28,8 @@ from ragflow_skill_runtime.benchmark_governance import (
     sample_benchmark_dataset,
     snapshot_chunks,
     summarize_benchmark_report,
+    render_suppression_report_markdown,
+    suppression_report_payload,
     trend_benchmark_reports,
     validate_grounded_qa,
 )
@@ -601,6 +604,83 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         }:
             self.assertIn(code, trend_codes)
             self.assertIn(code, delta_codes)
+
+    def test_suppression_report_identifies_pollution_candidates(self) -> None:
+        report = {
+            "ok": False,
+            "level": "benchmark",
+            "dataset": {"id": "ds-1", "name": "kb:test"},
+            "cases": [
+                {
+                    "id": "q1",
+                    "question": "What is the payroll retention policy?",
+                    "passed": False,
+                    "document_hits": ["expected.md"],
+                    "metadata": {"type": "fact", "allowed_tags": ["policy"]},
+                    "top_chunks": [
+                        {
+                            "content": "Payroll retention policy expected evidence.",
+                            "document_name": "expected.md",
+                            "chunk_id": "expected-1",
+                            "raw": {
+                                "content_with_weight": "Payroll retention policy expected evidence.",
+                                "docnm_kwd": "expected.md",
+                                "id": "expected-1",
+                                "tags": ["policy"],
+                            },
+                        },
+                        {
+                            "content": "Payroll bridge term appears in a finance benefits source.",
+                            "document_name": "finance.md",
+                            "document_id": "doc-finance",
+                            "chunk_id": "wrong-1",
+                            "raw": {
+                                "content_with_weight": "Payroll bridge term appears in a finance benefits source.",
+                                "docnm_kwd": "finance.md",
+                                "doc_id": "doc-finance",
+                                "id": "wrong-1",
+                                "tags": ["policy", "finance"],
+                            },
+                        },
+                    ],
+                }
+            ],
+            "benchmark": {
+                "metrics": {
+                    "wrong_document_rate": 0.5,
+                    "tag_pollution_rate": 0.5,
+                    "unexpected_tag_hit_rate": 1.0,
+                },
+                "per_query": [
+                    {
+                        "id": "q1",
+                        "wrong_document_count": 1,
+                        "tag_pollution_rate": 0.5,
+                        "unexpected_tag_count": 1,
+                    }
+                ],
+                "query_type_breakdown": {"fact": {"query_count": 1, "wrong_document_rate": 0.5}},
+            },
+        }
+
+        suppression = suppression_report_payload(report)
+        candidates_by_kind = {candidate["kind"]: candidate for candidate in suppression["candidates"]}
+        markdown = render_suppression_report_markdown(suppression)
+
+        self.assertEqual(suppression["schema"], SUPPRESSION_REPORT_SCHEMA)
+        self.assertTrue(suppression["ok"], suppression["issues"])
+        self.assertEqual(suppression["summary"]["polluted_case_count"], 1)
+        self.assertGreater(suppression["summary"]["raw_chunk_coverage"], 0)
+        self.assertIn("bridge_term", candidates_by_kind)
+        self.assertIn("source_boundary", candidates_by_kind)
+        self.assertIn("allowed_tag_review", candidates_by_kind)
+        self.assertIn("unexpected_tag", candidates_by_kind)
+        self.assertEqual(candidates_by_kind["bridge_term"]["risk"], "low")
+        self.assertEqual(candidates_by_kind["allowed_tag_review"]["risk"], "high")
+        self.assertIsInstance(candidates_by_kind["unexpected_tag"]["risk_score"], float)
+        self.assertIn("finance.md", candidates_by_kind["source_boundary"]["evidence"]["document_names"])
+        self.assertIn("RAGFlow Suppression Report", markdown)
+        self.assertIn("Bridge Terms", markdown)
 
 
 if __name__ == "__main__":

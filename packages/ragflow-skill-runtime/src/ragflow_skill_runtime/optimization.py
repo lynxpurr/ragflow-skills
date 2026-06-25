@@ -731,10 +731,32 @@ def _metric_value(metrics: Mapping[str, Any], key: str) -> float:
     return float(value)
 
 
+def _metric_first(mappings: list[Mapping[str, Any]], *keys: str) -> float:
+    for mapping in mappings:
+        for key in keys:
+            value = mapping.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                return float(value)
+    return 0.0
+
+
+def _empty_result_rate(top_metrics: Mapping[str, Any], benchmark_metrics: Mapping[str, Any]) -> float:
+    direct = _metric_first([benchmark_metrics, top_metrics], "empty_result_rate", "empty_rate")
+    if direct:
+        return direct
+    empty_results = _metric_first([top_metrics], "empty_results")
+    total = _metric_first([top_metrics], "total", "query_count")
+    return empty_results / total if total > 0 else 0.0
+
+
 def _validation_report_metrics(report: Mapping[str, Any]) -> dict[str, float]:
     top_metrics = report.get("metrics") if isinstance(report.get("metrics"), Mapping) else {}
     benchmark = report.get("benchmark") if isinstance(report.get("benchmark"), Mapping) else {}
     benchmark_metrics = benchmark.get("metrics") if isinstance(benchmark.get("metrics"), Mapping) else {}
+    metadata = report.get("metadata") if isinstance(report.get("metadata"), Mapping) else {}
+    timing = report.get("timing") if isinstance(report.get("timing"), Mapping) else {}
     metrics = {
         "pass_rate": _metric_value(top_metrics, "pass_rate"),
         "hit_rate": _metric_value(benchmark_metrics, "hit_rate"),
@@ -745,8 +767,25 @@ def _validation_report_metrics(report: Mapping[str, Any]) -> dict[str, float]:
         "map_at_k": _metric_value(benchmark_metrics, "map_at_k"),
         "strict_chunk_recall_at_k": _metric_value(benchmark_metrics, "strict_chunk_recall_at_k"),
         "expected_chunk_hit_rate": _metric_value(benchmark_metrics, "expected_chunk_hit_rate"),
-        "empty_result_rate": _metric_value(benchmark_metrics, "empty_result_rate"),
+        "empty_result_rate": _empty_result_rate(top_metrics, benchmark_metrics),
+        "average_chunks": _metric_first([top_metrics], "average_chunks", "avg_chunks"),
+        "query_latency_ms": _metric_first(
+            [benchmark_metrics, top_metrics, timing, metadata],
+            "query_latency_ms",
+            "average_query_latency_ms",
+            "avg_query_latency_ms",
+            "latency_ms",
+            "duration_ms",
+        ),
+        "parse_time_ms": _metric_first(
+            [top_metrics, timing, metadata],
+            "parse_time_ms",
+            "parse_duration_ms",
+            "average_parse_time_ms",
+            "avg_parse_time_ms",
+        ),
     }
+    metrics["benchmark_quality_score"] = (metrics["hit_rate"] + metrics["mrr"] + metrics["ndcg_at_k"]) / 3
     metrics["score"] = (
         (metrics["pass_rate"] * 0.30)
         + (metrics["hit_rate"] * 0.20)
@@ -1350,8 +1389,8 @@ def render_best_profile_markdown(results: Mapping[str, Any]) -> str:
             "",
             "## Ranking",
             "",
-            "| rank | profile | score | hit_rate | mrr | ndcg@k | strict_chunk_recall | empty_rate |",
-            "|---:|---|---:|---:|---:|---:|---:|---:|",
+            "| rank | profile | score | hit_rate | mrr | ndcg@k | strict_chunk_recall | empty_rate | latency_ms | parse_ms |",
+            "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for candidate in results.get("candidates", []) if isinstance(results.get("candidates"), list) else []:
@@ -1362,7 +1401,8 @@ def render_best_profile_markdown(results: Mapping[str, Any]) -> str:
             f"| {candidate.get('rank', 0)} | `{candidate.get('profile_id')}` | {metrics.get('score', 0.0):.4f} | "
             f"{metrics.get('hit_rate', 0.0):.4f} | {metrics.get('mrr', 0.0):.4f} | "
             f"{metrics.get('ndcg_at_k', 0.0):.4f} | {metrics.get('strict_chunk_recall_at_k', 0.0):.4f} | "
-            f"{metrics.get('empty_result_rate', 0.0):.4f} |"
+            f"{metrics.get('empty_result_rate', 0.0):.4f} | {metrics.get('query_latency_ms', 0.0):.1f} | "
+            f"{metrics.get('parse_time_ms', 0.0):.1f} |"
         )
     lines.extend(["", "## Tradeoffs", ""])
     for candidate in results.get("candidates", []) if isinstance(results.get("candidates"), list) else []:

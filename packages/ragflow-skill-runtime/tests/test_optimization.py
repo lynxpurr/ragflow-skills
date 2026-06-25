@@ -39,14 +39,26 @@ def _write_profile(path: Path, profile_id: str, chunk_size: int = 512) -> None:
     )
 
 
-def _write_validation_report(path: Path, *, mrr: float, hit_rate: float = 1.0) -> None:
+def _write_validation_report(
+    path: Path,
+    *,
+    mrr: float,
+    hit_rate: float = 1.0,
+    query_latency_ms: float = 0.0,
+    parse_time_ms: float = 0.0,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
             {
                 "ok": True,
                 "level": "benchmark",
-                "metrics": {"pass_rate": hit_rate},
+                "metrics": {
+                    "pass_rate": hit_rate,
+                    "average_chunks": 3.0,
+                    "query_latency_ms": query_latency_ms,
+                    "parse_time_ms": parse_time_ms,
+                },
                 "dataset": {"id": "ds-test", "name": path.parent.name},
                 "benchmark": {
                     "metrics": {
@@ -177,6 +189,8 @@ class OptimizationTests(unittest.TestCase):
                     report_path,
                     mrr=0.95 if candidate["profile_id"] == "strong-profile" else 0.4,
                     hit_rate=1.0 if candidate["profile_id"] == "strong-profile" else 0.7,
+                    query_latency_ms=80.0 if candidate["profile_id"] == "strong-profile" else 150.0,
+                    parse_time_ms=120.0 if candidate["profile_id"] == "strong-profile" else 240.0,
                 )
 
             results = summarize_optimization_results(plan_path=plan_path)
@@ -184,7 +198,11 @@ class OptimizationTests(unittest.TestCase):
         self.assertEqual(results["schema"], PROFILE_EXPERIMENT_RESULTS_SCHEMA)
         self.assertTrue(results["ok"], results["issues"])
         self.assertEqual(results["recommendation"]["profile_id"], "strong-profile")
-        self.assertIn("RAGFlow Best Profile Report", render_best_profile_markdown(results))
+        self.assertEqual(results["winner"]["metrics"]["query_latency_ms"], 80.0)
+        self.assertEqual(results["winner"]["metrics"]["parse_time_ms"], 120.0)
+        rendered = render_best_profile_markdown(results)
+        self.assertIn("RAGFlow Best Profile Report", rendered)
+        self.assertIn("latency_ms", rendered)
 
     def test_summarize_optimization_results_generates_diagnostics_for_zero_chunks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

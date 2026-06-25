@@ -471,6 +471,10 @@ user-owned `tag_kb_ids` as local experiment metadata. The report warns about slo
 LLM-backed paths such as auto keyword/question enrichment, rerank, high `top_k`, and low
 thresholds. It does not build KBs, run validation, call rerankers, or ship private tag
 IDs in public fixtures.
+MVP profile comparison and optimization summary reports also surface query latency, parse
+time, empty-result rate, average chunk count, and benchmark quality scores when those
+fields are present in existing validation or benchmark reports. They do not collect live
+timing data on their own.
 
 Enrichment reports should also call out pollution risk:
 
@@ -479,6 +483,11 @@ Enrichment reports should also call out pollution risk:
 - bridge terms that repeatedly pull in unrelated chunks;
 - source documents that dominate despite weak relevance;
 - expected tag hit rate versus unexpected tag hit rate.
+
+MVP benchmark validation derives wrong-document, tag pollution, expected-tag hit,
+and unexpected-tag hit rates from qrels, query/qrel metadata, and retrieved chunk
+metadata already present in validation reports. The metrics are offline diagnostics
+and do not create, delete, or mutate RAGFlow tags or documents.
 
 ## Feature Design 7: Multi-KB Fusion And RRF
 
@@ -768,6 +777,15 @@ Capabilities:
 - identify high-risk allowed-tag or source-boundary candidates for human review;
 - report unexpected tag/source hotspots;
 - keep suppression as a recommendation report, not an automatic content mutation.
+
+MVP `ragflow-kb-build suppression-report` reads existing validation or benchmark
+validation JSON reports offline. It uses benchmark pollution metrics when present,
+compares polluted query terms with returned chunk terms, groups suspect source and tag
+hotspots, and emits review-only candidates with low-risk bridge-term and high-risk
+allowed-tag/source-boundary scoring. Tag localization can use raw retrieved chunk payloads
+from `validate.py --include-raw --max-report-chunks ...` and optional public tagset
+labels/aliases, but raw payloads remain opt-in and the report never deletes documents,
+edits tags, mutates RAGFlow, or installs hidden filters.
 
 Optional external rerankers must be configured by the host and treated as remote/local
 services, not bundled daemons.

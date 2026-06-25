@@ -789,6 +789,79 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("ragflow_benchmark_delta_report_v1", delta_result.stdout)
         self.assertIn("RAGFlow Benchmark Delta Report", delta_md_text)
 
+    def test_suppression_report_subcommand_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            validation_report = root / "validation_report.json"
+            report_json = root / "suppression_report.json"
+            report_md = root / "suppression_report.md"
+            validation_report.write_text(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "level": "benchmark",
+                        "dataset": {"id": "ds-1", "name": "kb:test"},
+                        "cases": [
+                            {
+                                "id": "q1",
+                                "question": "What is the payroll retention policy?",
+                                "passed": False,
+                                "document_hits": ["expected.md"],
+                                "metadata": {"type": "fact", "allowed_tags": ["policy"]},
+                                "top_chunks": [
+                                    {
+                                        "content": "Payroll bridge term appears in a finance benefits source.",
+                                        "document_name": "finance.md",
+                                        "document_id": "doc-finance",
+                                        "chunk_id": "wrong-1",
+                                        "raw": {
+                                            "content_with_weight": "Payroll bridge term appears in a finance benefits source.",
+                                            "docnm_kwd": "finance.md",
+                                            "doc_id": "doc-finance",
+                                            "id": "wrong-1",
+                                            "tags": ["policy", "finance"],
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                        "benchmark": {
+                            "metrics": {"wrong_document_rate": 1.0, "tag_pollution_rate": 1.0},
+                            "per_query": [{"id": "q1", "wrong_document_count": 1, "unexpected_tag_count": 1}],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "suppression-report",
+                    "--report",
+                    str(validation_report),
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(report_json.read_text(encoding="utf-8")) if report_json.exists() else {}
+            report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("ragflow_suppression_report_v1", result.stdout)
+        self.assertEqual(payload["schema"], "ragflow_suppression_report_v1")
+        self.assertGreaterEqual(payload["summary"]["candidate_count"], 4)
+        self.assertIn("RAGFlow Suppression Report", report_md_text)
+        self.assertIn("Bridge Terms", report_md_text)
+
     def test_qa_validate_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -799,6 +799,9 @@ def _run_no_network_checks(
     benchmark_report_json = work_root / "benchmark_report.json"
     benchmark_report_md = work_root / "benchmark_report.md"
     baseline_benchmark_report_json = work_root / "baseline_benchmark_report.json"
+    suppression_input_json = work_root / "suppression_input.json"
+    suppression_report_json = work_root / "suppression_report.json"
+    suppression_report_md = work_root / "suppression_report.md"
     benchmark_manifest.write_text(
         json.dumps(
             {
@@ -910,6 +913,44 @@ def _run_no_network_checks(
         ),
         encoding="utf-8",
     )
+    suppression_input_json.write_text(
+        json.dumps(
+            {
+                "ok": False,
+                "level": "benchmark",
+                "dataset": {"id": "ds-consumer-acceptance", "name": "kb:consumer-acceptance"},
+                "cases": [
+                    {
+                        "id": "q1",
+                        "question": "What can run without repository source context?",
+                        "passed": False,
+                        "document_hits": ["sample.md"],
+                        "metadata": {"type": "fact", "allowed_tags": ["example-tag"]},
+                        "top_chunks": [
+                            {
+                                "content": "Repository bridge term appears in an unrelated finance source.",
+                                "document_name": "finance.md",
+                                "document_id": "doc-finance",
+                                "chunk_id": "wrong-1",
+                                "raw": {
+                                    "content_with_weight": "Repository bridge term appears in an unrelated finance source.",
+                                    "docnm_kwd": "finance.md",
+                                    "doc_id": "doc-finance",
+                                    "id": "wrong-1",
+                                    "tags": ["example-tag", "finance"],
+                                },
+                            }
+                        ],
+                    }
+                ],
+                "benchmark": {
+                    "metrics": {"wrong_document_rate": 1.0, "tag_pollution_rate": 1.0},
+                    "per_query": [{"id": "q1", "wrong_document_count": 1, "unexpected_tag_count": 1}],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     benchmark_snapshot_result = _run_command(
         [
             python_executable,
@@ -986,6 +1027,34 @@ raise SystemExit(code)
         required_output='"benchmark"',
     )
     for path in (benchmark_report_json, benchmark_report_md):
+        if path.exists():
+            produced.append(path)
+
+    suppression_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "suppression-report",
+            "--report",
+            str(suppression_input_json),
+            "--tagset",
+            str(tagset_template),
+            "--report-json",
+            str(suppression_report_json),
+            "--report-md",
+            str(suppression_report_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build suppression-report",
+        suppression_result,
+        required_output='"schema": "ragflow_suppression_report_v1"',
+    )
+    for path in (suppression_report_json, suppression_report_md):
         if path.exists():
             produced.append(path)
 

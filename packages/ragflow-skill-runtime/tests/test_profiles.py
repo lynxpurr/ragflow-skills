@@ -134,8 +134,15 @@ class ProfileTests(unittest.TestCase):
                     {
                         "ok": True,
                         "level": "benchmark",
-                        "metrics": {"pass_rate": 0.8},
-                        "benchmark": {"metrics": {"hit_rate": 0.5, "mrr": 0.3, "ndcg_at_k": 0.4}},
+                        "metrics": {
+                            "pass_rate": 0.8,
+                            "empty_results": 1,
+                            "total": 2,
+                            "average_chunks": 1.5,
+                            "query_latency_ms": 180.0,
+                            "parse_time_ms": 250.0,
+                        },
+                        "benchmark": {"metrics": {"hit_rate": 0.5, "mrr": 0.3, "ndcg_at_k": 0.4, "empty_result_rate": 0.5}},
                     }
                 ),
                 encoding="utf-8",
@@ -145,8 +152,15 @@ class ProfileTests(unittest.TestCase):
                     {
                         "ok": True,
                         "level": "benchmark",
-                        "metrics": {"pass_rate": 1.0},
-                        "benchmark": {"metrics": {"hit_rate": 1.0, "mrr": 0.9, "ndcg_at_k": 0.95}},
+                        "metrics": {
+                            "pass_rate": 1.0,
+                            "empty_results": 0,
+                            "total": 2,
+                            "average_chunks": 3.0,
+                            "query_latency_ms": 90.0,
+                            "parse_time_ms": 125.0,
+                        },
+                        "benchmark": {"metrics": {"hit_rate": 1.0, "mrr": 0.9, "ndcg_at_k": 0.95, "empty_result_rate": 0.0}},
                     }
                 ),
                 encoding="utf-8",
@@ -155,7 +169,12 @@ class ProfileTests(unittest.TestCase):
             report = compare_validation_reports([weak, strong])
 
         self.assertEqual(report["winner"]["path"], str(strong))
-        self.assertIn("Profile Compare", render_profile_compare_markdown(report))
+        self.assertEqual(report["winner"]["metrics"]["empty_result_rate"], 0.0)
+        self.assertEqual(report["winner"]["metrics"]["query_latency_ms"], 90.0)
+        self.assertEqual(report["winner"]["metrics"]["parse_time_ms"], 125.0)
+        rendered = render_profile_compare_markdown(report)
+        self.assertIn("Profile Compare", rendered)
+        self.assertIn("latency_ms", rendered)
 
     def test_plan_enrichment_experiments_expands_matrix(self) -> None:
         base = ChunkProfile.from_dict(

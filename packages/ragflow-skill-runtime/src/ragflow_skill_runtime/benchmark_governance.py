@@ -26,6 +26,8 @@ from .validation import (
     load_validation_queries,
 )
 from .retrieval import CHUNK_HASH_ALGORITHM, NormalizedChunk, normalize_chunk, normalize_retrieval_response, stable_chunk_hash
+from .handoff import CJK_PHRASE_RE, STOPWORDS, WORD_RE
+from .metadata_governance import lint_tagset_file, tagset_report_file
 
 
 BENCHMARK_MANIFEST_SCHEMA = "ragflow_benchmark_manifest_v1"
@@ -43,7 +45,42 @@ BENCHMARK_SUMMARY_REPORT_SCHEMA = "ragflow_benchmark_summary_report_v1"
 BENCHMARK_GATE_REPORT_SCHEMA = "ragflow_benchmark_gate_report_v1"
 BENCHMARK_TREND_REPORT_SCHEMA = "ragflow_benchmark_trend_report_v1"
 BENCHMARK_DELTA_REPORT_SCHEMA = "ragflow_benchmark_delta_report_v1"
+SUPPRESSION_REPORT_SCHEMA = "ragflow_suppression_report_v1"
 CHUNK_SNAPSHOT_REPORT_SCHEMA = "ragflow_chunk_snapshot_report_v1"
+_SUPPRESSION_STOPWORDS = STOPWORDS | {
+    "appear",
+    "appears",
+    "being",
+    "can",
+    "chunk",
+    "chunks",
+    "document",
+    "documents",
+    "does",
+    "doing",
+    "doesn",
+    "example",
+    "include",
+    "includes",
+    "issue",
+    "issues",
+    "query",
+    "queries",
+    "result",
+    "results",
+    "retrieval",
+    "source",
+    "sources",
+    "the",
+    "this",
+    "those",
+    "what",
+    "when",
+    "where",
+    "which",
+    "why",
+    "wrong",
+}
 
 
 class BenchmarkGovernanceError(RuntimeError):
@@ -2190,6 +2227,810 @@ def delta_benchmark_reports(
         },
         "quality_hints": _dedupe_hints([*_quality_hints(current_metrics), *_regression_hints(deltas)]),
     }
+
+
+def _suppression_string_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    if isinstance(value, Mapping):
+        for key in ("name", "tag", "tag_name", "label", "value", "id", "tag_id"):
+            if key in value:
+                values = _suppression_string_values(value[key])
+                if values:
+                    return values
+        return []
+    if isinstance(value, (list, tuple, set)):
+        values: list[str] = []
+        for item in value:
+            values.extend(_suppression_string_values(item))
+        return values
+    return []
+
+
+def _suppression_terms_from_text(text: str | None) -> set[str]:
+    if not text:
+        return set()
+    terms: set[str] = set()
+    for word in WORD_RE.findall(text):
+        normalized = word.strip().casefold()
+        if normalized and normalized not in _SUPPRESSION_STOPWORDS:
+            terms.add(normalized)
+    for phrase in CJK_PHRASE_RE.findall(text):
+        normalized = phrase.strip()
+        if len(normalized) >= 2:
+            terms.add(normalized)
+    return terms
+
+
+def _suppression_terms_from_value(value: Any) -> set[str]:
+    terms: set[str] = set()
+    for item in _suppression_string_values(value):
+        terms.update(_suppression_terms_from_text(item))
+    return terms
+
+
+def _suppression_query_terms(case: Mapping[str, Any]) -> set[str]:
+    terms = _suppression_terms_from_text(_clean_string(case.get("question")))
+    metadata = case.get("metadata")
+    if isinstance(metadata, Mapping):
+        for key in ("topic", "domain", "module", "summary", "description", "doc_type", "audience", "locale", "title"):
+            terms.update(_suppression_terms_from_value(metadata.get(key)))
+        terms.update(_suppression_terms_from_value(metadata.get("entities")))
+    return terms
+
+
+def _suppression_tag_scope(
+    metadata: Mapping[str, Any] | None,
+    *,
+    tag_lookup: Mapping[str, Mapping[str, Any]] | None = None,
+) -> set[str]:
+    if not isinstance(metadata, Mapping):
+        return set()
+    scope: set[str] = set()
+    for key in ("allowed_tags", "allow_tags", "expected_tags", "required_tags", "must_have_tags", "tags", "tag", "tag_ids", "tag_id"):
+        for value in _suppression_string_values(metadata.get(key)):
+            normalized, _entry = _suppression_canonical_tag(value, tag_lookup=tag_lookup)
+            if normalized:
+                scope.add(normalized)
+    return scope
+
+
+def _suppression_tag_lookup(tagset_path: str | Path | None) -> tuple[dict[str, dict[str, Any]], dict[str, Any] | None]:
+    if not tagset_path:
+        return {}, None
+    lint_report = lint_tagset_file(tagset_path)
+    normalized = lint_report.get("normalized_preview", {})
+    tags = normalized.get("tags", []) if isinstance(normalized, Mapping) else []
+    lookup: dict[str, dict[str, Any]] = {}
+    for item in tags:
+        if not isinstance(item, Mapping):
+            continue
+        name = _clean_string(item.get("name"))
+        if not name:
+            continue
+        entry = {
+            "name": name,
+            "label": _clean_string(item.get("label")) or name,
+            "description": _clean_string(item.get("description")) or "",
+            "aliases": sorted({alias.casefold() for alias in _suppression_string_values(item.get("aliases")) if alias.strip()}),
+        }
+        lookup[name.casefold()] = entry
+        for alias in entry["aliases"]:
+            lookup[alias] = entry
+    return lookup, tagset_report_file(tagset_path)
+
+
+def _suppression_canonical_tag(value: str, tag_lookup: Mapping[str, Mapping[str, Any]] | None = None) -> tuple[str, dict[str, Any] | None]:
+    normalized = value.strip().casefold()
+    if not normalized:
+        return "", None
+    entry = tag_lookup.get(normalized) if tag_lookup else None
+    if entry:
+        canonical = _clean_string(entry.get("name")) or normalized
+        return canonical.casefold(), dict(entry)
+    return normalized, None
+
+
+def _suppression_chunk_payload(chunk: Mapping[str, Any]) -> Mapping[str, Any]:
+    raw = chunk.get("raw")
+    return raw if isinstance(raw, Mapping) else chunk
+
+
+def _suppression_chunk_string(chunk: Mapping[str, Any], *keys: str) -> str | None:
+    payload = _suppression_chunk_payload(chunk)
+    for key in keys:
+        value = _clean_string(chunk.get(key))
+        if value:
+            return value
+        value = _clean_string(payload.get(key))
+        if value:
+            return value
+        metadata = payload.get("metadata")
+        if isinstance(metadata, Mapping):
+            value = _clean_string(metadata.get(key))
+            if value:
+                return value
+    return None
+
+
+def _suppression_chunk_terms(chunk: Mapping[str, Any]) -> set[str]:
+    payload = _suppression_chunk_payload(chunk)
+    terms: set[str] = set()
+    content = _suppression_chunk_string(chunk, "content", "content_preview", "content_with_weight", "text", "page_content")
+    if content:
+        terms.update(_suppression_terms_from_text(content))
+    for key in ("document_name", "document_id", "chunk_id", "title", "heading", "section_title"):
+        terms.update(_suppression_terms_from_value(_suppression_chunk_string(chunk, key)))
+    terms.update(_suppression_terms_from_value(chunk.get("important_keywords")))
+    terms.update(_suppression_terms_from_value(payload.get("important_keywords")))
+    metadata = payload.get("metadata")
+    if isinstance(metadata, Mapping):
+        for key in ("title", "heading", "section_title", "document_title"):
+            terms.update(_suppression_terms_from_value(metadata.get(key)))
+    return terms
+
+
+def _suppression_chunk_tags(chunk: Mapping[str, Any], *, tag_lookup: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, dict[str, Any] | None]:
+    payload = _suppression_chunk_payload(chunk)
+    tags: dict[str, dict[str, Any] | None] = {}
+    for source in (chunk, payload):
+        if not isinstance(source, Mapping):
+            continue
+        for key in ("tags", "tag", "tag_names", "tag_name", "tag_ids", "tag_id"):
+            for raw_tag in _suppression_string_values(source.get(key)):
+                canonical, entry = _suppression_canonical_tag(raw_tag, tag_lookup=tag_lookup)
+                if canonical:
+                    tags[canonical] = entry
+        metadata = source.get("metadata")
+        if isinstance(metadata, Mapping):
+            for key in ("tags", "tag", "tag_names", "tag_name", "tag_ids", "tag_id"):
+                for raw_tag in _suppression_string_values(metadata.get(key)):
+                    canonical, entry = _suppression_canonical_tag(raw_tag, tag_lookup=tag_lookup)
+                    if canonical:
+                        tags[canonical] = entry
+    return tags
+
+
+def _suppression_chunk_document_identity(chunk: Mapping[str, Any]) -> tuple[str | None, str | None, str | None]:
+    payload = _suppression_chunk_payload(chunk)
+    document_name = _suppression_chunk_string(chunk, "document_name", "docnm_kwd", "document_keyword", "doc_name", "source", "source_path", "path", "file", "filename")
+    document_id = _suppression_chunk_string(chunk, "document_id", "doc_id", "dataset_id", "kb_id")
+    chunk_id = _suppression_chunk_string(chunk, "chunk_id", "id")
+    if not document_name:
+        document_name = _suppression_chunk_string(payload, "document_name", "docnm_kwd", "document_keyword", "doc_name", "source", "source_path", "path", "file", "filename")
+    if not document_id:
+        document_id = _suppression_chunk_string(payload, "document_id", "doc_id", "dataset_id", "kb_id")
+    if not chunk_id:
+        chunk_id = _suppression_chunk_string(payload, "chunk_id", "id")
+    return document_name, document_id, chunk_id
+
+
+def _suppression_chunk_hash(chunk: Mapping[str, Any]) -> str:
+    payload = _suppression_chunk_payload(chunk)
+    return stable_chunk_hash(payload if payload is not chunk else chunk)
+
+
+def _suppression_chunk_snippet(chunk: Mapping[str, Any], limit: int = 160) -> str:
+    content = _suppression_chunk_string(chunk, "content", "content_preview", "content_with_weight", "text", "page_content") or ""
+    content = " ".join(content.split())
+    return content[:limit]
+
+
+def _suppression_case_polluted(case: Mapping[str, Any], benchmark_item: Mapping[str, Any] | None) -> bool:
+    if isinstance(benchmark_item, Mapping):
+        for key in ("wrong_document_rate", "tag_pollution_rate", "unexpected_tag_hit_rate"):
+            value = benchmark_item.get(key)
+            if isinstance(value, (int, float)) and float(value) > 0:
+                return True
+        for key in ("wrong_document_count", "tagged_chunk_count", "polluted_tagged_chunk_count", "unexpected_tag_count"):
+            value = benchmark_item.get(key)
+            if isinstance(value, int) and value > 0:
+                return True
+    return not bool(case.get("passed", True))
+
+
+def _suppression_case_document_hits(case: Mapping[str, Any]) -> set[str]:
+    hits: set[str] = set()
+    for value in _suppression_string_values(case.get("document_hits")):
+        normalized = value.strip().casefold()
+        if normalized:
+            hits.add(normalized)
+    return hits
+
+
+def _suppression_recommendation(kind: str, label: str) -> str:
+    if kind == "bridge_term":
+        return f"Review whether {label!r} should stay in the query rewrite or suppression path."
+    if kind == "source_boundary":
+        return "Review source boundaries or downranking; this source appears in polluted retrievals."
+    if kind == "allowed_tag_review":
+        return "Review the allowed-tag scope; this tag is still surfacing in polluted retrievals."
+    if kind == "unexpected_tag":
+        return "Review tag assignment and filters; this tag is outside the expected scope."
+    return "Review this candidate manually."
+
+
+def _suppression_risk(kind: str, *, polluted_query_count: int, polluted_chunk_count: int) -> tuple[str, float]:
+    base_map = {
+        "bridge_term": 0.25,
+        "source_boundary": 0.82,
+        "allowed_tag_review": 0.88,
+        "unexpected_tag": 0.93,
+    }
+    base = base_map.get(kind, 0.75)
+    risk_score = min(0.99, base + min(0.15, polluted_query_count * 0.03) + min(0.1, polluted_chunk_count * 0.02))
+    risk = "low" if kind == "bridge_term" else "high"
+    return risk, round(risk_score, 2)
+
+
+def _suppression_bucket(
+    buckets: dict[tuple[str, str], dict[str, Any]],
+    *,
+    kind: str,
+    key: str,
+    label: str,
+    recommendation: str,
+) -> dict[str, Any]:
+    bucket = buckets.setdefault(
+        (kind, key),
+        {
+            "kind": kind,
+            "key": key,
+            "label": label,
+            "recommendation": recommendation,
+            "score": 0.0,
+            "query_ids": set(),
+            "document_names": set(),
+            "document_ids": set(),
+            "tag_names": set(),
+            "tag_labels": set(),
+            "matched_terms": set(),
+            "chunk_ids": set(),
+            "examples": [],
+            "polluted_chunk_count": 0,
+            "raw_chunk_count": 0,
+        },
+    )
+    bucket["label"] = label or bucket["label"]
+    bucket["recommendation"] = recommendation or bucket["recommendation"]
+    return bucket
+
+
+def _suppression_bucket_add_example(
+    bucket: dict[str, Any],
+    *,
+    query_id: str,
+    document_name: str | None,
+    document_id: str | None,
+    chunk_id: str | None,
+    stable_hash: str,
+    snippet: str,
+    matched_terms: Iterable[str] = (),
+    raw_tags: Iterable[str] = (),
+    tag_label: str | None = None,
+) -> None:
+    if len(bucket["examples"]) >= 3:
+        return
+    example = {
+        "query_id": query_id,
+        "document_name": document_name,
+        "document_id": document_id,
+        "chunk_id": chunk_id,
+        "stable_hash": stable_hash,
+        "snippet": snippet,
+    }
+    matched = sorted({term for term in matched_terms if term})
+    if matched:
+        example["matched_terms"] = matched
+    tags = sorted({tag for tag in raw_tags if tag})
+    if tags:
+        example["raw_tags"] = tags
+    if tag_label:
+        example["tag_label"] = tag_label
+    bucket["examples"].append(example)
+
+
+def _suppression_bucket_touch(
+    bucket: dict[str, Any],
+    *,
+    query_id: str,
+    document_name: str | None,
+    document_id: str | None,
+    chunk_id: str | None,
+    stable_hash: str,
+    snippet: str,
+    matched_terms: Iterable[str] = (),
+    raw_tags: Iterable[str] = (),
+    tag_label: str | None = None,
+    raw_payload_present: bool = False,
+) -> None:
+    bucket["query_ids"].add(query_id)
+    if document_name:
+        bucket["document_names"].add(document_name)
+    if document_id:
+        bucket["document_ids"].add(document_id)
+    if chunk_id:
+        bucket["chunk_ids"].add(chunk_id)
+    if raw_payload_present:
+        bucket["raw_chunk_count"] += 1
+    matched = {term for term in matched_terms if term}
+    if matched:
+        bucket["matched_terms"].update(matched)
+    tags = {tag for tag in raw_tags if tag}
+    if tags:
+        bucket["tag_names"].update(tags)
+    if tag_label:
+        bucket["tag_labels"].add(tag_label)
+    bucket["polluted_chunk_count"] += 1
+    bucket["score"] += 1.0 + 0.5 * len(matched) + 0.25 * len(tags)
+    _suppression_bucket_add_example(
+        bucket,
+        query_id=query_id,
+        document_name=document_name,
+        document_id=document_id,
+        chunk_id=chunk_id,
+        stable_hash=stable_hash,
+        snippet=snippet,
+        matched_terms=matched,
+        raw_tags=tags,
+        tag_label=tag_label,
+    )
+
+
+def _suppression_bucket_to_candidate(bucket: Mapping[str, Any]) -> dict[str, Any]:
+    query_ids = sorted(bucket.get("query_ids", []))
+    document_names = sorted(bucket.get("document_names", []))
+    document_ids = sorted(bucket.get("document_ids", []))
+    tag_names = sorted(bucket.get("tag_names", []))
+    tag_labels = sorted(bucket.get("tag_labels", []))
+    matched_terms = sorted(bucket.get("matched_terms", []))
+    polluted_query_count = len(query_ids)
+    polluted_chunk_count = int(bucket.get("polluted_chunk_count", 0))
+    raw_chunk_count = int(bucket.get("raw_chunk_count", 0))
+    risk, risk_score = _suppression_risk(
+        str(bucket.get("kind", "")),
+        polluted_query_count=polluted_query_count,
+        polluted_chunk_count=polluted_chunk_count,
+    )
+    candidate = {
+        "id": f"{bucket.get('kind', 'candidate')}:{bucket.get('key', '')}",
+        "kind": bucket.get("kind"),
+        "label": bucket.get("label"),
+        "risk": risk,
+        "risk_score": risk_score,
+        "score": round(float(bucket.get("score", 0.0)), 4),
+        "recommendation": bucket.get("recommendation"),
+        "evidence": {
+            "query_ids": query_ids,
+            "document_names": document_names,
+            "document_ids": document_ids,
+            "tag_names": tag_names,
+            "tag_labels": tag_labels,
+            "matched_terms": matched_terms,
+            "polluted_query_count": polluted_query_count,
+            "polluted_chunk_count": polluted_chunk_count,
+            "raw_chunk_count": raw_chunk_count,
+            "examples": list(bucket.get("examples", [])),
+        },
+    }
+    if not candidate["evidence"]["document_ids"]:
+        candidate["evidence"].pop("document_ids")
+    if not candidate["evidence"]["tag_names"]:
+        candidate["evidence"].pop("tag_names")
+    if not candidate["evidence"]["tag_labels"]:
+        candidate["evidence"].pop("tag_labels")
+    if not candidate["evidence"]["matched_terms"]:
+        candidate["evidence"].pop("matched_terms")
+    if not candidate["evidence"]["examples"]:
+        candidate["evidence"].pop("examples")
+    return candidate
+
+
+def _suppression_hotspot(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    evidence = candidate.get("evidence", {}) if isinstance(candidate.get("evidence"), Mapping) else {}
+    hotspot = {
+        "id": candidate.get("id"),
+        "kind": candidate.get("kind"),
+        "label": candidate.get("label"),
+        "risk": candidate.get("risk"),
+        "risk_score": candidate.get("risk_score"),
+        "score": candidate.get("score"),
+        "polluted_query_count": evidence.get("polluted_query_count", 0),
+        "polluted_chunk_count": evidence.get("polluted_chunk_count", 0),
+    }
+    return hotspot
+
+
+def _suppression_top_candidates(candidates: list[dict[str, Any]], *, kind: str, limit: int = 5) -> list[dict[str, Any]]:
+    return [candidate for candidate in candidates if candidate.get("kind") == kind][:limit]
+
+
+def suppression_report_payload(
+    report: Mapping[str, Any],
+    *,
+    tagset_path: str | Path | None = None,
+    max_candidates: int = 20,
+) -> dict[str, Any]:
+    """Create a recommendation-only suppression report from a validation report."""
+
+    if not isinstance(report, Mapping):
+        raise BenchmarkGovernanceError("suppression report input must be a JSON object")
+    cases = report.get("cases")
+    if not isinstance(cases, list):
+        raise BenchmarkGovernanceError("suppression report requires a validation report with cases")
+
+    benchmark = report.get("benchmark")
+    benchmark_per_query = {}
+    benchmark_metrics: dict[str, float] = {}
+    query_type_breakdown: dict[str, Any] = {}
+    if isinstance(benchmark, Mapping):
+        benchmark_metrics = {
+            key: float(value)
+            for key, value in benchmark.get("metrics", {}).items()
+            if isinstance(value, (int, float))
+        }
+        per_query = benchmark.get("per_query")
+        if isinstance(per_query, list):
+            for item in per_query:
+                if isinstance(item, Mapping) and isinstance(item.get("id"), str):
+                    benchmark_per_query[str(item["id"])] = item
+        breakdown = benchmark.get("query_type_breakdown")
+        if isinstance(breakdown, Mapping):
+            query_type_breakdown = dict(breakdown)
+
+    tag_lookup, tagset_report = _suppression_tag_lookup(tagset_path)
+    issues: list[BenchmarkGovernanceIssue] = []
+    if tagset_report:
+        if not tagset_report.get("ok", True):
+            for raw_issue in tagset_report.get("issues", []):
+                if not isinstance(raw_issue, Mapping):
+                    continue
+                issues.append(
+                    BenchmarkGovernanceIssue(
+                        severity=str(raw_issue.get("severity", "warning")),
+                        code=f"tagset_{raw_issue.get('code', 'issue')}",
+                        message=str(raw_issue.get("message", "")),
+                        field=raw_issue.get("field") if isinstance(raw_issue.get("field"), str) else None,
+                        recommendation=raw_issue.get("recommendation") if isinstance(raw_issue.get("recommendation"), str) else None,
+                    )
+                )
+
+    buckets: dict[tuple[str, str], dict[str, Any]] = {}
+    polluted_case_count = 0
+    suspect_chunk_count = 0
+    raw_chunk_count = 0
+    top_chunk_count = 0
+
+    for index, case in enumerate(cases):
+        if not isinstance(case, Mapping):
+            continue
+        query_id = _clean_string(case.get("id")) or _clean_string(case.get("query_id")) or f"case-{index + 1}"
+        question = _clean_string(case.get("question")) or ""
+        metadata = case.get("metadata") if isinstance(case.get("metadata"), Mapping) else {}
+        benchmark_item = benchmark_per_query.get(query_id)
+        if not _suppression_case_polluted(case, benchmark_item):
+            continue
+        polluted_case_count += 1
+        query_terms = _suppression_query_terms(case)
+        document_hits = _suppression_case_document_hits(case)
+        raw_chunks = case.get("top_chunks")
+        if not isinstance(raw_chunks, list):
+            continue
+
+        suspect_chunks = []
+        for chunk in raw_chunks:
+            if not isinstance(chunk, Mapping):
+                continue
+            top_chunk_count += 1
+            document_name, document_id, _chunk_id = _suppression_chunk_document_identity(chunk)
+            chunk_key = {value.casefold() for value in (document_name, document_id) if value}
+            if document_hits and chunk_key and chunk_key.intersection(document_hits):
+                continue
+            suspect_chunks.append(chunk)
+
+        if not suspect_chunks and benchmark_item:
+            if any(
+                isinstance(benchmark_item.get(key), (int, float)) and float(benchmark_item.get(key)) > 0
+                for key in ("wrong_document_rate", "tag_pollution_rate", "unexpected_tag_hit_rate")
+            ) or any(
+                isinstance(benchmark_item.get(key), int) and int(benchmark_item.get(key)) > 0
+                for key in ("wrong_document_count", "tagged_chunk_count", "polluted_tagged_chunk_count", "unexpected_tag_count")
+            ):
+                suspect_chunks = [chunk for chunk in raw_chunks if isinstance(chunk, Mapping)]
+        elif not suspect_chunks:
+            suspect_chunks = [chunk for chunk in raw_chunks if isinstance(chunk, Mapping)]
+
+        for chunk in suspect_chunks:
+            document_name, document_id, chunk_id = _suppression_chunk_document_identity(chunk)
+            raw_payload = _suppression_chunk_payload(chunk)
+            stable_hash = _suppression_chunk_hash(chunk)
+            snippet = _suppression_chunk_snippet(chunk)
+            chunk_terms = _suppression_chunk_terms(chunk)
+            raw_tags = _suppression_chunk_tags(chunk, tag_lookup=tag_lookup)
+            raw_tag_names = set(raw_tags)
+            raw_chunk_present = isinstance(chunk.get("raw"), Mapping)
+            if raw_chunk_present:
+                raw_chunk_count += 1
+            suspect_chunk_count += 1
+
+            matched_terms = sorted(query_terms.intersection(chunk_terms))
+            for term in matched_terms:
+                bucket = _suppression_bucket(
+                    buckets,
+                    kind="bridge_term",
+                    key=term,
+                    label=term,
+                    recommendation=_suppression_recommendation("bridge_term", term),
+                )
+                _suppression_bucket_touch(
+                    bucket,
+                    query_id=query_id,
+                    document_name=document_name,
+                    document_id=document_id,
+                    chunk_id=chunk_id,
+                    stable_hash=stable_hash,
+                    snippet=snippet,
+                    matched_terms=[term],
+                    raw_tags=raw_tag_names,
+                    raw_payload_present=raw_chunk_present,
+                )
+
+            source_key = "|".join(part for part in (document_name, document_id) if part)
+            if source_key:
+                source_label = document_name or document_id or source_key
+                bucket = _suppression_bucket(
+                    buckets,
+                    kind="source_boundary",
+                    key=source_key.casefold(),
+                    label=source_label,
+                    recommendation=_suppression_recommendation("source_boundary", source_label),
+                )
+                _suppression_bucket_touch(
+                    bucket,
+                    query_id=query_id,
+                    document_name=document_name,
+                    document_id=document_id,
+                    chunk_id=chunk_id,
+                    stable_hash=stable_hash,
+                    snippet=snippet,
+                    raw_tags=raw_tag_names,
+                    raw_payload_present=raw_chunk_present,
+                )
+
+            scope_tags = _suppression_tag_scope(metadata, tag_lookup=tag_lookup)
+            if raw_tag_names:
+                for canonical_tag in sorted(raw_tag_names):
+                    tag_entry = raw_tags.get(canonical_tag)
+                    tag_label = _clean_string(tag_entry.get("label")) if isinstance(tag_entry, Mapping) else None
+                    display_label = tag_label or (tag_entry.get("name") if isinstance(tag_entry, Mapping) else None) or canonical_tag
+                    if canonical_tag in scope_tags:
+                        bucket = _suppression_bucket(
+                            buckets,
+                            kind="allowed_tag_review",
+                            key=canonical_tag,
+                            label=display_label,
+                            recommendation=_suppression_recommendation("allowed_tag_review", display_label),
+                        )
+                        _suppression_bucket_touch(
+                            bucket,
+                            query_id=query_id,
+                            document_name=document_name,
+                            document_id=document_id,
+                            chunk_id=chunk_id,
+                            stable_hash=stable_hash,
+                            snippet=snippet,
+                            raw_tags=[canonical_tag],
+                            tag_label=display_label,
+                            raw_payload_present=raw_chunk_present,
+                        )
+                    else:
+                        bucket = _suppression_bucket(
+                            buckets,
+                            kind="unexpected_tag",
+                            key=canonical_tag,
+                            label=display_label,
+                            recommendation=_suppression_recommendation("unexpected_tag", display_label),
+                        )
+                        _suppression_bucket_touch(
+                            bucket,
+                            query_id=query_id,
+                            document_name=document_name,
+                            document_id=document_id,
+                            chunk_id=chunk_id,
+                            stable_hash=stable_hash,
+                            snippet=snippet,
+                            raw_tags=[canonical_tag],
+                            tag_label=display_label,
+                            raw_payload_present=raw_chunk_present,
+                        )
+
+    candidates = [_suppression_bucket_to_candidate(bucket) for bucket in buckets.values()]
+    kind_order = {
+        "bridge_term": 0,
+        "source_boundary": 1,
+        "allowed_tag_review": 2,
+        "unexpected_tag": 3,
+    }
+    candidates.sort(
+        key=lambda item: (
+            kind_order.get(str(item.get("kind")), 9),
+            -float(item.get("score", 0.0)),
+            -float(item.get("risk_score", 0.0)),
+            str(item.get("label", "")),
+        )
+    )
+    limited_candidates = candidates[:max_candidates]
+    hotspots = {
+        "bridge_terms": [_suppression_hotspot(candidate) for candidate in _suppression_top_candidates(candidates, kind="bridge_term")],
+        "sources": [_suppression_hotspot(candidate) for candidate in _suppression_top_candidates(candidates, kind="source_boundary")],
+        "tags": [
+            _suppression_hotspot(candidate)
+            for candidate in _suppression_top_candidates(candidates, kind="allowed_tag_review")
+        ]
+        + [_suppression_hotspot(candidate) for candidate in _suppression_top_candidates(candidates, kind="unexpected_tag")],
+    }
+
+    summary = {
+        "case_count": len(cases),
+        "polluted_case_count": polluted_case_count,
+        "top_chunk_count": top_chunk_count,
+        "suspect_chunk_count": suspect_chunk_count,
+        "raw_chunk_count": raw_chunk_count,
+        "raw_chunk_coverage": _rate(raw_chunk_count, suspect_chunk_count),
+        "candidate_count": len(candidates),
+        "bridge_term_candidate_count": sum(1 for candidate in candidates if candidate.get("kind") == "bridge_term"),
+        "source_boundary_candidate_count": sum(1 for candidate in candidates if candidate.get("kind") == "source_boundary"),
+        "allowed_tag_review_candidate_count": sum(1 for candidate in candidates if candidate.get("kind") == "allowed_tag_review"),
+        "unexpected_tag_candidate_count": sum(1 for candidate in candidates if candidate.get("kind") == "unexpected_tag"),
+        "low_risk_candidate_count": sum(1 for candidate in candidates if candidate.get("risk") == "low"),
+        "high_risk_candidate_count": sum(1 for candidate in candidates if candidate.get("risk") == "high"),
+    }
+    if tagset_report:
+        summary.update(
+            {
+                "tagset_ok": tagset_report.get("ok", True),
+                "tagset_tag_count": tagset_report.get("summary", {}).get("tag_count", 0),
+                "tagset_assignment_count": tagset_report.get("summary", {}).get("assignment_count", 0),
+                "tagset_unused_tag_count": tagset_report.get("summary", {}).get("unused_tag_count", 0),
+                "tagset_orphan_tag_count": tagset_report.get("summary", {}).get("orphan_tag_count", 0),
+            }
+        )
+
+    metrics = dict(benchmark_metrics)
+    if benchmark_metrics:
+        metrics.update(
+            {
+                "polluted_case_count": polluted_case_count,
+                "raw_chunk_count": raw_chunk_count,
+                "suspect_chunk_count": suspect_chunk_count,
+            }
+        )
+
+    return {
+        "ok": _ok(issues),
+        "schema": SUPPRESSION_REPORT_SCHEMA,
+        "validation_report": str(report.get("report") or report.get("validation_report") or ""),
+        "dataset": report.get("dataset", {}),
+        "validation_level": report.get("level"),
+        "metrics": metrics,
+        "query_type_breakdown": query_type_breakdown,
+        "tagset": tagset_report,
+        "summary": summary,
+        "hotspots": hotspots,
+        "candidates": limited_candidates,
+        "issues": [issue.to_dict() for issue in issues],
+    }
+
+
+def suppression_report_file(
+    path: str | Path,
+    *,
+    tagset_path: str | Path | None = None,
+    max_candidates: int = 20,
+) -> dict[str, Any]:
+    """Load a validation report and generate a suppression report."""
+
+    report = _read_json(path)
+    if not isinstance(report, Mapping):
+        raise BenchmarkGovernanceError("suppression report input must be a JSON object")
+    output = suppression_report_payload(report, tagset_path=tagset_path, max_candidates=max_candidates)
+    output["validation_report"] = str(path)
+    return output
+
+
+def _suppression_table_rows(candidates: list[dict[str, Any]], *, kind: str) -> list[str]:
+    rows: list[str] = []
+    filtered = [candidate for candidate in candidates if candidate.get("kind") == kind]
+    if not filtered:
+        return rows
+    if kind == "bridge_term":
+        rows = [
+            "",
+            "| label | risk | risk score | score | queries | chunks | documents | recommendation |",
+            "| --- | --- | ---: | ---: | ---: | ---: | --- | --- |",
+        ]
+        for candidate in filtered:
+            evidence = candidate.get("evidence", {}) if isinstance(candidate.get("evidence"), Mapping) else {}
+            rows.append(
+                "| {label} | {risk} | `{risk_score}` | `{score}` | `{queries}` | `{chunks}` | {documents} | {recommendation} |".format(
+                    label=str(candidate.get("label", "")).replace("|", "\\|"),
+                    risk=candidate.get("risk", ""),
+                    risk_score=candidate.get("risk_score", ""),
+                    score=candidate.get("score", ""),
+                    queries=", ".join(evidence.get("query_ids", [])[:5]) or "-",
+                    chunks=evidence.get("polluted_chunk_count", 0),
+                    documents=", ".join(evidence.get("document_names", [])[:4]) or "-",
+                    recommendation=str(candidate.get("recommendation", "")).replace("|", "\\|"),
+                )
+            )
+        return rows
+    if kind == "source_boundary":
+        rows = [
+            "",
+            "| label | risk | risk score | score | queries | chunks | documents | recommendation |",
+            "| --- | --- | ---: | ---: | ---: | ---: | --- | --- |",
+        ]
+        for candidate in filtered:
+            evidence = candidate.get("evidence", {}) if isinstance(candidate.get("evidence"), Mapping) else {}
+            rows.append(
+                "| {label} | {risk} | `{risk_score}` | `{score}` | `{queries}` | `{chunks}` | {documents} | {recommendation} |".format(
+                    label=str(candidate.get("label", "")).replace("|", "\\|"),
+                    risk=candidate.get("risk", ""),
+                    risk_score=candidate.get("risk_score", ""),
+                    score=candidate.get("score", ""),
+                    queries=", ".join(evidence.get("query_ids", [])[:5]) or "-",
+                    chunks=evidence.get("polluted_chunk_count", 0),
+                    documents=", ".join(evidence.get("document_names", [])[:4]) or "-",
+                    recommendation=str(candidate.get("recommendation", "")).replace("|", "\\|"),
+                )
+            )
+        return rows
+    if kind in {"allowed_tag_review", "unexpected_tag"}:
+        rows = [
+            "",
+            "| kind | label | risk | risk score | score | queries | chunks | tags | recommendation |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- |",
+        ]
+        for candidate in filtered:
+            evidence = candidate.get("evidence", {}) if isinstance(candidate.get("evidence"), Mapping) else {}
+            tags = evidence.get("tag_labels") or evidence.get("tag_names") or []
+            rows.append(
+                "| {kind} | {label} | {risk} | `{risk_score}` | `{score}` | `{queries}` | `{chunks}` | {tags} | {recommendation} |".format(
+                    kind=str(candidate.get("kind", "")).replace("|", "\\|"),
+                    label=str(candidate.get("label", "")).replace("|", "\\|"),
+                    risk=candidate.get("risk", ""),
+                    risk_score=candidate.get("risk_score", ""),
+                    score=candidate.get("score", ""),
+                    queries=", ".join(evidence.get("query_ids", [])[:5]) or "-",
+                    chunks=evidence.get("polluted_chunk_count", 0),
+                    tags=", ".join(tags[:4]) or "-",
+                    recommendation=str(candidate.get("recommendation", "")).replace("|", "\\|"),
+                )
+            )
+        return rows
+    return rows
+
+
+def render_suppression_report_markdown(report: Mapping[str, Any], *, title: str = "RAGFlow Suppression Report") -> str:
+    """Render a compact Markdown summary for suppression candidates."""
+
+    base = render_benchmark_governance_markdown(report, title=title).rstrip()
+    candidates = report.get("candidates", []) if isinstance(report.get("candidates"), list) else []
+    if not candidates:
+        return base + "\n"
+    lines = [base, "", "## Bridge Terms"]
+    bridge = _suppression_table_rows(candidates, kind="bridge_term")
+    lines.extend(bridge or ["- none"])
+    lines.extend(["", "## Sources"])
+    sources = _suppression_table_rows(candidates, kind="source_boundary")
+    lines.extend(sources or ["- none"])
+    lines.extend(["", "## Tags"])
+    tags = _suppression_table_rows(candidates, kind="allowed_tag_review") + _suppression_table_rows(
+        candidates, kind="unexpected_tag"
+    )
+    lines.extend(tags or ["- none"])
+    return "\n".join(lines) + "\n"
 
 
 def render_benchmark_governance_markdown(report: Mapping[str, Any], *, title: str = "RAGFlow Benchmark Report") -> str:

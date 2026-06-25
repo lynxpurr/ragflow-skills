@@ -130,7 +130,7 @@ def _run(args: argparse.Namespace) -> int:
                 baseline_path=args.baseline_report,
                 chunk_snapshot=chunk_snapshot,
             )
-        payload = report.to_dict(max_chunks=args.max_report_chunks)
+        payload = report.to_dict(max_chunks=args.max_report_chunks, include_raw=args.include_raw)
         if metadata_summary:
             payload["metadata_summary"] = metadata_summary
         rendered_json = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -156,6 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--metric-cutoff", type=int, help="Metric cutoff for benchmark reports")
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--max-report-chunks", type=int, default=3)
+    parser.add_argument("--include-raw", action="store_true", help="Include raw chunk payloads in top_chunks for downstream diagnostics")
     parser.add_argument("--report-json", help="Optional JSON report output path")
     parser.add_argument("--report-md", help="Optional Markdown report output path")
     parser.add_argument("--metadata", help="Optional ragflow_metadata_v1 file to summarize and lint before validation")

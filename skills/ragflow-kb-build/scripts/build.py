@@ -51,12 +51,14 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_best_profile_markdown,
     render_benchmark_governance_markdown,
     render_optimization_cleanup_plan_markdown,
+    render_suppression_report_markdown,
     sample_benchmark_dataset,
     segment_metadata_report_file,
     render_optimization_plan_markdown,
     snapshot_chunks,
     summarize_optimization_results,
     summarize_benchmark_report,
+    suppression_report_file,
     trend_benchmark_reports,
     delta_benchmark_reports,
     summarize_metadata_for_documents,
@@ -448,6 +450,21 @@ def _run_benchmark_delta(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_suppression_report(args: argparse.Namespace) -> int:
+    try:
+        report = suppression_report_file(
+            args.report,
+            tagset_path=args.tagset,
+            max_candidates=args.max_candidates,
+        )
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_suppression_report_markdown(report))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (BenchmarkGovernanceError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _run_qa_validate(args: argparse.Namespace) -> int:
     try:
         report = validate_grounded_qa(
@@ -758,6 +775,18 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_suppression_report_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Create advisory suppression candidates from an existing validation report")
+    parser.add_argument("--report", required=True, help="Validation or benchmark validation report JSON")
+    parser.add_argument("--tagset", help="Optional ragflow_tagset_v1 JSON/YAML for tag labels and aliases")
+    parser.add_argument("--max-candidates", type=int, default=20, help="Maximum candidates to include in the report")
+    parser.add_argument("--report-json", help="Optional suppression report JSON path")
+    parser.add_argument("--report-md", help="Optional suppression report Markdown path")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    parser.set_defaults(func=_run_suppression_report)
+    return parser
+
+
 def build_qa_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate and validate grounded QA artifacts before benchmark use")
     subparsers = parser.add_subparsers(dest="qa_command", required=True)
@@ -910,6 +939,9 @@ def main(argv: list[str] | None = None) -> int:
         if command == "benchmark":
             benchmark_args = build_benchmark_parser().parse_args(command_args)
             return benchmark_args.func(benchmark_args)
+        if command == "suppression-report":
+            suppression_args = build_suppression_report_parser().parse_args(command_args)
+            return suppression_args.func(suppression_args)
         if command == "qa":
             qa_args = build_qa_parser().parse_args(command_args)
             return qa_args.func(qa_args)

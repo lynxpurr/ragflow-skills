@@ -30,7 +30,13 @@ STRICT_CHUNK_METRIC_KEYS = (
     "expected_chunk_hit_rate",
     "expected_evidence_rank",
 )
-BENCHMARK_METRIC_KEYS = METRIC_KEYS + STRICT_CHUNK_METRIC_KEYS
+POLLUTION_METRIC_KEYS = (
+    "wrong_document_rate",
+    "tag_pollution_rate",
+    "expected_tag_hit_rate",
+    "unexpected_tag_hit_rate",
+)
+BENCHMARK_METRIC_KEYS = METRIC_KEYS + STRICT_CHUNK_METRIC_KEYS + POLLUTION_METRIC_KEYS
 CHUNK_SNAPSHOT_SCHEMA = "ragflow_chunk_snapshot_v1"
 
 
@@ -302,7 +308,7 @@ class ValidationCaseResult:
     error: str | None = None
     chunks: list[NormalizedChunk] = field(default_factory=list)
 
-    def to_dict(self, *, max_chunks: int = 3) -> dict[str, Any]:
+    def to_dict(self, *, max_chunks: int = 3, include_raw: bool = False) -> dict[str, Any]:
         return {
             "id": self.query.id,
             "question": self.query.question,
@@ -313,7 +319,7 @@ class ValidationCaseResult:
             "document_hits": list(self.document_hits),
             "missing_documents": list(self.missing_documents),
             "error": self.error,
-            "top_chunks": [chunk.to_dict() for chunk in self.chunks[:max_chunks]],
+            "top_chunks": [chunk.to_dict(include_raw=include_raw) for chunk in self.chunks[:max_chunks]],
             "metadata": self.query.metadata,
         }
 
@@ -351,13 +357,13 @@ class ValidationReport:
             "document_hit_rate": doc_hits / expected_docs if expected_docs else None,
         }
 
-    def to_dict(self, *, max_chunks: int = 3) -> dict[str, Any]:
+    def to_dict(self, *, max_chunks: int = 3, include_raw: bool = False) -> dict[str, Any]:
         return {
             "ok": self.ok,
             "level": self.level,
             "dataset": {"id": self.dataset_id, "name": self.dataset_name},
             "metrics": self.metrics(),
-            "cases": [case.to_dict(max_chunks=max_chunks) for case in self.cases],
+            "cases": [case.to_dict(max_chunks=max_chunks, include_raw=include_raw) for case in self.cases],
             **({"benchmark": self.benchmark.to_dict()} if self.benchmark else {}),
         }
 
@@ -753,6 +759,160 @@ def _query_type(query: ValidationQuery) -> str:
     return str(value) if str(value).strip() else "default"
 
 
+def _iter_string_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    if isinstance(value, Mapping):
+        for key in ("name", "tag", "tag_name", "label", "value", "id", "tag_id"):
+            if key in value:
+                values = _iter_string_values(value[key])
+                if values:
+                    return values
+        return []
+    if isinstance(value, (list, tuple, set)):
+        values = []
+        for item in value:
+            values.extend(_iter_string_values(item))
+        return values
+    return []
+
+
+def _normalized_labels_from(mapping: Mapping[str, Any], keys: tuple[str, ...]) -> set[str]:
+    labels: set[str] = set()
+    for key in keys:
+        for value in _iter_string_values(mapping.get(key)):
+            normalized = value.strip().casefold()
+            if normalized:
+                labels.add(normalized)
+    return labels
+
+
+TAG_KEYS = ("tags", "tag", "tag_ids", "tag_id", "tag_names", "tag_name", "tag_kb_ids", "tag_kb_id")
+EXPECTED_TAG_KEYS = ("expected_tags", "required_tags", "must_have_tags", "tags", "tag", "tag_ids", "tag_id")
+ALLOWED_TAG_KEYS = (
+    "allowed_tags",
+    "allow_tags",
+    "expected_tags",
+    "required_tags",
+    "must_have_tags",
+    "tags",
+    "tag",
+    "tag_ids",
+    "tag_id",
+)
+
+
+def _tag_scope_from_metadata(metadata: Mapping[str, Any]) -> tuple[set[str], set[str]]:
+    expected = _normalized_labels_from(metadata, EXPECTED_TAG_KEYS)
+    allowed = _normalized_labels_from(metadata, ALLOWED_TAG_KEYS)
+    allowed.update(expected)
+    return expected, allowed
+
+
+def _query_tag_scope(query: ValidationQuery, qrels: list[BenchmarkQrel]) -> tuple[set[str], set[str]]:
+    expected, allowed = _tag_scope_from_metadata(query.metadata)
+    for qrel in qrels:
+        qrel_expected, qrel_allowed = _tag_scope_from_metadata(qrel.metadata)
+        expected.update(qrel_expected)
+        allowed.update(qrel_allowed)
+    return expected, allowed
+
+
+def _chunk_tags(chunk: NormalizedChunk) -> set[str]:
+    tags = _normalized_labels_from(chunk.raw, TAG_KEYS)
+    metadata = chunk.raw.get("metadata") if isinstance(chunk.raw, Mapping) else None
+    if isinstance(metadata, Mapping):
+        tags.update(_normalized_labels_from(metadata, TAG_KEYS))
+    return tags
+
+
+def _is_document_qrel(qrel: BenchmarkQrel) -> bool:
+    return qrel.field in {"document", "document_name", "document_id"}
+
+
+def _document_qrel_matches_chunk(qrel: BenchmarkQrel, chunk: NormalizedChunk) -> bool:
+    if qrel.field == "document_id":
+        return _target_matches(chunk.document_id, qrel.target)
+    if qrel.field == "document_name":
+        return _target_matches(chunk.document_name, qrel.target)
+    return _target_matches(chunk.document_name, qrel.target) or _target_matches(chunk.document_id, qrel.target)
+
+
+def _query_expected_document_matches_chunk(query: ValidationQuery, chunk: NormalizedChunk) -> bool:
+    return any(
+        _target_matches(chunk.document_name, document) or _target_matches(chunk.document_id, document)
+        for document in query.expected_documents
+    )
+
+
+def _chunk_has_document_identity(chunk: NormalizedChunk) -> bool:
+    return bool(chunk.document_name or chunk.document_id)
+
+
+def _document_pollution_metrics(
+    case: ValidationCaseResult,
+    qrels: list[BenchmarkQrel],
+    ranked_chunks: list[NormalizedChunk],
+) -> dict[str, float | int]:
+    document_qrels = [qrel for qrel in qrels if qrel.relevance > 0 and _is_document_qrel(qrel)]
+    if not document_qrels and not case.query.expected_documents:
+        return {}
+
+    scored_chunks = [chunk for chunk in ranked_chunks if _chunk_has_document_identity(chunk)]
+    wrong_document_count = 0
+    for chunk in scored_chunks:
+        if _query_expected_document_matches_chunk(case.query, chunk):
+            continue
+        if any(_document_qrel_matches_chunk(qrel, chunk) for qrel in document_qrels):
+            continue
+        wrong_document_count += 1
+
+    return {
+        "wrong_document_rate": wrong_document_count / len(scored_chunks) if scored_chunks else 0.0,
+        "document_scored_chunk_count": len(scored_chunks),
+        "wrong_document_count": wrong_document_count,
+    }
+
+
+def _tag_pollution_metrics(
+    case: ValidationCaseResult,
+    qrels: list[BenchmarkQrel],
+    ranked_chunks: list[NormalizedChunk],
+) -> dict[str, float | int]:
+    expected_tags, allowed_tags = _query_tag_scope(case.query, qrels)
+    if not expected_tags and not allowed_tags:
+        return {}
+
+    chunk_tag_sets = [_chunk_tags(chunk) for chunk in ranked_chunks]
+    tagged_chunks = [tags for tags in chunk_tag_sets if tags]
+    retrieved_tags = set().union(*tagged_chunks) if tagged_chunks else set()
+    unexpected_tags = retrieved_tags - allowed_tags
+
+    metrics: dict[str, float | int] = {}
+    if expected_tags:
+        matched_expected_tags = retrieved_tags & expected_tags
+        metrics.update(
+            {
+                "expected_tag_hit_rate": len(matched_expected_tags) / len(expected_tags),
+                "expected_tag_count": len(expected_tags),
+                "matched_expected_tags": len(matched_expected_tags),
+            }
+        )
+    if allowed_tags:
+        polluted_chunks = [tags for tags in tagged_chunks if tags - allowed_tags]
+        metrics.update(
+            {
+                "tag_pollution_rate": len(polluted_chunks) / len(tagged_chunks) if tagged_chunks else 0.0,
+                "unexpected_tag_hit_rate": 1.0 if unexpected_tags else 0.0,
+                "tagged_chunk_count": len(tagged_chunks),
+                "polluted_tagged_chunk_count": len(polluted_chunks),
+                "unexpected_tag_count": len(unexpected_tags),
+            }
+        )
+    return metrics
+
+
 def _query_benchmark_metrics(
     case: ValidationCaseResult,
     qrels: list[BenchmarkQrel],
@@ -820,6 +980,8 @@ def _query_benchmark_metrics(
             "expected_chunk_count": len(expected_chunk_keys),
             "matched_expected_chunks": len(matched_expected_chunks),
         }
+    document_metrics = _document_pollution_metrics(case, positive_qrels, ranked_chunks)
+    tag_metrics = _tag_pollution_metrics(case, positive_qrels, ranked_chunks)
 
     return {
         "id": case.query.id,
@@ -836,6 +998,8 @@ def _query_benchmark_metrics(
         "matched_targets": len(unique_hits),
         "first_relevant_rank": first_relevant_rank,
         **strict_metrics,
+        **document_metrics,
+        **tag_metrics,
     }
 
 
@@ -843,10 +1007,16 @@ def _aggregate_query_metrics(per_query: list[dict[str, Any]]) -> dict[str, float
     metrics: dict[str, float | int] = {"query_count": len(per_query)}
     for key in METRIC_KEYS:
         metrics[key] = _average([float(item[key]) for item in per_query])
-    for key in STRICT_CHUNK_METRIC_KEYS:
+    for key in STRICT_CHUNK_METRIC_KEYS + POLLUTION_METRIC_KEYS:
         values = [float(item[key]) for item in per_query if isinstance(item.get(key), (int, float))]
         if values:
             metrics[key] = _average(values)
+            if key == "wrong_document_rate":
+                metrics["document_scope_query_count"] = len(values)
+            elif key == "tag_pollution_rate":
+                metrics["tag_scope_query_count"] = len(values)
+            elif key == "expected_tag_hit_rate":
+                metrics["expected_tag_query_count"] = len(values)
     expected_chunk_counts = [
         int(item["expected_chunk_count"])
         for item in per_query
@@ -860,6 +1030,18 @@ def _aggregate_query_metrics(per_query: list[dict[str, Any]]) -> dict[str, float
             for item in per_query
             if isinstance(item.get("expected_chunk_count"), int)
         )
+    for key in (
+        "document_scored_chunk_count",
+        "wrong_document_count",
+        "expected_tag_count",
+        "matched_expected_tags",
+        "tagged_chunk_count",
+        "polluted_tagged_chunk_count",
+        "unexpected_tag_count",
+    ):
+        values = [int(item[key]) for item in per_query if isinstance(item.get(key), int)]
+        if values:
+            metrics[key] = sum(values)
     return metrics
 
 
@@ -1141,6 +1323,14 @@ def render_markdown_report(report: ValidationReport) -> str:
                 f"- Empty result rate: `{float(benchmark.metrics['empty_result_rate']):.2%}`",
             ]
         )
+        if "wrong_document_rate" in benchmark.metrics:
+            lines.append(f"- Wrong-document rate: `{float(benchmark.metrics['wrong_document_rate']):.2%}`")
+        if "tag_pollution_rate" in benchmark.metrics:
+            lines.append(f"- Tag pollution rate: `{float(benchmark.metrics['tag_pollution_rate']):.2%}`")
+        if "expected_tag_hit_rate" in benchmark.metrics:
+            lines.append(f"- Expected tag hit rate: `{float(benchmark.metrics['expected_tag_hit_rate']):.2%}`")
+        if "unexpected_tag_hit_rate" in benchmark.metrics:
+            lines.append(f"- Unexpected tag hit rate: `{float(benchmark.metrics['unexpected_tag_hit_rate']):.2%}`")
         if "strict_chunk_recall_at_k" in benchmark.metrics:
             lines.extend(
                 [
