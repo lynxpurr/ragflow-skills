@@ -321,6 +321,76 @@ class QueryCliTests(unittest.TestCase):
         self.assertIn("RAGFlow Query Pollution Report", markdown)
         self.assertIn("translation", markdown)
 
+    def test_rerank_ab_can_write_json_and_markdown(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            query_output = root / "query.json"
+            rerank_json = root / "rerank.json"
+            report_json = root / "rerank_report.json"
+            report_md = root / "rerank_report.md"
+            query_output.write_text(
+                json.dumps(
+                    {
+                        "question": "where is the best evidence",
+                        "dataset_ids": ["ds-1"],
+                        "chunks": [
+                            {
+                                "chunk_id": "chunk-1",
+                                "content": "weak background note",
+                                "document_name": "weak.md",
+                                "similarity": 0.7,
+                            },
+                            {
+                                "chunk_id": "chunk-2",
+                                "content": "best evidence has the target phrase",
+                                "document_name": "best.md",
+                                "similarity": 0.6,
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            rerank_json.write_text(
+                json.dumps({"results": [{"chunk_id": "chunk-2", "score": 0.99}, {"chunk_id": "chunk-1", "score": 0.2}]}),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "rerank-ab",
+                        "--query-output",
+                        str(query_output),
+                        "--rerank-json",
+                        str(rerank_json),
+                        "--expected-term",
+                        "target phrase",
+                        "--expected-chunk",
+                        "chunk-2",
+                        "--top-k",
+                        "1",
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            report_json_exists = report_json.exists()
+            report_md_exists = report_md.exists()
+            markdown = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["schema"], "ragflow_query_rerank_ab_report_v1")
+        self.assertEqual(payload["summary"]["candidate_expected_chunk_hit_count"], 1)
+        self.assertTrue(report_json_exists)
+        self.assertTrue(report_md_exists)
+        self.assertIn("RAGFlow Query Rerank A/B Report", markdown)
+        self.assertIn("best.md", markdown)
+
     def test_route_commands_use_routing_config(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:

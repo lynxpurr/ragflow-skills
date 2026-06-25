@@ -1601,6 +1601,9 @@ raise SystemExit(code)
     query_diagnostic_md = work_root / "query_diagnostic.md"
     query_pollution_json = work_root / "query_pollution.json"
     query_pollution_md = work_root / "query_pollution.md"
+    query_rerank_input = work_root / "query_rerank.json"
+    query_rerank_json = work_root / "query_rerank_ab.json"
+    query_rerank_md = work_root / "query_rerank_ab.md"
     query_output.write_text(
         json.dumps(
             {
@@ -1608,12 +1611,14 @@ raise SystemExit(code)
                 "question": "What can run without repository source context?",
                 "chunks": [
                     {
+                        "chunk_id": "consumer-chunk-1",
                         "content": "This release artifact can run without repository source context.",
                         "similarity": 0.9,
                         "document_name": "sample.md",
                         "dataset_id": "ds-consumer-acceptance",
                     },
                     {
+                        "chunk_id": "consumer-chunk-2",
                         "content": "Translated bridge term only match.",
                         "similarity": 0.4,
                         "document_name": "translated.md",
@@ -1621,6 +1626,14 @@ raise SystemExit(code)
                     }
                 ],
             },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    query_rerank_input.write_text(
+        json.dumps(
+            {"results": [{"chunk_id": "consumer-chunk-2", "score": 0.91}, {"chunk_id": "consumer-chunk-1", "score": 0.42}]},
             ensure_ascii=False,
             indent=2,
         ),
@@ -1714,6 +1727,41 @@ raise SystemExit(code)
         produced.append(query_pollution_json)
     if query_pollution_md.exists():
         produced.append(query_pollution_md)
+
+    query_rerank = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "rerank-ab",
+            "--query-output",
+            str(query_output),
+            "--rerank-json",
+            str(query_rerank_input),
+            "--expected-term",
+            "Translated bridge",
+            "--expected-chunk",
+            "consumer-chunk-2",
+            "--top-k",
+            "1",
+            "--report-json",
+            str(query_rerank_json),
+            "--report-md",
+            str(query_rerank_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query rerank ab report",
+        query_rerank,
+        required_output='"schema": "ragflow_query_rerank_ab_report_v1"',
+    )
+    if query_rerank_json.exists():
+        produced.append(query_rerank_json)
+    if query_rerank_md.exists():
+        produced.append(query_rerank_md)
 
     missing_config = _run_command(
         [

@@ -8,9 +8,11 @@ from ragflow_skill_runtime.observability import (
     diagnose_query_result,
     evidence_from_query_payload,
     query_pollution_report,
+    query_rerank_ab_report,
     render_citation_audit_markdown,
     render_query_diagnostic_markdown,
     render_query_pollution_markdown,
+    render_query_rerank_ab_markdown,
     render_query_trace_markdown,
     weight_evidence,
 )
@@ -166,6 +168,44 @@ class ObservabilityTests(unittest.TestCase):
         self.assertIn("translation", {item["term"] for item in report["terms"]["bridge_terms"]})
         self.assertIn("RAGFlow Query Pollution Report", markdown)
         self.assertIn("polluted.md", markdown)
+
+    def test_query_rerank_ab_report_compares_external_ordering(self) -> None:
+        payload = {
+            "question": "where is the best evidence",
+            "dataset_ids": ["ds-1"],
+            "chunks": [
+                {
+                    "chunk_id": "chunk-1",
+                    "content": "weak background note",
+                    "document_name": "weak.md",
+                    "similarity": 0.7,
+                },
+                {
+                    "chunk_id": "chunk-2",
+                    "content": "best evidence has the target phrase",
+                    "document_name": "best.md",
+                    "similarity": 0.6,
+                },
+            ],
+        }
+        rerank = {"results": [{"chunk_id": "chunk-2", "score": 0.99}, {"chunk_id": "chunk-1", "score": 0.2}]}
+
+        report = query_rerank_ab_report(
+            payload,
+            rerank_payload=rerank,
+            expected_terms=["target phrase"],
+            expected_chunks=["chunk-2"],
+            top_k=1,
+        )
+        markdown = render_query_rerank_ab_markdown(report)
+
+        self.assertEqual(report["schema"], "ragflow_query_rerank_ab_report_v1")
+        self.assertEqual(report["candidate_source"], "external_rerank")
+        self.assertEqual(report["summary"]["candidate_expected_term_hit_count"], 1)
+        self.assertEqual(report["summary"]["candidate_expected_chunk_hit_count"], 1)
+        self.assertIn("top_rank_changed", {issue["code"] for issue in report["issues"]})
+        self.assertIn("best.md", markdown)
+        self.assertIn("RAGFlow Query Rerank A/B Report", markdown)
 
 
 if __name__ == "__main__":

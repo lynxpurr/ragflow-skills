@@ -793,6 +793,13 @@ terms against expanded-term-only chunk hits, low original query coverage, repeat
 terms, and source dominance. The command is an offline advisory report; it does not call
 RAGFlow, translate queries, run BM25 itself, mutate route configs, or install filters.
 
+MVP `ragflow-query rerank-ab` reads saved `ask --json` output and optional external rerank
+JSON. It matches chunks by chunk ID, stable content hash, or content-derived hash, then
+reports rank movement, top-k overlap, top-rank changes, and expected term/chunk hit
+changes. When no external rerank JSON is supplied, it uses deterministic host evidence
+scores as a local candidate ordering. The command is offline and does not call or bundle a
+reranker service.
+
 Optional external rerankers must be configured by the host and treated as remote/local
 services, not bundled daemons.
 

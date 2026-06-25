@@ -788,7 +788,76 @@ pollution_payload = json.loads(stdout.getvalue())
 if pollution_payload.get("schema") != "ragflow_query_pollution_report_v1":
     raise SystemExit(8)
 
-print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload, "pollution": pollution_payload}}, ensure_ascii=False))
+rerank_input = artifacts_dir / "query_rerank.json"
+rerank_input.write_text(
+    json.dumps(
+        {{
+            "results": [
+                {{"chunk_id": "platform-translated", "score": 0.91}},
+                {{"chunk_id": "platform-known", "score": 0.42}},
+            ]
+        }},
+        ensure_ascii=False,
+        indent=2,
+    )
+    + "\\n",
+    encoding="utf-8",
+)
+rerank_query_input = artifacts_dir / "query_rerank_input.json"
+rerank_query_input.write_text(
+    json.dumps(
+        {{
+            "ok": True,
+            "question": "Where is the translated bridge term?",
+            "dataset_ids": ["ds-platform-smoke"],
+            "chunks": [
+                {{
+                    "chunk_id": "platform-known",
+                    "content": "portable validation chunk with known term",
+                    "document_name": "platform-smoke.md",
+                    "similarity": 0.98,
+                }},
+                {{
+                    "chunk_id": "platform-translated",
+                    "content": "translated bridge term only match",
+                    "document_name": "translated.md",
+                    "similarity": 0.4,
+                }},
+            ],
+        }},
+        ensure_ascii=False,
+        indent=2,
+    )
+    + "\\n",
+    encoding="utf-8",
+)
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    rerank_code = module.main([
+        "rerank-ab",
+        "--query-output",
+        str(rerank_query_input),
+        "--rerank-json",
+        str(rerank_input),
+        "--expected-term",
+        "translated bridge",
+        "--expected-chunk",
+        "platform-translated",
+        "--top-k",
+        "1",
+        "--report-json",
+        str(artifacts_dir / "query_rerank_ab.json"),
+        "--report-md",
+        str(artifacts_dir / "query_rerank_ab.md"),
+        "--json",
+    ])
+if rerank_code != 0:
+    raise SystemExit(rerank_code)
+rerank_payload = json.loads(stdout.getvalue())
+if rerank_payload.get("schema") != "ragflow_query_rerank_ab_report_v1":
+    raise SystemExit(9)
+
+print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload, "pollution": pollution_payload, "rerank": rerank_payload}}, ensure_ascii=False))
 """,
         encoding="utf-8",
     )
@@ -1613,6 +1682,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_diagnostic.md",
         artifacts_dir / "query_pollution.json",
         artifacts_dir / "query_pollution.md",
+        artifacts_dir / "query_rerank_ab.json",
+        artifacts_dir / "query_rerank_ab.md",
         artifacts_dir / "route_test.md",
         artifacts_dir / "profile_lint.md",
         artifacts_dir / "candidate_profile_set.json",

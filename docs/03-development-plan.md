@@ -878,7 +878,7 @@ Tasks:
 - [x] Add `ragflow-kb-build suppression-report` for bridge-term, source, and tag suppression candidates.
 - [x] Add risk scoring for low-risk suppression and high-risk allowed-tag review candidates.
 - [x] Add `ragflow-query pollution-report` for likely BM25 translation/keyword pollution symptoms.
-- [ ] Add `ragflow-query rerank-ab` to compare RAGFlow ordering with optional external reranker output.
+- [x] Add `ragflow-query rerank-ab` to compare RAGFlow ordering with optional external reranker output.
 - [x] Keep suppression candidates as review artifacts, not automatic deletes or hidden filters.
 - [x] Integrate enrichment experiments into `optimize` or add `profile experiment`.
 - [x] Add no-network tests with fake reports.
