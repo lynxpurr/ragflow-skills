@@ -17,6 +17,7 @@ class RoutingError(RuntimeError):
 
 ROUTE_REPORT_SCHEMA = "ragflow_route_report_v1"
 ROUTE_DIAGNOSE_SCHEMA = "ragflow_route_diagnose_report_v1"
+REQUIRED_ROUTE_PARAMS = ("top_k", "similarity_threshold")
 
 
 def _string_list(value: Any, *, field_name: str) -> list[str]:
@@ -67,6 +68,18 @@ def _string_set(values: Any) -> set[str]:
     if isinstance(values, list):
         return {item for item in values if isinstance(item, str) and item}
     return set()
+
+
+def _route_param_coverage(params: Mapping[str, Any]) -> dict[str, Any]:
+    present = sorted(key for key in REQUIRED_ROUTE_PARAMS if key in params and params.get(key) is not None)
+    missing = sorted(key for key in REQUIRED_ROUTE_PARAMS if key not in present)
+    return {
+        "required": list(REQUIRED_ROUTE_PARAMS),
+        "present": present,
+        "missing": missing,
+        "complete": not missing,
+        "coverage": _rate(len(present), len(REQUIRED_ROUTE_PARAMS)),
+    }
 
 
 @dataclass(frozen=True)
@@ -315,7 +328,7 @@ def run_route_report(
     hint_coverage: dict[str, dict[str, Any]] = {}
     hint_tokens_by_kb: dict[str, set[str]] = {}
     matched_hints_by_kb: dict[str, set[str]] = {}
-    params_coverage: dict[str, bool] = {}
+    params_coverage: dict[str, dict[str, Any]] = {}
     word_boundary_hints: list[dict[str, Any]] = []
     substring_conflicts: list[dict[str, Any]] = []
     total_hints = 0
@@ -325,7 +338,7 @@ def run_route_report(
         hint_tokens = _hint_tokens(kb.hints)
         hint_tokens_by_kb[kb.name] = hint_tokens
         matched_hints_by_kb[kb.name] = set()
-        params_coverage[kb.name] = bool(kb.params)
+        params_coverage[kb.name] = _route_param_coverage(kb.params)
         short_hints = [hint for hint in kb.hints if _short_hint(hint)]
         if short_hints:
             word_boundary_hints.append(
@@ -445,6 +458,7 @@ def run_route_report(
             "route_test_pass_rate": _rate(len(passing_cases), len(expected_cases)),
             "params": dict(kb.params),
             "has_params": bool(kb.params),
+            "param_coverage": params_coverage[kb.name],
             "short_hints": [hint for hint in kb.hints if _short_hint(hint)],
             "hints": list(kb.hints),
             "hint_tokens": sorted(hint_tokens_by_kb[kb.name]),
@@ -476,11 +490,14 @@ def run_route_report(
         {
             "name": kb.name,
             "dataset_id": kb.dataset_id,
-            "reason": "no per-KB retrieval params configured",
+            "missing": params_coverage[kb.name]["missing"],
+            "coverage": params_coverage[kb.name]["coverage"],
+            "reason": "missing per-KB retrieval parameter defaults",
         }
         for kb in config.knowledge_bases
-        if not kb.params
+        if not params_coverage[kb.name]["complete"]
     ]
+    complete_param_count = sum(1 for coverage in params_coverage.values() if coverage["complete"])
 
     route_scores = [float(case.get("selected_score") or 0.0) for case in cases]
     route_score_avg = _average(route_scores)
@@ -510,11 +527,8 @@ def run_route_report(
             "hint_count": total_hints,
             "hint_match_count": total_hint_matches,
             "hint_match_rate": _rate(total_hint_matches, total_hints),
-            "params_coverage_count": sum(1 for has_params in params_coverage.values() if has_params),
-            "params_coverage_rate": _rate(
-                sum(1 for has_params in params_coverage.values() if has_params),
-                len(params_coverage),
-            ),
+            "params_coverage_count": complete_param_count,
+            "params_coverage_rate": _rate(complete_param_count, len(params_coverage)),
             "missing_route_test_count": len(missing_route_tests),
             "missing_params_count": len(missing_params),
             "short_hint_kb_count": len(word_boundary_hints),
@@ -542,6 +556,7 @@ def run_route_report(
                 "dataset_id": kb.dataset_id,
                 "has_params": bool(kb.params),
                 "params": dict(kb.params),
+                "param_coverage": params_coverage[kb.name],
             }
             for kb in config.knowledge_bases
         ],
@@ -859,6 +874,7 @@ def render_route_report_markdown(report: Mapping[str, Any]) -> str:
     for item in report.get("hint_coverage", []):
         if not isinstance(item, Mapping):
             continue
+        param_coverage = item.get("param_coverage") if isinstance(item.get("param_coverage"), Mapping) else {}
         lines.append(
             "| `{name}` | {expected_query_count} | {route_test_pass_rate:.2f} | {hint_count} | "
             "{matched_hint_count} | {coverage:.2f} | {params} |".format(
@@ -868,7 +884,7 @@ def render_route_report_markdown(report: Mapping[str, Any]) -> str:
                 hint_count=int(item.get("hint_count", 0)),
                 matched_hint_count=int(item.get("matched_hint_count", 0)),
                 coverage=float(item.get("coverage", 0.0)),
-                params="yes" if item.get("has_params") else "no",
+                params="complete" if param_coverage.get("complete") else "missing",
             )
         )
     lines.extend(["", "## Route Test", ""])
@@ -896,7 +912,11 @@ def render_route_report_markdown(report: Mapping[str, Any]) -> str:
     else:
         for item in missing_params:
             if isinstance(item, Mapping):
-                lines.append(f"- `{item.get('name', '')}` `{item.get('dataset_id', '')}`")
+                missing = item.get("missing") if isinstance(item.get("missing"), list) else []
+                lines.append(
+                    f"- `{item.get('name', '')}` `{item.get('dataset_id', '')}` missing: "
+                    f"`{', '.join(str(value) for value in missing)}`"
+                )
     lines.extend(["", "## Category Coverage", ""])
     coverage_by_category = (
         report.get("coverage_by_category", {}) if isinstance(report.get("coverage_by_category"), Mapping) else {}

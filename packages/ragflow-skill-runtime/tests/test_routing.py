@@ -37,7 +37,7 @@ class RoutingTests(unittest.TestCase):
                         "dataset_id": "ds-technical",
                         "description": "API configuration and runtime integration",
                         "hints": ["api", "configuration", "runtime"],
-                        "params": {"top_k": 6},
+                        "params": {"top_k": 6, "similarity_threshold": 0.1},
                     },
                     {
                         "name": "kb:api-extra",
@@ -119,6 +119,8 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(report["summary"]["route_test_total"], 2)
         self.assertEqual(report["summary"]["missing_route_test_count"], 1)
         self.assertEqual(report["summary"]["missing_params_count"], 2)
+        self.assertEqual(report["summary"]["params_coverage_count"], 1)
+        self.assertEqual(report["hint_coverage"][1]["param_coverage"]["missing"], [])
         self.assertEqual(report["coverage_by_category"]["exact"]["total"], 1)
         self.assertEqual(report["coverage_by_locale"]["en"]["total"], 2)
         self.assertTrue(report["word_boundary_hints"])

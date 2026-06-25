@@ -790,7 +790,7 @@ class QueryCliTests(unittest.TestCase):
                                 "name": "kb:technical",
                                 "dataset_id": "ds-technical",
                                 "hints": ["api", "runtime"],
-                                "params": {"top_k": 5},
+                                "params": {"top_k": 5, "similarity_threshold": 0.1},
                             },
                             {
                                 "name": "kb:reference",

@@ -935,7 +935,7 @@ Tasks:
 - [ ] Add word-boundary checks for short English names, acronyms, and product terms.
 - [ ] Add English hint coverage reporting by category and KB.
 - [ ] Add comprehensive route-test categories: exact, fuzzy, short query, long query, mixed-language, negative, substring conflict, wildcard shadowing.
-- [ ] Report per-KB retrieval parameter coverage and missing defaults.
+- [x] Report per-KB retrieval parameter coverage and missing defaults.
 - [ ] Add optional centroid index schema generated from user-owned KB snapshots or manifests.
 - [ ] Add `ragflow-query centroid build --plan-only` with user-owned snapshots or KB manifests.
 - [ ] Add bounded centroid build execution with `--batch-size`, checkpoint, resume, and dynamic embedding config.
