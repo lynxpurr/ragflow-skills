@@ -249,6 +249,7 @@ from .retrieval import (
     stable_content_hash,
 )
 from .routing import (
+    ROUTE_REPORT_SCHEMA,
     RouteCandidate,
     RouteResult,
     RoutingConfig,
@@ -257,7 +258,9 @@ from .routing import (
     load_route_test_queries,
     load_routing_config,
     render_route_test_markdown,
+    render_route_report_markdown,
     route_question,
+    run_route_report,
     run_route_tests,
 )
 from .validation import (
@@ -379,6 +382,7 @@ __all__ = [
     "RAGFLOW_METADATA_SCHEMA",
     "RAGFLOW_TAGSET_SCHEMA",
     "RetrievalError",
+    "ROUTE_REPORT_SCHEMA",
     "RouteCandidate",
     "RouteResult",
     "RoutingConfig",
@@ -504,9 +508,11 @@ __all__ = [
     "render_profile_lint_markdown",
     "resolve_benchmark_artifacts",
     "render_route_test_markdown",
+    "render_route_report_markdown",
     "run_retrieval_validation",
     "run_fusion_tests",
     "route_question",
+    "run_route_report",
     "run_route_tests",
     "safe_markdown_name",
     "sample_benchmark_dataset",

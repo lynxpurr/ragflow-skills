@@ -20,6 +20,7 @@ python scripts/query.py fusion-test --cases ./fixtures/fusion-test-cases.json --
 python scripts/query.py list-kbs --routing-config ./templates/routing-config.example.json
 python scripts/query.py route "Which API configuration should I use?" --routing-config ./templates/routing-config.example.json --json
 python scripts/query.py route-test --routing-config ./templates/routing-config.example.json --queries ./templates/route-test-queries.example.json --report-md ./run/route_test.md
+python scripts/query.py route-report --routing-config ./templates/routing-config.example.json --queries ./templates/route-test-queries.example.json --report-json ./run/route_report.json --report-md ./run/route_report.md
 python scripts/query.py --config /path/to/ragflow-config.local.yaml ask "Question" --mode auto --routing-config ./routing-config.json --json
 python scripts/query.py --config /path/to/ragflow-config.local.yaml ask "Question" --kb-manifest ./kb_manifest.json --mode agentic --host-assisted --json --trace-json ./run/query_trace.json --trace-md ./run/query_trace.md
 python scripts/query.py audit-citations --query-output ./run/query.json --answer-file ./run/answer.md --report-json ./run/citation_audit.json --report-md ./run/citation_audit.md
@@ -37,7 +38,8 @@ Notes:
 
 - CLI mode is the v1 interface for Hermes, OpenClaw, Claude Code, opencode, and similar programming-agent tools.
 - `--mode auto` uses `--routing-config` or `RAGFLOW_ROUTING_CONFIG` when no explicit `--dataset-id`, `--kb`, or `--kb-manifest` is provided; otherwise it falls back to direct retrieval.
-- Routing config is user-owned and deterministic. Use `list-kbs`, `route`, and `route-test` to inspect it before live retrieval.
+- Routing config is user-owned and deterministic. Use `list-kbs`, `route`, `route-test`, and `route-report` to inspect it before live retrieval.
+- Use `route-report` offline to review hint coverage, missing route tests, ambiguous/low-confidence routes, short-hint word-boundary risks, substring conflicts, and per-KB retrieval parameter coverage.
 - `ask --fusion rrf` retrieves each selected dataset separately when multiple dataset IDs are present, then returns an offline fusion report and fused evidence order.
 - `--mode agentic --host-assisted` still retrieves from RAGFlow; the host agent performs final synthesis from returned evidence.
 - `ask` returns deterministic evidence weights and can write `--trace-json` / `--trace-md` for host-agent debugging.

@@ -771,6 +771,8 @@ class QueryCliTests(unittest.TestCase):
             routing = root / "routing.json"
             routes = root / "routes.json"
             report_md = root / "route-test.md"
+            route_report_json = root / "route-report.json"
+            route_report_md = root / "route-report.md"
             routing.write_text(
                 json.dumps(
                     {
@@ -785,6 +787,12 @@ class QueryCliTests(unittest.TestCase):
                                 "name": "kb:technical",
                                 "dataset_id": "ds-technical",
                                 "hints": ["api", "runtime"],
+                                "params": {"top_k": 5},
+                            },
+                            {
+                                "name": "kb:reference",
+                                "dataset_id": "ds-reference",
+                                "hints": ["api reference"],
                             },
                         ],
                     }
@@ -799,6 +807,8 @@ class QueryCliTests(unittest.TestCase):
                                 "id": "q1",
                                 "question": "How does the API runtime work?",
                                 "expected_kb": "kb:technical",
+                                "category": "exact",
+                                "locale": "en",
                             }
                         ]
                     }
@@ -834,13 +844,38 @@ class QueryCliTests(unittest.TestCase):
             route_test_payload = json.loads(stdout.getvalue())
             route_test_markdown = report_md.read_text(encoding="utf-8")
 
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                route_report_code = module.main(
+                    [
+                        "route-report",
+                        "--routing-config",
+                        str(routing),
+                        "--queries",
+                        str(routes),
+                        "--report-json",
+                        str(route_report_json),
+                        "--report-md",
+                        str(route_report_md),
+                    ]
+                )
+            route_report_payload = json.loads(stdout.getvalue())
+            route_report_markdown = route_report_md.read_text(encoding="utf-8")
+            route_report_file_payload = json.loads(route_report_json.read_text(encoding="utf-8"))
+
         self.assertEqual(list_code, 0)
-        self.assertEqual(list_payload["count"], 2)
+        self.assertEqual(list_payload["count"], 3)
         self.assertEqual(route_code, 0)
         self.assertEqual(route_payload["selected"]["dataset_id"], "ds-technical")
         self.assertEqual(test_code, 0)
         self.assertEqual(route_test_payload["metrics"]["accuracy"], 1.0)
         self.assertIn("Route Test", route_test_markdown)
+        self.assertEqual(route_report_code, 0)
+        self.assertEqual(route_report_payload["schema"], "ragflow_route_report_v1")
+        self.assertEqual(route_report_payload["summary"]["missing_route_test_count"], 2)
+        self.assertEqual(route_report_file_payload["schema"], "ragflow_route_report_v1")
+        self.assertIn("RAGFlow Route Report", route_report_markdown)
+        self.assertIn("Missing Route Tests", route_report_markdown)
 
     def test_auto_mode_uses_routing_config_with_fake_client(self) -> None:
         module = load_query_module()

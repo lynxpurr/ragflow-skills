@@ -927,8 +927,8 @@ shipping private route tables or private centroids.
 
 Tasks:
 
-- [ ] Add `ragflow-query route-report`.
-- [ ] Report hint coverage, missing route tests, ambiguous patterns, and low-confidence routes.
+- [x] Add `ragflow-query route-report`.
+- [x] Report hint coverage, missing route tests, ambiguous patterns, and low-confidence routes.
 - [ ] Add `ragflow-query route-diagnose`.
 - [ ] Classify route failures as missing hint, regex-order issue, priority conflict, acceptable ambiguity, missing KB config, or low-confidence semantic fallback.
 - [ ] Add regex ordering and substring-conflict checks.

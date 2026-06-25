@@ -635,13 +635,14 @@ used per-KB retrieval parameters, centroid coverage, and strong route regression
 
 ### Proposed Additions
 
-- `ragflow-query route-report`: show hint coverage, ambiguous rules, missing retrieval
-  params, and route-test pass rate.
+- `ragflow-query route-report`: show hint coverage, missing route tests, ambiguous rules,
+  short-hint word-boundary risks, substring conflicts, missing retrieval params, and
+  route-test pass rate.
 - `ragflow-query route-diagnose`: classify failures as missing hint, regex-order issue,
   priority conflict, acceptable ambiguity, or missing KB config.
 - English hint coverage and word-boundary checks for short English names, abbreviations,
   and product terms.
-- category coverage reports for public route-test suites.
+- category, locale, and negative-class coverage reports for public route-test suites.
 - optional centroid index generated from public user-owned KB manifests or snapshots;
 - centroid scoring as a tie-breaker, not a replacement for explicit user hints;
 - per-KB retrieval parameter report and benchmark-derived suggestions;

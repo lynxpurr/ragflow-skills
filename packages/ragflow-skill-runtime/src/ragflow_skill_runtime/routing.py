@@ -15,6 +15,9 @@ class RoutingError(RuntimeError):
     """Raised when routing inputs are invalid."""
 
 
+ROUTE_REPORT_SCHEMA = "ragflow_route_report_v1"
+
+
 def _string_list(value: Any, *, field_name: str) -> list[str]:
     if value is None:
         return []
@@ -27,6 +30,18 @@ def _string_list(value: Any, *, field_name: str) -> list[str]:
 
 def _tokenize(text: str) -> set[str]:
     return {token for token in re.split(r"[^0-9a-zA-Z_\u4e00-\u9fff]+", text.lower()) if token}
+
+
+def _rate(count: int | float, total: int | float) -> float:
+    return round(float(count) / float(total), 4) if total else 0.0
+
+
+def _average(values: list[float]) -> float:
+    return round(sum(values) / len(values), 4) if values else 0.0
+
+
+def _matches_kb_ref(value: Any, kb: "RoutingKnowledgeBase") -> bool:
+    return isinstance(value, str) and value in {kb.name, kb.dataset_id}
 
 
 @dataclass(frozen=True)
@@ -211,6 +226,436 @@ def route_question(config: RoutingConfig, question: str) -> RouteResult:
     return RouteResult(question=question, selected=selected, candidates=candidates)
 
 
+def _hint_tokens(hints: list[str]) -> set[str]:
+    tokens: set[str] = set()
+    for hint in hints:
+        tokens.update(_tokenize(hint))
+    return tokens
+
+
+def _short_hint(hint: str) -> bool:
+    compact = hint.strip()
+    if not compact:
+        return False
+    token_count = len(_tokenize(compact))
+    return len(compact) <= 8 or token_count <= 2
+
+
+def _query_category(query: Mapping[str, Any]) -> str:
+    for key in ("category", "type", "query_type"):
+        value = query.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "uncategorized"
+
+
+def _query_locale(query: Mapping[str, Any]) -> str:
+    value = query.get("locale") or query.get("language")
+    return value.strip() if isinstance(value, str) and value.strip() else "unknown"
+
+
+def _route_case_metadata(query: Mapping[str, Any]) -> dict[str, str]:
+    metadata = {
+        "category": _query_category(query),
+        "locale": _query_locale(query),
+    }
+    negative_class = query.get("negative_class")
+    if isinstance(negative_class, str) and negative_class.strip():
+        metadata["negative_class"] = negative_class.strip()
+    return metadata
+
+
+def _route_report_empty_route_test() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "schema": "ragflow_route_test_report_v1",
+        "metrics": {"total": 0, "passed": 0, "failed": 0, "accuracy": 0.0},
+        "cases": [],
+    }
+
+
+def run_route_report(
+    config: RoutingConfig,
+    queries: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Summarize deterministic routing quality signals."""
+
+    queries = list(queries or [])
+    route_results = [route_question(config, query["question"]) for query in queries]
+    cases: list[dict[str, Any]] = []
+    passed = 0
+    low_confidence_cases: list[dict[str, Any]] = []
+    ambiguous_cases: list[dict[str, Any]] = []
+    empty_cases: list[dict[str, Any]] = []
+    hint_coverage: dict[str, dict[str, Any]] = {}
+    hint_tokens_by_kb: dict[str, set[str]] = {}
+    matched_hints_by_kb: dict[str, set[str]] = {}
+    params_coverage: dict[str, bool] = {}
+    word_boundary_hints: list[dict[str, Any]] = []
+    substring_conflicts: list[dict[str, Any]] = []
+    total_hints = 0
+    total_hint_matches = 0
+
+    for kb in config.knowledge_bases:
+        hint_tokens = _hint_tokens(kb.hints)
+        hint_tokens_by_kb[kb.name] = hint_tokens
+        matched_hints_by_kb[kb.name] = set()
+        params_coverage[kb.name] = bool(kb.params)
+        short_hints = [hint for hint in kb.hints if _short_hint(hint)]
+        if short_hints:
+            word_boundary_hints.append(
+                {
+                    "kb": kb.name,
+                    "dataset_id": kb.dataset_id,
+                    "hints": short_hints,
+                    "reason": "short hints need route-test coverage for word-boundary conflicts",
+                }
+            )
+        total_hints += len(kb.hints)
+
+    for left_index, left_kb in enumerate(config.knowledge_bases):
+        for left_hint in left_kb.hints:
+            left_lower = left_hint.lower().strip()
+            if not left_lower:
+                continue
+            for right_kb in config.knowledge_bases[left_index + 1 :]:
+                for right_hint in right_kb.hints:
+                    right_lower = right_hint.lower().strip()
+                    if not right_lower or left_lower == right_lower:
+                        continue
+                    shorter, longer = (
+                        (left_hint, right_hint) if len(left_lower) < len(right_lower) else (right_hint, left_hint)
+                    )
+                    shorter_lower = shorter.lower().strip()
+                    longer_lower = longer.lower().strip()
+                    if shorter_lower and shorter_lower in longer_lower:
+                        substring_conflicts.append(
+                            {
+                                "kb_a": left_kb.name,
+                                "kb_b": right_kb.name,
+                                "hint_a": left_hint,
+                                "hint_b": right_hint,
+                                "shorter_hint": shorter,
+                                "longer_hint": longer,
+                            }
+                        )
+
+    for query, result in zip(queries, route_results, strict=False):
+        case = result.to_dict()
+        selected = result.selected
+        matched_hints = []
+        if selected:
+            matched_hints = list(selected.matched_hints)
+            total_hint_matches += len(matched_hints)
+            matched_hints_by_kb[selected.kb.name].update(matched_hints)
+        expected = query["expected"]
+        passed_case = expected in {
+            selected.kb.name if selected else None,
+            selected.kb.dataset_id if selected else None,
+        }
+        case.update(
+            {
+                "id": query["id"],
+                "expected": expected,
+                "passed": passed_case,
+                "actual": selected.kb.name if selected else None,
+                "actual_dataset_id": selected.kb.dataset_id if selected else None,
+                "matched_hints": matched_hints,
+                "selected_score": selected.score if selected else None,
+                "selected_reason": selected.reason if selected else None,
+                "candidate_count": len(result.candidates),
+                "low_confidence": bool(selected and selected.score < 2.0),
+                "ambiguous": bool(
+                    result.candidates
+                    and len(result.candidates) > 1
+                    and result.candidates[0].score > 0
+                    and result.candidates[1].score == result.candidates[0].score
+                ),
+                "empty_route": selected is None,
+                **_route_case_metadata(query),
+            }
+        )
+        if passed_case:
+            passed += 1
+        if case["low_confidence"]:
+            low_confidence_cases.append(case)
+        if case["ambiguous"]:
+            ambiguous_cases.append(case)
+        if case["empty_route"]:
+            empty_cases.append(case)
+        cases.append(case)
+
+    route_test_report = run_route_tests(config, queries) if queries else _route_report_empty_route_test()
+    missing_route_tests = []
+    for kb in config.knowledge_bases:
+        expected_cases = [case for case in cases if _matches_kb_ref(case.get("expected"), kb)]
+        passing_cases = [case for case in expected_cases if case.get("passed")]
+        routed_cases = [
+            case
+            for case in cases
+            if case.get("actual_dataset_id") == kb.dataset_id or case.get("actual") == kb.name
+        ]
+        matched_hint_set = matched_hints_by_kb[kb.name]
+        coverage = _rate(len(matched_hint_set), len(kb.hints) if kb.hints else 0)
+        if not expected_cases:
+            missing_route_tests.append(
+                {
+                    "name": kb.name,
+                    "dataset_id": kb.dataset_id,
+                    "reason": "no route-test query expects this KB",
+                }
+            )
+        hint_coverage[kb.name] = {
+            "name": kb.name,
+            "dataset_id": kb.dataset_id,
+            "hint_count": len(kb.hints),
+            "matched_hint_count": len(matched_hint_set),
+            "matched_hints": sorted(matched_hint_set),
+            "expected_query_count": len(expected_cases),
+            "passing_query_count": len(passing_cases),
+            "routed_query_count": len(routed_cases),
+            "question_count": len(routed_cases),
+            "coverage": coverage,
+            "route_test_coverage": _rate(len(expected_cases), len(queries)),
+            "route_test_pass_rate": _rate(len(passing_cases), len(expected_cases)),
+            "params": dict(kb.params),
+            "has_params": bool(kb.params),
+            "short_hints": [hint for hint in kb.hints if _short_hint(hint)],
+            "hints": list(kb.hints),
+            "hint_tokens": sorted(hint_tokens_by_kb[kb.name]),
+        }
+
+    category_totals: dict[str, dict[str, Any]] = {}
+    locale_totals: dict[str, dict[str, Any]] = {}
+    negative_class_totals: dict[str, dict[str, Any]] = {}
+    for case in cases:
+        for key, target in (
+            ("category", category_totals),
+            ("locale", locale_totals),
+            ("negative_class", negative_class_totals),
+        ):
+            value = case.get(key)
+            if not isinstance(value, str) or not value:
+                continue
+            bucket = target.setdefault(value, {"total": 0, "passed": 0, "failed": 0})
+            bucket["total"] += 1
+            if case.get("passed"):
+                bucket["passed"] += 1
+            else:
+                bucket["failed"] += 1
+    for target in (category_totals, locale_totals, negative_class_totals):
+        for bucket in target.values():
+            bucket["pass_rate"] = _rate(bucket["passed"], bucket["total"])
+
+    missing_params = [
+        {
+            "name": kb.name,
+            "dataset_id": kb.dataset_id,
+            "reason": "no per-KB retrieval params configured",
+        }
+        for kb in config.knowledge_bases
+        if not kb.params
+    ]
+
+    route_scores = [float(case.get("selected_score") or 0.0) for case in cases]
+    route_score_avg = _average(route_scores)
+    low_confidence_rate = _rate(len(low_confidence_cases), len(cases))
+    ambiguous_rate = _rate(len(ambiguous_cases), len(cases))
+    empty_rate = _rate(len(empty_cases), len(cases))
+    route_test_metrics = route_test_report.get("metrics", {})
+    route_pass_rate = route_test_metrics.get("accuracy", 0.0) if isinstance(route_test_metrics, Mapping) else 0.0
+    return {
+        "ok": True,
+        "schema": ROUTE_REPORT_SCHEMA,
+        "summary": {
+            "kb_count": len(config.knowledge_bases),
+            "query_count": len(cases),
+            "route_test_pass_rate": route_pass_rate,
+            "route_pass_count": passed,
+            "route_fail_count": len(cases) - passed,
+            "low_confidence_count": len(low_confidence_cases),
+            "low_confidence_rate": low_confidence_rate,
+            "ambiguous_count": len(ambiguous_cases),
+            "ambiguous_rate": ambiguous_rate,
+            "empty_route_count": len(empty_cases),
+            "empty_route_rate": empty_rate,
+            "route_score_average": route_score_avg,
+            "route_score_min": min((float(case.get("selected_score") or 0.0) for case in cases), default=0.0),
+            "route_score_max": max((float(case.get("selected_score") or 0.0) for case in cases), default=0.0),
+            "hint_count": total_hints,
+            "hint_match_count": total_hint_matches,
+            "hint_match_rate": _rate(total_hint_matches, total_hints),
+            "params_coverage_count": sum(1 for has_params in params_coverage.values() if has_params),
+            "params_coverage_rate": _rate(sum(1 for has_params in params_coverage.values() if has_params), len(params_coverage)),
+            "missing_route_test_count": len(missing_route_tests),
+            "missing_params_count": len(missing_params),
+            "short_hint_kb_count": len(word_boundary_hints),
+            "substring_conflict_count": len(substring_conflicts),
+            "category_count": len(category_totals),
+            "locale_count": len(locale_totals),
+            "negative_class_count": len(negative_class_totals),
+            "route_test_total": route_test_metrics.get("total", 0) if isinstance(route_test_metrics, Mapping) else 0,
+        },
+        "route_test": route_test_report,
+        "hint_coverage": list(hint_coverage.values()),
+        "missing_route_tests": missing_route_tests,
+        "missing_params": missing_params,
+        "word_boundary_hints": word_boundary_hints,
+        "substring_conflicts": substring_conflicts,
+        "coverage_by_category": category_totals,
+        "coverage_by_locale": locale_totals,
+        "coverage_by_negative_class": negative_class_totals,
+        "low_confidence_routes": low_confidence_cases,
+        "ambiguous_routes": ambiguous_cases,
+        "empty_routes": empty_cases,
+        "kb_params": [
+            {
+                "name": kb.name,
+                "dataset_id": kb.dataset_id,
+                "has_params": bool(kb.params),
+                "params": dict(kb.params),
+            }
+            for kb in config.knowledge_bases
+        ],
+        "recommendations": [
+            "Add route-test coverage for KBs that have hints but no passing query coverage.",
+            "Add per-KB params where route coverage depends on top_k or similarity_threshold defaults.",
+            "Review short hints and ambiguous matches for word-boundary conflicts before expanding route rules.",
+        ],
+    }
+
+
+def render_route_report_markdown(report: Mapping[str, Any]) -> str:
+    """Render a compact Markdown route quality report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Route Report",
+        "",
+        f"- ok: `{str(report.get('ok', False)).lower()}`",
+        f"- query_count: `{summary.get('query_count', 0)}`",
+        f"- route_test_pass_rate: `{summary.get('route_test_pass_rate', 0)}`",
+        f"- low_confidence_rate: `{summary.get('low_confidence_rate', 0)}`",
+        f"- ambiguous_rate: `{summary.get('ambiguous_rate', 0)}`",
+        f"- empty_route_rate: `{summary.get('empty_route_rate', 0)}`",
+        f"- missing_route_tests: `{summary.get('missing_route_test_count', 0)}`",
+        f"- missing_params: `{summary.get('missing_params_count', 0)}`",
+        f"- substring_conflicts: `{summary.get('substring_conflict_count', 0)}`",
+        "",
+        "## KB Coverage",
+        "",
+        "| KB | route tests | pass rate | hints | matched | hint coverage | params |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
+    ]
+    for item in report.get("hint_coverage", []):
+        if not isinstance(item, Mapping):
+            continue
+        lines.append(
+            "| `{name}` | {expected_query_count} | {route_test_pass_rate:.2f} | {hint_count} | "
+            "{matched_hint_count} | {coverage:.2f} | {params} |".format(
+                name=item.get("name", ""),
+                expected_query_count=int(item.get("expected_query_count", 0)),
+                route_test_pass_rate=float(item.get("route_test_pass_rate", 0.0)),
+                hint_count=int(item.get("hint_count", 0)),
+                matched_hint_count=int(item.get("matched_hint_count", 0)),
+                coverage=float(item.get("coverage", 0.0)),
+                params="yes" if item.get("has_params") else "no",
+            )
+        )
+    lines.extend(["", "## Route Test", ""])
+    route_test = report.get("route_test", {}) if isinstance(report.get("route_test"), Mapping) else {}
+    metrics = route_test.get("metrics", {}) if isinstance(route_test.get("metrics"), Mapping) else {}
+    lines.extend(
+        [
+            f"- total: `{metrics.get('total', 0)}`",
+            f"- passed: `{metrics.get('passed', 0)}`",
+            f"- failed: `{metrics.get('failed', 0)}`",
+        ]
+    )
+    lines.extend(["", "## Missing Route Tests", ""])
+    missing_route_tests = report.get("missing_route_tests", []) if isinstance(report.get("missing_route_tests"), list) else []
+    if not missing_route_tests:
+        lines.append("- None")
+    else:
+        for item in missing_route_tests:
+            if isinstance(item, Mapping):
+                lines.append(f"- `{item.get('name', '')}` `{item.get('dataset_id', '')}`")
+    lines.extend(["", "## Missing Params", ""])
+    missing_params = report.get("missing_params", []) if isinstance(report.get("missing_params"), list) else []
+    if not missing_params:
+        lines.append("- None")
+    else:
+        for item in missing_params:
+            if isinstance(item, Mapping):
+                lines.append(f"- `{item.get('name', '')}` `{item.get('dataset_id', '')}`")
+    lines.extend(["", "## Category Coverage", ""])
+    coverage_by_category = (
+        report.get("coverage_by_category", {}) if isinstance(report.get("coverage_by_category"), Mapping) else {}
+    )
+    if not coverage_by_category:
+        lines.append("- None")
+    else:
+        lines.extend(["| category | total | passed | pass rate |", "| --- | ---: | ---: | ---: |"])
+        for category, item in sorted(coverage_by_category.items()):
+            if isinstance(item, Mapping):
+                lines.append(
+                    "| `{category}` | {total} | {passed} | {pass_rate:.2f} |".format(
+                        category=category,
+                        total=int(item.get("total", 0)),
+                        passed=int(item.get("passed", 0)),
+                        pass_rate=float(item.get("pass_rate", 0.0)),
+                    )
+                )
+    lines.extend(["", "## Low Confidence", ""])
+    low_confidence = report.get("low_confidence_routes", []) if isinstance(report.get("low_confidence_routes"), list) else []
+    if not low_confidence:
+        lines.append("- None")
+    else:
+        for case in low_confidence[:10]:
+            if isinstance(case, Mapping):
+                lines.append(f"- `{case.get('id', '')}` `{case.get('question', '')}` score={case.get('selected_score', 0)}")
+    lines.extend(["", "## Ambiguous", ""])
+    ambiguous = report.get("ambiguous_routes", []) if isinstance(report.get("ambiguous_routes"), list) else []
+    if not ambiguous:
+        lines.append("- None")
+    else:
+        for case in ambiguous[:10]:
+            if isinstance(case, Mapping):
+                lines.append(f"- `{case.get('id', '')}` `{case.get('question', '')}`")
+    lines.extend(["", "## Empty Routes", ""])
+    empty_routes = report.get("empty_routes", []) if isinstance(report.get("empty_routes"), list) else []
+    if not empty_routes:
+        lines.append("- None")
+    else:
+        for case in empty_routes[:10]:
+            if isinstance(case, Mapping):
+                lines.append(f"- `{case.get('id', '')}` `{case.get('question', '')}`")
+    lines.extend(["", "## Word Boundary Hints", ""])
+    word_boundary_hints = report.get("word_boundary_hints", []) if isinstance(report.get("word_boundary_hints"), list) else []
+    if not word_boundary_hints:
+        lines.append("- None")
+    else:
+        for item in word_boundary_hints[:10]:
+            if isinstance(item, Mapping):
+                lines.append(f"- `{item.get('kb', '')}`: {', '.join(str(hint) for hint in item.get('hints', []))}")
+    lines.extend(["", "## Substring Conflicts", ""])
+    substring_conflicts = report.get("substring_conflicts", []) if isinstance(report.get("substring_conflicts"), list) else []
+    if not substring_conflicts:
+        lines.append("- None")
+    else:
+        for item in substring_conflicts[:10]:
+            if isinstance(item, Mapping):
+                lines.append(
+                    "- `{kb_a}` `{hint_a}` overlaps `{kb_b}` `{hint_b}`".format(
+                        kb_a=item.get("kb_a", ""),
+                        hint_a=item.get("hint_a", ""),
+                        kb_b=item.get("kb_b", ""),
+                        hint_b=item.get("hint_b", ""),
+                    )
+                )
+    return "\n".join(lines) + "\n"
+
+
 def load_route_test_queries(path: str | Path) -> list[dict[str, Any]]:
     """Load route-test queries from a compact JSON file."""
 
@@ -234,13 +679,16 @@ def load_route_test_queries(path: str | Path) -> list[dict[str, Any]]:
             raise RoutingError(f"queries[{index}].question is required")
         if not isinstance(expected, str) or not expected.strip():
             raise RoutingError(f"queries[{index}].expected_kb or expected_dataset_id is required")
-        queries.append(
-            {
-                "id": str(item.get("id") or f"q{index + 1}"),
-                "question": question.strip(),
-                "expected": expected.strip(),
-            }
-        )
+        query = {
+            "id": str(item.get("id") or f"q{index + 1}"),
+            "question": question.strip(),
+            "expected": expected.strip(),
+        }
+        for key in ("category", "type", "query_type", "locale", "language", "negative_class"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                query[key] = value.strip()
+        queries.append(query)
     return queries
 
 

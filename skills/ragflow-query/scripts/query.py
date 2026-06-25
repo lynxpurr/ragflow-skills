@@ -59,10 +59,12 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_query_rerank_ab_markdown,
     render_query_rewrite_markdown,
     render_query_trace_markdown,
+    render_route_report_markdown,
     render_route_test_markdown,
     run_fusion_tests,
     resolve_dataset_ids,
     route_question,
+    run_route_report,
     run_route_tests,
     weight_evidence,
 )
@@ -425,6 +427,19 @@ def _route_test(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _route_report(args: argparse.Namespace) -> int:
+    try:
+        routing = _load_routing(args)
+        queries = load_route_test_queries(args.queries) if args.queries else None
+        report = run_route_report(routing, queries)
+    except (RoutingError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=True)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_route_report_markdown(report))
+    _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _rewrite(args: argparse.Namespace) -> int:
     try:
         config = _load_runtime(args) if args.rewrite == "hyde" else None
@@ -619,6 +634,13 @@ def build_parser() -> argparse.ArgumentParser:
     route_test.add_argument("--report-json", help="Optional JSON report output path")
     route_test.add_argument("--report-md", help="Optional Markdown report output path")
     route_test.set_defaults(func=_route_test)
+
+    route_report = sub.add_parser("route-report", help="Summarize route quality coverage")
+    _add_routing_option(route_report)
+    route_report.add_argument("--queries", help="Optional route-test queries JSON")
+    route_report.add_argument("--report-json", help="Optional JSON report output path")
+    route_report.add_argument("--report-md", help="Optional Markdown report output path")
+    route_report.set_defaults(func=_route_report)
 
     rewrite = sub.add_parser(
         "rewrite",

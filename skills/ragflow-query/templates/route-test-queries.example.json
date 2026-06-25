@@ -3,12 +3,16 @@
     {
       "id": "route-general",
       "question": "How do I get started with the sample onboarding flow?",
-      "expected_kb": "kb:general-sample"
+      "expected_kb": "kb:general-sample",
+      "category": "exact",
+      "locale": "en"
     },
     {
       "id": "route-technical",
       "question": "Which API configuration should a developer use?",
-      "expected_kb": "kb:technical-sample"
+      "expected_kb": "kb:technical-sample",
+      "category": "exact",
+      "locale": "en"
     }
   ]
 }

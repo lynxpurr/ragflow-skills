@@ -9,8 +9,10 @@ from ragflow_skill_runtime.routing import (
     RoutingConfig,
     load_route_test_queries,
     load_routing_config,
+    render_route_report_markdown,
     render_route_test_markdown,
     route_question,
+    run_route_report,
     run_route_tests,
 )
 
@@ -34,6 +36,12 @@ class RoutingTests(unittest.TestCase):
                         "description": "API configuration and runtime integration",
                         "hints": ["api", "configuration", "runtime"],
                         "params": {"top_k": 6},
+                    },
+                    {
+                        "name": "kb:api-extra",
+                        "dataset_id": "ds-api-extra",
+                        "description": "Additional API references",
+                        "hints": ["api docs", "sdk"],
                     },
                 ],
             }
@@ -81,6 +89,41 @@ class RoutingTests(unittest.TestCase):
         self.assertTrue(report["ok"])
         self.assertEqual(report["metrics"]["accuracy"], 1.0)
         self.assertIn("Route Test", render_route_test_markdown(report))
+
+    def test_route_report_summarizes_coverage_and_conflicts(self) -> None:
+        queries = [
+            {
+                "id": "api-config",
+                "question": "API configuration details",
+                "expected": "kb:technical",
+                "category": "exact",
+                "locale": "en",
+            },
+            {
+                "id": "fallback",
+                "question": "Unmatched onboarding question",
+                "expected": "kb:general",
+                "category": "fuzzy",
+                "locale": "en",
+            },
+        ]
+
+        report = run_route_report(self.sample_config(), queries)
+        markdown = render_route_report_markdown(report)
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["schema"], "ragflow_route_report_v1")
+        self.assertEqual(report["summary"]["kb_count"], 3)
+        self.assertEqual(report["summary"]["route_test_total"], 2)
+        self.assertEqual(report["summary"]["missing_route_test_count"], 1)
+        self.assertEqual(report["summary"]["missing_params_count"], 2)
+        self.assertEqual(report["coverage_by_category"]["exact"]["total"], 1)
+        self.assertEqual(report["coverage_by_locale"]["en"]["total"], 2)
+        self.assertTrue(report["word_boundary_hints"])
+        self.assertTrue(report["substring_conflicts"])
+        self.assertIn("RAGFlow Route Report", markdown)
+        self.assertIn("Missing Route Tests", markdown)
+        self.assertIn("Category Coverage", markdown)
 
 
 if __name__ == "__main__":
