@@ -1604,6 +1604,9 @@ raise SystemExit(code)
     query_rerank_input = work_root / "query_rerank.json"
     query_rerank_json = work_root / "query_rerank_ab.json"
     query_rerank_md = work_root / "query_rerank_ab.md"
+    query_fusion_source = work_root / "query_fusion_source.json"
+    query_fusion_json = work_root / "query_fusion.json"
+    query_fusion_md = work_root / "query_fusion.md"
     query_output.write_text(
         json.dumps(
             {
@@ -1634,6 +1637,34 @@ raise SystemExit(code)
     query_rerank_input.write_text(
         json.dumps(
             {"results": [{"chunk_id": "consumer-chunk-2", "score": 0.91}, {"chunk_id": "consumer-chunk-1", "score": 0.42}]},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    query_fusion_source.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "question": "What can run without repository source context?",
+                "dataset_ids": ["ds-consumer-secondary"],
+                "chunks": [
+                    {
+                        "chunk_id": "consumer-secondary",
+                        "content": "Secondary KB evidence for repository source context.",
+                        "similarity": 0.8,
+                        "document_name": "secondary.md",
+                        "dataset_id": "ds-consumer-secondary",
+                    },
+                    {
+                        "chunk_id": "consumer-chunk-1",
+                        "content": "This release artifact can run without repository source context.",
+                        "similarity": 0.7,
+                        "document_name": "sample.md",
+                        "dataset_id": "ds-consumer-secondary",
+                    },
+                ],
+            },
             ensure_ascii=False,
             indent=2,
         ),
@@ -1762,6 +1793,37 @@ raise SystemExit(code)
         produced.append(query_rerank_json)
     if query_rerank_md.exists():
         produced.append(query_rerank_md)
+
+    query_fusion = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "fusion",
+            "--query-output",
+            str(query_output),
+            "--query-output",
+            str(query_fusion_source),
+            "--top-k",
+            "3",
+            "--report-json",
+            str(query_fusion_json),
+            "--report-md",
+            str(query_fusion_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query fusion report",
+        query_fusion,
+        required_output='"schema": "ragflow_fusion_report_v1"',
+    )
+    if query_fusion_json.exists():
+        produced.append(query_fusion_json)
+    if query_fusion_md.exists():
+        produced.append(query_fusion_md)
 
     missing_config = _run_command(
         [

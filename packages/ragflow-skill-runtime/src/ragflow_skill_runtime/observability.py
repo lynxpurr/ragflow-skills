@@ -16,6 +16,7 @@ CITATION_AUDIT_SCHEMA = "ragflow_citation_audit_v1"
 QUERY_DIAGNOSTIC_SCHEMA = "ragflow_query_diagnostic_report_v1"
 QUERY_POLLUTION_REPORT_SCHEMA = "ragflow_query_pollution_report_v1"
 QUERY_RERANK_AB_REPORT_SCHEMA = "ragflow_query_rerank_ab_report_v1"
+FUSION_REPORT_SCHEMA = "ragflow_fusion_report_v1"
 
 _STOPWORDS = {
     "a",
@@ -939,6 +940,327 @@ def _expected_term_hits_for_indices(
         if any(lowered in texts_by_index[index].lower() for index in indices):
             hits.append(term)
     return hits
+
+
+def _source_label(payload: Mapping[str, Any], *, index: int) -> str:
+    for key in ("source", "source_id", "kb_name", "name"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    dataset_ids = payload.get("dataset_ids")
+    if isinstance(dataset_ids, list) and dataset_ids:
+        return ",".join(str(item) for item in dataset_ids if str(item)) or f"source-{index}"
+    route = payload.get("route")
+    if isinstance(route, Mapping):
+        selected = route.get("selected")
+        if isinstance(selected, Mapping):
+            name = selected.get("name") or selected.get("dataset_id")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+    metadata = payload.get("metadata")
+    if isinstance(metadata, Mapping):
+        route = metadata.get("route")
+        if isinstance(route, Mapping):
+            selected = route.get("selected")
+            if isinstance(selected, Mapping):
+                name = selected.get("name") or selected.get("dataset_id")
+                if isinstance(name, str) and name.strip():
+                    return name.strip()
+    return f"source-{index}"
+
+
+def _dataset_ids(payload: Mapping[str, Any]) -> list[str]:
+    dataset_ids = payload.get("dataset_ids")
+    if isinstance(dataset_ids, list):
+        return [str(item) for item in dataset_ids if str(item)]
+    return []
+
+
+def _normalized_similarity(chunk: Mapping[str, Any]) -> float | None:
+    score = _as_float(chunk.get("similarity"))
+    if score is None:
+        score = _as_float(chunk.get("score"))
+    return score
+
+
+def _near_duplicate_key(chunk: Mapping[str, Any]) -> str:
+    identity = _chunk_identity(chunk)
+    if identity and not identity.startswith("sha256:"):
+        return f"id:{identity.lower()}"
+    text = _chunk_text(chunk) or str(chunk.get("content") or "")
+    tokens = sorted(_pollution_tokenize(text))
+    if len(tokens) >= 6:
+        return "tokens:" + " ".join(tokens[:24])
+    document = chunk.get("document_name") or chunk.get("document_id") or ""
+    preview = _preview(str(chunk.get("content") or ""), limit=140).lower()
+    return f"text:{document}:{preview}"
+
+
+def _score_range(values: Sequence[float]) -> tuple[float, float]:
+    if not values:
+        return 0.0, 0.0
+    return min(values), max(values)
+
+
+def query_fusion_report(
+    query_payloads: Sequence[Mapping[str, Any]],
+    *,
+    top_k: int = 10,
+    rrf_k: int = 60,
+    max_per_source: int | None = None,
+) -> dict[str, Any]:
+    """Fuse saved query outputs with reciprocal rank fusion and explainable contributions."""
+
+    issues: list[dict[str, Any]] = []
+    if not query_payloads:
+        _append_issue(
+            issues,
+            severity="error",
+            code="no_query_outputs",
+            message="fusion requires at least one query output",
+        )
+    if rrf_k <= 0:
+        _append_issue(
+            issues,
+            severity="error",
+            code="invalid_rrf_k",
+            message="rrf_k must be greater than zero",
+            detail={"rrf_k": rrf_k},
+        )
+    if top_k <= 0:
+        _append_issue(
+            issues,
+            severity="error",
+            code="invalid_top_k",
+            message="top_k must be greater than zero",
+            detail={"top_k": top_k},
+        )
+    if any(issue["severity"] == "error" for issue in issues):
+        status = _severity_status(issues)
+        return {
+            "ok": False,
+            "schema": FUSION_REPORT_SCHEMA,
+            "status": status,
+            "algorithm": "rrf",
+            "parameters": {"top_k": top_k, "rrf_k": rrf_k, "max_per_source": max_per_source},
+            "summary": {
+                "source_count": len(query_payloads),
+                "input_chunk_count": 0,
+                "unique_chunk_count": 0,
+                "deduplicated_chunk_count": 0,
+                "result_count": 0,
+                "issue_count": len(issues),
+                "errors": sum(1 for issue in issues if issue["severity"] == "error"),
+                "warnings": 0,
+                "infos": 0,
+            },
+            "sources": [],
+            "results": [],
+            "issues": issues,
+        }
+
+    sources: list[dict[str, Any]] = []
+    grouped: dict[str, dict[str, Any]] = {}
+    input_chunk_count = 0
+    question = ""
+
+    for source_index, payload in enumerate(query_payloads, start=1):
+        if not question and isinstance(payload.get("question"), str):
+            question = str(payload.get("question"))
+        chunks = _query_chunks(payload)
+        evidence = evidence_from_query_payload(payload)
+        evidence_by_rank = _evidence_by_rank(evidence)
+        label = _source_label(payload, index=source_index)
+        dataset_ids = _dataset_ids(payload)
+        similarities = [
+            value
+            for value in (_normalized_similarity(chunk) for chunk in chunks)
+            if value is not None
+        ]
+        min_score, max_score = _score_range(similarities)
+        if not chunks:
+            _append_issue(
+                issues,
+                severity="warning",
+                code="empty_source",
+                message="one fusion source contains zero chunks",
+                detail={"source": label},
+            )
+        sources.append(
+            {
+                "index": source_index,
+                "source": label,
+                "dataset_ids": dataset_ids,
+                "chunk_count": len(chunks),
+                "score_min": min_score if similarities else None,
+                "score_max": max_score if similarities else None,
+            }
+        )
+        source_limit = len(chunks) if max_per_source is None else max(0, min(max_per_source, len(chunks)))
+        for rank, chunk in enumerate(chunks[:source_limit], start=1):
+            input_chunk_count += 1
+            similarity = _normalized_similarity(chunk)
+            if similarity is not None and max_score > min_score:
+                normalized_score = round((similarity - min_score) / (max_score - min_score), 4)
+            elif similarity is not None:
+                normalized_score = 1.0
+            else:
+                normalized_score = None
+            contribution = round(1.0 / (rrf_k + rank), 6)
+            key = _near_duplicate_key(chunk)
+            evidence_item = evidence_by_rank.get(rank, {})
+            entry = grouped.get(key)
+            if entry is None:
+                entry = {
+                    "identity": _chunk_identity(chunk),
+                    "dedupe_key": key,
+                    "document_name": chunk.get("document_name"),
+                    "document_id": chunk.get("document_id"),
+                    "chunk_id": _chunk_field(chunk, ("chunk_id", "id", "source_chunk_id")),
+                    "stable_hash": stable_chunk_hash(chunk),
+                    "content_preview": _preview(str(chunk.get("content") or "")),
+                    "best_original_rank": rank,
+                    "best_similarity": similarity,
+                    "best_evidence_score": _as_float(evidence_item.get("score")) if isinstance(evidence_item, Mapping) else None,
+                    "source_count": 0,
+                    "sources": [],
+                    "score_components": [],
+                    "rrf_score": 0.0,
+                }
+                grouped[key] = entry
+            entry["rrf_score"] = round(float(entry["rrf_score"]) + contribution, 6)
+            entry["best_original_rank"] = min(int(entry["best_original_rank"]), rank)
+            if similarity is not None and (
+                entry.get("best_similarity") is None or similarity > float(entry.get("best_similarity") or 0.0)
+            ):
+                entry["best_similarity"] = similarity
+            evidence_score = _as_float(evidence_item.get("score")) if isinstance(evidence_item, Mapping) else None
+            if evidence_score is not None and (
+                entry.get("best_evidence_score") is None or evidence_score > float(entry.get("best_evidence_score") or 0.0)
+            ):
+                entry["best_evidence_score"] = evidence_score
+            if label not in entry["sources"]:
+                entry["sources"].append(label)
+                entry["source_count"] = len(entry["sources"])
+            entry["score_components"].append(
+                {
+                    "source": label,
+                    "dataset_ids": dataset_ids,
+                    "rank": rank,
+                    "rrf_contribution": contribution,
+                    "similarity": similarity,
+                    "normalized_similarity": normalized_score,
+                    "evidence_score": evidence_score,
+                }
+            )
+
+    results = sorted(
+        grouped.values(),
+        key=lambda item: (-float(item["rrf_score"]), int(item["best_original_rank"]), str(item.get("identity") or "")),
+    )
+    for fused_rank, item in enumerate(results, start=1):
+        item["fused_rank"] = fused_rank
+        item["rrf_score"] = round(float(item["rrf_score"]), 6)
+        item["sources"] = sorted(item["sources"])
+    deduplicated_chunk_count = input_chunk_count - len(results)
+    if deduplicated_chunk_count:
+        _append_issue(
+            issues,
+            severity="info",
+            code="deduplicated_chunks",
+            message="fusion collapsed duplicate or near-identical chunks across sources",
+            detail={"deduplicated_chunk_count": deduplicated_chunk_count},
+        )
+    status = _severity_status(issues)
+    return {
+        "ok": status != "FAIL",
+        "schema": FUSION_REPORT_SCHEMA,
+        "status": status,
+        "algorithm": "rrf",
+        "question": question,
+        "parameters": {"top_k": top_k, "rrf_k": rrf_k, "max_per_source": max_per_source},
+        "summary": {
+            "source_count": len(sources),
+            "input_chunk_count": input_chunk_count,
+            "unique_chunk_count": len(results),
+            "deduplicated_chunk_count": deduplicated_chunk_count,
+            "result_count": min(top_k, len(results)),
+            "issue_count": len(issues),
+            "errors": sum(1 for issue in issues if issue["severity"] == "error"),
+            "warnings": sum(1 for issue in issues if issue["severity"] == "warning"),
+            "infos": sum(1 for issue in issues if issue["severity"] == "info"),
+        },
+        "sources": sources,
+        "results": results[:top_k],
+        "issues": issues,
+        "recommendations": [
+            "Review source contributions before using fusion as a default retrieval strategy.",
+            "Use benchmark gates to compare fused output against single-KB retrieval before increasing top_k.",
+        ],
+    }
+
+
+def render_query_fusion_markdown(report: Mapping[str, Any]) -> str:
+    """Render a compact Markdown fusion report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Fusion Report",
+        "",
+        f"- ok: `{str(report.get('ok', False)).lower()}`",
+        f"- status: `{report.get('status', '')}`",
+        f"- algorithm: `{report.get('algorithm', '')}`",
+        f"- source_count: `{summary.get('source_count', 0)}`",
+        f"- input_chunk_count: `{summary.get('input_chunk_count', 0)}`",
+        f"- unique_chunk_count: `{summary.get('unique_chunk_count', 0)}`",
+        f"- deduplicated_chunk_count: `{summary.get('deduplicated_chunk_count', 0)}`",
+        "",
+        "## Results",
+        "",
+    ]
+    results = report.get("results", []) if isinstance(report.get("results"), list) else []
+    if not results:
+        lines.append("- None")
+    else:
+        lines.extend(["| rank | score | sources | document | preview |", "| ---: | ---: | --- | --- | --- |"])
+        for item in results:
+            if not isinstance(item, Mapping):
+                continue
+            sources = item.get("sources", [])
+            source_text = ", ".join(str(source) for source in sources) if isinstance(sources, list) else ""
+            preview = str(item.get("content_preview", "")).replace("|", "\\|")
+            lines.append(
+                "| {rank} | {score:.6f} | {sources} | {doc} | {preview} |".format(
+                    rank=item.get("fused_rank", ""),
+                    score=float(item.get("rrf_score") or 0.0),
+                    sources=source_text,
+                    doc=(item.get("document_name") or item.get("document_id") or item.get("identity") or ""),
+                    preview=preview,
+                )
+            )
+    sources = report.get("sources", []) if isinstance(report.get("sources"), list) else []
+    if sources:
+        lines.extend(["", "## Sources", ""])
+        for source in sources:
+            if isinstance(source, Mapping):
+                lines.append(
+                    "- `{source}`: `{chunks}` chunks, datasets `{datasets}`".format(
+                        source=source.get("source", ""),
+                        chunks=source.get("chunk_count", 0),
+                        datasets=", ".join(str(item) for item in source.get("dataset_ids", []))
+                        if isinstance(source.get("dataset_ids"), list)
+                        else "",
+                    )
+                )
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    lines.extend(["", "## Issues", ""])
+    if not issues:
+        lines.append("- None")
+    else:
+        for issue in issues:
+            if isinstance(issue, Mapping):
+                lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    return "\n".join(lines) + "\n"
 
 
 def query_rerank_ab_report(

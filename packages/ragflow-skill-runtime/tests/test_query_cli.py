@@ -391,6 +391,85 @@ class QueryCliTests(unittest.TestCase):
         self.assertIn("RAGFlow Query Rerank A/B Report", markdown)
         self.assertIn("best.md", markdown)
 
+    def test_fusion_can_write_json_and_markdown(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            query_a = root / "query-a.json"
+            query_b = root / "query-b.json"
+            report_json = root / "fusion.json"
+            report_md = root / "fusion.md"
+            query_a.write_text(
+                json.dumps(
+                    {
+                        "question": "shared answer",
+                        "dataset_ids": ["ds-a"],
+                        "chunks": [
+                            {
+                                "chunk_id": "shared",
+                                "content": "Shared answer evidence.",
+                                "document_name": "shared.md",
+                                "similarity": 0.9,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            query_b.write_text(
+                json.dumps(
+                    {
+                        "question": "shared answer",
+                        "dataset_ids": ["ds-b"],
+                        "chunks": [
+                            {
+                                "chunk_id": "b-only",
+                                "content": "B only evidence.",
+                                "document_name": "b.md",
+                                "similarity": 0.8,
+                            },
+                            {
+                                "chunk_id": "shared",
+                                "content": "Shared answer evidence.",
+                                "document_name": "shared.md",
+                                "similarity": 0.7,
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "fusion",
+                        "--query-output",
+                        str(query_a),
+                        "--query-output",
+                        str(query_b),
+                        "--top-k",
+                        "2",
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            report_json_exists = report_json.exists()
+            report_md_exists = report_md.exists()
+            markdown = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["schema"], "ragflow_fusion_report_v1")
+        self.assertEqual(payload["summary"]["source_count"], 2)
+        self.assertTrue(report_json_exists)
+        self.assertTrue(report_md_exists)
+        self.assertIn("RAGFlow Fusion Report", markdown)
+        self.assertIn("shared.md", markdown)
+
     def test_route_commands_use_routing_config(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:

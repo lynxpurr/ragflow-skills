@@ -857,7 +857,57 @@ rerank_payload = json.loads(stdout.getvalue())
 if rerank_payload.get("schema") != "ragflow_query_rerank_ab_report_v1":
     raise SystemExit(9)
 
-print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload, "pollution": pollution_payload, "rerank": rerank_payload}}, ensure_ascii=False))
+fusion_source = artifacts_dir / "query_fusion_source.json"
+fusion_source.write_text(
+    json.dumps(
+        {{
+            "ok": True,
+            "question": "Where is the known term?",
+            "dataset_ids": ["ds-platform-secondary"],
+            "chunks": [
+                {{
+                    "chunk_id": "platform-secondary",
+                    "content": "secondary KB chunk with known term",
+                    "document_name": "secondary.md",
+                    "similarity": 0.88,
+                }},
+                {{
+                    "chunk_id": "platform-known",
+                    "content": "portable validation chunk with known term",
+                    "document_name": "platform-smoke.md",
+                    "similarity": 0.75,
+                }},
+            ],
+        }},
+        ensure_ascii=False,
+        indent=2,
+    )
+    + "\\n",
+    encoding="utf-8",
+)
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    fusion_code = module.main([
+        "fusion",
+        "--query-output",
+        str(rerank_query_input),
+        "--query-output",
+        str(fusion_source),
+        "--top-k",
+        "3",
+        "--report-json",
+        str(artifacts_dir / "query_fusion.json"),
+        "--report-md",
+        str(artifacts_dir / "query_fusion.md"),
+        "--json",
+    ])
+if fusion_code != 0:
+    raise SystemExit(fusion_code)
+fusion_payload = json.loads(stdout.getvalue())
+if fusion_payload.get("schema") != "ragflow_fusion_report_v1":
+    raise SystemExit(10)
+
+print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload, "pollution": pollution_payload, "rerank": rerank_payload, "fusion": fusion_payload}}, ensure_ascii=False))
 """,
         encoding="utf-8",
     )
@@ -1684,6 +1734,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_pollution.md",
         artifacts_dir / "query_rerank_ab.json",
         artifacts_dir / "query_rerank_ab.md",
+        artifacts_dir / "query_fusion.json",
+        artifacts_dir / "query_fusion.md",
         artifacts_dir / "route_test.md",
         artifacts_dir / "profile_lint.md",
         artifacts_dir / "candidate_profile_set.json",

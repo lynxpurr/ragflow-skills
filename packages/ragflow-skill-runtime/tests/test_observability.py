@@ -7,10 +7,12 @@ from ragflow_skill_runtime.observability import (
     build_query_trace,
     diagnose_query_result,
     evidence_from_query_payload,
+    query_fusion_report,
     query_pollution_report,
     query_rerank_ab_report,
     render_citation_audit_markdown,
     render_query_diagnostic_markdown,
+    render_query_fusion_markdown,
     render_query_pollution_markdown,
     render_query_rerank_ab_markdown,
     render_query_trace_markdown,
@@ -206,6 +208,36 @@ class ObservabilityTests(unittest.TestCase):
         self.assertIn("top_rank_changed", {issue["code"] for issue in report["issues"]})
         self.assertIn("best.md", markdown)
         self.assertIn("RAGFlow Query Rerank A/B Report", markdown)
+
+    def test_query_fusion_report_deduplicates_and_explains_rrf(self) -> None:
+        source_a = {
+            "question": "shared answer",
+            "dataset_ids": ["ds-a"],
+            "chunks": [
+                {"chunk_id": "shared", "content": "Shared answer evidence.", "document_name": "shared.md", "similarity": 0.9},
+                {"chunk_id": "a-only", "content": "A only evidence.", "document_name": "a.md", "similarity": 0.4},
+            ],
+        }
+        source_b = {
+            "question": "shared answer",
+            "dataset_ids": ["ds-b"],
+            "chunks": [
+                {"chunk_id": "b-only", "content": "B only evidence.", "document_name": "b.md", "similarity": 0.8},
+                {"chunk_id": "shared", "content": "Shared answer evidence.", "document_name": "shared.md", "similarity": 0.7},
+            ],
+        }
+
+        report = query_fusion_report([source_a, source_b], top_k=3, rrf_k=60)
+        markdown = render_query_fusion_markdown(report)
+
+        self.assertEqual(report["schema"], "ragflow_fusion_report_v1")
+        self.assertEqual(report["summary"]["source_count"], 2)
+        self.assertEqual(report["summary"]["deduplicated_chunk_count"], 1)
+        self.assertEqual(report["results"][0]["identity"], "shared")
+        self.assertEqual(report["results"][0]["source_count"], 2)
+        self.assertIn("deduplicated_chunks", {issue["code"] for issue in report["issues"]})
+        self.assertIn("RAGFlow Fusion Report", markdown)
+        self.assertIn("shared.md", markdown)
 
 
 if __name__ == "__main__":

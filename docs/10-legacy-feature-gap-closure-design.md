@@ -516,6 +516,12 @@ Fusion features:
 - preserve source KB, document name, score components, and rank explanation;
 - export `ragflow_fusion_report_v1`.
 
+MVP `ragflow-query fusion` reads multiple saved `ask --json` outputs, normalizes score
+ranges per source, deduplicates exact chunk IDs and near-identical content, applies
+reciprocal rank fusion, and emits source contribution details for every fused result. It
+is offline and does not run retrieval itself; live `ask --fusion rrf` can build on the same
+report schema later.
+
 This should work without an LLM key.
 
 ## Feature Design 8: Query Rewrite, HyDE, And Cross-Language Expansion

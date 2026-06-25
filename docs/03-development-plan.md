@@ -898,14 +898,14 @@ evidence output available without an LLM key.
 
 Tasks:
 
-- [ ] Add `ragflow_fusion_report_v1`.
+- [x] Add `ragflow_fusion_report_v1`.
 - [ ] Add `ragflow-query ask --fusion rrf`.
-- [ ] Add `ragflow-query fusion` for explicit multi-KB result merging.
+- [x] Add `ragflow-query fusion` for explicit multi-KB result merging.
 - [ ] Add `ragflow-query fusion-test` with offline fixture coverage.
-- [ ] Normalize per-KB scores and preserve original score components.
-- [ ] Deduplicate near-identical chunks across KBs.
-- [ ] Add reciprocal rank fusion with explainable rank contributions.
-- [ ] Preserve source KB, document, chunk ID/hash, and route metadata in output.
+- [x] Normalize per-KB scores and preserve original score components.
+- [x] Deduplicate near-identical chunks across KBs.
+- [x] Add reciprocal rank fusion with explainable rank contributions.
+- [x] Preserve source KB, document, chunk ID/hash, and route metadata in output.
 - [ ] Add `ragflow-query rewrite`.
 - [ ] Add `ask --rewrite simple`, `ask --rewrite translate`, and `ask --rewrite hyde`.
 - [ ] Add `ask --multi-query queries.json`.
