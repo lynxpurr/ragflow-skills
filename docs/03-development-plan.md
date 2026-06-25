@@ -906,13 +906,13 @@ Tasks:
 - [x] Deduplicate near-identical chunks across KBs.
 - [x] Add reciprocal rank fusion with explainable rank contributions.
 - [x] Preserve source KB, document, chunk ID/hash, and route metadata in output.
-- [ ] Add `ragflow-query rewrite`.
-- [ ] Add `ask --rewrite simple`, `ask --rewrite translate`, and `ask --rewrite hyde`.
-- [ ] Add `ask --multi-query queries.json`.
-- [ ] Ensure generated queries are always recorded in trace output.
-- [ ] Keep original query retrieval visible in outputs.
-- [ ] Add deterministic offline rewrite stubs for tests.
-- [ ] Gate LLM-backed rewrite/HyDE behind explicit LLM config.
+- [x] Add `ragflow-query rewrite`.
+- [x] Add `ask --rewrite simple`, `ask --rewrite translate`, and `ask --rewrite hyde`.
+- [x] Add `ask --multi-query queries.json`.
+- [x] Ensure generated queries are always recorded in trace output.
+- [x] Keep original query retrieval visible in outputs.
+- [x] Add deterministic offline rewrite stubs for tests.
+- [x] Gate LLM-backed rewrite/HyDE behind explicit LLM config.
 
 Exit criteria:
 

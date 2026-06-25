@@ -14,6 +14,8 @@ python scripts/query.py --base-url https://ragflow.example.test --api-key "$RAGF
 python scripts/query.py --base-url https://ragflow.example.test --api-key "$RAGFLOW_API_KEY" ask "Question" --kb-manifest ./kb_manifest.json --mode agentic --host-assisted --json
 python scripts/query.py --config /path/to/ragflow-config.local.yaml ask "Question" --kb-manifest ./kb_manifest.json --mode direct --json
 python scripts/query.py --config /path/to/ragflow-config.local.yaml ask "Question" --dataset-id ds-a --dataset-id ds-b --fusion rrf --json
+python scripts/query.py rewrite "Question" --rewrite simple --report-json ./run/rewrite.json --report-md ./run/rewrite.md --json
+python scripts/query.py ask "Question" --dataset-id ds-a --rewrite simple --multi-query ./fixtures/multi-query.json --trace-json ./run/query_trace.json --json
 python scripts/query.py fusion-test --cases ./fixtures/fusion-test-cases.json --report-json ./run/fusion_test.json --report-md ./run/fusion_test.md --json
 python scripts/query.py list-kbs --routing-config ./templates/routing-config.example.json
 python scripts/query.py route "Which API configuration should I use?" --routing-config ./templates/routing-config.example.json --json
@@ -45,6 +47,8 @@ Notes:
 - Use `rerank-ab` on saved `ask --json` outputs and optional host-owned rerank JSON to compare RAGFlow order with a candidate ordering. It is offline; without `--rerank-json`, it uses deterministic evidence scores as the candidate order.
 - Use `fusion` on multiple saved `ask --json` outputs to build an offline reciprocal-rank-fusion report with per-source rank contributions and deduplicated chunks.
 - Use `fusion-test` on a cases file that points at saved query outputs to verify expected top chunks, expected terms, and minimum source contributions offline.
+- Use `rewrite` or `ask --rewrite simple|translate` for deterministic offline query planning; `hyde` is reserved for a host-owned LLM adapter.
+- Use `ask --multi-query` with a host-owned JSON file when you need to preserve multiple original/generated queries in the trace and retrieval payload.
 - See `templates/host-assisted-response.example.json`, `templates/query-trace.example.json`, `templates/citation-audit.example.json`, and `templates/query-diagnostic.example.json` for expected payload shapes.
 - Release artifacts are smoke-tested against a fake RAGFlow endpoint for both direct and host-assisted query paths.
 - For v1, agentic mode means host-assisted evidence return only.

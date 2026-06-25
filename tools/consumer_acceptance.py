@@ -1516,7 +1516,20 @@ raise SystemExit(code)
     _record_command_check(checks, "query top-level help", query_help, required_output="Portable RAGFlow query CLI")
 
     ask_help = _run_command([python_executable, str(query_script), "ask", "--help"], cwd=work_root, env=env)
-    _record_command_check(checks, "query host-assisted help", ask_help, required_output="--host-assisted")
+    _record_command_check(
+        checks,
+        "query host-assisted help",
+        ask_help,
+        required_output="--host-assisted",
+    )
+
+    rewrite_help = _run_command([python_executable, str(query_script), "rewrite", "--help"], cwd=work_root, env=env)
+    _record_command_check(
+        checks,
+        "query rewrite help",
+        rewrite_help,
+        required_output="Plan deterministic query rewrite variants",
+    )
 
     routing_config = work_root / "routing_config.json"
     route_queries = work_root / "route_queries.json"
@@ -1610,6 +1623,8 @@ raise SystemExit(code)
     query_fusion_md = work_root / "query_fusion.md"
     query_fusion_test_json = work_root / "query_fusion_test.json"
     query_fusion_test_md = work_root / "query_fusion_test.md"
+    query_rewrite_json = work_root / "query_rewrite.json"
+    query_rewrite_md = work_root / "query_rewrite.md"
     query_output.write_text(
         json.dumps(
             {
@@ -1875,6 +1890,34 @@ raise SystemExit(code)
         produced.append(query_fusion_test_json)
     if query_fusion_test_md.exists():
         produced.append(query_fusion_test_md)
+
+    query_rewrite = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "rewrite",
+            "How do I configure runtime?",
+            "--rewrite",
+            "simple",
+            "--report-json",
+            str(query_rewrite_json),
+            "--report-md",
+            str(query_rewrite_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query rewrite report",
+        query_rewrite,
+        required_output='"schema": "ragflow_query_rewrite_plan_v1"',
+    )
+    if query_rewrite_json.exists():
+        produced.append(query_rewrite_json)
+    if query_rewrite_md.exists():
+        produced.append(query_rewrite_md)
 
     missing_config = _run_command(
         [

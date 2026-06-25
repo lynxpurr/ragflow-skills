@@ -89,6 +89,8 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("kb-build diagnose help", check_names)
         self.assertIn("kb-build probe help", check_names)
         self.assertIn("query host-assisted help", check_names)
+        self.assertIn("query rewrite help", check_names)
+        self.assertIn("query rewrite report", check_names)
         self.assertIn("query missing config guard", check_names)
         self.assertIn("live build skipped", check_names)
         self.assertTrue(payload["reports"]["json"].endswith("consumer-acceptance-report.json"))

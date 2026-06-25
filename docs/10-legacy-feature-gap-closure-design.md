@@ -560,6 +560,11 @@ Rewrite and translation experiments should support A/B gates. For example, disab
 cross-language expansion must be rejected if it causes zero-result regressions or large
 chunk-count drops. This preserves the old smart-query lesson: data beats assumptions.
 
+Current public implementation includes deterministic rewrite planning for `none`,
+`simple`, and `translate`, plus host-owned multi-query orchestration that keeps the
+original query visible in trace and retrieval outputs. `hyde` remains an explicit LLM-gated
+placeholder until a host-owned adapter is added.
+
 ## Feature Design 9: Experimental Agentic Synthesis
 
 ### Problem

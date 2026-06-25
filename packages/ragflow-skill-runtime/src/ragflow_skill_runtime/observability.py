@@ -268,10 +268,13 @@ def build_query_trace(
     started_at: str | None = None,
     finished_at: str | None = None,
     warnings: Sequence[str] | None = None,
+    rewrite_plan: Mapping[str, Any] | None = None,
+    retrieval_call_count: int = 1,
+    llm_call_count: int = 0,
 ) -> dict[str, Any]:
     """Build a redaction-safe query trace payload."""
 
-    return {
+    trace = {
         "schema": TRACE_SCHEMA,
         "question": question,
         "mode": {
@@ -288,8 +291,8 @@ def build_query_trace(
         "route": route,
         "timings_ms": dict(timings_ms or {}),
         "cost": {
-            "ragflow_retrieval_calls": 1,
-            "llm_calls": 0,
+            "ragflow_retrieval_calls": max(0, int(retrieval_call_count)),
+            "llm_calls": max(0, int(llm_call_count)),
             "script_owned_synthesis": False,
         },
         "evidence": [dict(item) for item in evidence],
@@ -297,6 +300,9 @@ def build_query_trace(
         "started_at": started_at,
         "finished_at": finished_at,
     }
+    if rewrite_plan:
+        trace["rewrite"] = dict(rewrite_plan)
+    return trace
 
 
 def render_query_trace_markdown(trace: Mapping[str, Any]) -> str:
@@ -314,12 +320,36 @@ def render_query_trace_markdown(trace: Mapping[str, Any]) -> str:
         f"- dataset_ids: `{', '.join(str(item) for item in trace.get('dataset_ids', []))}`",
         f"- top_k: `{retrieval.get('top_k', '')}`",
         f"- chunk_count: `{retrieval.get('chunk_count', '')}`",
-        "",
-        "## Evidence",
-        "",
-        "| Rank | Score | Similarity | Document | Reasons |",
-        "| --- | ---: | ---: | --- | --- |",
     ]
+    rewrite = trace.get("rewrite") if isinstance(trace.get("rewrite"), Mapping) else None
+    if rewrite:
+        summary = rewrite.get("summary", {}) if isinstance(rewrite.get("summary"), Mapping) else {}
+        lines.extend(
+            [
+                f"- rewrite_mode: `{rewrite.get('mode', '')}`",
+                f"- generated_query_count: `{summary.get('generated_query_count', 0)}`",
+                f"- retrieval_query_count: `{summary.get('retrieval_query_count', 0)}`",
+            ]
+        )
+        queries = rewrite.get("retrieval_queries", []) if isinstance(rewrite.get("retrieval_queries"), list) else []
+        if queries:
+            lines.extend(["", "## Retrieval Queries", "", "| id | kind | source | query |", "| --- | --- | --- | --- |"])
+            for item in queries:
+                if not isinstance(item, Mapping):
+                    continue
+                query = str(item.get("query", "")).replace("|", "\\|")
+                lines.append(
+                    f"| `{item.get('id', '')}` | `{item.get('kind', '')}` | `{item.get('source', '')}` | {query} |"
+                )
+    lines.extend(
+        [
+            "",
+            "## Evidence",
+            "",
+            "| Rank | Score | Similarity | Document | Reasons |",
+            "| --- | ---: | ---: | --- | --- |",
+        ]
+    )
     for item in trace.get("evidence", []):
         if not isinstance(item, Mapping):
             continue

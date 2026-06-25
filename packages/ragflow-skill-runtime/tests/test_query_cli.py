@@ -208,6 +208,143 @@ class QueryCliTests(unittest.TestCase):
         self.assertIn("fusion", payload["trace"])
         self.assertEqual(len(payload["chunks"]), 2)
 
+    def test_rewrite_command_writes_plan_outputs(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_json = root / "rewrite.json"
+            report_md = root / "rewrite.md"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "rewrite",
+                        "How do I configure runtime?",
+                        "--rewrite",
+                        "simple",
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            report_json_exists = report_json.exists()
+            report_md_exists = report_md.exists()
+            markdown = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(payload["schema"], "ragflow_query_rewrite_plan_v1")
+        self.assertGreaterEqual(payload["summary"]["generated_query_count"], 1)
+        self.assertTrue(report_json_exists)
+        self.assertTrue(report_md_exists)
+        self.assertIn("RAGFlow Query Rewrite Plan", markdown)
+        self.assertIn("how to configure runtime", markdown)
+
+    def test_ask_rewrite_and_multi_query_record_trace_and_retrievals(self) -> None:
+        class RewriteClient(FakeQueryClient):
+            def retrieve(self, *, question, dataset_ids, top_k=5, similarity_threshold=None):
+                FakeQueryClient.last_request = {
+                    "question": question,
+                    "dataset_ids": dataset_ids,
+                    "top_k": top_k,
+                    "similarity_threshold": similarity_threshold,
+                }
+                FakeQueryClient.requests.append(FakeQueryClient.last_request)
+                chunk_id = "original" if question == "How do I configure runtime?" else question.replace(" ", "-")
+                return {
+                    "data": {
+                        "chunks": [
+                            {
+                                "id": chunk_id,
+                                "content_with_weight": f"answer for {question}",
+                                "docnm_kwd": f"{chunk_id}.md",
+                                "similarity": 0.9 if chunk_id == "original" else 0.75,
+                                "kb_id": dataset_ids[0],
+                            }
+                        ]
+                    }
+                }
+
+        module = load_query_module()
+        module.RAGFlowClient = RewriteClient
+        FakeQueryClient.requests = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            multi_query = root / "multi.json"
+            trace_json = root / "trace.json"
+            multi_query.write_text(json.dumps({"queries": [{"id": "manual-cn", "query": "运行时 配置"}]}), encoding="utf-8")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "test-key",
+                        "ask",
+                        "How do I configure runtime?",
+                        "--mode",
+                        "direct",
+                        "--dataset-id",
+                        "ds-1",
+                        "--rewrite",
+                        "simple",
+                        "--multi-query",
+                        str(multi_query),
+                        "--trace-json",
+                        str(trace_json),
+                        "--include-trace",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            trace = json.loads(trace_json.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        requested_questions = [request["question"] for request in FakeQueryClient.requests]
+        self.assertIn("How do I configure runtime?", requested_questions)
+        self.assertIn("how to configure runtime", requested_questions)
+        self.assertIn("运行时 配置", requested_questions)
+        self.assertEqual(payload["rewrite"]["schema"], "ragflow_query_rewrite_plan_v1")
+        self.assertEqual(payload["fusion"]["schema"], "ragflow_fusion_report_v1")
+        self.assertEqual(payload["metadata"]["fusion"], "rrf")
+        self.assertEqual(len(payload["retrievals"]), len(requested_questions))
+        self.assertIn("rewrite", payload["trace"])
+        self.assertIn("rewrite", trace)
+        self.assertEqual(trace["cost"]["ragflow_retrieval_calls"], len(requested_questions))
+        self.assertEqual(trace["rewrite"]["retrieval_queries"][0]["id"], "original")
+
+    def test_hyde_rewrite_is_gated_before_retrieval(self) -> None:
+        module = load_query_module()
+        module.RAGFlowClient = FakeQueryClient
+        FakeQueryClient.requests = []
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = module.main(
+                [
+                    "--base-url",
+                    "https://ragflow.example.test",
+                    "--api-key",
+                    "test-key",
+                    "ask",
+                    "question",
+                    "--mode",
+                    "direct",
+                    "--dataset-id",
+                    "ds-1",
+                    "--rewrite",
+                    "hyde",
+                    "--json",
+                ]
+            )
+        payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 2)
+        self.assertIn("requires explicit LLM config", payload["error"])
+        self.assertEqual(FakeQueryClient.requests, [])
+
     def test_host_assisted_mode_can_succeed_with_fake_client(self) -> None:
         module = load_query_module()
         module.RAGFlowClient = FakeQueryClient

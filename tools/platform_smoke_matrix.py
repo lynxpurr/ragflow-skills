@@ -696,6 +696,62 @@ for mode, extra, output_name in [
     )
     payloads.append({{"mode": mode, "chunk_count": len(payload.get("chunks", []))}})
 
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    rewrite_code = module.main([
+        "rewrite",
+        "How do I configure runtime?",
+        "--rewrite",
+        "simple",
+        "--report-json",
+        str(artifacts_dir / "query_rewrite.json"),
+        "--report-md",
+        str(artifacts_dir / "query_rewrite.md"),
+        "--json",
+    ])
+if rewrite_code != 0:
+    raise SystemExit(rewrite_code)
+rewrite_payload = json.loads(stdout.getvalue())
+if rewrite_payload.get("schema") != "ragflow_query_rewrite_plan_v1":
+    raise SystemExit(14)
+
+multi_query_path = artifacts_dir / "query_multi_input.json"
+multi_query_path.write_text(
+    json.dumps({{"queries": [{{"id": "rewrite-cn", "query": "运行时 配置"}}]}}, ensure_ascii=False, indent=2)
+    + "\\n",
+    encoding="utf-8",
+)
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    multi_code = module.main(
+        runtime_args
+        + [
+            "ask",
+            "How do I configure runtime?",
+            "--kb-manifest",
+            str(kb_manifest),
+            "--mode",
+            "direct",
+            "--rewrite",
+            "simple",
+            "--multi-query",
+            str(multi_query_path),
+            "--trace-json",
+            str(artifacts_dir / "query_multi_trace.json"),
+            "--include-trace",
+            "--json",
+        ]
+    )
+if multi_code != 0:
+    raise SystemExit(multi_code)
+multi_payload = json.loads(stdout.getvalue())
+if "retrievals" not in multi_payload or not multi_payload.get("trace", {{}}).get("rewrite"):
+    raise SystemExit(15)
+(artifacts_dir / "query_multi.json").write_text(
+    json.dumps(multi_payload, ensure_ascii=False, indent=2) + "\\n",
+    encoding="utf-8",
+)
+
 answer_path = artifacts_dir / "answer.md"
 answer_path.write_text("The known term is present in the portable validation chunk [1].\\n", encoding="utf-8")
 stdout = StringIO()
@@ -1766,6 +1822,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_host_assisted.json",
         artifacts_dir / "query_trace.json",
         artifacts_dir / "query_trace.md",
+        artifacts_dir / "query_rewrite.json",
+        artifacts_dir / "query_rewrite.md",
+        artifacts_dir / "query_multi.json",
+        artifacts_dir / "query_multi_trace.json",
         artifacts_dir / "citation_audit.json",
         artifacts_dir / "citation_audit.md",
         artifacts_dir / "query_diagnostic.json",

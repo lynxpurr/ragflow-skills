@@ -31,10 +31,12 @@ from ragflow_skill_runtime import (  # noqa: E402
     ConfigError,
     NormalizedChunk,
     QueryResult,
+    QueryRewriteError,
     RAGFlowClient,
     RetrievalError,
     RoutingError,
     audit_citations,
+    build_query_rewrite_plan,
     build_query_trace,
     diagnose_query_result,
     evidence_from_query_payload,
@@ -43,6 +45,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     load_config,
     load_fusion_test_cases,
     load_kb_manifest,
+    load_multi_query_file,
     load_routing_config,
     normalize_retrieval_response,
     query_fusion_report,
@@ -54,6 +57,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_query_diagnostic_markdown,
     render_query_pollution_markdown,
     render_query_rerank_ab_markdown,
+    render_query_rewrite_markdown,
     render_query_trace_markdown,
     render_route_test_markdown,
     run_fusion_tests,
@@ -140,6 +144,99 @@ def _fused_chunks(report: dict[str, Any]) -> list[NormalizedChunk]:
     return chunks
 
 
+def _llm_configured(config: Any) -> bool:
+    return bool(getattr(config, "llm_base_url", None) and getattr(config, "llm_api_key", None))
+
+
+def _build_retrieval_payload(
+    *,
+    question: str,
+    source: str,
+    query_id: str,
+    query_kind: str,
+    dataset_ids: list[str],
+    chunks: list[NormalizedChunk],
+    include_raw: bool,
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "question": question,
+        "source": source,
+        "query_id": query_id,
+        "query_kind": query_kind,
+        "dataset_ids": list(dataset_ids),
+        "chunks": [chunk.to_dict(include_raw=include_raw) for chunk in chunks],
+        "evidence": weight_evidence(question, chunks),
+    }
+
+
+def _retrieve_query_payloads(
+    *,
+    client: RAGFlowClient,
+    retrieval_queries: list[dict[str, Any]],
+    dataset_ids: list[str],
+    top_k: int,
+    similarity_threshold: float | None,
+    fusion: str,
+    include_raw: bool,
+) -> tuple[list[dict[str, Any]], list[NormalizedChunk], dict[str, Any] | None, int]:
+    payloads: list[dict[str, Any]] = []
+    normalized_by_payload: list[list[NormalizedChunk]] = []
+    retrieval_calls = 0
+    for query_item in retrieval_queries:
+        query = str(query_item["query"])
+        query_id = str(query_item.get("id") or "query")
+        query_kind = str(query_item.get("kind") or "")
+        source_prefix = str(query_item.get("source") or query_id)
+        if fusion == "rrf" and len(dataset_ids) > 1:
+            for dataset_id in dataset_ids:
+                raw = client.retrieve(
+                    question=query,
+                    dataset_ids=[dataset_id],
+                    top_k=top_k,
+                    similarity_threshold=similarity_threshold,
+                )
+                retrieval_calls += 1
+                chunks = normalize_retrieval_response(raw)
+                normalized_by_payload.append(chunks)
+                payloads.append(
+                    _build_retrieval_payload(
+                        question=query,
+                        source=f"{source_prefix}:{query_id}:{dataset_id}",
+                        query_id=query_id,
+                        query_kind=query_kind,
+                        dataset_ids=[dataset_id],
+                        chunks=chunks,
+                        include_raw=include_raw,
+                    )
+                )
+        else:
+            raw = client.retrieve(
+                question=query,
+                dataset_ids=dataset_ids,
+                top_k=top_k,
+                similarity_threshold=similarity_threshold,
+            )
+            retrieval_calls += 1
+            chunks = normalize_retrieval_response(raw)
+            normalized_by_payload.append(chunks)
+            payloads.append(
+                _build_retrieval_payload(
+                    question=query,
+                    source=f"{source_prefix}:{query_id}",
+                    query_id=query_id,
+                    query_kind=query_kind,
+                    dataset_ids=dataset_ids,
+                    chunks=chunks,
+                    include_raw=include_raw,
+                )
+            )
+    if len(payloads) == 1 and not (fusion == "rrf" and len(dataset_ids) > 1):
+        return payloads, normalized_by_payload[0], None, retrieval_calls
+    fusion_report = query_fusion_report(payloads, top_k=top_k)
+    return payloads, _fused_chunks(fusion_report), fusion_report, retrieval_calls
+
+
 def _ask(args: argparse.Namespace) -> int:
     mode = args.mode
     route_result = None
@@ -148,6 +245,10 @@ def _ask(args: argparse.Namespace) -> int:
     started_at = _utc_now()
     total_start = time.perf_counter()
     retrieval_duration_ms = 0.0
+    retrieval_calls = 0
+    rewrite_plan = None
+    retrieval_payloads: list[dict[str, Any]] = []
+    rewrite_active = bool(args.multi_query or args.rewrite != "none")
 
     if mode == "agentic" and not args.host_assisted:
         return _error(
@@ -182,39 +283,25 @@ def _ask(args: argparse.Namespace) -> int:
             if args.similarity_threshold is not None
             else routed_params.get("similarity_threshold")
         )
+        multi_queries = load_multi_query_file(args.multi_query) if args.multi_query else []
+        rewrite_plan = build_query_rewrite_plan(
+            args.question,
+            mode=args.rewrite,
+            multi_queries=multi_queries,
+            llm_configured=_llm_configured(config),
+        )
         retrieval_start = time.perf_counter()
-        fusion_report = None
-        fusion_sources: list[dict[str, Any]] = []
-        if args.fusion == "rrf" and len(dataset_ids) > 1:
-            for dataset_id in dataset_ids:
-                raw = client.retrieve(
-                    question=args.question,
-                    dataset_ids=[dataset_id],
-                    top_k=effective_top_k,
-                    similarity_threshold=effective_similarity_threshold,
-                )
-                source_chunks = normalize_retrieval_response(raw)
-                source_payload = {
-                    "ok": True,
-                    "question": args.question,
-                    "source": dataset_id,
-                    "dataset_ids": [dataset_id],
-                    "chunks": [chunk.to_dict(include_raw=args.include_raw) for chunk in source_chunks],
-                    "evidence": weight_evidence(args.question, source_chunks),
-                }
-                fusion_sources.append(source_payload)
-            fusion_report = query_fusion_report(fusion_sources, top_k=effective_top_k)
-            chunks = _fused_chunks(fusion_report)
-        else:
-            raw = client.retrieve(
-                question=args.question,
-                dataset_ids=dataset_ids,
-                top_k=effective_top_k,
-                similarity_threshold=effective_similarity_threshold,
-            )
-            chunks = normalize_retrieval_response(raw)
+        retrieval_payloads, chunks, fusion_report, retrieval_calls = _retrieve_query_payloads(
+            client=client,
+            retrieval_queries=rewrite_plan["retrieval_queries"],
+            dataset_ids=dataset_ids,
+            top_k=effective_top_k,
+            similarity_threshold=effective_similarity_threshold,
+            fusion=args.fusion,
+            include_raw=args.include_raw,
+        )
         retrieval_duration_ms = (time.perf_counter() - retrieval_start) * 1000
-    except (ConfigError, RetrievalError, RoutingError, ValueError, OSError, RuntimeError) as exc:
+    except (ConfigError, QueryRewriteError, RetrievalError, RoutingError, ValueError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=args.json)
 
     total_duration_ms = (time.perf_counter() - total_start) * 1000
@@ -239,6 +326,8 @@ def _ask(args: argparse.Namespace) -> int:
         started_at=started_at,
         finished_at=finished_at,
         warnings=[] if chunks else ["retrieval returned zero chunks"],
+        rewrite_plan=rewrite_plan if rewrite_active else None,
+        retrieval_call_count=retrieval_calls,
     )
     if fusion_report:
         trace["fusion"] = fusion_report
@@ -255,11 +344,14 @@ def _ask(args: argparse.Namespace) -> int:
             "requested_mode": args.mode,
             "top_k": effective_top_k,
             "similarity_threshold": effective_similarity_threshold,
-            "fusion": args.fusion,
+            "fusion": "rrf" if fusion_report else args.fusion,
+            "rewrite": args.rewrite,
             "chunk_count": len(chunks),
             "synthesis": "host-assisted" if args.host_assisted else "not-requested",
             "duration_ms": round(total_duration_ms, 3),
             "retrieval_ms": round(retrieval_duration_ms, 3),
+            "retrieval_call_count": retrieval_calls,
+            **({"rewrite_plan": rewrite_plan} if rewrite_active and rewrite_plan else {}),
             "evidence_count": len(evidence),
             **({"fusion_report": fusion_report} if fusion_report else {}),
             **({"route": route_payload} if route_payload else {}),
@@ -270,6 +362,10 @@ def _ask(args: argparse.Namespace) -> int:
         **result.to_dict(include_raw=args.include_raw),
         "evidence": evidence,
     }
+    if retrieval_payloads and (args.multi_query or args.rewrite != "none" or args.fusion == "rrf"):
+        payload["retrievals"] = retrieval_payloads
+    if rewrite_active and rewrite_plan:
+        payload["rewrite"] = rewrite_plan
     if fusion_report:
         payload["fusion"] = fusion_report
     if args.include_trace:
@@ -326,6 +422,25 @@ def _route_test(args: argparse.Namespace) -> int:
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_route_test_markdown(report))
     _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _rewrite(args: argparse.Namespace) -> int:
+    try:
+        config = _load_runtime(args) if args.rewrite == "hyde" else None
+        multi_queries = load_multi_query_file(args.multi_query) if args.multi_query else []
+        report = build_query_rewrite_plan(
+            args.question,
+            mode=args.rewrite,
+            multi_queries=multi_queries,
+            llm_configured=_llm_configured(config) if config is not None else False,
+        )
+    except (ConfigError, QueryRewriteError, OSError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_rewrite_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
     return 0 if report["ok"] else 1
 
 
@@ -505,6 +620,20 @@ def build_parser() -> argparse.ArgumentParser:
     route_test.add_argument("--report-md", help="Optional Markdown report output path")
     route_test.set_defaults(func=_route_test)
 
+    rewrite = sub.add_parser(
+        "rewrite",
+        help="Plan deterministic query rewrite variants",
+        description="Plan deterministic query rewrite variants",
+    )
+    _add_runtime_options(rewrite, suppress_defaults=True)
+    rewrite.add_argument("question", help="Original query")
+    rewrite.add_argument("--rewrite", choices=["none", "simple", "translate", "hyde"], default="simple")
+    rewrite.add_argument("--multi-query", help="Optional JSON list of host-owned query variants")
+    rewrite.add_argument("--report-json", help="Optional JSON report output path")
+    rewrite.add_argument("--report-md", help="Optional Markdown report output path")
+    rewrite.add_argument("--json", action="store_true", help="Emit JSON report")
+    rewrite.set_defaults(func=_rewrite)
+
     audit = sub.add_parser("audit-citations", help="Audit host-generated answer citations")
     audit.add_argument("--query-output", required=True, help="JSON output from query.py ask")
     answer_group = audit.add_mutually_exclusive_group(required=True)
@@ -583,6 +712,8 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--top-k", type=int)
     ask.add_argument("--similarity-threshold", type=float)
     ask.add_argument("--fusion", choices=["none", "rrf"], default="none", help="Fuse per-dataset retrieval results when multiple dataset IDs are selected")
+    ask.add_argument("--rewrite", choices=["none", "simple", "translate", "hyde"], default="none", help="Opt-in query rewrite planning before retrieval")
+    ask.add_argument("--multi-query", help="JSON file with additional host-owned query variants")
     ask.add_argument("--host-assisted", action="store_true", help="Return evidence for host agent synthesis")
     ask.add_argument("--json", action="store_true", help="Emit JSON")
     ask.add_argument("--include-raw", action="store_true", help="Include raw RAGFlow chunks in JSON")

@@ -123,6 +123,13 @@ from .observability import (
     run_fusion_tests,
     weight_evidence,
 )
+from .query_rewrite import (
+    QUERY_REWRITE_PLAN_SCHEMA,
+    QueryRewriteError,
+    build_query_rewrite_plan,
+    load_multi_query_file,
+    render_query_rewrite_markdown,
+)
 from .ragflow_client import RAGFlowClient
 from .profiles import (
     ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA,
@@ -367,6 +374,8 @@ __all__ = [
     "OPTIMIZATION_PLAN_SCHEMA",
     "PROFILE_EXPERIMENT_RESULTS_SCHEMA",
     "QueryResult",
+    "QUERY_REWRITE_PLAN_SCHEMA",
+    "QueryRewriteError",
     "RAGFLOW_METADATA_SCHEMA",
     "RAGFLOW_TAGSET_SCHEMA",
     "RetrievalError",
@@ -387,6 +396,7 @@ __all__ = [
     "ValidationReport",
     "audit_citations",
     "build_query_trace",
+    "build_query_rewrite_plan",
     "compare_validation_reports",
     "convert_source_to_markdown",
     "create_optimization_cleanup_plan",
@@ -422,6 +432,7 @@ __all__ = [
     "load_doc_manifest_payload",
     "load_enrichment_experiment_matrix",
     "load_fusion_test_cases",
+    "load_multi_query_file",
     "make_kb_manifest_payload",
     "make_assistant_profile_payload",
     "make_assistant_test_plan_payload",
@@ -479,6 +490,7 @@ __all__ = [
     "render_query_diagnostic_markdown",
     "render_query_fusion_markdown",
     "render_query_fusion_test_markdown",
+    "render_query_rewrite_markdown",
     "render_query_pollution_markdown",
     "render_query_rerank_ab_markdown",
     "render_quality_markdown",
