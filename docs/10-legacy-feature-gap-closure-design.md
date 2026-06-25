@@ -787,6 +787,12 @@ from `validate.py --include-raw --max-report-chunks ...` and optional public tag
 labels/aliases, but raw payloads remain opt-in and the report never deletes documents,
 edits tags, mutates RAGFlow, or installs hidden filters.
 
+MVP `ragflow-query pollution-report` reads saved `ask --json` output, optional query
+trace JSON, and optional expanded or translated term lists. It compares original query
+terms against expanded-term-only chunk hits, low original query coverage, repeated bridge
+terms, and source dominance. The command is an offline advisory report; it does not call
+RAGFlow, translate queries, run BM25 itself, mutate route configs, or install filters.
+
 Optional external rerankers must be configured by the host and treated as remote/local
 services, not bundled daemons.
 

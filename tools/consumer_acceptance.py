@@ -1599,6 +1599,8 @@ raise SystemExit(code)
     citation_audit_md = work_root / "citation_audit.md"
     query_diagnostic_json = work_root / "query_diagnostic.json"
     query_diagnostic_md = work_root / "query_diagnostic.md"
+    query_pollution_json = work_root / "query_pollution.json"
+    query_pollution_md = work_root / "query_pollution.md"
     query_output.write_text(
         json.dumps(
             {
@@ -1609,6 +1611,12 @@ raise SystemExit(code)
                         "content": "This release artifact can run without repository source context.",
                         "similarity": 0.9,
                         "document_name": "sample.md",
+                        "dataset_id": "ds-consumer-acceptance",
+                    },
+                    {
+                        "content": "Translated bridge term only match.",
+                        "similarity": 0.4,
+                        "document_name": "translated.md",
                         "dataset_id": "ds-consumer-acceptance",
                     }
                 ],
@@ -1677,6 +1685,35 @@ raise SystemExit(code)
         produced.append(query_diagnostic_json)
     if query_diagnostic_md.exists():
         produced.append(query_diagnostic_md)
+
+    query_pollution = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "pollution-report",
+            "--query-output",
+            str(query_output),
+            "--expanded-term",
+            "translated",
+            "--report-json",
+            str(query_pollution_json),
+            "--report-md",
+            str(query_pollution_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query pollution report",
+        query_pollution,
+        required_output='"schema": "ragflow_query_pollution_report_v1"',
+    )
+    if query_pollution_json.exists():
+        produced.append(query_pollution_json)
+    if query_pollution_md.exists():
+        produced.append(query_pollution_md)
 
     missing_config = _run_command(
         [

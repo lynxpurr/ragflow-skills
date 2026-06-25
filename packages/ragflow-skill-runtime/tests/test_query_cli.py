@@ -265,6 +265,62 @@ class QueryCliTests(unittest.TestCase):
             self.assertTrue(diagnostic_json.exists())
             self.assertIn("RAGFlow Query Diagnostic", diagnostic_md.read_text(encoding="utf-8"))
 
+    def test_pollution_report_can_write_json_and_markdown(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            query_output = root / "query.json"
+            report_json = root / "pollution.json"
+            report_md = root / "pollution.md"
+            query_output.write_text(
+                json.dumps(
+                    {
+                        "question": "how to use runtime",
+                        "dataset_ids": ["ds-1"],
+                        "chunks": [
+                            {
+                                "content": "runtime configuration details",
+                                "document_name": "runtime.md",
+                                "similarity": 0.9,
+                            },
+                            {
+                                "content": "translation term only match",
+                                "document_name": "polluted.md",
+                                "similarity": 0.4,
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "pollution-report",
+                        "--query-output",
+                        str(query_output),
+                        "--expanded-term",
+                        "translation",
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            report_json_exists = report_json.exists()
+            report_md_exists = report_md.exists()
+            markdown = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["schema"], "ragflow_query_pollution_report_v1")
+        self.assertTrue(report_json_exists)
+        self.assertTrue(report_md_exists)
+        self.assertIn("RAGFlow Query Pollution Report", markdown)
+        self.assertIn("translation", markdown)
+
     def test_route_commands_use_routing_config(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:

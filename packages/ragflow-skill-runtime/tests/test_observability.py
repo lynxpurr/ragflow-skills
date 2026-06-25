@@ -7,8 +7,10 @@ from ragflow_skill_runtime.observability import (
     build_query_trace,
     diagnose_query_result,
     evidence_from_query_payload,
+    query_pollution_report,
     render_citation_audit_markdown,
     render_query_diagnostic_markdown,
+    render_query_pollution_markdown,
     render_query_trace_markdown,
     weight_evidence,
 )
@@ -131,6 +133,39 @@ class ObservabilityTests(unittest.TestCase):
         self.assertGreaterEqual(report["summary"]["warnings"], 3)
         self.assertIn("missing_expected_terms", {issue["code"] for issue in report["issues"]})
         self.assertIn("RAGFlow Query Diagnostic", markdown)
+
+    def test_query_pollution_report_flags_expansion_only_matches(self) -> None:
+        payload = {
+            "question": "how to use runtime",
+            "dataset_ids": ["ds-1"],
+            "chunks": [
+                {
+                    "content": "runtime configuration details",
+                    "document_name": "runtime.md",
+                    "similarity": 0.9,
+                },
+                {
+                    "content": "translation term only match",
+                    "document_name": "polluted.md",
+                    "similarity": 0.4,
+                },
+            ],
+        }
+        trace = {"expanded_terms": ["translation", "rewrite"]}
+        report = query_pollution_report(
+            payload,
+            trace=trace,
+            expanded_terms=["translation"],
+            max_examples=3,
+        )
+        markdown = render_query_pollution_markdown(report)
+
+        self.assertEqual(report["schema"], "ragflow_query_pollution_report_v1")
+        self.assertEqual(report["status"], "REVIEW")
+        self.assertIn("expansion_only_matches", {issue["code"] for issue in report["issues"]})
+        self.assertIn("translation", {item["term"] for item in report["terms"]["bridge_terms"]})
+        self.assertIn("RAGFlow Query Pollution Report", markdown)
+        self.assertIn("polluted.md", markdown)
 
 
 if __name__ == "__main__":

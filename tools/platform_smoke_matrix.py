@@ -742,7 +742,53 @@ diagnostic_payload = json.loads(stdout.getvalue())
 if not diagnostic_payload.get("ok"):
     raise SystemExit(7)
 
-print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload}}, ensure_ascii=False))
+pollution_input = artifacts_dir / "query_pollution_input.json"
+pollution_input.write_text(
+    json.dumps(
+        {{
+            "ok": True,
+            "question": "Where is the known term?",
+            "dataset_ids": ["ds-platform-smoke"],
+            "chunks": [
+                {{
+                    "content": "portable validation chunk with known term",
+                    "document_name": "platform-smoke.md",
+                    "similarity": 0.98,
+                }},
+                {{
+                    "content": "translated bridge term only match",
+                    "document_name": "translated.md",
+                    "similarity": 0.4,
+                }},
+            ],
+        }},
+        ensure_ascii=False,
+        indent=2,
+    )
+    + "\\n",
+    encoding="utf-8",
+)
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    pollution_code = module.main([
+        "pollution-report",
+        "--query-output",
+        str(pollution_input),
+        "--expanded-term",
+        "translated",
+        "--report-json",
+        str(artifacts_dir / "query_pollution.json"),
+        "--report-md",
+        str(artifacts_dir / "query_pollution.md"),
+        "--json",
+    ])
+if pollution_code != 0:
+    raise SystemExit(pollution_code)
+pollution_payload = json.loads(stdout.getvalue())
+if pollution_payload.get("schema") != "ragflow_query_pollution_report_v1":
+    raise SystemExit(8)
+
+print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload, "pollution": pollution_payload}}, ensure_ascii=False))
 """,
         encoding="utf-8",
     )
@@ -1565,6 +1611,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "citation_audit.md",
         artifacts_dir / "query_diagnostic.json",
         artifacts_dir / "query_diagnostic.md",
+        artifacts_dir / "query_pollution.json",
+        artifacts_dir / "query_pollution.md",
         artifacts_dir / "route_test.md",
         artifacts_dir / "profile_lint.md",
         artifacts_dir / "candidate_profile_set.json",

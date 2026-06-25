@@ -37,13 +37,16 @@ from ragflow_skill_runtime import (  # noqa: E402
     build_query_trace,
     diagnose_query_result,
     evidence_from_query_payload,
+    load_pollution_terms,
     load_route_test_queries,
     load_config,
     load_kb_manifest,
     load_routing_config,
     normalize_retrieval_response,
+    query_pollution_report,
     render_citation_audit_markdown,
     render_query_diagnostic_markdown,
+    render_query_pollution_markdown,
     render_query_trace_markdown,
     render_route_test_markdown,
     resolve_dataset_ids,
@@ -316,6 +319,35 @@ def _diagnose_result(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _pollution_report(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        trace = _read_json(args.trace_json) if args.trace_json else None
+        if trace is not None and not isinstance(trace, dict):
+            raise ValueError("trace JSON must be an object")
+        expanded_terms: list[str] = []
+        for term in args.expanded_term:
+            expanded_terms.append(term)
+        if args.expanded_terms_json:
+            expanded_terms.extend(load_pollution_terms(args.expanded_terms_json))
+        report = query_pollution_report(
+            query_payload,
+            trace=trace,
+            expanded_terms=expanded_terms,
+            max_examples=args.max_examples,
+            low_query_coverage_threshold=args.low_query_coverage_threshold,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_pollution_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _add_runtime_options(parser: argparse.ArgumentParser, *, suppress_defaults: bool = False) -> None:
     default = argparse.SUPPRESS if suppress_defaults else None
     parser.add_argument("--config", default=default, help="Path to JSON or simple YAML config")
@@ -370,6 +402,18 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose.add_argument("--report-md", help="Optional Markdown report output path")
     diagnose.add_argument("--json", action="store_true", help="Emit JSON report")
     diagnose.set_defaults(func=_diagnose_result)
+
+    pollution = sub.add_parser("pollution-report", help="Diagnose likely query expansion or BM25 pollution")
+    pollution.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    pollution.add_argument("--trace-json", help="Optional query trace JSON from --trace-json")
+    pollution.add_argument("--expanded-term", action="append", default=[], help="Expanded or translated term; repeatable")
+    pollution.add_argument("--expanded-terms-json", help="Optional JSON file containing expanded/translated terms")
+    pollution.add_argument("--low-query-coverage-threshold", type=float, default=0.25)
+    pollution.add_argument("--max-examples", type=int, default=5)
+    pollution.add_argument("--report-json", help="Optional JSON report output path")
+    pollution.add_argument("--report-md", help="Optional Markdown report output path")
+    pollution.add_argument("--json", action="store_true", help="Emit JSON report")
+    pollution.set_defaults(func=_pollution_report)
 
     ask = sub.add_parser("ask", help="Ask a question against RAGFlow")
     _add_runtime_options(ask, suppress_defaults=True)

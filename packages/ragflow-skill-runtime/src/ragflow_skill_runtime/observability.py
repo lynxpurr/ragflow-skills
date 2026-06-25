@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .retrieval import NormalizedChunk
@@ -12,6 +14,7 @@ from .retrieval import NormalizedChunk
 TRACE_SCHEMA = "ragflow_query_trace_v1"
 CITATION_AUDIT_SCHEMA = "ragflow_citation_audit_v1"
 QUERY_DIAGNOSTIC_SCHEMA = "ragflow_query_diagnostic_report_v1"
+QUERY_POLLUTION_REPORT_SCHEMA = "ragflow_query_pollution_report_v1"
 
 _STOPWORDS = {
     "a",
@@ -41,6 +44,23 @@ _STOPWORDS = {
     "where",
     "which",
     "with",
+    "without",
+}
+_POLLUTION_STOPWORDS = _STOPWORDS | {
+    "answer",
+    "chunk",
+    "chunks",
+    "content",
+    "document",
+    "documents",
+    "evidence",
+    "query",
+    "question",
+    "result",
+    "results",
+    "retrieval",
+    "source",
+    "sources",
 }
 
 
@@ -89,6 +109,10 @@ def _tokenize(text: str) -> set[str]:
     return tokens
 
 
+def _pollution_tokenize(text: str) -> set[str]:
+    return {token for token in _tokenize(text) if token not in _POLLUTION_STOPWORDS}
+
+
 def _clamp_similarity(value: float | None) -> float:
     if value is None:
         return 0.0
@@ -100,6 +124,42 @@ def _preview(text: str, *, limit: int = 220) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: limit - 3].rstrip() + "..."
+
+
+def _json_string_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    if isinstance(value, Mapping):
+        values: list[str] = []
+        for key in (
+            "term",
+            "terms",
+            "keyword",
+            "keywords",
+            "expanded_terms",
+            "translated_terms",
+            "generated_terms",
+            "rewrite_terms",
+            "query_terms",
+            "value",
+        ):
+            if key in value:
+                values.extend(_json_string_values(value[key]))
+        return values
+    if isinstance(value, list):
+        values = []
+        for item in value:
+            values.extend(_json_string_values(item))
+        return values
+    return []
+
+
+def load_pollution_terms(path: str | Path) -> list[str]:
+    """Load optional expanded/translated query terms from a JSON file."""
+
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    return _json_string_values(raw)
 
 
 def weight_evidence(question: str, chunks: Sequence[NormalizedChunk]) -> list[dict[str, Any]]:
@@ -274,6 +334,259 @@ def evidence_from_query_payload(payload: Mapping[str, Any]) -> list[dict[str, An
             )
         )
     return weight_evidence(str(payload.get("question") or ""), chunks)
+
+
+def _query_chunks(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    return [chunk for chunk in payload.get("chunks", []) if isinstance(chunk, Mapping)]
+
+
+def _chunk_text(chunk: Mapping[str, Any]) -> str:
+    parts = []
+    for key in ("content", "content_preview", "text", "page_content"):
+        value = chunk.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(value)
+    for key in ("document_name", "document_id", "chunk_id"):
+        value = chunk.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(value)
+    keywords = chunk.get("important_keywords")
+    if isinstance(keywords, list):
+        parts.extend(str(item) for item in keywords if str(item))
+    raw = chunk.get("raw")
+    if isinstance(raw, Mapping):
+        for key in ("content_with_weight", "content", "docnm_kwd", "document_name", "important_keywords"):
+            value = raw.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(value)
+            elif isinstance(value, list):
+                parts.extend(str(item) for item in value if str(item))
+    return "\n".join(parts)
+
+
+def _evidence_by_rank(evidence: Sequence[Mapping[str, Any]]) -> dict[int, Mapping[str, Any]]:
+    by_rank: dict[int, Mapping[str, Any]] = {}
+    for item in evidence:
+        rank = item.get("rank")
+        if isinstance(rank, int):
+            by_rank[rank] = item
+    return by_rank
+
+
+def _rate(count: int | float, total: int | float) -> float:
+    return round(float(count) / float(total), 4) if total else 0.0
+
+
+def query_pollution_report(
+    query_payload: Mapping[str, Any],
+    *,
+    trace: Mapping[str, Any] | None = None,
+    expanded_terms: Sequence[str] | None = None,
+    max_examples: int = 5,
+    low_query_coverage_threshold: float = 0.25,
+) -> dict[str, Any]:
+    """Detect likely query expansion or BM25 bridge-term pollution in saved query output."""
+
+    question = str(query_payload.get("question") or "")
+    original_terms = _pollution_tokenize(question)
+    expanded_term_set = {
+        term
+        for raw in expanded_terms or []
+        for term in _pollution_tokenize(str(raw))
+        if term and term not in original_terms
+    }
+    trace_payload = trace or {}
+    if isinstance(trace_payload, Mapping):
+        for key in ("expanded_terms", "translated_terms", "generated_terms", "rewrite_terms"):
+            expanded_term_set.update(
+                term
+                for raw in _json_string_values(trace_payload.get(key))
+                for term in _pollution_tokenize(raw)
+                if term and term not in original_terms
+            )
+
+    chunks = _query_chunks(query_payload)
+    evidence = evidence_from_query_payload(query_payload)
+    evidence_rank = _evidence_by_rank(evidence)
+    issues: list[dict[str, Any]] = []
+    examples: list[dict[str, Any]] = []
+    bridge_counts: dict[str, int] = {}
+    document_counts: dict[str, int] = {}
+    expansion_only_hits = 0
+    low_original_coverage_hits = 0
+
+    for index, chunk in enumerate(chunks, start=1):
+        text = _chunk_text(chunk)
+        chunk_terms = _pollution_tokenize(text)
+        original_hits = sorted(original_terms.intersection(chunk_terms))
+        expansion_hits = sorted(expanded_term_set.intersection(chunk_terms))
+        original_coverage = _rate(len(original_hits), len(original_terms))
+        expansion_only = bool(expansion_hits and not original_hits)
+        low_original_coverage = bool(expansion_hits and original_coverage < low_query_coverage_threshold)
+        doc = (
+            chunk.get("document_name")
+            if isinstance(chunk.get("document_name"), str)
+            else chunk.get("document_id")
+            if isinstance(chunk.get("document_id"), str)
+            else None
+        )
+        if doc:
+            document_counts[str(doc)] = document_counts.get(str(doc), 0) + 1
+        if expansion_only:
+            expansion_only_hits += 1
+        if low_original_coverage:
+            low_original_coverage_hits += 1
+        for term in expansion_hits:
+            bridge_counts[term] = bridge_counts.get(term, 0) + 1
+        if (expansion_only or low_original_coverage) and len(examples) < max_examples:
+            evidence_item = evidence_rank.get(index, {})
+            examples.append(
+                {
+                    "rank": index,
+                    "document_name": chunk.get("document_name"),
+                    "document_id": chunk.get("document_id"),
+                    "chunk_id": chunk.get("chunk_id"),
+                    "score": evidence_item.get("score") if isinstance(evidence_item, Mapping) else None,
+                    "similarity": chunk.get("similarity"),
+                    "original_coverage": original_coverage,
+                    "original_hits": original_hits,
+                    "expansion_hits": expansion_hits,
+                    "symptoms": [
+                        symptom
+                        for symptom, present in (
+                            ("expansion_only_match", expansion_only),
+                            ("low_original_query_coverage", low_original_coverage),
+                        )
+                        if present
+                    ],
+                    "content_preview": _preview(str(chunk.get("content") or "")),
+                }
+            )
+
+    if expansion_only_hits:
+        issues.append(
+            {
+                "severity": "warning",
+                "code": "expansion_only_matches",
+                "message": "retrieved chunks matched expanded or translated terms without original query-term support",
+                "count": expansion_only_hits,
+            }
+        )
+    if low_original_coverage_hits:
+        issues.append(
+            {
+                "severity": "warning",
+                "code": "low_original_query_coverage",
+                "message": "retrieved chunks have weak original query-term coverage and expansion-term overlap",
+                "count": low_original_coverage_hits,
+            }
+        )
+    dominant_sources = [
+        {"document": document, "chunk_count": count, "share": _rate(count, len(chunks))}
+        for document, count in sorted(document_counts.items(), key=lambda item: (-item[1], item[0]))
+        if len(chunks) >= 3 and count / len(chunks) >= 0.5
+    ]
+    if dominant_sources:
+        issues.append(
+            {
+                "severity": "info",
+                "code": "source_dominance",
+                "message": "one source contributes a large share of retrieved chunks",
+                "sources": dominant_sources[:5],
+            }
+        )
+
+    status = "PASS"
+    if any(issue["severity"] == "warning" for issue in issues):
+        status = "REVIEW"
+    bridge_terms = [
+        {"term": term, "chunk_count": count}
+        for term, count in sorted(bridge_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    return {
+        "ok": True,
+        "schema": QUERY_POLLUTION_REPORT_SCHEMA,
+        "status": status,
+        "question": question,
+        "dataset_ids": list(query_payload.get("dataset_ids", [])) if isinstance(query_payload.get("dataset_ids"), list) else [],
+        "summary": {
+            "chunk_count": len(chunks),
+            "evidence_count": len(evidence),
+            "original_term_count": len(original_terms),
+            "expanded_term_count": len(expanded_term_set),
+            "expansion_only_match_count": expansion_only_hits,
+            "low_original_coverage_count": low_original_coverage_hits,
+            "bridge_term_count": len(bridge_terms),
+            "issue_count": len(issues),
+            "warnings": sum(1 for issue in issues if issue["severity"] == "warning"),
+            "infos": sum(1 for issue in issues if issue["severity"] == "info"),
+        },
+        "terms": {
+            "original": sorted(original_terms),
+            "expanded": sorted(expanded_term_set),
+            "bridge_terms": bridge_terms[:20],
+        },
+        "source_dominance": dominant_sources[:10],
+        "examples": examples,
+        "issues": issues,
+        "recommendations": [
+            "Review expanded or translated query terms before increasing recall-oriented retrieval parameters."
+            if expanded_term_set
+            else "Provide expanded or translated terms to distinguish expansion pollution from ordinary low relevance.",
+            "Use suppression-report or benchmark qrels when repeated bridge terms or sources appear across many queries.",
+        ],
+    }
+
+
+def render_query_pollution_markdown(report: Mapping[str, Any]) -> str:
+    """Render a compact Markdown query pollution report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Query Pollution Report",
+        "",
+        f"- ok: `{str(report.get('ok', False)).lower()}`",
+        f"- status: `{report.get('status', '')}`",
+        f"- chunk_count: `{summary.get('chunk_count', 0)}`",
+        f"- expansion_only_match_count: `{summary.get('expansion_only_match_count', 0)}`",
+        f"- low_original_coverage_count: `{summary.get('low_original_coverage_count', 0)}`",
+        "",
+        "## Bridge Terms",
+        "",
+    ]
+    terms = report.get("terms", {}) if isinstance(report.get("terms"), Mapping) else {}
+    bridge_terms = terms.get("bridge_terms", []) if isinstance(terms.get("bridge_terms"), list) else []
+    if not bridge_terms:
+        lines.append("- None")
+    else:
+        for item in bridge_terms[:10]:
+            if isinstance(item, Mapping):
+                lines.append(f"- `{item.get('term')}`: `{item.get('chunk_count')}` chunks")
+    lines.extend(["", "## Examples", ""])
+    examples = report.get("examples", []) if isinstance(report.get("examples"), list) else []
+    if not examples:
+        lines.append("- None")
+    else:
+        lines.extend(["| rank | document | symptoms | expansion hits | preview |", "| ---: | --- | --- | --- | --- |"])
+        for item in examples:
+            if not isinstance(item, Mapping):
+                continue
+            lines.append(
+                "| {rank} | {doc} | {symptoms} | {hits} | {preview} |".format(
+                    rank=item.get("rank", ""),
+                    doc=(item.get("document_name") or item.get("document_id") or ""),
+                    symptoms=", ".join(str(value) for value in item.get("symptoms", [])),
+                    hits=", ".join(str(value) for value in item.get("expansion_hits", [])),
+                    preview=str(item.get("content_preview", "")).replace("|", "\\|"),
+                )
+            )
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    if issues:
+        lines.extend(["", "## Issues", ""])
+        for issue in issues:
+            if isinstance(issue, Mapping):
+                lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    return "\n".join(lines) + "\n"
 
 
 def _sentence_candidates(answer: str) -> list[str]:
