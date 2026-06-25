@@ -901,7 +901,7 @@ Tasks:
 - [x] Add `ragflow_fusion_report_v1`.
 - [x] Add `ragflow-query ask --fusion rrf`.
 - [x] Add `ragflow-query fusion` for explicit multi-KB result merging.
-- [ ] Add `ragflow-query fusion-test` with offline fixture coverage.
+- [x] Add `ragflow-query fusion-test` with offline fixture coverage.
 - [x] Normalize per-KB scores and preserve original score components.
 - [x] Deduplicate near-identical chunks across KBs.
 - [x] Add reciprocal rank fusion with explainable rank contributions.

@@ -17,6 +17,7 @@ QUERY_DIAGNOSTIC_SCHEMA = "ragflow_query_diagnostic_report_v1"
 QUERY_POLLUTION_REPORT_SCHEMA = "ragflow_query_pollution_report_v1"
 QUERY_RERANK_AB_REPORT_SCHEMA = "ragflow_query_rerank_ab_report_v1"
 FUSION_REPORT_SCHEMA = "ragflow_fusion_report_v1"
+FUSION_TEST_REPORT_SCHEMA = "ragflow_fusion_test_report_v1"
 
 _STOPWORDS = {
     "a",
@@ -155,6 +156,39 @@ def _json_string_values(value: Any) -> list[str]:
             values.extend(_json_string_values(item))
         return values
     return []
+
+
+def _strict_string_list(value: Any, *, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return [item.strip() for item in value if item.strip()]
+    raise ValueError(f"{field_name} must be a string or list of strings")
+
+
+def _positive_int_value(
+    value: Any,
+    *,
+    field_name: str,
+    default: int | None = None,
+    minimum: int = 1,
+) -> int | None:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be an integer")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+    else:
+        raise ValueError(f"{field_name} must be an integer")
+    if parsed < minimum:
+        raise ValueError(f"{field_name} must be at least {minimum}")
+    return parsed
 
 
 def load_pollution_terms(path: str | Path) -> list[str]:
@@ -1261,6 +1295,397 @@ def render_query_fusion_markdown(report: Mapping[str, Any]) -> str:
         for issue in issues:
             if isinstance(issue, Mapping):
                 lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    return "\n".join(lines) + "\n"
+
+
+def _resolve_relative_path(path: str, *, base_dir: Path) -> str:
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = base_dir / candidate
+    return str(candidate)
+
+
+def load_fusion_test_cases(path: str | Path) -> list[dict[str, Any]]:
+    """Load offline fusion fixture cases and resolve query output paths."""
+
+    case_path = Path(path)
+    try:
+        data = json.loads(case_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"fusion test cases file not found: {case_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"fusion test cases file is not valid JSON: {case_path}") from exc
+
+    raw_cases = data.get("cases") if isinstance(data, Mapping) else data
+    if not isinstance(raw_cases, list) or not raw_cases:
+        raise ValueError("fusion test cases must be a non-empty list or object with cases")
+
+    cases: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_cases):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"cases[{index}] must be an object")
+        case_id = str(item.get("id") or f"case-{index + 1}").strip()
+        query_outputs = _strict_string_list(
+            item.get("query_outputs", item.get("query_output")),
+            field_name=f"cases[{index}].query_outputs",
+        )
+        if not query_outputs:
+            raise ValueError(f"cases[{index}].query_outputs is required")
+        case: dict[str, Any] = {
+            "id": case_id,
+            "query_outputs": [
+                _resolve_relative_path(output, base_dir=case_path.parent)
+                for output in query_outputs
+            ],
+            "expected_terms": _strict_string_list(
+                item.get("expected_terms", item.get("expected_term")),
+                field_name=f"cases[{index}].expected_terms",
+            ),
+            "expected_chunks": _strict_string_list(
+                item.get("expected_chunks", item.get("expected_chunk")),
+                field_name=f"cases[{index}].expected_chunks",
+            ),
+        }
+        for key in ("question", "expected_top_chunk", "description"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                case[key] = value.strip()
+        for key in ("top_k", "rrf_k", "max_per_source", "min_source_count", "min_result_count"):
+            if key in item:
+                case[key] = _positive_int_value(
+                    item.get(key),
+                    field_name=f"cases[{index}].{key}",
+                    minimum=0 if key == "max_per_source" else 1,
+                )
+        metadata = item.get("metadata")
+        if isinstance(metadata, Mapping):
+            case["metadata"] = dict(metadata)
+        elif metadata is not None:
+            raise ValueError(f"cases[{index}].metadata must be an object")
+        cases.append(case)
+    return cases
+
+
+def _read_query_output_payload(path: str | Path) -> dict[str, Any]:
+    payload_path = Path(path)
+    try:
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"query output file not found: {payload_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"query output file is not valid JSON: {payload_path}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"query output must be a JSON object: {payload_path}")
+    return payload
+
+
+def _fusion_result_aliases(result: Mapping[str, Any]) -> set[str]:
+    aliases = _chunk_aliases(result)
+    aliases.update(_reference_variants(result.get("identity")))
+    return aliases
+
+
+def _case_query_payloads(case: Mapping[str, Any]) -> list[dict[str, Any]]:
+    payloads = case.get("query_payloads")
+    if isinstance(payloads, list):
+        if not all(isinstance(payload, Mapping) for payload in payloads):
+            raise ValueError(f"fusion test case {case.get('id', '')} query_payloads must contain objects")
+        return [dict(payload) for payload in payloads]
+
+    query_outputs = _strict_string_list(
+        case.get("query_outputs", case.get("query_output")),
+        field_name=f"fusion test case {case.get('id', '')} query_outputs",
+    )
+    if not query_outputs:
+        raise ValueError(f"fusion test case {case.get('id', '')} requires query_outputs")
+    return [_read_query_output_payload(path) for path in query_outputs]
+
+
+def run_fusion_tests(
+    cases: Sequence[Mapping[str, Any]],
+    *,
+    top_k: int = 10,
+    rrf_k: int = 60,
+    max_per_source: int | None = None,
+) -> dict[str, Any]:
+    """Run offline reciprocal-rank-fusion fixture checks."""
+
+    if not cases:
+        raise ValueError("fusion test cases must be non-empty")
+    default_top_k = _positive_int_value(top_k, field_name="top_k") or 10
+    default_rrf_k = _positive_int_value(rrf_k, field_name="rrf_k") or 60
+    default_max_per_source = (
+        _positive_int_value(max_per_source, field_name="max_per_source", minimum=0)
+        if max_per_source is not None
+        else None
+    )
+
+    case_results: list[dict[str, Any]] = []
+    all_issues: list[dict[str, Any]] = []
+    passed = 0
+    review_count = 0
+
+    for index, case in enumerate(cases):
+        case_id = str(case.get("id") or f"case-{index + 1}")
+        case_top_k = _positive_int_value(
+            case.get("top_k"),
+            field_name=f"{case_id}.top_k",
+            default=default_top_k,
+        ) or default_top_k
+        case_rrf_k = _positive_int_value(
+            case.get("rrf_k"),
+            field_name=f"{case_id}.rrf_k",
+            default=default_rrf_k,
+        ) or default_rrf_k
+        case_max_per_source = (
+            _positive_int_value(
+                case.get("max_per_source"),
+                field_name=f"{case_id}.max_per_source",
+                minimum=0,
+            )
+            if case.get("max_per_source") is not None
+            else default_max_per_source
+        )
+        payloads = _case_query_payloads(case)
+        fusion = query_fusion_report(
+            payloads,
+            top_k=case_top_k,
+            rrf_k=case_rrf_k,
+            max_per_source=case_max_per_source,
+        )
+        results = [item for item in fusion.get("results", []) if isinstance(item, Mapping)]
+        result_indices = list(range(len(results)))
+        aliases_by_index = [_fusion_result_aliases(result) for result in results]
+        texts_by_index = [_chunk_text(result) for result in results]
+        expected_terms = _strict_string_list(
+            case.get("expected_terms"),
+            field_name=f"{case_id}.expected_terms",
+        )
+        expected_chunks = _strict_string_list(
+            case.get("expected_chunks"),
+            field_name=f"{case_id}.expected_chunks",
+        )
+        expected_top_chunk = case.get("expected_top_chunk")
+        min_source_count = _positive_int_value(
+            case.get("min_source_count"),
+            field_name=f"{case_id}.min_source_count",
+            default=None,
+        )
+        min_result_count = _positive_int_value(
+            case.get("min_result_count"),
+            field_name=f"{case_id}.min_result_count",
+            default=None,
+        )
+        term_hits = _expected_term_hits_for_indices(result_indices, texts_by_index, expected_terms)
+        chunk_hits = _expected_chunk_hits_for_indices(result_indices, aliases_by_index, expected_chunks)
+        top_chunk_hits = (
+            _expected_chunk_hits_for_indices([0], aliases_by_index, [str(expected_top_chunk)])
+            if expected_top_chunk and results
+            else []
+        )
+        missing_terms = [term for term in expected_terms if term not in term_hits]
+        missing_chunks = [chunk for chunk in expected_chunks if chunk not in chunk_hits]
+        top_result = results[0] if results else {}
+        top_source_count = (
+            int(top_result.get("source_count", 0))
+            if isinstance(top_result.get("source_count", 0), int)
+            else 0
+        )
+
+        case_issues: list[dict[str, Any]] = []
+        if not fusion.get("ok", False):
+            _append_issue(
+                case_issues,
+                severity="error",
+                code="fusion_report_failed",
+                message="fusion report did not pass",
+                detail={"status": fusion.get("status")},
+            )
+        if expected_top_chunk and not top_chunk_hits:
+            _append_issue(
+                case_issues,
+                severity="error",
+                code="top_chunk_mismatch",
+                message="top fused result did not match expected_top_chunk",
+                detail={
+                    "expected_top_chunk": expected_top_chunk,
+                    "actual_top_identity": top_result.get("identity") if isinstance(top_result, Mapping) else None,
+                },
+            )
+        if missing_chunks:
+            _append_issue(
+                case_issues,
+                severity="error",
+                code="missing_expected_chunks",
+                message="fused top-k results do not contain all expected chunks",
+                detail={"missing_chunks": missing_chunks},
+            )
+        if missing_terms:
+            _append_issue(
+                case_issues,
+                severity="error",
+                code="missing_expected_terms",
+                message="fused top-k results do not contain all expected terms",
+                detail={"missing_terms": missing_terms},
+            )
+        if min_source_count is not None and top_source_count < min_source_count:
+            _append_issue(
+                case_issues,
+                severity="error",
+                code="low_top_source_count",
+                message="top fused result has fewer source contributions than required",
+                detail={"top_source_count": top_source_count, "min_source_count": min_source_count},
+            )
+        if min_result_count is not None and len(results) < min_result_count:
+            _append_issue(
+                case_issues,
+                severity="error",
+                code="low_result_count",
+                message="fusion produced fewer results than required",
+                detail={"result_count": len(results), "min_result_count": min_result_count},
+            )
+
+        case_passed = not any(issue["severity"] == "error" for issue in case_issues)
+        if case_passed:
+            passed += 1
+        if fusion.get("status") == "REVIEW":
+            review_count += 1
+        for issue in case_issues:
+            issue_with_case = dict(issue)
+            issue_with_case["case_id"] = case_id
+            all_issues.append(issue_with_case)
+        case_results.append(
+            {
+                "id": case_id,
+                "description": case.get("description"),
+                "passed": case_passed,
+                "status": "FAIL" if not case_passed else fusion.get("status", "PASS"),
+                "question": case.get("question") or fusion.get("question"),
+                "query_outputs": list(case.get("query_outputs", [])) if isinstance(case.get("query_outputs"), list) else [],
+                "parameters": {
+                    "top_k": case_top_k,
+                    "rrf_k": case_rrf_k,
+                    "max_per_source": case_max_per_source,
+                },
+                "expected": {
+                    "top_chunk": expected_top_chunk,
+                    "chunks": expected_chunks,
+                    "terms": expected_terms,
+                    "min_source_count": min_source_count,
+                    "min_result_count": min_result_count,
+                },
+                "hits": {
+                    "top_chunk": top_chunk_hits,
+                    "chunks": chunk_hits,
+                    "terms": term_hits,
+                    "missing_chunks": missing_chunks,
+                    "missing_terms": missing_terms,
+                },
+                "summary": {
+                    "source_count": fusion.get("summary", {}).get("source_count", 0)
+                    if isinstance(fusion.get("summary"), Mapping)
+                    else 0,
+                    "result_count": len(results),
+                    "top_identity": top_result.get("identity") if isinstance(top_result, Mapping) else None,
+                    "top_chunk_id": top_result.get("chunk_id") if isinstance(top_result, Mapping) else None,
+                    "top_source_count": top_source_count,
+                    "deduplicated_chunk_count": fusion.get("summary", {}).get("deduplicated_chunk_count", 0)
+                    if isinstance(fusion.get("summary"), Mapping)
+                    else 0,
+                },
+                "issues": case_issues,
+                "fusion": fusion,
+            }
+        )
+
+    total = len(case_results)
+    failed = total - passed
+    status = "FAIL" if failed else "REVIEW" if review_count else "PASS"
+    return {
+        "ok": failed == 0,
+        "schema": FUSION_TEST_REPORT_SCHEMA,
+        "status": status,
+        "parameters": {
+            "top_k": default_top_k,
+            "rrf_k": default_rrf_k,
+            "max_per_source": default_max_per_source,
+        },
+        "summary": {
+            "total": total,
+            "passed": passed,
+            "failed": failed,
+            "pass_rate": _rate(passed, total),
+            "review_count": review_count,
+            "issue_count": len(all_issues),
+            "errors": sum(1 for issue in all_issues if issue["severity"] == "error"),
+            "warnings": sum(1 for issue in all_issues if issue["severity"] == "warning"),
+            "infos": sum(1 for issue in all_issues if issue["severity"] == "info"),
+        },
+        "cases": case_results,
+        "issues": all_issues,
+        "recommendations": [
+            "Keep fusion-test fixtures offline and version their saved query outputs with the cases file.",
+            "Add benchmark gates before using fusion defaults for production KB routing changes.",
+        ],
+    }
+
+
+def render_query_fusion_test_markdown(report: Mapping[str, Any]) -> str:
+    """Render a compact Markdown report for offline fusion fixture tests."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Fusion Test Report",
+        "",
+        f"- ok: `{str(report.get('ok', False)).lower()}`",
+        f"- status: `{report.get('status', '')}`",
+        f"- total: `{summary.get('total', 0)}`",
+        f"- passed: `{summary.get('passed', 0)}`",
+        f"- failed: `{summary.get('failed', 0)}`",
+        f"- pass_rate: `{summary.get('pass_rate', 0)}`",
+        "",
+        "## Cases",
+        "",
+    ]
+    cases = report.get("cases", []) if isinstance(report.get("cases"), list) else []
+    if not cases:
+        lines.append("- None")
+    else:
+        lines.extend(
+            [
+                "| id | status | top result | source count | missing chunks | missing terms |",
+                "| --- | --- | --- | ---: | --- | --- |",
+            ]
+        )
+        for case in cases:
+            if not isinstance(case, Mapping):
+                continue
+            case_summary = case.get("summary", {}) if isinstance(case.get("summary"), Mapping) else {}
+            hits = case.get("hits", {}) if isinstance(case.get("hits"), Mapping) else {}
+            lines.append(
+                "| `{id}` | {status} | `{top}` | {sources} | {chunks} | {terms} |".format(
+                    id=case.get("id", ""),
+                    status="passed" if case.get("passed") else "failed",
+                    top=case_summary.get("top_identity") or "-",
+                    sources=case_summary.get("top_source_count", 0),
+                    chunks=", ".join(str(item) for item in hits.get("missing_chunks", []))
+                    if isinstance(hits.get("missing_chunks"), list)
+                    else "",
+                    terms=", ".join(str(item) for item in hits.get("missing_terms", []))
+                    if isinstance(hits.get("missing_terms"), list)
+                    else "",
+                )
+            )
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    lines.extend(["", "## Issues", ""])
+    if not issues:
+        lines.append("- None")
+    else:
+        for issue in issues:
+            if isinstance(issue, Mapping):
+                lines.append(
+                    f"- `{issue.get('case_id', '')}` `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}"
+                )
     return "\n".join(lines) + "\n"
 
 

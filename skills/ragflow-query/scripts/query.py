@@ -41,6 +41,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     load_pollution_terms,
     load_route_test_queries,
     load_config,
+    load_fusion_test_cases,
     load_kb_manifest,
     load_routing_config,
     normalize_retrieval_response,
@@ -49,11 +50,13 @@ from ragflow_skill_runtime import (  # noqa: E402
     query_rerank_ab_report,
     render_citation_audit_markdown,
     render_query_fusion_markdown,
+    render_query_fusion_test_markdown,
     render_query_diagnostic_markdown,
     render_query_pollution_markdown,
     render_query_rerank_ab_markdown,
     render_query_trace_markdown,
     render_route_test_markdown,
+    run_fusion_tests,
     resolve_dataset_ids,
     route_question,
     run_route_tests,
@@ -451,6 +454,24 @@ def _fusion(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _fusion_test(args: argparse.Namespace) -> int:
+    try:
+        cases = load_fusion_test_cases(args.cases)
+        report = run_fusion_tests(
+            cases,
+            top_k=args.top_k,
+            rrf_k=args.rrf_k,
+            max_per_source=args.max_per_source,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_fusion_test_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _add_runtime_options(parser: argparse.ArgumentParser, *, suppress_defaults: bool = False) -> None:
     default = argparse.SUPPRESS if suppress_defaults else None
     parser.add_argument("--config", default=default, help="Path to JSON or simple YAML config")
@@ -540,6 +561,16 @@ def build_parser() -> argparse.ArgumentParser:
     fusion.add_argument("--report-md", help="Optional Markdown report output path")
     fusion.add_argument("--json", action="store_true", help="Emit JSON report")
     fusion.set_defaults(func=_fusion)
+
+    fusion_test = sub.add_parser("fusion-test", help="Run offline fusion fixture checks")
+    fusion_test.add_argument("--cases", required=True, help="Fusion test cases JSON")
+    fusion_test.add_argument("--top-k", type=int, help="Default top_k for cases that omit it")
+    fusion_test.add_argument("--rrf-k", type=int, help="Default rrf_k for cases that omit it")
+    fusion_test.add_argument("--max-per-source", type=int, help="Default max_per_source for cases that omit it")
+    fusion_test.add_argument("--report-json", help="Optional JSON report output path")
+    fusion_test.add_argument("--report-md", help="Optional Markdown report output path")
+    fusion_test.add_argument("--json", action="store_true", help="Emit JSON report")
+    fusion_test.set_defaults(func=_fusion_test)
 
     ask = sub.add_parser("ask", help="Ask a question against RAGFlow")
     _add_runtime_options(ask, suppress_defaults=True)

@@ -1,21 +1,27 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from ragflow_skill_runtime.observability import (
     audit_citations,
     build_query_trace,
     diagnose_query_result,
     evidence_from_query_payload,
+    load_fusion_test_cases,
     query_fusion_report,
     query_pollution_report,
     query_rerank_ab_report,
     render_citation_audit_markdown,
     render_query_diagnostic_markdown,
     render_query_fusion_markdown,
+    render_query_fusion_test_markdown,
     render_query_pollution_markdown,
     render_query_rerank_ab_markdown,
     render_query_trace_markdown,
+    run_fusion_tests,
     weight_evidence,
 )
 from ragflow_skill_runtime.retrieval import NormalizedChunk
@@ -238,6 +244,84 @@ class ObservabilityTests(unittest.TestCase):
         self.assertIn("deduplicated_chunks", {issue["code"] for issue in report["issues"]})
         self.assertIn("RAGFlow Fusion Report", markdown)
         self.assertIn("shared.md", markdown)
+
+    def test_fusion_test_report_validates_saved_query_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            query_a = root / "query-a.json"
+            query_b = root / "query-b.json"
+            cases = root / "cases.json"
+            query_a.write_text(
+                json.dumps(
+                    {
+                        "question": "shared answer",
+                        "dataset_ids": ["ds-a"],
+                        "chunks": [
+                            {
+                                "chunk_id": "shared",
+                                "content": "Shared answer evidence.",
+                                "document_name": "shared.md",
+                                "similarity": 0.9,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            query_b.write_text(
+                json.dumps(
+                    {
+                        "question": "shared answer",
+                        "dataset_ids": ["ds-b"],
+                        "chunks": [
+                            {
+                                "chunk_id": "b-only",
+                                "content": "B only evidence.",
+                                "document_name": "b.md",
+                                "similarity": 0.8,
+                            },
+                            {
+                                "chunk_id": "shared",
+                                "content": "Shared answer evidence.",
+                                "document_name": "shared.md",
+                                "similarity": 0.7,
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            cases.write_text(
+                json.dumps(
+                    {
+                        "cases": [
+                            {
+                                "id": "shared-evidence",
+                                "query_outputs": ["query-a.json", "query-b.json"],
+                                "top_k": 2,
+                                "rrf_k": 60,
+                                "expected_top_chunk": "shared",
+                                "expected_chunks": ["shared"],
+                                "expected_terms": ["Shared answer"],
+                                "min_source_count": 2,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            loaded = load_fusion_test_cases(cases)
+            report = run_fusion_tests(loaded)
+            markdown = render_query_fusion_test_markdown(report)
+
+        self.assertTrue(Path(loaded[0]["query_outputs"][0]).is_absolute())
+        self.assertEqual(report["schema"], "ragflow_fusion_test_report_v1")
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["summary"]["passed"], 1)
+        self.assertEqual(report["cases"][0]["summary"]["top_source_count"], 2)
+        self.assertIn("RAGFlow Fusion Test Report", markdown)
+        self.assertIn("shared-evidence", markdown)
 
 
 if __name__ == "__main__":

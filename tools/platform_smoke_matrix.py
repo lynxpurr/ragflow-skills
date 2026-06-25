@@ -907,7 +907,47 @@ fusion_payload = json.loads(stdout.getvalue())
 if fusion_payload.get("schema") != "ragflow_fusion_report_v1":
     raise SystemExit(10)
 
-print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload, "pollution": pollution_payload, "rerank": rerank_payload, "fusion": fusion_payload}}, ensure_ascii=False))
+fusion_cases = artifacts_dir / "query_fusion_cases.json"
+fusion_cases.write_text(
+    json.dumps(
+        {{
+            "cases": [
+                {{
+                    "id": "platform-shared-evidence",
+                    "query_outputs": [rerank_query_input.name, fusion_source.name],
+                    "top_k": 3,
+                    "expected_top_chunk": "platform-known",
+                    "expected_chunks": ["platform-known"],
+                    "expected_terms": ["known term"],
+                    "min_source_count": 2,
+                }}
+            ]
+        }},
+        ensure_ascii=False,
+        indent=2,
+    )
+    + "\\n",
+    encoding="utf-8",
+)
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    fusion_test_code = module.main([
+        "fusion-test",
+        "--cases",
+        str(fusion_cases),
+        "--report-json",
+        str(artifacts_dir / "query_fusion_test.json"),
+        "--report-md",
+        str(artifacts_dir / "query_fusion_test.md"),
+        "--json",
+    ])
+if fusion_test_code != 0:
+    raise SystemExit(fusion_test_code)
+fusion_test_payload = json.loads(stdout.getvalue())
+if fusion_test_payload.get("schema") != "ragflow_fusion_test_report_v1":
+    raise SystemExit(11)
+
+print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload, "pollution": pollution_payload, "rerank": rerank_payload, "fusion": fusion_payload, "fusion_test": fusion_test_payload}}, ensure_ascii=False))
 """,
         encoding="utf-8",
     )
@@ -1736,6 +1776,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_rerank_ab.md",
         artifacts_dir / "query_fusion.json",
         artifacts_dir / "query_fusion.md",
+        artifacts_dir / "query_fusion_test.json",
+        artifacts_dir / "query_fusion_test.md",
         artifacts_dir / "route_test.md",
         artifacts_dir / "profile_lint.md",
         artifacts_dir / "candidate_profile_set.json",

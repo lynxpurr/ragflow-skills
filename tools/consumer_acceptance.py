@@ -1605,8 +1605,11 @@ raise SystemExit(code)
     query_rerank_json = work_root / "query_rerank_ab.json"
     query_rerank_md = work_root / "query_rerank_ab.md"
     query_fusion_source = work_root / "query_fusion_source.json"
+    query_fusion_cases = work_root / "query_fusion_cases.json"
     query_fusion_json = work_root / "query_fusion.json"
     query_fusion_md = work_root / "query_fusion.md"
+    query_fusion_test_json = work_root / "query_fusion_test.json"
+    query_fusion_test_md = work_root / "query_fusion_test.md"
     query_output.write_text(
         json.dumps(
             {
@@ -1824,6 +1827,54 @@ raise SystemExit(code)
         produced.append(query_fusion_json)
     if query_fusion_md.exists():
         produced.append(query_fusion_md)
+
+    query_fusion_cases.write_text(
+        json.dumps(
+            {
+                "cases": [
+                    {
+                        "id": "consumer-shared-evidence",
+                        "query_outputs": [query_output.name, query_fusion_source.name],
+                        "top_k": 3,
+                        "expected_top_chunk": "consumer-chunk-1",
+                        "expected_chunks": ["consumer-chunk-1"],
+                        "expected_terms": ["repository source context"],
+                        "min_source_count": 2,
+                    }
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    query_fusion_test = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "fusion-test",
+            "--cases",
+            str(query_fusion_cases),
+            "--report-json",
+            str(query_fusion_test_json),
+            "--report-md",
+            str(query_fusion_test_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query fusion test report",
+        query_fusion_test,
+        required_output='"schema": "ragflow_fusion_test_report_v1"',
+    )
+    if query_fusion_test_json.exists():
+        produced.append(query_fusion_test_json)
+    if query_fusion_test_md.exists():
+        produced.append(query_fusion_test_md)
 
     missing_config = _run_command(
         [
