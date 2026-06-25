@@ -1118,6 +1118,7 @@ def query_fusion_report(
                     "document_id": chunk.get("document_id"),
                     "chunk_id": _chunk_field(chunk, ("chunk_id", "id", "source_chunk_id")),
                     "stable_hash": stable_chunk_hash(chunk),
+                    "content": str(chunk.get("content") or ""),
                     "content_preview": _preview(str(chunk.get("content") or "")),
                     "best_original_rank": rank,
                     "best_similarity": similarity,

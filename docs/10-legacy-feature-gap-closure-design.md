@@ -522,6 +522,11 @@ reciprocal rank fusion, and emits source contribution details for every fused re
 is offline and does not run retrieval itself; live `ask --fusion rrf` can build on the same
 report schema later.
 
+MVP `ask --fusion rrf` uses that same report schema when multiple dataset IDs are selected.
+It calls RAGFlow retrieval once per dataset, preserves each per-KB source payload, and
+returns fused chunks plus the fusion report in JSON output and trace data. Single-dataset
+queries keep the normal direct retrieval path.
+
 This should work without an LLM key.
 
 ## Feature Design 8: Query Rewrite, HyDE, And Cross-Language Expansion

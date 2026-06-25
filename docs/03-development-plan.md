@@ -899,7 +899,7 @@ evidence output available without an LLM key.
 Tasks:
 
 - [x] Add `ragflow_fusion_report_v1`.
-- [ ] Add `ragflow-query ask --fusion rrf`.
+- [x] Add `ragflow-query ask --fusion rrf`.
 - [x] Add `ragflow-query fusion` for explicit multi-KB result merging.
 - [ ] Add `ragflow-query fusion-test` with offline fixture coverage.
 - [x] Normalize per-KB scores and preserve original score components.

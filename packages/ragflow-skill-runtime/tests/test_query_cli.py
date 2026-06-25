@@ -28,6 +28,7 @@ def load_query_module():
 
 class FakeQueryClient:
     last_request = None
+    requests = []
 
     def __init__(self, config):
         self.config = config
@@ -39,6 +40,7 @@ class FakeQueryClient:
             "top_k": top_k,
             "similarity_threshold": similarity_threshold,
         }
+        FakeQueryClient.requests.append(FakeQueryClient.last_request)
         return {
             "data": {
                 "chunks": [
@@ -146,6 +148,65 @@ class QueryCliTests(unittest.TestCase):
             )
         self.assertEqual(code, 0, stdout.getvalue())
         self.assertIn('"ok": true', stdout.getvalue().lower())
+
+    def test_direct_mode_can_fuse_multiple_dataset_results(self) -> None:
+        class MultiDatasetClient(FakeQueryClient):
+            def retrieve(self, *, question, dataset_ids, top_k=5, similarity_threshold=None):
+                FakeQueryClient.last_request = {
+                    "question": question,
+                    "dataset_ids": dataset_ids,
+                    "top_k": top_k,
+                    "similarity_threshold": similarity_threshold,
+                }
+                FakeQueryClient.requests.append(FakeQueryClient.last_request)
+                dataset_id = dataset_ids[0]
+                return {
+                    "data": {
+                        "chunks": [
+                            {
+                                "id": f"{dataset_id}-chunk",
+                                "content_with_weight": f"{dataset_id} answer for {question}",
+                                "docnm_kwd": f"{dataset_id}.md",
+                                "similarity": 0.9 if dataset_id == "ds-1" else 0.8,
+                                "kb_id": dataset_id,
+                            }
+                        ]
+                    }
+                }
+
+        module = load_query_module()
+        module.RAGFlowClient = MultiDatasetClient
+        FakeQueryClient.requests = []
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = module.main(
+                [
+                    "--base-url",
+                    "https://ragflow.example.test",
+                    "--api-key",
+                    "test-key",
+                    "ask",
+                    "question",
+                    "--mode",
+                    "direct",
+                    "--dataset-id",
+                    "ds-1",
+                    "--dataset-id",
+                    "ds-2",
+                    "--fusion",
+                    "rrf",
+                    "--json",
+                    "--include-trace",
+                ]
+            )
+        payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual([request["dataset_ids"] for request in FakeQueryClient.requests], [["ds-1"], ["ds-2"]])
+        self.assertEqual(payload["fusion"]["schema"], "ragflow_fusion_report_v1")
+        self.assertEqual(payload["metadata"]["fusion"], "rrf")
+        self.assertIn("fusion", payload["trace"])
+        self.assertEqual(len(payload["chunks"]), 2)
 
     def test_host_assisted_mode_can_succeed_with_fake_client(self) -> None:
         module = load_query_module()

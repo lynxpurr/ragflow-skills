@@ -29,6 +29,7 @@ bootstrap_core()
 
 from ragflow_skill_runtime import (  # noqa: E402
     ConfigError,
+    NormalizedChunk,
     QueryResult,
     RAGFlowClient,
     RetrievalError,
@@ -114,6 +115,28 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _fused_chunks(report: dict[str, Any]) -> list[NormalizedChunk]:
+    chunks: list[NormalizedChunk] = []
+    for item in report.get("results", []):
+        if not isinstance(item, dict):
+            continue
+        components = item.get("score_components")
+        first_component = components[0] if isinstance(components, list) and components and isinstance(components[0], dict) else {}
+        dataset_ids = first_component.get("dataset_ids") if isinstance(first_component, dict) else []
+        chunks.append(
+            NormalizedChunk(
+                content=str(item.get("content") or item.get("content_preview") or ""),
+                similarity=float(item.get("rrf_score") or 0.0),
+                document_name=item.get("document_name") if isinstance(item.get("document_name"), str) else None,
+                document_id=item.get("document_id") if isinstance(item.get("document_id"), str) else None,
+                dataset_id=str(dataset_ids[0]) if isinstance(dataset_ids, list) and dataset_ids else None,
+                chunk_id=item.get("chunk_id") if isinstance(item.get("chunk_id"), str) else None,
+                raw=dict(item),
+            )
+        )
+    return chunks
+
+
 def _ask(args: argparse.Namespace) -> int:
     mode = args.mode
     route_result = None
@@ -157,14 +180,37 @@ def _ask(args: argparse.Namespace) -> int:
             else routed_params.get("similarity_threshold")
         )
         retrieval_start = time.perf_counter()
-        raw = client.retrieve(
-            question=args.question,
-            dataset_ids=dataset_ids,
-            top_k=effective_top_k,
-            similarity_threshold=effective_similarity_threshold,
-        )
+        fusion_report = None
+        fusion_sources: list[dict[str, Any]] = []
+        if args.fusion == "rrf" and len(dataset_ids) > 1:
+            for dataset_id in dataset_ids:
+                raw = client.retrieve(
+                    question=args.question,
+                    dataset_ids=[dataset_id],
+                    top_k=effective_top_k,
+                    similarity_threshold=effective_similarity_threshold,
+                )
+                source_chunks = normalize_retrieval_response(raw)
+                source_payload = {
+                    "ok": True,
+                    "question": args.question,
+                    "source": dataset_id,
+                    "dataset_ids": [dataset_id],
+                    "chunks": [chunk.to_dict(include_raw=args.include_raw) for chunk in source_chunks],
+                    "evidence": weight_evidence(args.question, source_chunks),
+                }
+                fusion_sources.append(source_payload)
+            fusion_report = query_fusion_report(fusion_sources, top_k=effective_top_k)
+            chunks = _fused_chunks(fusion_report)
+        else:
+            raw = client.retrieve(
+                question=args.question,
+                dataset_ids=dataset_ids,
+                top_k=effective_top_k,
+                similarity_threshold=effective_similarity_threshold,
+            )
+            chunks = normalize_retrieval_response(raw)
         retrieval_duration_ms = (time.perf_counter() - retrieval_start) * 1000
-        chunks = normalize_retrieval_response(raw)
     except (ConfigError, RetrievalError, RoutingError, ValueError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=args.json)
 
@@ -191,6 +237,8 @@ def _ask(args: argparse.Namespace) -> int:
         finished_at=finished_at,
         warnings=[] if chunks else ["retrieval returned zero chunks"],
     )
+    if fusion_report:
+        trace["fusion"] = fusion_report
     _write_json(args.trace_json, trace)
     _write_text(args.trace_md, render_query_trace_markdown(trace))
     result = QueryResult(
@@ -204,11 +252,13 @@ def _ask(args: argparse.Namespace) -> int:
             "requested_mode": args.mode,
             "top_k": effective_top_k,
             "similarity_threshold": effective_similarity_threshold,
+            "fusion": args.fusion,
             "chunk_count": len(chunks),
             "synthesis": "host-assisted" if args.host_assisted else "not-requested",
             "duration_ms": round(total_duration_ms, 3),
             "retrieval_ms": round(retrieval_duration_ms, 3),
             "evidence_count": len(evidence),
+            **({"fusion_report": fusion_report} if fusion_report else {}),
             **({"route": route_payload} if route_payload else {}),
         },
     )
@@ -217,6 +267,8 @@ def _ask(args: argparse.Namespace) -> int:
         **result.to_dict(include_raw=args.include_raw),
         "evidence": evidence,
     }
+    if fusion_report:
+        payload["fusion"] = fusion_report
     if args.include_trace:
         payload["trace"] = trace
     if args.json or args.host_assisted:
@@ -499,6 +551,7 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--kb-manifest", help="Path to kb_manifest.json")
     ask.add_argument("--top-k", type=int)
     ask.add_argument("--similarity-threshold", type=float)
+    ask.add_argument("--fusion", choices=["none", "rrf"], default="none", help="Fuse per-dataset retrieval results when multiple dataset IDs are selected")
     ask.add_argument("--host-assisted", action="store_true", help="Return evidence for host agent synthesis")
     ask.add_argument("--json", action="store_true", help="Emit JSON")
     ask.add_argument("--include-raw", action="store_true", help="Include raw RAGFlow chunks in JSON")
