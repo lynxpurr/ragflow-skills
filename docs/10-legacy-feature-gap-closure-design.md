@@ -639,7 +639,9 @@ used per-KB retrieval parameters, centroid coverage, and strong route regression
   short-hint word-boundary risks, substring conflicts, missing retrieval params, and
   route-test pass rate.
 - `ragflow-query route-diagnose`: classify failures as missing hint, regex-order issue,
-  priority conflict, acceptable ambiguity, or missing KB config.
+  priority conflict, acceptable ambiguity, missing KB config, or low-confidence fallback.
+  The MVP consumes user-owned route-test queries offline and only treats regex ordering as
+  explicit when routing metadata marks a KB as order-sensitive.
 - English hint coverage and word-boundary checks for short English names, abbreviations,
   and product terms.
 - category, locale, and negative-class coverage reports for public route-test suites.

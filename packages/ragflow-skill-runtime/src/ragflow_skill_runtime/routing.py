@@ -16,6 +16,7 @@ class RoutingError(RuntimeError):
 
 
 ROUTE_REPORT_SCHEMA = "ragflow_route_report_v1"
+ROUTE_DIAGNOSE_SCHEMA = "ragflow_route_diagnose_report_v1"
 
 
 def _string_list(value: Any, *, field_name: str) -> list[str]:
@@ -42,6 +43,30 @@ def _average(values: list[float]) -> float:
 
 def _matches_kb_ref(value: Any, kb: "RoutingKnowledgeBase") -> bool:
     return isinstance(value, str) and value in {kb.name, kb.dataset_id}
+
+
+def _kb_ref(config: "RoutingConfig", value: Any) -> "RoutingKnowledgeBase | None":
+    if not isinstance(value, str):
+        return None
+    return next((kb for kb in config.knowledge_bases if value in {kb.name, kb.dataset_id}), None)
+
+
+def _truthy_metadata(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
+def _string_set(values: Any) -> set[str]:
+    if values is None:
+        return set()
+    if isinstance(values, str):
+        return {values}
+    if isinstance(values, list):
+        return {item for item in values if isinstance(item, str) and item}
+    return set()
 
 
 @dataclass(frozen=True)
@@ -486,7 +511,10 @@ def run_route_report(
             "hint_match_count": total_hint_matches,
             "hint_match_rate": _rate(total_hint_matches, total_hints),
             "params_coverage_count": sum(1 for has_params in params_coverage.values() if has_params),
-            "params_coverage_rate": _rate(sum(1 for has_params in params_coverage.values() if has_params), len(params_coverage)),
+            "params_coverage_rate": _rate(
+                sum(1 for has_params in params_coverage.values() if has_params),
+                len(params_coverage),
+            ),
             "missing_route_test_count": len(missing_route_tests),
             "missing_params_count": len(missing_params),
             "short_hint_kb_count": len(word_boundary_hints),
@@ -523,6 +551,287 @@ def run_route_report(
             "Review short hints and ambiguous matches for word-boundary conflicts before expanding route rules.",
         ],
     }
+
+
+def _acceptable_refs(query: Mapping[str, Any]) -> set[str]:
+    refs: set[str] = set()
+    for key in ("acceptable_kbs", "acceptable_dataset_ids", "allowed_kbs", "allowed_dataset_ids"):
+        refs.update(_string_set(query.get(key)))
+    return refs
+
+
+def _candidate_refs(candidate: Mapping[str, Any]) -> set[str]:
+    refs = set()
+    name = candidate.get("name")
+    dataset_id = candidate.get("dataset_id")
+    if isinstance(name, str):
+        refs.add(name)
+    if isinstance(dataset_id, str):
+        refs.add(dataset_id)
+    return refs
+
+
+def _candidate_score(candidate: Mapping[str, Any] | None) -> float:
+    if not isinstance(candidate, Mapping):
+        return 0.0
+    value = candidate.get("score")
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+
+def _candidate_names(candidates: list[Mapping[str, Any]], *, score: float | None = None) -> list[str]:
+    names = []
+    for candidate in candidates:
+        if score is not None and _candidate_score(candidate) != score:
+            continue
+        name = candidate.get("name") or candidate.get("dataset_id")
+        if isinstance(name, str):
+            names.append(name)
+    return names
+
+
+def _route_candidates(case: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    candidates = case.get("candidates")
+    if isinstance(candidates, list):
+        return [candidate for candidate in candidates if isinstance(candidate, Mapping)]
+    route = case.get("route") if isinstance(case.get("route"), Mapping) else {}
+    candidates = route.get("candidates")
+    if isinstance(candidates, list):
+        return [candidate for candidate in candidates if isinstance(candidate, Mapping)]
+    return []
+
+
+def _expected_candidate(case: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    for candidate in _route_candidates(case):
+        if case.get("expected") in _candidate_refs(candidate):
+            return candidate
+    return None
+
+
+def _selected_candidate(case: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    selected = case.get("selected")
+    if isinstance(selected, Mapping):
+        return selected
+    route = case.get("route") if isinstance(case.get("route"), Mapping) else {}
+    selected = route.get("selected")
+    return selected if isinstance(selected, Mapping) else None
+
+
+def _selected_reason(case: Mapping[str, Any], selected: Mapping[str, Any] | None) -> str | None:
+    direct = case.get("selected_reason")
+    if isinstance(direct, str):
+        return direct
+    if isinstance(selected, Mapping) and isinstance(selected.get("reason"), str):
+        return str(selected["reason"])
+    return None
+
+
+def _case_query(cases_by_id: Mapping[str, Mapping[str, Any]], case: Mapping[str, Any]) -> Mapping[str, Any]:
+    case_id = case.get("id")
+    return cases_by_id.get(str(case_id), {}) if case_id is not None else {}
+
+
+def _classify_route_case(
+    config: RoutingConfig,
+    case: Mapping[str, Any],
+    query: Mapping[str, Any],
+) -> tuple[str, str, list[str]]:
+    expected_kb = _kb_ref(config, case.get("expected"))
+    if expected_kb is None:
+        return (
+            "missing_kb_config",
+            "expected KB is not present in the routing config",
+            ["Add the expected KB to the routing config or fix the route-test expected_kb value."],
+        )
+
+    selected = _selected_candidate(case)
+    selected_reason = _selected_reason(case, selected)
+    selected_score = _candidate_score(selected)
+    if selected and _candidate_refs(selected).intersection(_acceptable_refs(query)):
+        return (
+            "acceptable_ambiguity",
+            "selected KB is listed as acceptable for this route-test query",
+            ["Record why this alternate KB is acceptable or tighten the route-test expectation."],
+        )
+    if selected_reason == "default" and selected_score == 0.0:
+        return (
+            "low_confidence_semantic_fallback",
+            "route fell back to the default KB without a positive hint score",
+            ["Add explicit hints for the expected KB or pass an explicit KB for this query class."],
+        )
+    expected_candidate = _expected_candidate(case)
+    selected_candidate = selected
+    if isinstance(expected_candidate, Mapping) and isinstance(selected_candidate, Mapping):
+        expected_score = _candidate_score(expected_candidate)
+        selected_score = _candidate_score(selected_candidate)
+        if expected_score == selected_score and expected_score > 0:
+            if _truthy_metadata(expected_kb.metadata.get("regex_order_sensitive")):
+                return (
+                    "regex_order_issue",
+                    "expected and selected KBs tied, and expected KB metadata marks regex order as sensitive",
+                    ["Review rule ordering or explicit priority metadata for tied route hints."],
+                )
+            return (
+                "priority_conflict",
+                "expected KB tied with the selected KB but lost deterministic ordering",
+                ["Add a more specific hint or explicit priority metadata for the expected KB."],
+            )
+        if expected_score > 0 and selected_score > expected_score:
+            return (
+                "priority_conflict",
+                "another KB scored higher than the expected KB",
+                ["Add a stronger expected-KB hint or narrow the competing KB hint."],
+            )
+    if not case.get("matched_hints"):
+        return (
+            "missing_hint",
+            "selected route has no matched hints for this query",
+            ["Add a route hint for the expected KB using wording from the failed query."],
+        )
+    return (
+        "missing_hint",
+        "expected KB did not receive a strong enough hint match",
+        ["Add or refine hints for the expected KB and rerun route-test."],
+    )
+
+
+def run_route_diagnose(config: RoutingConfig, queries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Classify route-test failures and routing-rule risks without live retrieval."""
+
+    route_report = run_route_report(config, queries)
+    cases_by_id = {str(query["id"]): query for query in queries}
+    issues: list[dict[str, Any]] = []
+    failed_cases = [
+        case
+        for case in route_report.get("route_test", {}).get("cases", [])
+        if isinstance(case, Mapping) and not case.get("passed")
+    ]
+
+    report_cases = {
+        str(case.get("id")): case
+        for case in route_report.get("low_confidence_routes", [])
+        + route_report.get("ambiguous_routes", [])
+        + route_report.get("empty_routes", [])
+        if isinstance(case, Mapping) and case.get("id") is not None
+    }
+    for case in route_report.get("route_test", {}).get("cases", []):
+        if isinstance(case, Mapping) and case.get("id") is not None:
+            report_cases.setdefault(str(case.get("id")), case)
+
+    for case in failed_cases:
+        report_case = report_cases.get(str(case.get("id")), case)
+        query = _case_query(cases_by_id, report_case)
+        category, reason, recommendations = _classify_route_case(config, report_case, query)
+        candidates = _route_candidates(report_case)
+        selected = _selected_candidate(report_case)
+        top_score = _candidate_score(candidates[0]) if candidates else 0.0
+        issues.append(
+            {
+                "severity": "warning" if category == "acceptable_ambiguity" else "error",
+                "category": category,
+                "id": report_case.get("id"),
+                "question": report_case.get("question"),
+                "expected": report_case.get("expected"),
+                "actual": report_case.get("actual"),
+                "actual_dataset_id": report_case.get("actual_dataset_id"),
+                "reason": reason,
+                "selected_score": _candidate_score(selected),
+                "selected_reason": _selected_reason(report_case, selected),
+                "top_candidates": _candidate_names(candidates, score=top_score),
+                "recommendations": recommendations,
+            }
+        )
+
+    for case in route_report.get("low_confidence_routes", []):
+        if not isinstance(case, Mapping) or not case.get("passed"):
+            continue
+        issues.append(
+            {
+                "severity": "info",
+                "category": "low_confidence_semantic_fallback",
+                "id": case.get("id"),
+                "question": case.get("question"),
+                "expected": case.get("expected"),
+                "actual": case.get("actual"),
+                "reason": "route passed but selected score is low",
+                "selected_score": case.get("selected_score"),
+                "selected_reason": case.get("selected_reason"),
+                "recommendations": ["Add a more specific hint to make this passing route less fragile."],
+            }
+        )
+
+    for item in route_report.get("substring_conflicts", []):
+        if isinstance(item, Mapping):
+            issues.append(
+                {
+                    "severity": "warning",
+                    "category": "priority_conflict",
+                    "id": f"{item.get('kb_a')}::{item.get('kb_b')}",
+                    "reason": "one route hint is a substring of another KB hint",
+                    "kb_a": item.get("kb_a"),
+                    "kb_b": item.get("kb_b"),
+                    "hint_a": item.get("hint_a"),
+                    "hint_b": item.get("hint_b"),
+                    "recommendations": [
+                        "Add route tests for substring conflicts or make the shorter hint more specific."
+                    ],
+                }
+            )
+
+    by_category: dict[str, int] = {}
+    by_severity: dict[str, int] = {}
+    for issue in issues:
+        by_category[str(issue["category"])] = by_category.get(str(issue["category"]), 0) + 1
+        by_severity[str(issue["severity"])] = by_severity.get(str(issue["severity"]), 0) + 1
+
+    return {
+        "ok": not any(issue.get("severity") == "error" for issue in issues),
+        "schema": ROUTE_DIAGNOSE_SCHEMA,
+        "summary": {
+            "query_count": len(queries),
+            "issue_count": len(issues),
+            "error_count": by_severity.get("error", 0),
+            "warning_count": by_severity.get("warning", 0),
+            "info_count": by_severity.get("info", 0),
+            "failed_route_count": len(failed_cases),
+            "categories": by_category,
+        },
+        "issues": issues,
+        "route_report": route_report,
+    }
+
+
+def render_route_diagnose_markdown(report: Mapping[str, Any]) -> str:
+    """Render a compact Markdown route diagnosis report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Route Diagnosis",
+        "",
+        f"- ok: `{str(report.get('ok', False)).lower()}`",
+        f"- queries: `{summary.get('query_count', 0)}`",
+        f"- issues: `{summary.get('issue_count', 0)}`",
+        f"- errors: `{summary.get('error_count', 0)}`",
+        f"- warnings: `{summary.get('warning_count', 0)}`",
+        "",
+        "## Issues",
+        "",
+    ]
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    if not issues:
+        lines.append("- None")
+    else:
+        for issue in issues[:25]:
+            if not isinstance(issue, Mapping):
+                continue
+            lines.append(
+                "- `{severity}` `{category}` `{id}`: {reason}".format(
+                    severity=issue.get("severity", ""),
+                    category=issue.get("category", ""),
+                    id=issue.get("id", ""),
+                    reason=issue.get("reason", ""),
+                )
+            )
+    return "\n".join(lines) + "\n"
 
 
 def render_route_report_markdown(report: Mapping[str, Any]) -> str:
@@ -688,6 +997,10 @@ def load_route_test_queries(path: str | Path) -> list[dict[str, Any]]:
             value = item.get(key)
             if isinstance(value, str) and value.strip():
                 query[key] = value.strip()
+        for key in ("acceptable_kbs", "acceptable_dataset_ids", "allowed_kbs", "allowed_dataset_ids"):
+            values = _string_set(item.get(key))
+            if values:
+                query[key] = sorted(values)
         queries.append(query)
     return queries
 

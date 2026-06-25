@@ -12,7 +12,8 @@
       "question": "Which API configuration should a developer use?",
       "expected_kb": "kb:technical-sample",
       "category": "exact",
-      "locale": "en"
+      "locale": "en",
+      "acceptable_kbs": ["kb:technical-sample"]
     }
   ]
 }

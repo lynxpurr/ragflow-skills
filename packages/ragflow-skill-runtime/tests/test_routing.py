@@ -9,9 +9,11 @@ from ragflow_skill_runtime.routing import (
     RoutingConfig,
     load_route_test_queries,
     load_routing_config,
+    render_route_diagnose_markdown,
     render_route_report_markdown,
     render_route_test_markdown,
     route_question,
+    run_route_diagnose,
     run_route_report,
     run_route_tests,
 )
@@ -124,6 +126,80 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("RAGFlow Route Report", markdown)
         self.assertIn("Missing Route Tests", markdown)
         self.assertIn("Category Coverage", markdown)
+
+    def test_route_diagnose_classifies_failures_and_risks(self) -> None:
+        config = RoutingConfig.from_dict(
+            {
+                "version": "0.1",
+                "default_kb": "kb:general",
+                "knowledge_bases": [
+                    {
+                        "name": "kb:general",
+                        "dataset_id": "ds-general",
+                        "hints": ["general"],
+                    },
+                    {
+                        "name": "kb:alpha",
+                        "dataset_id": "ds-alpha",
+                        "hints": ["shared", "alpha", "api"],
+                        "metadata": {"regex_order_sensitive": True},
+                    },
+                    {
+                        "name": "kb:beta",
+                        "dataset_id": "ds-beta",
+                        "hints": ["shared", "beta"],
+                        "metadata": {"regex_order_sensitive": True},
+                    },
+                    {
+                        "name": "kb:reference",
+                        "dataset_id": "ds-reference",
+                        "hints": ["api reference"],
+                    },
+                ],
+            }
+        )
+        queries = [
+            {
+                "id": "missing-hint",
+                "question": "unknown topic",
+                "expected": "kb:alpha",
+            },
+            {
+                "id": "missing-kb",
+                "question": "general help",
+                "expected": "kb:missing",
+            },
+            {
+                "id": "wrong-hint",
+                "question": "general help",
+                "expected": "kb:alpha",
+            },
+            {
+                "id": "regex-order",
+                "question": "shared topic",
+                "expected": "kb:beta",
+            },
+            {
+                "id": "acceptable",
+                "question": "beta details",
+                "expected": "kb:alpha",
+                "acceptable_kbs": ["kb:beta"],
+            },
+        ]
+
+        report = run_route_diagnose(config, queries)
+        markdown = render_route_diagnose_markdown(report)
+        categories = {issue["category"] for issue in report["issues"]}
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["schema"], "ragflow_route_diagnose_report_v1")
+        self.assertIn("missing_hint", categories)
+        self.assertIn("missing_kb_config", categories)
+        self.assertIn("regex_order_issue", categories)
+        self.assertIn("acceptable_ambiguity", categories)
+        self.assertIn("priority_conflict", categories)
+        self.assertIn("RAGFlow Route Diagnosis", markdown)
+        self.assertIn("regex_order_issue", markdown)
 
 
 if __name__ == "__main__":

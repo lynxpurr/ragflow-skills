@@ -1798,6 +1798,27 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         route_report_result,
         required_stdout='"ragflow_route_report_v1"',
     )
+    route_diagnose_result = _run_command(
+        [
+            sys.executable,
+            str(query_script),
+            "route-diagnose",
+            "--routing-config",
+            str(routing_config),
+            "--queries",
+            str(route_queries),
+            "--report-md",
+            str(artifacts_dir / "route_diagnose.md"),
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query route-diagnose",
+        route_diagnose_result,
+        required_stdout='"ragflow_route_diagnose_report_v1"',
+    )
     query_runner = workspace / "query_runner.py"
     _write_query_runner(
         runner_path=query_runner,
@@ -1861,6 +1882,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_fusion_test.md",
         artifacts_dir / "route_test.md",
         artifacts_dir / "route_report.md",
+        artifacts_dir / "route_diagnose.md",
         artifacts_dir / "profile_lint.md",
         artifacts_dir / "candidate_profile_set.json",
         artifacts_dir / "profile_experiment_matrix.md",

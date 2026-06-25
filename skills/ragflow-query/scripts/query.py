@@ -59,11 +59,13 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_query_rerank_ab_markdown,
     render_query_rewrite_markdown,
     render_query_trace_markdown,
+    render_route_diagnose_markdown,
     render_route_report_markdown,
     render_route_test_markdown,
     run_fusion_tests,
     resolve_dataset_ids,
     route_question,
+    run_route_diagnose,
     run_route_report,
     run_route_tests,
     weight_evidence,
@@ -440,6 +442,19 @@ def _route_report(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _route_diagnose(args: argparse.Namespace) -> int:
+    try:
+        routing = _load_routing(args)
+        queries = load_route_test_queries(args.queries)
+        report = run_route_diagnose(routing, queries)
+    except (RoutingError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=True)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_route_diagnose_markdown(report))
+    _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _rewrite(args: argparse.Namespace) -> int:
     try:
         config = _load_runtime(args) if args.rewrite == "hyde" else None
@@ -641,6 +656,13 @@ def build_parser() -> argparse.ArgumentParser:
     route_report.add_argument("--report-json", help="Optional JSON report output path")
     route_report.add_argument("--report-md", help="Optional Markdown report output path")
     route_report.set_defaults(func=_route_report)
+
+    route_diagnose = sub.add_parser("route-diagnose", help="Classify route-test failures")
+    _add_routing_option(route_diagnose)
+    route_diagnose.add_argument("--queries", required=True, help="Route-test queries JSON")
+    route_diagnose.add_argument("--report-json", help="Optional JSON report output path")
+    route_diagnose.add_argument("--report-md", help="Optional Markdown report output path")
+    route_diagnose.set_defaults(func=_route_diagnose)
 
     rewrite = sub.add_parser(
         "rewrite",

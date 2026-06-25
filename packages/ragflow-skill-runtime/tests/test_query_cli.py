@@ -770,9 +770,12 @@ class QueryCliTests(unittest.TestCase):
             root = Path(tmp)
             routing = root / "routing.json"
             routes = root / "routes.json"
+            bad_routes = root / "bad-routes.json"
             report_md = root / "route-test.md"
             route_report_json = root / "route-report.json"
             route_report_md = root / "route-report.md"
+            route_diagnose_json = root / "route-diagnose.json"
+            route_diagnose_md = root / "route-diagnose.md"
             routing.write_text(
                 json.dumps(
                     {
@@ -795,6 +798,20 @@ class QueryCliTests(unittest.TestCase):
                                 "hints": ["api reference"],
                             },
                         ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bad_routes.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {
+                                "id": "missing-route-hint",
+                                "question": "unmatched topic",
+                                "expected_kb": "kb:technical",
+                            }
+                        ]
                     }
                 ),
                 encoding="utf-8",
@@ -863,6 +880,25 @@ class QueryCliTests(unittest.TestCase):
             route_report_markdown = route_report_md.read_text(encoding="utf-8")
             route_report_file_payload = json.loads(route_report_json.read_text(encoding="utf-8"))
 
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                route_diagnose_code = module.main(
+                    [
+                        "route-diagnose",
+                        "--routing-config",
+                        str(routing),
+                        "--queries",
+                        str(bad_routes),
+                        "--report-json",
+                        str(route_diagnose_json),
+                        "--report-md",
+                        str(route_diagnose_md),
+                    ]
+                )
+            route_diagnose_payload = json.loads(stdout.getvalue())
+            route_diagnose_markdown = route_diagnose_md.read_text(encoding="utf-8")
+            route_diagnose_file_payload = json.loads(route_diagnose_json.read_text(encoding="utf-8"))
+
         self.assertEqual(list_code, 0)
         self.assertEqual(list_payload["count"], 3)
         self.assertEqual(route_code, 0)
@@ -876,6 +912,11 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(route_report_file_payload["schema"], "ragflow_route_report_v1")
         self.assertIn("RAGFlow Route Report", route_report_markdown)
         self.assertIn("Missing Route Tests", route_report_markdown)
+        self.assertEqual(route_diagnose_code, 1)
+        self.assertEqual(route_diagnose_payload["schema"], "ragflow_route_diagnose_report_v1")
+        self.assertEqual(route_diagnose_payload["issues"][0]["category"], "missing_hint")
+        self.assertEqual(route_diagnose_file_payload["schema"], "ragflow_route_diagnose_report_v1")
+        self.assertIn("RAGFlow Route Diagnosis", route_diagnose_markdown)
 
     def test_auto_mode_uses_routing_config_with_fake_client(self) -> None:
         module = load_query_module()

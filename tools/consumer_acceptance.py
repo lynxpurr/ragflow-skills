@@ -1629,6 +1629,34 @@ raise SystemExit(code)
     for path in (route_report_json, route_report_md):
         if path.exists():
             produced.append(path)
+    route_diagnose_json = work_root / "route_diagnose.json"
+    route_diagnose_md = work_root / "route_diagnose.md"
+    route_diagnose = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "route-diagnose",
+            "--routing-config",
+            str(routing_config),
+            "--queries",
+            str(route_queries),
+            "--report-json",
+            str(route_diagnose_json),
+            "--report-md",
+            str(route_diagnose_md),
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query route-diagnose",
+        route_diagnose,
+        required_output='"ragflow_route_diagnose_report_v1"',
+    )
+    for path in (route_diagnose_json, route_diagnose_md):
+        if path.exists():
+            produced.append(path)
 
     query_output = work_root / "query_output.json"
     citation_audit_json = work_root / "citation_audit.json"
