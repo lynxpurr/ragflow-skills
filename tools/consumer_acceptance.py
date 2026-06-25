@@ -1561,6 +1561,23 @@ raise SystemExit(code)
                         "id": "route-api",
                         "question": "How does the API runtime work?",
                         "expected_kb": "kb:consumer-technical",
+                        "category": "exact",
+                        "locale": "en",
+                    },
+                    {
+                        "id": "route-short-query",
+                        "question": "api",
+                        "expected_kb": "kb:consumer-technical",
+                        "category": "short_query",
+                        "locale": "en",
+                    },
+                    {
+                        "id": "route-negative",
+                        "question": "invoice refund policy",
+                        "expected_no_route": True,
+                        "category": "negative",
+                        "locale": "en",
+                        "negative_class": "out_of_scope",
                     }
                 ]
             }

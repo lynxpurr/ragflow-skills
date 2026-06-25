@@ -249,6 +249,7 @@ from .retrieval import (
     stable_content_hash,
 )
 from .routing import (
+    REQUIRED_ROUTE_TEST_CATEGORIES,
     ROUTE_DIAGNOSE_SCHEMA,
     ROUTE_REPORT_SCHEMA,
     RouteCandidate,
@@ -385,6 +386,7 @@ __all__ = [
     "RAGFLOW_METADATA_SCHEMA",
     "RAGFLOW_TAGSET_SCHEMA",
     "RetrievalError",
+    "REQUIRED_ROUTE_TEST_CATEGORIES",
     "ROUTE_DIAGNOSE_SCHEMA",
     "ROUTE_REPORT_SCHEMA",
     "RouteCandidate",

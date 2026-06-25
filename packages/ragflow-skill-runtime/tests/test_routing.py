@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from ragflow_skill_runtime.routing import (
+    REQUIRED_ROUTE_TEST_CATEGORIES,
     RoutingConfig,
     load_route_test_queries,
     load_routing_config,
@@ -120,6 +121,7 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(report["summary"]["missing_route_test_count"], 1)
         self.assertEqual(report["summary"]["missing_params_count"], 2)
         self.assertEqual(report["summary"]["params_coverage_count"], 1)
+        self.assertEqual(report["summary"]["route_test_category_gap_count"], len(REQUIRED_ROUTE_TEST_CATEGORIES) - 2)
         self.assertEqual(report["hint_coverage"][1]["param_coverage"]["missing"], [])
         self.assertEqual(report["coverage_by_category"]["exact"]["total"], 1)
         self.assertEqual(report["coverage_by_locale"]["en"]["total"], 2)
@@ -128,6 +130,103 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("RAGFlow Route Report", markdown)
         self.assertIn("Missing Route Tests", markdown)
         self.assertIn("Category Coverage", markdown)
+        self.assertIn("Required Route-Test Categories", markdown)
+
+    def test_route_test_category_coverage_and_expected_no_route(self) -> None:
+        config = RoutingConfig.from_dict(
+            {
+                "version": "0.1",
+                "knowledge_bases": [
+                    {
+                        "name": "kb:general",
+                        "dataset_id": "ds-general",
+                        "hints": ["general", "onboarding"],
+                        "params": {"top_k": 5, "similarity_threshold": 0.1},
+                    },
+                    {
+                        "name": "kb:technical",
+                        "dataset_id": "ds-technical",
+                        "hints": ["api", "configuration", "runtime"],
+                        "params": {"top_k": 6, "similarity_threshold": 0.1},
+                    },
+                ],
+            }
+        )
+        queries = [
+            {
+                "id": "exact",
+                "question": "API configuration",
+                "expected": "kb:technical",
+                "category": "exact",
+                "locale": "en",
+            },
+            {
+                "id": "fuzzy",
+                "question": "developer runtime help",
+                "expected": "kb:technical",
+                "category": "fuzzy",
+                "locale": "en",
+            },
+            {
+                "id": "short",
+                "question": "api",
+                "expected": "kb:technical",
+                "category": "short query",
+                "locale": "en",
+            },
+            {
+                "id": "long",
+                "question": "Please explain the API runtime configuration path for a developer integration.",
+                "expected": "kb:technical",
+                "category": "long-query",
+                "locale": "en",
+            },
+            {
+                "id": "mixed-language",
+                "question": "API runtime 配置",
+                "expected": "kb:technical",
+                "category": "mixed_language",
+                "locale": "mixed",
+            },
+            {
+                "id": "negative",
+                "question": "billing invoice policy",
+                "expected": "__no_route__",
+                "expected_no_route": True,
+                "category": "negative",
+                "locale": "en",
+                "negative_class": "out_of_scope",
+            },
+            {
+                "id": "substring",
+                "question": "runtime API configuration",
+                "expected": "kb:technical",
+                "category": "substring conflict",
+                "locale": "en",
+            },
+            {
+                "id": "wildcard",
+                "question": "general onboarding",
+                "expected": "kb:general",
+                "category": "wildcard-shadowing",
+                "locale": "en",
+            },
+        ]
+
+        route_test = run_route_tests(config, queries)
+        report = run_route_report(config, queries)
+        route_test_markdown = render_route_test_markdown(route_test)
+
+        self.assertTrue(route_test["ok"])
+        self.assertEqual(route_test["required_route_test_categories"]["missing"], [])
+        self.assertEqual(route_test["required_route_test_categories"]["present"], sorted(REQUIRED_ROUTE_TEST_CATEGORIES))
+        self.assertTrue(report["required_route_test_categories"]["complete"])
+        self.assertEqual(report["summary"]["route_test_category_gap_count"], 0)
+        self.assertEqual(report["summary"]["expected_no_route_pass_count"], 1)
+        self.assertEqual(report["coverage_by_negative_class"]["out_of_scope"]["passed"], 1)
+        self.assertIn("Category Summary", route_test_markdown)
+        self.assertIn("Locale Summary", route_test_markdown)
+        self.assertIn("Negative Query Summary", route_test_markdown)
 
     def test_route_diagnose_classifies_failures_and_risks(self) -> None:
         config = RoutingConfig.from_dict(
@@ -187,6 +286,12 @@ class RoutingTests(unittest.TestCase):
                 "expected": "kb:alpha",
                 "acceptable_kbs": ["kb:beta"],
             },
+            {
+                "id": "unexpected-route",
+                "question": "general help",
+                "expected": "__no_route__",
+                "expected_no_route": True,
+            },
         ]
 
         report = run_route_diagnose(config, queries)
@@ -200,6 +305,7 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("regex_order_issue", categories)
         self.assertIn("acceptable_ambiguity", categories)
         self.assertIn("priority_conflict", categories)
+        self.assertIn("unexpected_route", categories)
         self.assertIn("RAGFlow Route Diagnosis", markdown)
         self.assertIn("regex_order_issue", markdown)
 

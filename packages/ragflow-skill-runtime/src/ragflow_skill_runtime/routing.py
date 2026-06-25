@@ -18,6 +18,16 @@ class RoutingError(RuntimeError):
 ROUTE_REPORT_SCHEMA = "ragflow_route_report_v1"
 ROUTE_DIAGNOSE_SCHEMA = "ragflow_route_diagnose_report_v1"
 REQUIRED_ROUTE_PARAMS = ("top_k", "similarity_threshold")
+REQUIRED_ROUTE_TEST_CATEGORIES = (
+    "exact",
+    "fuzzy",
+    "short_query",
+    "long_query",
+    "mixed_language",
+    "negative",
+    "substring_conflict",
+    "wildcard_shadowing",
+)
 
 
 def _string_list(value: Any, *, field_name: str) -> list[str]:
@@ -68,6 +78,10 @@ def _string_set(values: Any) -> set[str]:
     if isinstance(values, list):
         return {item for item in values if isinstance(item, str) and item}
     return set()
+
+
+def _normalize_route_test_category(value: str) -> str:
+    return re.sub(r"[^0-9a-zA-Z]+", "_", value.strip().lower()).strip("_") or "uncategorized"
 
 
 def _route_param_coverage(params: Mapping[str, Any]) -> dict[str, Any]:
@@ -283,7 +297,7 @@ def _query_category(query: Mapping[str, Any]) -> str:
     for key in ("category", "type", "query_type"):
         value = query.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()
+            return _normalize_route_test_category(value)
     return "uncategorized"
 
 
@@ -303,12 +317,102 @@ def _route_case_metadata(query: Mapping[str, Any]) -> dict[str, str]:
     return metadata
 
 
+def _expects_no_route(query: Mapping[str, Any]) -> bool:
+    value = query.get("expected_no_route")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    expected = query.get("expected")
+    return isinstance(expected, str) and expected in {"__none__", "__no_route__"}
+
+
+def _expected_refs(query: Mapping[str, Any]) -> set[str]:
+    expected = query.get("expected")
+    return {expected} if isinstance(expected, str) and expected else set()
+
+
+def _selected_is_no_positive_route(selected: RouteCandidate | Mapping[str, Any] | None) -> bool:
+    if selected is None:
+        return True
+    if isinstance(selected, RouteCandidate):
+        return selected.reason == "default" and selected.score == 0.0
+    return _selected_reason({}, selected) == "default" and _candidate_score(selected) == 0.0
+
+
+def _route_test_category_coverage(category_totals: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    required = list(REQUIRED_ROUTE_TEST_CATEGORIES)
+    present = sorted(
+        category
+        for category in required
+        if isinstance(category_totals.get(category), Mapping) and int(category_totals[category].get("total", 0)) > 0
+    )
+    missing = [category for category in required if category not in present]
+    categories: dict[str, dict[str, Any]] = {}
+    for category in sorted(set(required).union(category_totals.keys())):
+        item = category_totals.get(category, {})
+        total = int(item.get("total", 0)) if isinstance(item, Mapping) else 0
+        passed = int(item.get("passed", 0)) if isinstance(item, Mapping) else 0
+        failed = int(item.get("failed", 0)) if isinstance(item, Mapping) else 0
+        categories[category] = {
+            "required": category in REQUIRED_ROUTE_TEST_CATEGORIES,
+            "present": total > 0,
+            "total": total,
+            "passed": passed,
+            "failed": failed,
+            "pass_rate": _rate(passed, total),
+        }
+    return {
+        "required": required,
+        "present": present,
+        "missing": missing,
+        "extra": sorted(
+            category
+            for category, item in category_totals.items()
+            if category not in REQUIRED_ROUTE_TEST_CATEGORIES
+            and isinstance(item, Mapping)
+            and int(item.get("total", 0)) > 0
+        ),
+        "complete": not missing,
+        "coverage": _rate(len(present), len(required)),
+        "categories": categories,
+    }
+
+
+def _case_bucket_totals(cases: list[Mapping[str, Any]]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    category_totals: dict[str, dict[str, Any]] = {}
+    locale_totals: dict[str, dict[str, Any]] = {}
+    negative_class_totals: dict[str, dict[str, Any]] = {}
+    for case in cases:
+        for key, target in (
+            ("category", category_totals),
+            ("locale", locale_totals),
+            ("negative_class", negative_class_totals),
+        ):
+            value = case.get(key)
+            if not isinstance(value, str) or not value:
+                continue
+            bucket = target.setdefault(value, {"total": 0, "passed": 0, "failed": 0})
+            bucket["total"] += 1
+            if case.get("passed"):
+                bucket["passed"] += 1
+            else:
+                bucket["failed"] += 1
+    for target in (category_totals, locale_totals, negative_class_totals):
+        for bucket in target.values():
+            bucket["pass_rate"] = _rate(bucket["passed"], bucket["total"])
+    return category_totals, locale_totals, negative_class_totals
+
+
 def _route_report_empty_route_test() -> dict[str, Any]:
     return {
         "ok": True,
         "schema": "ragflow_route_test_report_v1",
         "metrics": {"total": 0, "passed": 0, "failed": 0, "accuracy": 0.0},
         "cases": [],
+        "coverage_by_category": {},
+        "coverage_by_locale": {},
+        "coverage_by_negative_class": {},
     }
 
 
@@ -325,6 +429,7 @@ def run_route_report(
     low_confidence_cases: list[dict[str, Any]] = []
     ambiguous_cases: list[dict[str, Any]] = []
     empty_cases: list[dict[str, Any]] = []
+    expected_no_route_cases: list[dict[str, Any]] = []
     hint_coverage: dict[str, dict[str, Any]] = {}
     hint_tokens_by_kb: dict[str, set[str]] = {}
     matched_hints_by_kb: dict[str, set[str]] = {}
@@ -386,15 +491,22 @@ def run_route_report(
             matched_hints = list(selected.matched_hints)
             total_hint_matches += len(matched_hints)
             matched_hints_by_kb[selected.kb.name].update(matched_hints)
-        expected = query["expected"]
-        passed_case = expected in {
+        expected_no_route = _expects_no_route(query)
+        expected = str(query.get("expected") or ("__no_route__" if expected_no_route else ""))
+        selected_refs = {
             selected.kb.name if selected else None,
             selected.kb.dataset_id if selected else None,
         }
+        passed_case = (
+            _selected_is_no_positive_route(selected)
+            if expected_no_route
+            else bool(_expected_refs({"expected": expected}) & selected_refs)
+        )
         case.update(
             {
                 "id": query["id"],
                 "expected": expected,
+                "expected_no_route": expected_no_route,
                 "passed": passed_case,
                 "actual": selected.kb.name if selected else None,
                 "actual_dataset_id": selected.kb.dataset_id if selected else None,
@@ -415,11 +527,13 @@ def run_route_report(
         )
         if passed_case:
             passed += 1
-        if case["low_confidence"]:
+        if case["low_confidence"] and not (expected_no_route and passed_case):
             low_confidence_cases.append(case)
         if case["ambiguous"]:
             ambiguous_cases.append(case)
-        if case["empty_route"]:
+        if expected_no_route:
+            expected_no_route_cases.append(case)
+        if case["empty_route"] and not expected_no_route:
             empty_cases.append(case)
         cases.append(case)
 
@@ -464,27 +578,15 @@ def run_route_report(
             "hint_tokens": sorted(hint_tokens_by_kb[kb.name]),
         }
 
-    category_totals: dict[str, dict[str, Any]] = {}
-    locale_totals: dict[str, dict[str, Any]] = {}
-    negative_class_totals: dict[str, dict[str, Any]] = {}
-    for case in cases:
-        for key, target in (
-            ("category", category_totals),
-            ("locale", locale_totals),
-            ("negative_class", negative_class_totals),
-        ):
-            value = case.get(key)
-            if not isinstance(value, str) or not value:
-                continue
-            bucket = target.setdefault(value, {"total": 0, "passed": 0, "failed": 0})
-            bucket["total"] += 1
-            if case.get("passed"):
-                bucket["passed"] += 1
-            else:
-                bucket["failed"] += 1
-    for target in (category_totals, locale_totals, negative_class_totals):
-        for bucket in target.values():
-            bucket["pass_rate"] = _rate(bucket["passed"], bucket["total"])
+    category_totals, locale_totals, negative_class_totals = _case_bucket_totals(cases)
+    route_test_category_coverage = _route_test_category_coverage(category_totals)
+    route_test_category_gaps = [
+        {
+            "category": category,
+            "reason": "no route-test query covers this required route-test category",
+        }
+        for category in route_test_category_coverage["missing"]
+    ]
 
     missing_params = [
         {
@@ -536,6 +638,12 @@ def run_route_report(
             "category_count": len(category_totals),
             "locale_count": len(locale_totals),
             "negative_class_count": len(negative_class_totals),
+            "required_route_test_category_count": len(REQUIRED_ROUTE_TEST_CATEGORIES),
+            "route_test_category_coverage_count": len(route_test_category_coverage["present"]),
+            "route_test_category_coverage_rate": route_test_category_coverage["coverage"],
+            "route_test_category_gap_count": len(route_test_category_gaps),
+            "expected_no_route_count": len(expected_no_route_cases),
+            "expected_no_route_pass_count": sum(1 for case in expected_no_route_cases if case.get("passed")),
             "route_test_total": route_test_metrics.get("total", 0) if isinstance(route_test_metrics, Mapping) else 0,
         },
         "route_test": route_test_report,
@@ -547,9 +655,12 @@ def run_route_report(
         "coverage_by_category": category_totals,
         "coverage_by_locale": locale_totals,
         "coverage_by_negative_class": negative_class_totals,
+        "required_route_test_categories": route_test_category_coverage,
+        "route_test_category_gaps": route_test_category_gaps,
         "low_confidence_routes": low_confidence_cases,
         "ambiguous_routes": ambiguous_cases,
         "empty_routes": empty_cases,
+        "expected_no_route_cases": expected_no_route_cases,
         "kb_params": [
             {
                 "name": kb.name,
@@ -650,6 +761,12 @@ def _classify_route_case(
     case: Mapping[str, Any],
     query: Mapping[str, Any],
 ) -> tuple[str, str, list[str]]:
+    if _expects_no_route(query):
+        return (
+            "unexpected_route",
+            "negative route-test expected no positive route but a KB was selected",
+            ["Remove the unexpected hint match or avoid a default KB for this negative class."],
+        )
     expected_kb = _kb_ref(config, case.get("expected"))
     if expected_kb is None:
         return (
@@ -757,7 +874,11 @@ def run_route_diagnose(config: RoutingConfig, queries: list[dict[str, Any]]) -> 
         )
 
     for case in route_report.get("low_confidence_routes", []):
-        if not isinstance(case, Mapping) or not case.get("passed"):
+        if (
+            not isinstance(case, Mapping)
+            or not case.get("passed")
+            or case.get("expected_no_route")
+        ):
             continue
         issues.append(
             {
@@ -935,6 +1056,30 @@ def render_route_report_markdown(report: Mapping[str, Any]) -> str:
                         pass_rate=float(item.get("pass_rate", 0.0)),
                     )
                 )
+    lines.extend(["", "## Required Route-Test Categories", ""])
+    required_categories = (
+        report.get("required_route_test_categories", {})
+        if isinstance(report.get("required_route_test_categories"), Mapping)
+        else {}
+    )
+    missing_categories = (
+        required_categories.get("missing", []) if isinstance(required_categories.get("missing"), list) else []
+    )
+    lines.append(f"- coverage: `{float(required_categories.get('coverage', 0.0)):.2f}`")
+    if missing_categories:
+        lines.append("- missing: " + ", ".join(f"`{category}`" for category in missing_categories))
+    else:
+        lines.append("- missing: `none`")
+    lines.extend(["", "## Route-Test Category Gaps", ""])
+    route_test_category_gaps = (
+        report.get("route_test_category_gaps", []) if isinstance(report.get("route_test_category_gaps"), list) else []
+    )
+    if not route_test_category_gaps:
+        lines.append("- None")
+    else:
+        for item in route_test_category_gaps:
+            if isinstance(item, Mapping):
+                lines.append(f"- `{item.get('category', '')}`: {item.get('reason', '')}")
     lines.extend(["", "## Low Confidence", ""])
     low_confidence = report.get("low_confidence_routes", []) if isinstance(report.get("low_confidence_routes"), list) else []
     if not low_confidence:
@@ -1003,20 +1148,27 @@ def load_route_test_queries(path: str | Path) -> list[dict[str, Any]]:
         if not isinstance(item, Mapping):
             raise RoutingError(f"queries[{index}] must be an object")
         question = item.get("question") or item.get("query")
+        expected_no_route = _expects_no_route(item)
         expected = item.get("expected_kb") or item.get("expected_dataset_id")
+        if expected_no_route and expected is None:
+            expected = "__no_route__"
         if not isinstance(question, str) or not question.strip():
             raise RoutingError(f"queries[{index}].question is required")
         if not isinstance(expected, str) or not expected.strip():
-            raise RoutingError(f"queries[{index}].expected_kb or expected_dataset_id is required")
+            raise RoutingError(
+                f"queries[{index}].expected_kb, expected_dataset_id, or expected_no_route is required"
+            )
         query = {
             "id": str(item.get("id") or f"q{index + 1}"),
             "question": question.strip(),
             "expected": expected.strip(),
         }
+        if expected_no_route:
+            query["expected_no_route"] = True
         for key in ("category", "type", "query_type", "locale", "language", "negative_class"):
             value = item.get(key)
             if isinstance(value, str) and value.strip():
-                query[key] = value.strip()
+                query[key] = _normalize_route_test_category(value) if key in {"category", "type", "query_type"} else value.strip()
         for key in ("acceptable_kbs", "acceptable_dataset_ids", "allowed_kbs", "allowed_dataset_ids"):
             values = _string_set(item.get(key))
             if values:
@@ -1035,21 +1187,24 @@ def run_route_tests(config: RoutingConfig, queries: list[dict[str, Any]]) -> dic
         selected = result.selected
         actual = selected.kb.name if selected else None
         actual_id = selected.kb.dataset_id if selected else None
-        ok = query["expected"] in {actual, actual_id}
+        expected_no_route = _expects_no_route(query)
+        ok = _selected_is_no_positive_route(selected) if expected_no_route else query["expected"] in {actual, actual_id}
         if ok:
             passed += 1
-        cases.append(
-            {
-                "id": query["id"],
-                "question": query["question"],
-                "expected": query["expected"],
-                "actual": actual,
-                "actual_dataset_id": actual_id,
-                "passed": ok,
-                "route": result.to_dict(),
-            }
-        )
+        case = {
+            "id": query["id"],
+            "question": query["question"],
+            "expected": query["expected"],
+            "expected_no_route": expected_no_route,
+            "actual": actual,
+            "actual_dataset_id": actual_id,
+            "passed": ok,
+            "route": result.to_dict(),
+            **_route_case_metadata(query),
+        }
+        cases.append(case)
     total = len(cases)
+    category_totals, locale_totals, negative_class_totals = _case_bucket_totals(cases)
     return {
         "ok": passed == total,
         "schema": "ragflow_route_test_report_v1",
@@ -1059,6 +1214,10 @@ def run_route_tests(config: RoutingConfig, queries: list[dict[str, Any]]) -> dic
             "failed": total - passed,
             "accuracy": passed / total if total else 0.0,
         },
+        "coverage_by_category": category_totals,
+        "coverage_by_locale": locale_totals,
+        "coverage_by_negative_class": negative_class_totals,
+        "required_route_test_categories": _route_test_category_coverage(category_totals),
         "cases": cases,
     }
 
@@ -1067,15 +1226,67 @@ def render_route_test_markdown(report: Mapping[str, Any]) -> str:
     """Render a compact Markdown route-test report."""
 
     metrics = report.get("metrics", {})
+    category_totals = report.get("coverage_by_category", {}) if isinstance(report.get("coverage_by_category"), Mapping) else {}
+    locale_totals = report.get("coverage_by_locale", {}) if isinstance(report.get("coverage_by_locale"), Mapping) else {}
+    negative_class_totals = (
+        report.get("coverage_by_negative_class", {})
+        if isinstance(report.get("coverage_by_negative_class"), Mapping)
+        else {}
+    )
+    required_categories = (
+        report.get("required_route_test_categories", {})
+        if isinstance(report.get("required_route_test_categories"), Mapping)
+        else {}
+    )
     lines = [
         "# RAGFlow Route Test Report",
         "",
         f"- Status: `{'passed' if report.get('ok') else 'failed'}`",
         f"- Accuracy: `{float(metrics.get('accuracy', 0.0)):.2%}`",
+        f"- Required category coverage: `{float(required_categories.get('coverage', 0.0)):.2f}`",
         "",
-        "| id | status | expected | actual |",
-        "|---|---|---|---|",
     ]
+    missing_categories = (
+        required_categories.get("missing", []) if isinstance(required_categories.get("missing"), list) else []
+    )
+    lines.append("## Required Route-Test Categories")
+    lines.append("")
+    if not missing_categories:
+        lines.append("- None")
+    else:
+        for category in missing_categories:
+            lines.append(f"- `{category}`")
+    lines.extend(["", "## Category Summary", ""])
+    if not category_totals:
+        lines.append("- None")
+    else:
+        for category, item in sorted(category_totals.items()):
+            if isinstance(item, Mapping):
+                lines.append(
+                    f"- `{category}` total={int(item.get('total', 0))} passed={int(item.get('passed', 0))} "
+                    f"rate={float(item.get('pass_rate', 0.0)):.2f}"
+                )
+    lines.extend(["", "## Locale Summary", ""])
+    if not locale_totals:
+        lines.append("- None")
+    else:
+        for locale, item in sorted(locale_totals.items()):
+            if isinstance(item, Mapping):
+                lines.append(
+                    f"- `{locale}` total={int(item.get('total', 0))} passed={int(item.get('passed', 0))} "
+                    f"rate={float(item.get('pass_rate', 0.0)):.2f}"
+                )
+    lines.extend(["", "## Negative Query Summary", ""])
+    if not negative_class_totals:
+        lines.append("- None")
+    else:
+        for negative_class, item in sorted(negative_class_totals.items()):
+            if isinstance(item, Mapping):
+                lines.append(
+                    f"- `{negative_class}` total={int(item.get('total', 0))} passed={int(item.get('passed', 0))} "
+                    f"rate={float(item.get('pass_rate', 0.0)):.2f}"
+                )
+    lines.extend(["", "| id | status | expected | actual |", "|---|---|---|---|"])
     for case in report.get("cases", []):
         lines.append(
             f"| `{case.get('id')}` | {'passed' if case.get('passed') else 'failed'} | "

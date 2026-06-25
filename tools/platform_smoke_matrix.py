@@ -1748,6 +1748,23 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
                         "id": "route-known-term",
                         "question": "Where is the known term in the runtime?",
                         "expected_kb": "kb:platform-technical",
+                        "category": "exact",
+                        "locale": "en",
+                    },
+                    {
+                        "id": "route-short-query",
+                        "question": "runtime",
+                        "expected_kb": "kb:platform-technical",
+                        "category": "short_query",
+                        "locale": "en",
+                    },
+                    {
+                        "id": "route-negative",
+                        "question": "invoice refund policy",
+                        "expected_no_route": True,
+                        "category": "negative",
+                        "locale": "en",
+                        "negative_class": "out_of_scope",
                     }
                 ]
             },

@@ -1,19 +1,64 @@
 {
   "queries": [
     {
-      "id": "route-general",
+      "id": "route-exact-general",
       "question": "How do I get started with the sample onboarding flow?",
       "expected_kb": "kb:general-sample",
       "category": "exact",
       "locale": "en"
     },
     {
-      "id": "route-technical",
-      "question": "Which API configuration should a developer use?",
+      "id": "route-fuzzy-technical",
+      "question": "Which developer integration setup should I use?",
       "expected_kb": "kb:technical-sample",
-      "category": "exact",
+      "category": "fuzzy",
       "locale": "en",
-      "acceptable_kbs": ["kb:technical-sample"]
+      "acceptable_kbs": [
+        "kb:technical-sample"
+      ]
+    },
+    {
+      "id": "route-short-query",
+      "question": "api",
+      "expected_kb": "kb:technical-sample",
+      "category": "short_query",
+      "locale": "en"
+    },
+    {
+      "id": "route-long-query",
+      "question": "Please explain which API configuration and runtime integration path a developer should use for a sample project.",
+      "expected_kb": "kb:technical-sample",
+      "category": "long_query",
+      "locale": "en"
+    },
+    {
+      "id": "route-mixed-language",
+      "question": "API configuration 示例",
+      "expected_kb": "kb:technical-sample",
+      "category": "mixed_language",
+      "locale": "mixed"
+    },
+    {
+      "id": "route-negative",
+      "question": "What is the refund policy for an unrelated store?",
+      "expected_no_route": true,
+      "category": "negative",
+      "locale": "en",
+      "negative_class": "out_of_scope"
+    },
+    {
+      "id": "route-substring-conflict",
+      "question": "Which runtime API configuration should a developer use?",
+      "expected_kb": "kb:technical-sample",
+      "category": "substring_conflict",
+      "locale": "en"
+    },
+    {
+      "id": "route-wildcard-shadowing",
+      "question": "Where is the general sample onboarding guidance?",
+      "expected_kb": "kb:general-sample",
+      "category": "wildcard_shadowing",
+      "locale": "en"
     }
   ]
 }
