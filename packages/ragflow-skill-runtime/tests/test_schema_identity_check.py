@@ -22,7 +22,7 @@ class SchemaIdentityCheckTests(unittest.TestCase):
         self.assertEqual(report["schema"], SCHEMA)
         self.assertEqual(report["summary"]["failed_count"], 0)
         groups = set(report["groups"])
-        for group in ("manifest", "quality", "benchmark", "query", "trace", "diagnostic", "route"):
+        for group in ("manifest", "quality", "benchmark", "query", "trace", "diagnostic", "route", "topology"):
             self.assertIn(group, groups)
 
     def test_schema_identity_check_reports_missing_source_or_coverage(self) -> None:

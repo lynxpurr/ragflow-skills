@@ -231,6 +231,12 @@ from .optimization import (
     render_optimization_plan_markdown,
     summarize_optimization_results,
 )
+from .topology import (
+    KB_TOPOLOGY_ADVICE_SCHEMA,
+    TopologyError,
+    create_kb_topology_advice,
+    render_topology_advice_markdown,
+)
 from .model_providers import (
     DEFAULT_MODEL_PROVIDER_ENDPOINTS,
     MODEL_PROVIDER_PROBE_REPORT_SCHEMA,
@@ -421,6 +427,7 @@ __all__ = [
     "KbDataset",
     "KbDocumentEntry",
     "KbManifest",
+    "KB_TOPOLOGY_ADVICE_SCHEMA",
     "ManifestError",
     "HandoffError",
     "MetadataGovernanceError",
@@ -531,6 +538,7 @@ __all__ = [
     "RoutingError",
     "RoutingKnowledgeBase",
     "TRACE_SCHEMA",
+    "TopologyError",
     "SAFE_METADATA_FIELDS",
     "SEGMENT_METADATA_REPORT_SCHEMA",
     "TAGSET_EXPORT_SCHEMA",
@@ -555,6 +563,7 @@ __all__ = [
     "convert_source_to_markdown",
     "create_optimization_cleanup_plan",
     "create_optimization_plan",
+    "create_kb_topology_advice",
     "create_rich_handoff_package",
     "diagnose_query_result",
     "diagnose_kb_manifest",
@@ -661,6 +670,7 @@ __all__ = [
     "render_best_profile_markdown",
     "render_optimization_cleanup_plan_markdown",
     "render_optimization_plan_markdown",
+    "render_topology_advice_markdown",
     "render_query_diagnostic_markdown",
     "render_query_endpoint_report_markdown",
     "render_query_fallback_test_markdown",

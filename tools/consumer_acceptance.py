@@ -1161,6 +1161,43 @@ def _run_no_network_checks(
         if path.exists():
             produced.append(path)
 
+    topology_advice = work_root / "kb_topology_advice.json"
+    topology_advice_md = work_root / "kb_topology_advice.md"
+    topology_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "topology",
+            "advise",
+            "--doc-manifest",
+            str(doc_manifest),
+            "--kb-name",
+            "kb:consumer-topology",
+            "--metadata",
+            str(metadata_template),
+            "--retrieval-hints",
+            str(handoff_dir / "retrieval_hints.json"),
+            "--future-growth",
+            "high",
+            "--output",
+            str(topology_advice),
+            "--report-md",
+            str(topology_advice_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build topology advise",
+        topology_result,
+        required_output='"schema": "kb_topology_advice_v1"',
+    )
+    for path in (topology_advice, topology_advice_md):
+        if path.exists():
+            produced.append(path)
+
     tagset_template = work_root / "tagset.template.json"
     tagset_csv = work_root / "tagset.csv"
     tagset_report_md = work_root / "tagset_report.md"

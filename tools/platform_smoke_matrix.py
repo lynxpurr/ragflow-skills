@@ -1780,6 +1780,39 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         metadata_lint_report,
         required_stdout='"schema": "ragflow_metadata_lint_report_v1"',
     )
+    topology_advice = artifacts_dir / "kb_topology_advice.json"
+    topology_advice_md = artifacts_dir / "kb_topology_advice.md"
+    topology_advice_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "topology",
+            "advise",
+            "--doc-manifest",
+            str(doc_manifest),
+            "--kb-name",
+            "kb:platform-topology",
+            "--metadata",
+            str(metadata_template),
+            "--retrieval-hints",
+            str(handoff_dir / "retrieval_hints.json"),
+            "--future-growth",
+            "high",
+            "--output",
+            str(topology_advice),
+            "--report-md",
+            str(topology_advice_md),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb topology advise",
+        topology_advice_result,
+        required_stdout='"schema": "kb_topology_advice_v1"',
+    )
     tagset_template = artifacts_dir / "tagset.template.json"
     tagset_template_result = _run_command(
         [

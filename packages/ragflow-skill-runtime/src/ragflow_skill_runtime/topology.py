@@ -1,0 +1,618 @@
+"""Advisory KB topology helpers for non-mutating build workflows."""
+
+from __future__ import annotations
+
+import json
+import math
+import re
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable, Mapping
+
+from .kb_build import BuildDocument
+from .metadata_governance import MetadataGovernanceError, load_metadata
+from .routing import RoutingConfig, RoutingError, load_routing_config
+
+
+KB_TOPOLOGY_ADVICE_SCHEMA = "kb_topology_advice_v1"
+
+WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}|[\u4e00-\u9fff]{2,12}")
+STOPWORDS = {
+    "about",
+    "after",
+    "and",
+    "are",
+    "body",
+    "can",
+    "for",
+    "from",
+    "how",
+    "into",
+    "the",
+    "this",
+    "under",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+}
+AMBIGUOUS_TERMS = {
+    "api",
+    "config",
+    "guide",
+    "key",
+    "manual",
+    "model",
+    "policy",
+    "profile",
+    "runtime",
+    "service",
+    "setup",
+    "token",
+}
+
+
+class TopologyError(RuntimeError):
+    """Raised when topology advice inputs cannot be loaded."""
+
+
+@dataclass(frozen=True)
+class TopologyDocument:
+    path: str
+    title: str
+    chars: int
+    token_count: int
+    estimated_chunks: int
+    domain: str
+    topic: str
+    terms: set[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "path": self.path,
+            "title": self.title,
+            "chars": self.chars,
+            "token_count": self.token_count,
+            "estimated_chunks": self.estimated_chunks,
+            "domain": self.domain,
+            "topic": self.topic,
+            "top_terms": sorted(self.terms)[:20],
+        }
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _read_json_mapping(path: str | Path) -> dict[str, Any]:
+    source = Path(path)
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise TopologyError(f"file not found: {source}") from exc
+    except json.JSONDecodeError as exc:
+        raise TopologyError(f"file is not valid JSON: {source}") from exc
+    if not isinstance(payload, dict):
+        raise TopologyError(f"file must contain a JSON object: {source}")
+    return payload
+
+
+def _tokenize(text: str) -> set[str]:
+    return {
+        token.lower()
+        for token in WORD_RE.findall(text)
+        if len(token.strip()) >= 2 and token.lower() not in STOPWORDS
+    }
+
+
+def _title_from_markdown(text: str, path: Path) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            title = stripped.lstrip("#").strip()
+            if title:
+                return title
+    return path.stem
+
+
+def _metadata_index(metadata_path: str | Path | None) -> dict[str, dict[str, Any]]:
+    if not metadata_path:
+        return {}
+    try:
+        metadata = load_metadata(metadata_path)
+    except MetadataGovernanceError as exc:
+        raise TopologyError(str(exc)) from exc
+    index: dict[str, dict[str, Any]] = {}
+    for item in metadata.get("documents", []):
+        if not isinstance(item, Mapping):
+            continue
+        path = str(item.get("path") or "")
+        values = dict(item.get("metadata") or {}) if isinstance(item.get("metadata"), Mapping) else {}
+        tags = item.get("tags")
+        if isinstance(tags, list):
+            values["tags"] = [tag for tag in tags if isinstance(tag, str)]
+        if path:
+            index[path] = values
+    return index
+
+
+def _metadata_for_path(path: Path, metadata: Mapping[str, Mapping[str, Any]]) -> Mapping[str, Any]:
+    path_text = str(path)
+    candidates = [
+        path_text,
+        path.as_posix(),
+        path.name,
+        f"documents/{path.name}",
+    ]
+    for candidate in candidates:
+        item = metadata.get(candidate)
+        if isinstance(item, Mapping):
+            return item
+    for key, item in metadata.items():
+        if path_text.endswith(key) or key.endswith(path.name):
+            return item
+    return {}
+
+
+def _domain_from_path(path: Path) -> str:
+    parts = [part for part in path.with_suffix("").parts if part not in {"", ".", "documents"}]
+    if len(parts) >= 2:
+        return parts[-2]
+    return "unknown"
+
+
+def _topic_from_path(path: Path) -> str:
+    return path.stem or "unknown"
+
+
+def _as_string(value: Any) -> str:
+    return value.strip() if isinstance(value, str) and value.strip() else ""
+
+
+def _read_document(path: Path, metadata: Mapping[str, Mapping[str, Any]]) -> TopologyDocument:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    values = _metadata_for_path(path, metadata)
+    title = _as_string(values.get("topic")) or _title_from_markdown(text, path)
+    domain = _as_string(values.get("domain")) or _domain_from_path(path)
+    topic = _as_string(values.get("topic")) or _topic_from_path(path)
+    metadata_terms = " ".join(
+        str(value)
+        for key in ("domain", "topic", "module", "doc_type", "audience", "summary")
+        for value in [values.get(key)]
+        if isinstance(value, str)
+    )
+    tag_terms = " ".join(values.get("tags", [])) if isinstance(values.get("tags"), list) else ""
+    terms = _tokenize(f"{title}\n{text}\n{metadata_terms}\n{tag_terms}")
+    chars = len(text)
+    return TopologyDocument(
+        path=str(path),
+        title=title,
+        chars=chars,
+        token_count=len(terms),
+        estimated_chunks=max(1, math.ceil(chars / 3000)) if chars else 1,
+        domain=domain,
+        topic=topic,
+        terms=terms,
+    )
+
+
+def _load_retrieval_hints(path: str | Path | None) -> dict[str, Any]:
+    if not path:
+        return {}
+    payload = _read_json_mapping(path)
+    if payload.get("schema") != "ragflow_retrieval_hints_v1":
+        raise TopologyError("retrieval hints schema must be ragflow_retrieval_hints_v1")
+    return payload
+
+
+def _hint_terms(retrieval_hints: Mapping[str, Any]) -> set[str]:
+    terms: set[str] = set()
+    for item in retrieval_hints.get("keyword_candidates", []) if isinstance(retrieval_hints.get("keyword_candidates"), list) else []:
+        if isinstance(item, Mapping):
+            terms.update(_tokenize(str(item.get("term") or "")))
+    for item in retrieval_hints.get("section_boundaries", []) if isinstance(retrieval_hints.get("section_boundaries"), list) else []:
+        if isinstance(item, Mapping):
+            terms.update(_tokenize(str(item.get("title") or "")))
+    return terms
+
+
+def _question_candidates(retrieval_hints: Mapping[str, Any], *, limit: int = 6) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for item in retrieval_hints.get("question_candidates", []) if isinstance(retrieval_hints.get("question_candidates"), list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        question = item.get("question")
+        if isinstance(question, str) and question.strip():
+            output.append(
+                {
+                    "question": question.strip(),
+                    "type": item.get("type") or "starter",
+                    "source_document": item.get("source_document"),
+                    "source_heading": item.get("source_heading"),
+                }
+            )
+        if len(output) >= limit:
+            break
+    return output
+
+
+def _route_config(path: str | Path | None) -> RoutingConfig | None:
+    if not path:
+        return None
+    try:
+        return load_routing_config(path)
+    except RoutingError as exc:
+        raise TopologyError(str(exc)) from exc
+
+
+def _kb_terms(config: RoutingConfig | None) -> list[dict[str, Any]]:
+    if not config:
+        return []
+    output = []
+    for kb in config.knowledge_bases:
+        text = " ".join([kb.name, kb.description, *kb.hints])
+        output.append(
+            {
+                "name": kb.name,
+                "dataset_id": kb.dataset_id,
+                "terms": _tokenize(text),
+                "hint_count": len(kb.hints),
+            }
+        )
+    return output
+
+
+def _jaccard(left: set[str], right: set[str]) -> float:
+    union = left | right
+    return round(len(left & right) / len(union), 4) if union else 0.0
+
+
+def _semantic_overlap(candidate_terms: set[str], route_terms: list[dict[str, Any]]) -> dict[str, Any]:
+    overlaps = []
+    for kb in route_terms:
+        terms = kb["terms"]
+        shared = sorted(candidate_terms & terms)
+        score = _jaccard(candidate_terms, terms)
+        overlaps.append(
+            {
+                "kb": kb["name"],
+                "dataset_id": kb["dataset_id"],
+                "score": score,
+                "shared_terms": shared[:12],
+                "hint_count": kb["hint_count"],
+            }
+        )
+    overlaps.sort(key=lambda item: (-float(item["score"]), item["kb"]))
+    max_score = float(overlaps[0]["score"]) if overlaps else 0.0
+    return {
+        "status": "not_available" if not route_terms else ("high_overlap" if max_score >= 0.28 else "low_overlap"),
+        "max_overlap_score": max_score,
+        "candidates": overlaps[:5],
+    }
+
+
+def _terminology_independence(overlap: Mapping[str, Any]) -> dict[str, Any]:
+    if overlap.get("status") == "not_available":
+        return {
+            "status": "unknown",
+            "score": None,
+            "reason": "no route config supplied for existing-KB comparison",
+        }
+    score = round(1.0 - float(overlap.get("max_overlap_score") or 0.0), 4)
+    status = "independent" if score >= 0.75 else ("overlapping" if score < 0.6 else "mixed")
+    return {
+        "status": status,
+        "score": score,
+        "reason": "higher score means fewer candidate terms overlap existing route hints",
+    }
+
+
+def _minimum_corpus(documents: list[TopologyDocument], *, min_documents: int, min_total_chars: int) -> dict[str, Any]:
+    total_chars = sum(doc.chars for doc in documents)
+    sufficient = len(documents) >= min_documents or total_chars >= min_total_chars
+    return {
+        "status": "sufficient" if sufficient else "thin",
+        "document_count": len(documents),
+        "total_chars": total_chars,
+        "min_documents": min_documents,
+        "min_total_chars": min_total_chars,
+        "reason": "small corpora usually need merge/stage review before creating a standalone KB",
+    }
+
+
+def _future_growth_signal(value: str) -> dict[str, Any]:
+    normalized = value.strip().lower() if value else "medium"
+    if normalized not in {"low", "medium", "high"}:
+        raise TopologyError("--future-growth must be low, medium, or high")
+    return {
+        "level": normalized,
+        "supports_new_kb": normalized in {"medium", "high"},
+        "reason": "future growth can justify a dedicated KB even when the first corpus is small",
+    }
+
+
+def _domain_summary(documents: list[TopologyDocument]) -> dict[str, Any]:
+    chunks_by_domain: Counter[str] = Counter()
+    chars_by_domain: Counter[str] = Counter()
+    for document in documents:
+        chunks_by_domain[document.domain] += document.estimated_chunks
+        chars_by_domain[document.domain] += document.chars
+    total_chunks = sum(chunks_by_domain.values())
+    total_chars = sum(chars_by_domain.values())
+    top_domain, top_chunks = chunks_by_domain.most_common(1)[0] if chunks_by_domain else ("unknown", 0)
+    return {
+        "domain_count": len(chunks_by_domain),
+        "chunks_by_domain": dict(sorted(chunks_by_domain.items())),
+        "chars_by_domain": dict(sorted(chars_by_domain.items())),
+        "top_domain": top_domain,
+        "top_domain_chunk_share": round(top_chunks / total_chunks, 4) if total_chunks else 0.0,
+        "top_domain_char_share": round(chars_by_domain[top_domain] / total_chars, 4) if total_chars else 0.0,
+    }
+
+
+def _ambiguous_term_signal(documents: list[TopologyDocument]) -> dict[str, Any]:
+    terms_by_domain: dict[str, set[str]] = defaultdict(set)
+    for document in documents:
+        terms_by_domain[document.domain].update(document.terms)
+    term_domains: dict[str, set[str]] = defaultdict(set)
+    for domain, terms in terms_by_domain.items():
+        for term in terms:
+            term_domains[term].add(domain)
+    repeated = sorted(term for term, domains in term_domains.items() if len(domains) >= 2)
+    intrinsic = sorted(term for term in term_domains if term in AMBIGUOUS_TERMS)
+    ambiguous = sorted(set(repeated + intrinsic))
+    all_terms = set(term_domains)
+    score = round(len(ambiguous) / len(all_terms), 4) if all_terms else 0.0
+    return {
+        "score": score,
+        "status": "high" if score >= 0.18 else ("medium" if score >= 0.08 else "low"),
+        "terms": ambiguous[:20],
+        "cross_domain_terms": repeated[:20],
+    }
+
+
+def _split_signals(documents: list[TopologyDocument]) -> dict[str, Any]:
+    domain = _domain_summary(documents)
+    top_domain = domain["top_domain"]
+    cross_domain_chunk_count = sum(
+        doc.estimated_chunks
+        for doc in documents
+        if doc.domain != top_domain
+    )
+    total_chars = sum(doc.chars for doc in documents)
+    max_doc = max(documents, key=lambda doc: doc.chars) if documents else None
+    dominant_share = round(max_doc.chars / total_chars, 4) if max_doc and total_chars else 0.0
+    ambiguous = _ambiguous_term_signal(documents)
+    warnings: list[dict[str, Any]] = []
+    if domain["domain_count"] > 1 and domain["top_domain_chunk_share"] < 0.75:
+        warnings.append(
+            {
+                "code": "mixed_domain_corpus",
+                "message": "multiple domains have enough estimated chunks to review a split before upload",
+            }
+        )
+    if ambiguous["status"] in {"medium", "high"}:
+        warnings.append(
+            {
+                "code": "ambiguous_terms",
+                "message": "ambiguous or cross-domain terms may blur route hints and retrieval tests",
+            }
+        )
+    if dominant_share >= 0.8 and len(documents) > 1:
+        warnings.append(
+            {
+                "code": "dominant_document",
+                "message": "one document dominates the corpus and may deserve separate validation",
+            }
+        )
+    return {
+        "cross_domain_chunk_count": cross_domain_chunk_count,
+        "ambiguous_term_score": ambiguous["score"],
+        "ambiguous_term_status": ambiguous["status"],
+        "ambiguous_terms": ambiguous["terms"],
+        "dominant_document_share": dominant_share,
+        "dominant_document": max_doc.path if max_doc else None,
+        "domain_purity": domain,
+        "domain_purity_warnings": warnings,
+        "split_review_recommended": bool(warnings and (domain["domain_count"] > 1 or ambiguous["status"] == "high")),
+    }
+
+
+def _anchor_query_pairs(
+    *,
+    kb_name: str,
+    candidate_terms: set[str],
+    questions: list[dict[str, Any]],
+    overlap: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    pairs: list[dict[str, Any]] = []
+    overlap_candidates = [
+        item for item in overlap.get("candidates", []) if isinstance(item, Mapping) and item.get("kb")
+    ]
+    fallback_questions = [
+        {"question": f"What are the key facts about {term}?", "type": "keyword_anchor"}
+        for term in sorted(candidate_terms)[:3]
+    ]
+    source_questions = questions or fallback_questions
+    for index, question in enumerate(source_questions[:5], start=1):
+        existing = overlap_candidates[0] if overlap_candidates else {}
+        shared_terms = existing.get("shared_terms") if isinstance(existing.get("shared_terms"), list) else []
+        contrast_term = shared_terms[0] if shared_terms else (sorted(candidate_terms)[0] if candidate_terms else kb_name)
+        pairs.append(
+            {
+                "id": f"anchor-{index:03d}",
+                "candidate_kb": kb_name,
+                "candidate_query": question["question"],
+                "candidate_query_type": question.get("type", "starter"),
+                "contrast_existing_kb": existing.get("kb"),
+                "contrast_query": f"Should this route to {kb_name} rather than {existing.get('kb') or 'an existing KB'} for {contrast_term}?",
+                "purpose": "distinguish create-vs-merge and route activation behavior",
+            }
+        )
+    return pairs
+
+
+def _recommendation(
+    *,
+    corpus: Mapping[str, Any],
+    growth: Mapping[str, Any],
+    independence: Mapping[str, Any],
+    overlap: Mapping[str, Any],
+    split: Mapping[str, Any],
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    action = "create_new_kb"
+    confidence = "medium"
+    if split.get("split_review_recommended"):
+        action = "split_before_upload"
+        confidence = "medium"
+        reasons.append("split signals show mixed domains, ambiguity, or a dominant document")
+    elif overlap.get("status") == "high_overlap" and corpus.get("status") == "thin":
+        action = "merge_with_existing"
+        confidence = "medium"
+        reasons.append("candidate terms overlap existing route hints and the corpus is still thin")
+    elif corpus.get("status") == "thin" and not growth.get("supports_new_kb"):
+        action = "stage_until_larger"
+        confidence = "low"
+        reasons.append("corpus is thin and future-growth hint is low")
+    elif independence.get("status") == "independent" and corpus.get("status") == "sufficient":
+        action = "create_new_kb"
+        confidence = "high"
+        reasons.append("candidate terminology is independent and corpus size is sufficient")
+    else:
+        reasons.append("signals are mixed; review route-test anchors before mutating config")
+    return {
+        "action": action,
+        "confidence": confidence,
+        "reasons": reasons,
+        "advisory_only": True,
+    }
+
+
+def create_kb_topology_advice(
+    *,
+    kb_name: str,
+    documents: Iterable[BuildDocument | str | Path],
+    metadata_path: str | Path | None = None,
+    retrieval_hints_path: str | Path | None = None,
+    route_config_path: str | Path | None = None,
+    future_growth: str = "medium",
+    min_documents: int = 3,
+    min_total_chars: int = 1200,
+) -> dict[str, Any]:
+    """Create non-mutating KB topology advice from local handoff artifacts."""
+
+    paths = [Path(item.path if isinstance(item, BuildDocument) else item) for item in documents]
+    if not paths:
+        raise TopologyError("topology advice requires at least one Markdown document")
+    metadata = _metadata_index(metadata_path)
+    doc_summaries = [_read_document(path, metadata) for path in paths]
+    retrieval_hints = _load_retrieval_hints(retrieval_hints_path)
+    route_config = _route_config(route_config_path)
+    route_terms = _kb_terms(route_config)
+    candidate_terms = set().union(*(doc.terms for doc in doc_summaries)) | _hint_terms(retrieval_hints)
+    candidate_terms = {term for term in candidate_terms if term not in STOPWORDS}
+    overlap = _semantic_overlap(candidate_terms, route_terms)
+    independence = _terminology_independence(overlap)
+    corpus = _minimum_corpus(doc_summaries, min_documents=min_documents, min_total_chars=min_total_chars)
+    growth = _future_growth_signal(future_growth)
+    split = _split_signals(doc_summaries)
+    questions = _question_candidates(retrieval_hints)
+    anchor_pairs = _anchor_query_pairs(
+        kb_name=kb_name,
+        candidate_terms=candidate_terms,
+        questions=questions,
+        overlap=overlap,
+    )
+    recommendation = _recommendation(
+        corpus=corpus,
+        growth=growth,
+        independence=independence,
+        overlap=overlap,
+        split=split,
+    )
+    return {
+        "ok": True,
+        "schema": KB_TOPOLOGY_ADVICE_SCHEMA,
+        "created_at": _now(),
+        "kb_name": kb_name,
+        "advisory_only": True,
+        "mutation": "none",
+        "inputs": {
+            "metadata": str(metadata_path) if metadata_path else None,
+            "retrieval_hints": str(retrieval_hints_path) if retrieval_hints_path else None,
+            "route_config": str(route_config_path) if route_config_path else None,
+            "future_growth": growth["level"],
+            "min_documents": min_documents,
+            "min_total_chars": min_total_chars,
+        },
+        "summary": {
+            "document_count": len(doc_summaries),
+            "estimated_chunk_count": sum(doc.estimated_chunks for doc in doc_summaries),
+            "candidate_term_count": len(candidate_terms),
+            "recommendation": recommendation["action"],
+            "confidence": recommendation["confidence"],
+        },
+        "recommendation": recommendation,
+        "signals": {
+            "terminology_independence": independence,
+            "minimum_useful_corpus_size": corpus,
+            "future_growth": growth,
+            "semantic_overlap": overlap,
+            "split": split,
+        },
+        "anchor_query_pairs": anchor_pairs,
+        "route_test_starters": questions,
+        "documents": [doc.to_dict() for doc in doc_summaries],
+        "next_steps": [
+            "Review the recommendation before creating, merging, splitting, or registering any KB.",
+            "Run route-test with the anchor query pairs before editing user-owned routing config.",
+            "Keep this report as a sidecar; it does not mutate RAGFlow or routing files.",
+        ],
+    }
+
+
+def render_topology_advice_markdown(report: Mapping[str, Any]) -> str:
+    """Render topology advice as a compact review note."""
+
+    recommendation = report.get("recommendation", {}) if isinstance(report.get("recommendation"), Mapping) else {}
+    signals = report.get("signals", {}) if isinstance(report.get("signals"), Mapping) else {}
+    split = signals.get("split", {}) if isinstance(signals.get("split"), Mapping) else {}
+    overlap = signals.get("semantic_overlap", {}) if isinstance(signals.get("semantic_overlap"), Mapping) else {}
+    lines = [
+        "# RAGFlow KB Topology Advice",
+        "",
+        f"- Schema: `{report.get('schema')}`",
+        f"- KB: `{report.get('kb_name')}`",
+        f"- Recommendation: `{recommendation.get('action')}` ({recommendation.get('confidence')})",
+        f"- Advisory only: `{report.get('advisory_only')}`",
+        "",
+        "## Signals",
+        "",
+        f"- Minimum corpus: `{signals.get('minimum_useful_corpus_size', {}).get('status') if isinstance(signals.get('minimum_useful_corpus_size'), Mapping) else 'unknown'}`",
+        f"- Terminology independence: `{signals.get('terminology_independence', {}).get('status') if isinstance(signals.get('terminology_independence'), Mapping) else 'unknown'}`",
+        f"- Semantic overlap: `{overlap.get('status')}` max `{overlap.get('max_overlap_score')}`",
+        f"- Split review recommended: `{split.get('split_review_recommended')}`",
+        f"- Ambiguous-term score: `{split.get('ambiguous_term_score')}`",
+        f"- Dominant-document share: `{split.get('dominant_document_share')}`",
+        "",
+        "## Anchor Queries",
+        "",
+    ]
+    anchors = report.get("anchor_query_pairs", [])
+    if isinstance(anchors, list) and anchors:
+        for item in anchors[:8]:
+            if isinstance(item, Mapping):
+                lines.append(f"- `{item.get('id')}` {item.get('candidate_query')}")
+    else:
+        lines.append("- No anchor queries generated.")
+    lines.extend(["", "## Next Steps", ""])
+    for step in report.get("next_steps", []) if isinstance(report.get("next_steps"), list) else []:
+        lines.append(f"- {step}")
+    return "\n".join(lines) + "\n"

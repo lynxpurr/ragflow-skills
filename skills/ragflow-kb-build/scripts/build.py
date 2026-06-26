@@ -45,6 +45,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     merge_metadata_payloads,
     probe_model_providers,
     configured_private_hosts_from_urls,
+    create_kb_topology_advice,
     render_handoff_inspection_markdown,
     render_governance_markdown,
     render_model_provider_probe_markdown,
@@ -57,6 +58,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_suppression_report_markdown,
     sample_benchmark_dataset,
     segment_metadata_report_file,
+    render_topology_advice_markdown,
     render_optimization_plan_markdown,
     snapshot_chunks,
     suggest_benchmark_retrieval_parameters,
@@ -78,6 +80,7 @@ from ragflow_skill_runtime.config import ConfigError  # noqa: E402
 from ragflow_skill_runtime.kb_build import extract_dataset_id, extract_uploaded_document_id  # noqa: E402
 from ragflow_skill_runtime.metadata_governance import MetadataGovernanceError  # noqa: E402
 from ragflow_skill_runtime.profiles import ProfileError  # noqa: E402
+from ragflow_skill_runtime.topology import TopologyError  # noqa: E402
 
 
 def _dump_json(data: Any) -> None:
@@ -627,6 +630,33 @@ def _run_optimize_cleanup_plan(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_topology_advise(args: argparse.Namespace) -> int:
+    try:
+        doc_manifest = load_doc_manifest(args.doc_manifest) if args.doc_manifest else None
+        _guard_quality_gate(doc_manifest, allow_blocked=args.allow_blocked)
+        docs = discover_markdown_documents(
+            input_path=args.input,
+            doc_manifest=doc_manifest,
+            manifest_base_path=args.doc_manifest,
+        )
+        report = create_kb_topology_advice(
+            kb_name=args.kb_name,
+            documents=docs,
+            metadata_path=args.metadata,
+            retrieval_hints_path=args.retrieval_hints,
+            route_config_path=args.route_config,
+            future_growth=args.future_growth,
+            min_documents=args.min_documents,
+            min_total_chars=args.min_total_chars,
+        )
+        _write_json_file(args.output, report)
+        _write_text_file(args.report_md, render_topology_advice_markdown(report))
+        _dump_json(report)
+        return 0
+    except (BuildError, TopologyError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _sanitize_model_provider_report(report: dict[str, Any], args: argparse.Namespace, config: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     urls = [config.base_url, args.embedding_adapter_url, args.rerank_adapter_url]
     sanitized, redaction_report = sanitize_report_payload(
@@ -1015,6 +1045,34 @@ def build_optimize_cleanup_plan_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_topology_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Create non-mutating KB topology advice")
+    subparsers = parser.add_subparsers(dest="topology_command", required=True)
+
+    advise = subparsers.add_parser("advise", help="Advise create, merge, split, or stage decisions")
+    advise.add_argument("--input", help="Markdown file or directory")
+    advise.add_argument("--doc-manifest", help="Path to doc_manifest.json")
+    advise.add_argument("--kb-name", required=True, help="Candidate RAGFlow dataset name")
+    advise.add_argument("--metadata", help="Optional ragflow_metadata_v1 file")
+    advise.add_argument("--retrieval-hints", help="Optional rich handoff retrieval_hints.json")
+    advise.add_argument("--route-config", help="Optional user-owned routing config for overlap checks")
+    advise.add_argument(
+        "--future-growth",
+        choices=("low", "medium", "high"),
+        default="medium",
+        help="Expected future corpus growth for create-vs-merge advice",
+    )
+    advise.add_argument("--min-documents", type=int, default=3, help="Minimum documents for a standalone KB signal")
+    advise.add_argument("--min-total-chars", type=int, default=1200, help="Minimum total Markdown chars for a standalone KB signal")
+    advise.add_argument("--allow-blocked", action="store_true", help="Allow advice with a BLOCKED doc_manifest quality gate")
+    advise.add_argument("--output", default="kb_topology_advice.json", help="Output kb_topology_advice_v1 JSON")
+    advise.add_argument("--report-md", help="Optional topology advice Markdown path")
+    advise.add_argument("--json", action="store_true", help="Emit JSON errors")
+    advise.set_defaults(func=_run_topology_advise)
+
+    return parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build a RAGFlow KB from Markdown")
     parser.add_argument("--input", help="Markdown file or directory")
@@ -1067,6 +1125,9 @@ def main(argv: list[str] | None = None) -> int:
         if command == "segment-metadata":
             segment_metadata_args = build_segment_metadata_parser().parse_args(command_args)
             return segment_metadata_args.func(segment_metadata_args)
+        if command == "topology":
+            topology_args = build_topology_parser().parse_args(command_args)
+            return topology_args.func(topology_args)
         if command == "optimize":
             if command_args and command_args[0] == "summarize":
                 optimize_summary_args = build_optimize_summarize_parser().parse_args(command_args[1:])

@@ -1247,6 +1247,120 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("ragflow_segment_metadata_report_v1", result.stdout)
         self.assertIn("RAGFlow Segment Metadata Report", report_md_text)
 
+    def test_topology_advise_subcommand_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            handoff = root / "handoff"
+            docs = handoff / "documents"
+            docs.mkdir(parents=True)
+            payroll = docs / "payroll.md"
+            payroll.write_text(
+                "# Payroll Policy\n\n" + "Payroll benefits onboarding policy. " * 45,
+                encoding="utf-8",
+            )
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [
+                            {
+                                "source_path": "source/payroll.pdf",
+                                "markdown_path": "documents/payroll.md",
+                                "title": "Payroll Policy",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            metadata = root / "metadata.json"
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_metadata_v1",
+                        "documents": [
+                            {
+                                "path": str(payroll),
+                                "metadata": {"domain": "hr", "topic": "Payroll Policy"},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            retrieval_hints = handoff / "retrieval_hints.json"
+            retrieval_hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "keyword_candidates": [{"term": "payroll policy"}],
+                        "question_candidates": [
+                            {
+                                "question": "What is the payroll policy?",
+                                "type": "section_summary",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            route_config = root / "routing.json"
+            route_config.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "knowledge_bases": [
+                            {"name": "kb:general", "dataset_id": "ds-general", "hints": ["general", "onboarding"]}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output = root / "kb_topology_advice.json"
+            report_md = root / "kb_topology_advice.md"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "topology",
+                    "advise",
+                    "--doc-manifest",
+                    str(manifest),
+                    "--kb-name",
+                    "kb:payroll",
+                    "--metadata",
+                    str(metadata),
+                    "--retrieval-hints",
+                    str(retrieval_hints),
+                    "--route-config",
+                    str(route_config),
+                    "--future-growth",
+                    "high",
+                    "--output",
+                    str(output),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+            report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("kb_topology_advice_v1", result.stdout)
+        self.assertEqual(payload["schema"], "kb_topology_advice_v1")
+        self.assertTrue(payload["advisory_only"])
+        self.assertEqual(payload["mutation"], "none")
+        self.assertGreaterEqual(len(payload["anchor_query_pairs"]), 1)
+        self.assertIn("RAGFlow KB Topology Advice", report_md_text)
+
     def test_optimize_plan_only_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

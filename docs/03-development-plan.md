@@ -1110,17 +1110,17 @@ assistant tests without mutating user-owned routing config automatically.
 
 Tasks:
 
-- [ ] Add `kb_topology_advice_v1`.
+- [x] Add `kb_topology_advice_v1`.
 - [ ] Add `kb_split_plan_v1`.
 - [ ] Add `kb_activation_plan_v1`.
-- [ ] Add `ragflow-kb-build topology advise`.
-- [ ] Add create-vs-merge signals: terminology independence, minimum useful corpus size, future-growth hint, semantic overlap, and anchor query pairs.
-- [ ] Add split signals: cross-domain chunk count, ambiguous-term score, dominant-document share, and domain-purity warnings.
+- [x] Add `ragflow-kb-build topology advise`.
+- [x] Add create-vs-merge signals: terminology independence, minimum useful corpus size, future-growth hint, semantic overlap, and anchor query pairs.
+- [x] Add split signals: cross-domain chunk count, ambiguous-term score, dominant-document share, and domain-purity warnings.
 - [ ] Add `ragflow-kb-build topology split-plan`.
 - [ ] Add `ragflow-kb-build activation-plan`.
 - [ ] Check content completeness, document count, chunk count, route config registration, hint coverage, optional centroid availability, and route-test readiness.
 - [ ] Add `ragflow-query route-activation-check`.
-- [ ] Consume rich-handoff `retrieval_hints.json` when present for keyword/question candidates and route-test starter suggestions.
+- [x] Consume rich-handoff `retrieval_hints.json` when present for keyword/question candidates and route-test starter suggestions.
 - [ ] Add `ragflow-query assistant-profile recommend`.
 - [ ] Recommend assistant retrieval settings such as similarity threshold, vector/BM25 weight, top-k, quote/citation settings, and no-answer policy.
 - [ ] Add `ragflow-query assistant-test-plan`.

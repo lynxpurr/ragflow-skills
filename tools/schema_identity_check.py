@@ -392,6 +392,13 @@ EXPECTED_IDENTITIES = (
         source_patterns=("ragflow_route_centroid_build_checkpoint_v1",),
         coverage_patterns=("ragflow_route_centroid_build_checkpoint_v1", "CENTROID_BUILD_CHECKPOINT_SCHEMA"),
     ),
+    SchemaIdentity(
+        key="kb_topology_advice",
+        group="topology",
+        identity="kb_topology_advice_v1",
+        source_patterns=("kb_topology_advice_v1",),
+        coverage_patterns=("kb_topology_advice_v1", "KB_TOPOLOGY_ADVICE_SCHEMA"),
+    ),
 )
 
 
