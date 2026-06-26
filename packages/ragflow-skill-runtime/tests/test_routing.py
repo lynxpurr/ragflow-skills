@@ -166,6 +166,7 @@ class RoutingTests(unittest.TestCase):
             report = run_route_tests(config, queries)
 
         self.assertTrue(report["ok"])
+        self.assertEqual(report["schema"], "ragflow_route_test_report_v1")
         self.assertEqual(report["metrics"]["accuracy"], 1.0)
         self.assertEqual(centroid_index["schema"], "ragflow_route_centroid_index_v1")
         self.assertIn("Route Test", render_route_test_markdown(report))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -102,6 +103,72 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("query missing config guard", check_names)
         self.assertIn("live build skipped", check_names)
         self.assertTrue(payload["reports"]["json"].endswith("consumer-acceptance-report.json"))
+
+    def test_command_manifest_only_redacts_live_acceptance_details(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            export_payload = export_release_archives(
+                dist_dir=root / "dist",
+                output_dir=root / "release-artifacts",
+                rebuild=True,
+                hygiene=True,
+            )
+            self.assertTrue(export_payload["ok"], export_payload)
+            work = root / "consumer"
+            config_path = root / "private" / "ragflow.local.yaml"
+            secret = "fake-command-manifest-secret"
+            dataset_id = "dataset-command-manifest-private"
+            base_url = "http://localhost:9380"
+
+            payload = run_consumer_acceptance(
+                artifacts_dir=root / "release-artifacts",
+                work_root=work,
+                live=True,
+                live_build=True,
+                env={
+                    "RAGFLOW_BASE_URL": base_url,
+                    "RAGFLOW_API_KEY": secret,
+                    "RAGFLOW_DATASET_ID": dataset_id,
+                    "RAGFLOW_CONFIG": str(config_path),
+                },
+                command_manifest_only=True,
+            )
+
+            self.assertTrue(payload["ok"], payload)
+            check_names = [check["name"] for check in payload["checks"]]
+            self.assertIn("command manifest dry-run", check_names)
+            self.assertIn("live execution skipped by command manifest dry-run", check_names)
+            self.assertNotIn("live build disposable kb", check_names)
+
+            manifest_path = Path(payload["command_manifest"]["json"])
+            redaction_path = Path(payload["command_manifest"]["redaction"])
+            self.assertTrue(manifest_path.exists(), payload)
+            self.assertTrue(redaction_path.exists(), payload)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            redaction = json.loads(redaction_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["schema"], "ragflow_consumer_command_manifest_v1")
+            self.assertEqual(manifest["summary"]["mutating_command_count"], 1)
+            command_ids = {command["id"] for command in manifest["commands"]}
+            self.assertIn("live-query-existing", command_ids)
+            self.assertIn("live-build-disposable-kb", command_ids)
+            self.assertIn("live-validate-smoke", command_ids)
+            self.assertIn("live-query-direct", command_ids)
+            self.assertIn("live-query-agentic", command_ids)
+            build_command = next(command for command in manifest["commands"] if command["id"] == "live-build-disposable-kb")
+            self.assertTrue(build_command["mutates_ragflow"])
+            self.assertEqual(build_command["mutation_label"], "creates_dataset_uploads_documents_and_triggers_parse")
+            self.assertTrue(build_command["expected_artifacts"])
+            self.assertTrue(build_command["cleanup_notes"])
+
+            manifest_text = manifest_path.read_text(encoding="utf-8")
+            self.assertNotIn(secret, manifest_text)
+            self.assertNotIn(dataset_id, manifest_text)
+            self.assertNotIn("localhost", manifest_text)
+            self.assertNotIn(str(config_path), manifest_text)
+            self.assertNotIn(str(work), manifest_text)
+            self.assertIn("<env:RAGFLOW_DATASET_ID>", manifest_text)
+            self.assertIn("<work>/live/kb_manifest.json", manifest_text)
+            self.assertTrue(redaction["ok"])
 
 
 if __name__ == "__main__":

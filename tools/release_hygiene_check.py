@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from build_release import DIST_DIR, PUBLIC_SKILLS, ROOT, build_release
+from schema_identity_check import run_schema_identity_check
 
 
 TEXT_SUFFIXES = {
@@ -587,6 +588,7 @@ def run_hygiene_check(
     rebuild: bool = True,
     scan_source: bool = True,
     suite_review: bool = False,
+    schema_identity: bool = True,
 ) -> dict[str, Any]:
     if rebuild:
         build_release(dist_dir)
@@ -622,6 +624,10 @@ def run_hygiene_check(
         suite_payload = run_suite_review(skills_root=ROOT / "skills", public_skills=PUBLIC_SKILLS)
         payload["suite_review"] = suite_payload
         payload["ok"] = bool(payload["ok"] and suite_payload["ok"])
+    if schema_identity:
+        schema_identity_payload = run_schema_identity_check(root=ROOT)
+        payload["schema_identity"] = schema_identity_payload
+        payload["ok"] = bool(payload["ok"] and schema_identity_payload["ok"])
     return payload
 
 
@@ -631,6 +637,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-build", action="store_true", help="Check an existing dist directory")
     parser.add_argument("--dist-only", action="store_true", help="Skip public source checks")
     parser.add_argument("--suite-review", action="store_true", help="Run static public skill suite drift checks")
+    parser.add_argument("--skip-schema-identity", action="store_true", help="Skip static schema identity checks")
     args = parser.parse_args(argv)
 
     payload = run_hygiene_check(
@@ -638,6 +645,7 @@ def main(argv: list[str] | None = None) -> int:
         rebuild=not args.no_build,
         scan_source=not args.dist_only,
         suite_review=args.suite_review,
+        schema_identity=not args.skip_schema_identity,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if payload["ok"] else 1

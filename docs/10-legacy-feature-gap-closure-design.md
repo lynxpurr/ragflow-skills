@@ -934,7 +934,10 @@ Implementation status: the first `--suite-review` gate is implemented as an offl
 release-hygiene mode. It validates public `SKILL.md` frontmatter, required shared
 references, shared-reference hash drift, broken relative links, stale/private references,
 and high-overlap skill descriptions with fixture coverage. Version/date drift, repeated
-warning centralization, and compatibility-reference checks remain open.
+warning centralization, and compatibility-reference checks remain open. A private
+`ragflow-skills-maintainer` Codex skill now records repository-specific development
+workflow, validation-chain, task-selection, and release-governance guidance outside the
+public release skill tree; maintainer-only skills must not be added under public `skills/`.
 
 ## Feature Design 18: Runtime Capability, Model Provider, And Fallback Gates
 
@@ -1032,6 +1035,45 @@ Acceptance dry-run manifests should include:
 - expected produced artifacts;
 - which commands mutate RAGFlow;
 - cleanup notes and dataset IDs once live execution occurs.
+
+Recommended implementation sequence:
+
+1. Add a focused offline contract fixture gate before broader packaging work. The MVP
+   should create neutral plain and rich handoff fixtures with `ragflow-doc-to-md`, run
+   `ragflow-kb-build --dry-run` against both, and emit `ragflow_contract_fixture_gate_v1`.
+   It should run against release/dist scripts, use only placeholder KB names, and never
+   contact RAGFlow.
+2. Add installed archive smoke next, with one minimal no-network check per exported tarball.
+   This should prove archive contents work after unpacking, independently from source-tree
+   smoke and broader consumer acceptance.
+3. Add command-manifest dry-run after archive smoke. These manifests should make live
+   acceptance reviewable before mutation by listing redacted commands, expected artifacts,
+   mutation labels, cleanup notes, and local config checks.
+4. Add schema identity, compatibility facade, rename policy, and naming-drift checks after
+   the contract and archive surfaces are explicit. These are static release gates and should
+   not depend on live services.
+
+Implementation status: the offline contract fixture gate is implemented in
+`tools/contract_fixture_gate.py`. It rebuilds or reuses release/dist skill scripts, creates
+neutral plain and rich handoffs with `ragflow-doc-to-md`, proves both are accepted by
+`ragflow-kb-build --dry-run`, inspects the rich handoff sidecars, and emits
+`ragflow_contract_fixture_gate_v1` without requiring RAGFlow credentials. The installed
+archive smoke gate is implemented in `tools/installed_archive_smoke.py`; it exports or
+reuses release tarballs, verifies manifest hashes, safely unpacks each public skill archive
+in an independent workspace, checks vendored runtime presence, and runs a minimal no-network
+CLI smoke per skill while emitting `ragflow_installed_archive_smoke_v1`. Command-manifest
+dry-run is implemented in `tools/consumer_acceptance.py` with
+`ragflow_consumer_command_manifest_v1`, `--command-manifest`, and
+`--command-manifest-only`. It writes redacted command arrays plus a redaction sidecar,
+records local configuration checks, expected artifacts, mutation labels, and cleanup notes,
+and can review live/live-build acceptance commands without executing live mutation. Fixture
+coverage uses fake credentials and private paths to prove the generated manifest does not
+leak secrets, localhost endpoints, config paths, or work paths. Schema identity checks are
+implemented in `tools/schema_identity_check.py` and run by default from
+`tools/release_hygiene_check.py`. The gate emits `ragflow_schema_identity_check_v1` and
+requires source plus test/smoke evidence for versioned `doc_manifest`/`kb_manifest`
+identity and quality, benchmark, query, trace, diagnostic, and route report schemas.
+Compatibility facade, rename policy, and naming-drift gates remain open.
 
 These gates should complement, not replace, unit tests and platform smoke tests.
 

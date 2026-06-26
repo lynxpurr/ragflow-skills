@@ -57,6 +57,8 @@ class ReleaseHygieneTests(unittest.TestCase):
 
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["findings"], [])
+        self.assertTrue(payload["schema_identity"]["ok"])
+        self.assertEqual(payload["schema_identity"]["schema"], "ragflow_schema_identity_check_v1")
 
     def test_forbidden_private_path_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

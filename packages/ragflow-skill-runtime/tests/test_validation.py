@@ -345,6 +345,7 @@ class ValidationTests(unittest.TestCase):
         per_query = benchmark["per_query"][0]
         markdown = render_markdown_report(benchmarked)
 
+        self.assertEqual(benchmark["schema"], "ragflow_benchmark_report_v1")
         self.assertEqual(metrics["wrong_document_rate"], 0.5)
         self.assertEqual(metrics["tag_pollution_rate"], 0.5)
         self.assertEqual(metrics["expected_tag_hit_rate"], 1.0)

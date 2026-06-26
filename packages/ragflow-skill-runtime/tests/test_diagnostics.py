@@ -41,6 +41,7 @@ class DiagnosticsTests(unittest.TestCase):
 
         issue_types = {issue["issue_type"] for issue in report["issues"]}
         self.assertFalse(report["ok"])
+        self.assertEqual(report["schema"], "ragflow_kb_diagnostic_report_v1")
         self.assertIn("dataset_id_short", issue_types)
         self.assertIn("dataset_name_suffix_fragment", issue_types)
         self.assertIn("document_parse_not_done", issue_types)

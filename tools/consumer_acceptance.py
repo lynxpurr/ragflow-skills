@@ -28,6 +28,13 @@ REQUIRED_ASSETS = (
     "ragflow-query.tar.gz",
     "release-manifest.json",
 )
+COMMAND_MANIFEST_SCHEMA = "ragflow_consumer_command_manifest_v1"
+
+RUNTIME_SRC = ROOT / "packages" / "ragflow-skill-runtime" / "src"
+if RUNTIME_SRC.exists() and str(RUNTIME_SRC) not in sys.path:
+    sys.path.insert(0, str(RUNTIME_SRC))
+
+from ragflow_skill_runtime import configured_private_hosts_from_urls, sanitize_report_payload  # noqa: E402
 
 
 def _preview(text: str, *, limit: int = 500) -> str:
@@ -310,6 +317,389 @@ def _write_reports(payload: dict[str, Any], reports_dir: Path) -> dict[str, str]
 
 def _skill_path(extract_dir: Path, skill_name: str, *parts: str) -> Path:
     return extract_dir / skill_name / Path(*parts)
+
+
+def _tokenize_manifest_value(
+    value: str,
+    *,
+    work_root: Path,
+    extract_dir: Path,
+    artifacts_dir: Path,
+    env_map: Mapping[str, str],
+) -> str:
+    for key in ("RAGFLOW_BASE_URL", "RAGFLOW_API_KEY", "RAGFLOW_DATASET_ID"):
+        if env_map.get(key) and value == env_map[key]:
+            return f"<env:{key}>"
+    if value.startswith("-") or (not Path(value).is_absolute() and "/" not in value and "\\" not in value):
+        return value
+    for root, token in (
+        (extract_dir.resolve(), "<unpacked>"),
+        (work_root.resolve(), "<work>"),
+        (artifacts_dir.resolve(), "<artifacts>"),
+        (ROOT.resolve(), "<repo>"),
+    ):
+        try:
+            path = Path(value).resolve()
+        except OSError:
+            continue
+        try:
+            return f"{token}/{path.relative_to(root)}"
+        except ValueError:
+            continue
+    return value
+
+
+def _tokenize_manifest_command(
+    command: list[str],
+    *,
+    work_root: Path,
+    extract_dir: Path,
+    artifacts_dir: Path,
+    env_map: Mapping[str, str],
+) -> list[str]:
+    return [
+        _tokenize_manifest_value(
+            part,
+            work_root=work_root,
+            extract_dir=extract_dir,
+            artifacts_dir=artifacts_dir,
+            env_map=env_map,
+        )
+        for part in command
+    ]
+
+
+def _tokenize_manifest_path(
+    path: Path,
+    *,
+    work_root: Path,
+    extract_dir: Path,
+    artifacts_dir: Path,
+    env_map: Mapping[str, str],
+) -> str:
+    return _tokenize_manifest_value(
+        str(path),
+        work_root=work_root,
+        extract_dir=extract_dir,
+        artifacts_dir=artifacts_dir,
+        env_map=env_map,
+    )
+
+
+def _manifest_config_checks(*, live: bool, live_build: bool, env_map: Mapping[str, str]) -> list[dict[str, Any]]:
+    required_for: dict[str, list[str]] = {}
+    if live:
+        for name in ("RAGFLOW_BASE_URL", "RAGFLOW_API_KEY", "RAGFLOW_DATASET_ID"):
+            required_for.setdefault(name, []).append("live")
+    if live_build:
+        for name in ("RAGFLOW_BASE_URL", "RAGFLOW_API_KEY"):
+            required_for.setdefault(name, []).append("live_build")
+    return [
+        {
+            "name": name,
+            "required_for": flows,
+            "configured": bool(env_map.get(name)),
+            "source": "environment",
+            "value": "<configured>" if env_map.get(name) else None,
+        }
+        for name, flows in sorted(required_for.items())
+    ]
+
+
+def _command_manifest_entry(
+    *,
+    command_id: str,
+    label: str,
+    command: list[str],
+    mutates_ragflow: bool,
+    mutation_label: str,
+    required_config: list[str],
+    expected_artifacts: list[Path],
+    cleanup_notes: list[str],
+    work_root: Path,
+    extract_dir: Path,
+    artifacts_dir: Path,
+    env_map: Mapping[str, str],
+) -> dict[str, Any]:
+    return {
+        "id": command_id,
+        "label": label,
+        "command": _tokenize_manifest_command(
+            command,
+            work_root=work_root,
+            extract_dir=extract_dir,
+            artifacts_dir=artifacts_dir,
+            env_map=env_map,
+        ),
+        "mutates_ragflow": mutates_ragflow,
+        "mutation_label": mutation_label,
+        "required_config": required_config,
+        "missing_config": [name for name in required_config if not env_map.get(name)],
+        "expected_artifacts": [
+            {
+                "path": _tokenize_manifest_path(
+                    path,
+                    work_root=work_root,
+                    extract_dir=extract_dir,
+                    artifacts_dir=artifacts_dir,
+                    env_map=env_map,
+                ),
+                "when": "on_success",
+            }
+            for path in expected_artifacts
+        ],
+        "cleanup_notes": cleanup_notes,
+    }
+
+
+def _build_consumer_command_manifest(
+    *,
+    artifacts_dir: Path,
+    extract_dir: Path,
+    work_root: Path,
+    python_executable: str,
+    env_map: Mapping[str, str],
+    live: bool,
+    live_build: bool,
+    question: str,
+    top_k: int,
+    kb_name: str | None,
+    parse_timeout: float,
+    poll_interval: float,
+) -> dict[str, Any]:
+    commands: list[dict[str, Any]] = []
+    query_script = _skill_path(extract_dir, "ragflow-query", "scripts", "query.py")
+    build_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "build.py")
+    validate_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "validate.py")
+    profile = _skill_path(extract_dir, "ragflow-kb-build", "templates", "default-en-768.json")
+    doc_manifest = work_root / "handoff" / "doc_manifest.json"
+    live_dir = work_root / "live"
+    kb_manifest = live_dir / "kb_manifest.json"
+    planned_kb_name = kb_name or "kb:consumer-acceptance-<generated>"
+
+    if live:
+        commands.append(
+            _command_manifest_entry(
+                command_id="live-query-existing",
+                label="Query an existing live RAGFlow dataset",
+                command=[
+                    python_executable,
+                    str(query_script),
+                    "ask",
+                    question,
+                    "--dataset-id",
+                    env_map.get("RAGFLOW_DATASET_ID", "<env:RAGFLOW_DATASET_ID>"),
+                    "--mode",
+                    "direct",
+                    "--top-k",
+                    str(top_k),
+                    "--json",
+                ],
+                mutates_ragflow=False,
+                mutation_label="read_only_retrieval",
+                required_config=["RAGFLOW_BASE_URL", "RAGFLOW_API_KEY", "RAGFLOW_DATASET_ID"],
+                expected_artifacts=[work_root / "live-query-result.json"],
+                cleanup_notes=["No RAGFlow cleanup is required for read-only retrieval."],
+                work_root=work_root,
+                extract_dir=extract_dir,
+                artifacts_dir=artifacts_dir,
+                env_map=env_map,
+            )
+        )
+
+    if live_build:
+        commands.append(
+            _command_manifest_entry(
+                command_id="live-build-disposable-kb",
+                label="Create and parse a disposable RAGFlow KB",
+                command=[
+                    python_executable,
+                    str(build_script),
+                    "--doc-manifest",
+                    str(doc_manifest),
+                    "--kb-name",
+                    planned_kb_name,
+                    "--profile",
+                    str(profile),
+                    "--output",
+                    str(kb_manifest),
+                    "--parse-timeout",
+                    str(parse_timeout),
+                    "--poll-interval",
+                    str(poll_interval),
+                    "--json",
+                ],
+                mutates_ragflow=True,
+                mutation_label="creates_dataset_uploads_documents_and_triggers_parse",
+                required_config=["RAGFLOW_BASE_URL", "RAGFLOW_API_KEY"],
+                expected_artifacts=[kb_manifest],
+                cleanup_notes=[
+                    "Delete the disposable KB from RAGFlow after review.",
+                    "Use the dataset_id recorded in <work>/live/kb_manifest.json after live execution.",
+                ],
+                work_root=work_root,
+                extract_dir=extract_dir,
+                artifacts_dir=artifacts_dir,
+                env_map=env_map,
+            )
+        )
+        commands.append(
+            _command_manifest_entry(
+                command_id="live-validate-smoke",
+                label="Validate the disposable KB with a smoke query",
+                command=[
+                    python_executable,
+                    str(validate_script),
+                    "--kb-manifest",
+                    str(kb_manifest),
+                    "--level",
+                    "smoke",
+                    "--query",
+                    question,
+                    "--top-k",
+                    str(top_k),
+                    "--report-json",
+                    str(live_dir / "validation_report.json"),
+                    "--report-md",
+                    str(live_dir / "validation_report.md"),
+                ],
+                mutates_ragflow=False,
+                mutation_label="read_only_validation",
+                required_config=["RAGFLOW_BASE_URL", "RAGFLOW_API_KEY"],
+                expected_artifacts=[live_dir / "validation_report.json", live_dir / "validation_report.md"],
+                cleanup_notes=["No additional RAGFlow cleanup is required beyond deleting the disposable KB."],
+                work_root=work_root,
+                extract_dir=extract_dir,
+                artifacts_dir=artifacts_dir,
+                env_map=env_map,
+            )
+        )
+        for mode, extra, output_name in (
+            ("direct", ["--json"], "live-query-direct.json"),
+            ("agentic", ["--host-assisted", "--json"], "live-query-host-assisted.json"),
+        ):
+            commands.append(
+                _command_manifest_entry(
+                    command_id=f"live-query-{mode}",
+                    label=f"Query the disposable KB in {mode} mode",
+                    command=[
+                        python_executable,
+                        str(query_script),
+                        "ask",
+                        question,
+                        "--kb-manifest",
+                        str(kb_manifest),
+                        "--mode",
+                        mode,
+                        "--top-k",
+                        str(top_k),
+                        *extra,
+                    ],
+                    mutates_ragflow=False,
+                    mutation_label="read_only_retrieval",
+                    required_config=["RAGFLOW_BASE_URL", "RAGFLOW_API_KEY"],
+                    expected_artifacts=[live_dir / output_name],
+                    cleanup_notes=["No additional RAGFlow cleanup is required beyond deleting the disposable KB."],
+                    work_root=work_root,
+                    extract_dir=extract_dir,
+                    artifacts_dir=artifacts_dir,
+                    env_map=env_map,
+                )
+            )
+
+    config_checks = _manifest_config_checks(live=live, live_build=live_build, env_map=env_map)
+    return {
+        "ok": True,
+        "schema": COMMAND_MANIFEST_SCHEMA,
+        "mode": "dry_run",
+        "source": "consumer_acceptance",
+        "work_root": "<work>",
+        "artifacts_dir": "<artifacts>",
+        "live_flows": {
+            "live": live,
+            "live_build": live_build,
+        },
+        "local_configuration": {
+            "checks": config_checks,
+            "missing_required": sorted(
+                {check["name"] for check in config_checks if not check["configured"]}
+            ),
+        },
+        "commands": commands,
+        "expected_artifacts": [
+            artifact
+            for command in commands
+            for artifact in command["expected_artifacts"]
+        ],
+        "cleanup": {
+            "required": live_build,
+            "notes": [
+                "Review this command manifest before running live acceptance.",
+                "Delete any disposable KB created by live-build after validation.",
+                "Local artifacts under <work>/live can be removed after reports are collected.",
+            ],
+        },
+        "summary": {
+            "command_count": len(commands),
+            "mutating_command_count": sum(1 for command in commands if command["mutates_ragflow"]),
+            "expected_artifact_count": sum(len(command["expected_artifacts"]) for command in commands),
+        },
+    }
+
+
+def _write_command_manifest(
+    *,
+    path: Path,
+    redaction_path: Path,
+    artifacts_dir: Path,
+    extract_dir: Path,
+    work_root: Path,
+    python_executable: str,
+    env_map: Mapping[str, str],
+    live: bool,
+    live_build: bool,
+    question: str,
+    top_k: int,
+    kb_name: str | None,
+    parse_timeout: float,
+    poll_interval: float,
+) -> dict[str, Any]:
+    raw_manifest = _build_consumer_command_manifest(
+        artifacts_dir=artifacts_dir,
+        extract_dir=extract_dir,
+        work_root=work_root,
+        python_executable=python_executable,
+        env_map=env_map,
+        live=live,
+        live_build=live_build,
+        question=question,
+        top_k=top_k,
+        kb_name=kb_name,
+        parse_timeout=parse_timeout,
+        poll_interval=poll_interval,
+    )
+    sanitized, redaction_report = sanitize_report_payload(
+        raw_manifest,
+        explicit_secrets=[
+            env_map.get("RAGFLOW_API_KEY"),
+            env_map.get("RAGFLOW_DATASET_ID"),
+        ],
+        private_hosts=configured_private_hosts_from_urls([env_map.get("RAGFLOW_BASE_URL")]),
+        home_paths=[str(work_root), str(extract_dir), str(artifacts_dir)],
+        config_paths=[env_map.get("RAGFLOW_CONFIG")],
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    redaction_path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(sanitized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    redaction_path.write_text(json.dumps(redaction_report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {
+        "json": str(path),
+        "redaction": str(redaction_path),
+        "schema": COMMAND_MANIFEST_SCHEMA,
+        "command_count": sanitized["summary"]["command_count"],
+        "mutating_command_count": sanitized["summary"]["mutating_command_count"],
+        "redaction_summary": redaction_report["summary"],
+    }
 
 
 def _run_no_network_checks(
@@ -2992,6 +3382,9 @@ def run_consumer_acceptance(
     live_kb_name: str | None = None,
     live_parse_timeout: float = 300.0,
     live_poll_interval: float = 2.0,
+    command_manifest: Path | None = None,
+    command_manifest_redaction: Path | None = None,
+    command_manifest_only: bool = False,
 ) -> dict[str, Any]:
     if overwrite and _is_relative_to(artifacts_dir.resolve(), work_root.resolve()):
         raise RuntimeError("artifacts directory must not be inside an overwritten work directory")
@@ -3007,25 +3400,69 @@ def run_consumer_acceptance(
         python_executable=python_executable,
         env=command_env,
     )
+    live_env_map = os.environ if env is None else env
+    command_manifest_info: dict[str, Any] | None = None
+    if command_manifest or command_manifest_only:
+        manifest_path = command_manifest or work_root / "reports" / "consumer-command-manifest.json"
+        redaction_path = (
+            command_manifest_redaction
+            or manifest_path.with_name(f"{manifest_path.stem}.redaction.json")
+        )
+        command_manifest_info = _write_command_manifest(
+            path=manifest_path,
+            redaction_path=redaction_path,
+            artifacts_dir=artifacts_dir,
+            extract_dir=extract_dir,
+            work_root=work_root,
+            python_executable=python_executable,
+            env_map=live_env_map,
+            live=live,
+            live_build=live_build,
+            question=live_question,
+            top_k=live_top_k,
+            kb_name=live_kb_name,
+            parse_timeout=live_parse_timeout,
+            poll_interval=live_poll_interval,
+        )
+        checks.append(
+            {
+                "name": "command manifest dry-run",
+                "ok": True,
+                "path": command_manifest_info["json"],
+                "redaction_report": command_manifest_info["redaction"],
+                "error": "",
+            }
+        )
+        produced.extend([manifest_path, redaction_path])
 
-    if live:
+    if command_manifest_only and (live or live_build):
+        checks.append(
+            {
+                "name": "live execution skipped by command manifest dry-run",
+                "ok": True,
+                "skipped": True,
+                "error": "",
+            }
+        )
+
+    if live and not command_manifest_only:
         live_checks, live_produced = _run_live_check(
             extract_dir=extract_dir,
             work_root=work_root,
             python_executable=python_executable,
-            env_map=os.environ if env is None else env,
+            env_map=live_env_map,
             question=live_question,
             top_k=live_top_k,
         )
         checks.extend(live_checks)
         produced.extend(live_produced)
 
-    if live_build:
+    if live_build and not command_manifest_only:
         live_build_checks, live_build_produced = _run_live_build_check(
             extract_dir=extract_dir,
             work_root=work_root,
             python_executable=python_executable,
-            env_map=os.environ if env is None else env,
+            env_map=live_env_map,
             question=live_question,
             top_k=live_top_k,
             kb_name=live_kb_name,
@@ -3049,6 +3486,8 @@ def run_consumer_acceptance(
         "checks": checks,
         "produced_artifacts": [str(path) for path in produced if path.exists()],
     }
+    if command_manifest_info:
+        payload["command_manifest"] = command_manifest_info
     reports = _write_reports(payload, work_root / "reports")
     payload["reports"] = reports
     Path(reports["json"]).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -3101,6 +3540,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--live-kb-name", help="Override the disposable live KB name")
     parser.add_argument("--live-parse-timeout", type=float, default=300.0)
     parser.add_argument("--live-poll-interval", type=float, default=2.0)
+    parser.add_argument("--command-manifest", help="Write a redacted dry-run command manifest for live acceptance")
+    parser.add_argument("--command-manifest-redaction", help="Write the command manifest redaction sidecar")
+    parser.add_argument(
+        "--command-manifest-only",
+        action="store_true",
+        help="Generate the command manifest and skip live acceptance execution",
+    )
     args = parser.parse_args(argv)
     if args.github_release and not args.repo:
         parser.error("--repo is required with --github-release unless GITHUB_REPOSITORY is set")
@@ -3144,6 +3590,11 @@ def main(argv: list[str] | None = None) -> int:
                 live_kb_name=args.live_kb_name,
                 live_parse_timeout=args.live_parse_timeout,
                 live_poll_interval=args.live_poll_interval,
+                command_manifest=Path(args.command_manifest).resolve() if args.command_manifest else None,
+                command_manifest_redaction=Path(args.command_manifest_redaction).resolve()
+                if args.command_manifest_redaction
+                else None,
+                command_manifest_only=args.command_manifest_only,
             )
             payload["artifacts_retained"] = True
         else:
@@ -3159,6 +3610,11 @@ def main(argv: list[str] | None = None) -> int:
                     live_kb_name=args.live_kb_name,
                     live_parse_timeout=args.live_parse_timeout,
                     live_poll_interval=args.live_poll_interval,
+                    command_manifest=Path(args.command_manifest).resolve() if args.command_manifest else None,
+                    command_manifest_redaction=Path(args.command_manifest_redaction).resolve()
+                    if args.command_manifest_redaction
+                    else None,
+                    command_manifest_only=args.command_manifest_only,
                 )
                 payload["artifacts_retained"] = False
 

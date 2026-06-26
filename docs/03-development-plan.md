@@ -1056,29 +1056,44 @@ Tasks:
 - [ ] Detect accidental naming drift from old or experimental product names.
 - [ ] Validate compatibility references for deprecated aliases and schema names.
 - [x] Add fixture coverage for intentional drift, broken links, duplicate shared docs, and private references.
+- [x] Add a private `ragflow-skills-maintainer` Codex skill outside the public release tree to preserve development workflow, validation-chain, task-selection, and release-governance guidance.
 
 Exit criteria:
 
 - A release candidate can prove the three public skills are structurally aligned.
 - Suite review runs offline and never scans private old skill folders by default.
 - Drift findings are actionable and do not require loading large project docs into `SKILL.md`.
+- Maintainer-only workflow guidance stays outside public release artifacts.
 
 ## Phase 33: Contract, Packaging, And Compatibility Gates
 
 Goal: make release readiness cover installed artifacts, handoff contracts, command manifests,
 schema identity, and rename compatibility.
 
+Implementation order:
+
+1. Start with an offline contract fixture gate from release/dist skill scripts: create a
+   neutral plain handoff and rich handoff with `ragflow-doc-to-md`, then prove
+   `ragflow-kb-build --dry-run` accepts both. This should emit a small
+   `ragflow_contract_fixture_gate_v1` report and must not require RAGFlow credentials.
+2. Add explicit installed-archive smoke after the contract gate is stable, so each exported
+   tarball is checked independently from source-tree smoke.
+3. Add command-manifest dry-run and redaction gates after the archive smoke path exists.
+   Command manifests should describe live mutations before any live acceptance run executes.
+4. Add schema identity, compatibility facade, rename policy, and naming-drift gates as
+   static release checks once the contract and archive gates define the release surface.
+
 Tasks:
 
-- [ ] Add a contract fixture gate from `ragflow-doc-to-md` rich/plain handoff into `ragflow-kb-build --dry-run`.
-- [ ] Add installed archive smoke for every exported skill tarball, separate from source-tree smoke.
-- [ ] Add command-manifest dry-run support for live acceptance flows.
-- [ ] Include local configuration checks, redacted command arrays, expected artifacts, mutation labels, and cleanup notes in command manifests.
-- [ ] Add schema identity checks for `doc_manifest`, `kb_manifest`, quality, benchmark, query, trace, diagnostic, and route reports.
+- [x] Add a contract fixture gate from `ragflow-doc-to-md` rich/plain handoff into `ragflow-kb-build --dry-run`.
+- [x] Add installed archive smoke for every exported skill tarball, separate from source-tree smoke.
+- [x] Add command-manifest dry-run support for live acceptance flows.
+- [x] Include local configuration checks, redacted command arrays, expected artifacts, mutation labels, and cleanup notes in command manifests.
+- [x] Add schema identity checks for `doc_manifest`, `kb_manifest`, quality, benchmark, query, trace, diagnostic, and route reports.
 - [ ] Add compatibility facade checks for deprecated command aliases or schema names when aliases exist.
 - [ ] Add explicit rename policy documentation for CLI aliases, schema migration, docs updates, downstream gates, release notes, and rollback plan.
 - [ ] Add release hygiene checks for accidental public rename drift.
-- [ ] Add acceptance fixtures proving the command manifest does not leak secrets or private paths.
+- [x] Add acceptance fixtures proving the command manifest does not leak secrets or private paths.
 - [ ] Add forward-test prompt templates for Hermes/OpenClaw to validate installed artifacts from release archives.
 
 Exit criteria:
