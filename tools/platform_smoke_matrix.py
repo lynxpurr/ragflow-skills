@@ -737,6 +737,13 @@ if agentic_trace.get("llm_calls") != 0:
     raise SystemExit(29)
 if agentic_trace.get("cost_trace", {{}}).get("estimated_total_usd") != 0.0:
     raise SystemExit(30)
+host_contract = agentic_retrieval_payload.get("host_synthesis_contract", {{}})
+if host_contract.get("schema") != "ragflow_host_synthesis_contract_v1":
+    raise SystemExit(31)
+if host_contract.get("citation_policy", {{}}).get("compatible_with") != "audit-citations":
+    raise SystemExit(32)
+if not host_contract.get("citation_policy", {{}}).get("valid_citation_ids"):
+    raise SystemExit(33)
 (artifacts_dir / "query_agentic_retrieval.json").write_text(
     json.dumps(agentic_retrieval_payload, ensure_ascii=False, indent=2) + "\\n",
     encoding="utf-8",

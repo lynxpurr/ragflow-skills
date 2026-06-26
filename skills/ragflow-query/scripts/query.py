@@ -44,6 +44,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     build_agentic_plan,
     build_centroid_index,
     build_centroid_plan,
+    build_host_synthesis_contract,
     build_query_rewrite_plan,
     classify_query_intent,
     build_query_session_inspection,
@@ -323,6 +324,7 @@ def _ask(args: argparse.Namespace) -> int:
     rewrite_plan = None
     agentic_plan = None
     agentic_trace = None
+    host_synthesis_contract = None
     retrieval_payloads: list[dict[str, Any]] = []
     agentic_active = mode == "agentic" and args.host_assisted
     rewrite_active = bool(args.multi_query or args.rewrite != "none") and not agentic_active
@@ -429,6 +431,11 @@ def _ask(args: argparse.Namespace) -> int:
             started_at=started_at,
             finished_at=finished_at,
         )
+        host_synthesis_contract = build_host_synthesis_contract(
+            agentic_plan,
+            evidence,
+            retrieval_status=status_report,
+        )
     trace_warnings = [str(item) for item in agentic_plan.get("warnings", [])] if agentic_plan else []
     if not chunks:
         trace_warnings.append("retrieval returned zero chunks")
@@ -458,6 +465,8 @@ def _ask(args: argparse.Namespace) -> int:
         trace["agentic_plan"] = agentic_plan
     if agentic_trace:
         trace["agentic_trace"] = agentic_trace
+    if host_synthesis_contract:
+        trace["host_synthesis_contract"] = host_synthesis_contract
     if fusion_report:
         trace["fusion"] = fusion_report
     _write_json(args.trace_json, trace)
@@ -485,6 +494,7 @@ def _ask(args: argparse.Namespace) -> int:
             **({"rewrite_plan": rewrite_plan} if rewrite_active and rewrite_plan else {}),
             **({"agentic_plan": agentic_plan} if agentic_plan else {}),
             **({"agentic_trace": agentic_trace} if agentic_trace else {}),
+            **({"host_synthesis_contract": host_synthesis_contract} if host_synthesis_contract else {}),
             "evidence_count": len(evidence),
             **({"fusion_report": fusion_report} if fusion_report else {}),
             **({"route": route_payload} if route_payload else {}),
@@ -505,6 +515,8 @@ def _ask(args: argparse.Namespace) -> int:
         payload["agentic_plan"] = agentic_plan
     if agentic_trace:
         payload["agentic_trace"] = agentic_trace
+    if host_synthesis_contract:
+        payload["host_synthesis_contract"] = host_synthesis_contract
     if fusion_report:
         payload["fusion"] = fusion_report
     if args.include_trace:

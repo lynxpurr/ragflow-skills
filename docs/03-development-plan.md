@@ -978,7 +978,7 @@ Tasks:
 - [x] Implement bounded query decomposition and sub-query retrieval.
 - [ ] Implement optional reflection with a strict iteration budget.
 - [ ] Synthesize answers only from retrieved evidence.
-- [ ] Emit citations compatible with `audit-citations`.
+- [x] Emit citations compatible with `audit-citations`.
 - [x] Emit latency, token, model, and estimated cost traces.
 - [x] Add `ragflow-query evaluate-answer`.
 - [x] Add deterministic answer checks for citation presence, citation reachability, unsupported-claim warnings, and abstention behavior.

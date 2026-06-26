@@ -648,6 +648,23 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(payload["agentic_trace"]["cost_trace"]["estimated_total_usd"], 0.0)
         self.assertEqual(payload["metadata"]["agentic_trace"]["schema"], "ragflow_agentic_trace_v1")
         self.assertEqual(payload["trace"]["agentic_trace"]["cost_trace"]["estimated_total_usd"], 0.0)
+        self.assertEqual(payload["host_synthesis_contract"]["schema"], "ragflow_host_synthesis_contract_v1")
+        self.assertEqual(payload["host_synthesis_contract"]["status"], "ready")
+        self.assertEqual(payload["host_synthesis_contract"]["retrieval_status"], "success")
+        self.assertEqual(
+            payload["host_synthesis_contract"]["citation_policy"]["compatible_with"],
+            "audit-citations",
+        )
+        self.assertEqual(
+            payload["host_synthesis_contract"]["citation_policy"]["valid_citation_ids"],
+            ["[1]", "[2]", "[3]"],
+        )
+        self.assertTrue(payload["host_synthesis_contract"]["citation_policy"]["required"])
+        self.assertFalse(payload["host_synthesis_contract"]["evidence_policy"]["allow_external_facts"])
+        self.assertEqual(
+            payload["trace"]["host_synthesis_contract"]["citation_policy"]["format"],
+            "numeric_bracket",
+        )
         self.assertEqual(payload["retrieval_status"], "success")
 
     def test_ask_can_write_trace_and_audit_citations(self) -> None:

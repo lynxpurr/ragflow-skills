@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from .query_intent import (
     QueryIntentError,
@@ -15,6 +15,7 @@ from .query_intent import (
 
 AGENTIC_PLAN_SCHEMA = "ragflow_agentic_plan_v1"
 AGENTIC_TRACE_SCHEMA = "ragflow_agentic_trace_v1"
+HOST_SYNTHESIS_CONTRACT_SCHEMA = "ragflow_host_synthesis_contract_v1"
 
 
 class AgenticPlanError(ValueError):
@@ -105,6 +106,33 @@ def _retrieval_query_token_count(retrieval_queries: Any) -> int:
         if isinstance(item, Mapping):
             total += len(tokenize_query_text(str(item.get("query") or "")))
     return total
+
+
+def _evidence_citation_ids(evidence: Sequence[Mapping[str, Any]]) -> list[str]:
+    citation_ids: list[str] = []
+    seen: set[str] = set()
+    for item in evidence:
+        citation_id = str(item.get("citation_id") or "").strip()
+        if not re.fullmatch(r"\[\d+\]", citation_id) or citation_id in seen:
+            continue
+        seen.add(citation_id)
+        citation_ids.append(citation_id)
+    return citation_ids
+
+
+def _evidence_ranks(evidence: Sequence[Mapping[str, Any]]) -> list[int]:
+    ranks: list[int] = []
+    seen: set[int] = set()
+    for item in evidence:
+        try:
+            rank = int(item.get("rank"))
+        except (TypeError, ValueError):
+            continue
+        if rank <= 0 or rank in seen:
+            continue
+        seen.add(rank)
+        ranks.append(rank)
+    return ranks
 
 
 def _subqueries(question: str, *, intent: str, complexity: str, max_subqueries: int) -> list[dict[str, Any]]:
@@ -409,6 +437,64 @@ def build_agentic_execution_trace(
         "started_at": started_at,
         "finished_at": finished_at,
         "script_owned_synthesis": False,
+    }
+
+
+def build_host_synthesis_contract(
+    plan: Mapping[str, Any],
+    evidence: Sequence[Mapping[str, Any]],
+    *,
+    retrieval_status: Mapping[str, Any] | None = None,
+    require_citations: bool | None = None,
+) -> dict[str, Any]:
+    """Build a host-owned answer synthesis contract from retrieved evidence."""
+
+    if not isinstance(plan, Mapping) or plan.get("schema") != AGENTIC_PLAN_SCHEMA:
+        raise AgenticPlanError("agentic plan must be a ragflow_agentic_plan_v1 object")
+    evidence_items = [dict(item) for item in evidence if isinstance(item, Mapping)]
+    citation_ids = _evidence_citation_ids(evidence_items)
+    ranks = _evidence_ranks(evidence_items)
+    parameters = plan.get("parameters", {}) if isinstance(plan.get("parameters"), Mapping) else {}
+    citations_required = bool(parameters.get("require_citations", True)) if require_citations is None else bool(require_citations)
+    status_name = str(retrieval_status.get("status")) if isinstance(retrieval_status, Mapping) else ""
+    blocked_statuses = {"clarification", "rejected", "error", "timeout"}
+    ready = bool(evidence_items) and status_name not in blocked_statuses
+    contract_status = status_name if status_name in blocked_statuses else ("ready" if ready else "no_evidence")
+    return {
+        "ok": True,
+        "schema": HOST_SYNTHESIS_CONTRACT_SCHEMA,
+        "status": contract_status,
+        "plan_schema": plan.get("schema"),
+        "plan_status": plan.get("status"),
+        "retrieval_status": status_name or None,
+        "answer_generation": "host_owned",
+        "script_owned_synthesis": False,
+        "citation_policy": {
+            "compatible_with": "audit-citations",
+            "format": "numeric_bracket",
+            "pattern": r"\[\d+\]",
+            "required": citations_required and bool(evidence_items),
+            "valid_citation_ids": citation_ids,
+            "valid_ranks": ranks,
+            "evidence_count": len(evidence_items),
+            "no_evidence_behavior": "abstain_or_ask_clarification",
+        },
+        "evidence_policy": {
+            "source": "retrieved_evidence_only",
+            "allow_external_facts": False,
+            "allow_uncited_claims": False,
+            "minimum_supported_answer_citations": 1 if citations_required and evidence_items else 0,
+        },
+        "audit": {
+            "command": "ragflow-query audit-citations",
+            "query_output_field": "evidence",
+            "answer_citation_format": "[n]",
+        },
+        "guards": {
+            "llm_generation": "host_owned",
+            "script_llm_calls": 0,
+            "ragflow_mutation": "disabled",
+        },
     }
 
 

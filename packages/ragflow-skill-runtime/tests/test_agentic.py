@@ -6,8 +6,10 @@ from ragflow_skill_runtime.agentic import (
     AGENTIC_PLAN_SCHEMA,
     AGENTIC_TRACE_SCHEMA,
     AgenticPlanError,
+    HOST_SYNTHESIS_CONTRACT_SCHEMA,
     build_agentic_execution_trace,
     build_agentic_plan,
+    build_host_synthesis_contract,
     render_agentic_plan_markdown,
 )
 
@@ -63,6 +65,33 @@ class AgenticPlanTests(unittest.TestCase):
         self.assertEqual(trace["estimated_cost_usd"], 0.0)
         self.assertEqual(trace["cost_trace"]["estimated_total_usd"], 0.0)
         self.assertFalse(trace["script_owned_synthesis"])
+
+    def test_host_synthesis_contract_exposes_audit_compatible_citations(self) -> None:
+        plan = build_agentic_plan(
+            "Compare runtime configuration and metadata routing tradeoffs",
+            max_subqueries=2,
+        )
+        evidence = [
+            {"rank": 1, "citation_id": "[1]", "content_preview": "runtime config evidence"},
+            {"rank": 2, "citation_id": "[2]", "content_preview": "metadata routing evidence"},
+        ]
+        contract = build_host_synthesis_contract(
+            plan,
+            evidence,
+            retrieval_status={"status": "success"},
+        )
+
+        self.assertEqual(contract["schema"], HOST_SYNTHESIS_CONTRACT_SCHEMA)
+        self.assertEqual(contract["status"], "ready")
+        self.assertEqual(contract["retrieval_status"], "success")
+        self.assertEqual(contract["answer_generation"], "host_owned")
+        self.assertFalse(contract["script_owned_synthesis"])
+        self.assertEqual(contract["citation_policy"]["compatible_with"], "audit-citations")
+        self.assertEqual(contract["citation_policy"]["format"], "numeric_bracket")
+        self.assertTrue(contract["citation_policy"]["required"])
+        self.assertEqual(contract["citation_policy"]["valid_citation_ids"], ["[1]", "[2]"])
+        self.assertEqual(contract["citation_policy"]["valid_ranks"], [1, 2])
+        self.assertFalse(contract["evidence_policy"]["allow_external_facts"])
 
     def test_agentic_plan_stops_for_clarification(self) -> None:
         plan = build_agentic_plan("What about it?")
