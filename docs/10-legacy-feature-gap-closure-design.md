@@ -1027,6 +1027,8 @@ Extend release tooling with:
 - naming drift checks for accidental old/new product names;
 - explicit rename policy requiring CLI aliases, schema migration, docs, downstream gates,
   release notes, and rollback plan before any public rename.
+- host-agent forward-test prompt templates for validating installed release archives from
+  Hermes and OpenClaw.
 
 Acceptance dry-run manifests should include:
 
@@ -1052,6 +1054,9 @@ Recommended implementation sequence:
 4. Add schema identity, compatibility facade, rename policy, and naming-drift checks after
    the contract and archive surfaces are explicit. These are static release gates and should
    not depend on live services.
+5. Add host-agent forward-test prompt templates after archive smoke exists. These templates
+   should ask Hermes/OpenClaw-style agents to validate installed artifacts from
+   `release-artifacts/`, not the source tree, and should remain no-network/no-mutation.
 
 Implementation status: the offline contract fixture gate is implemented in
 `tools/contract_fixture_gate.py`. It rebuilds or reuses release/dist skill scripts, creates
@@ -1073,7 +1078,19 @@ implemented in `tools/schema_identity_check.py` and run by default from
 `tools/release_hygiene_check.py`. The gate emits `ragflow_schema_identity_check_v1` and
 requires source plus test/smoke evidence for versioned `doc_manifest`/`kb_manifest`
 identity and quality, benchmark, query, trace, diagnostic, and route report schemas.
-Compatibility facade, rename policy, and naming-drift gates remain open.
+Rename governance is implemented in `tools/rename_governance_check.py` and also runs by
+default from `tools/release_hygiene_check.py`. It emits
+`ragflow_rename_governance_check_v1`, validates the explicit public rename policy in
+`docs/11-public-rename-policy.md`, checks declared compatibility aliases, and scans the
+public release surface for accidental legacy naming drift. CLI and schema aliases are
+currently not declared, so command/schema compatibility checks report `not_applicable`;
+existing platform-profile aliases are covered by source, docs, and tests. Host-agent
+forward-test prompt governance is implemented in `tools/forward_test_prompt_check.py` and
+runs by default from `tools/release_hygiene_check.py`. It emits
+`ragflow_forward_test_prompt_check_v1`, validates
+`docs/12-release-archive-forward-test-prompts.md`, and checks that Hermes/OpenClaw
+templates validate installed release archives without repository edits, network calls,
+real credentials, or live mutation.
 
 These gates should complement, not replace, unit tests and platform smoke tests.
 

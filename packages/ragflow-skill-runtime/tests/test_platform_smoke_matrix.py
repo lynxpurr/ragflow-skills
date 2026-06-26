@@ -130,6 +130,11 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
 
         self.assertEqual([profile.id for profile in profiles], ["strict-vendor-env"])
 
+    def test_legacy_manus_profile_aliases_to_artifact_runner(self) -> None:
+        profiles = selected_profiles(["manus-artifact-cli"])
+
+        self.assertEqual([profile.id for profile in profiles], ["artifact-runner-cli"])
+
 
 if __name__ == "__main__":
     unittest.main()

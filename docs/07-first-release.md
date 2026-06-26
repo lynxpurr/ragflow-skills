@@ -35,6 +35,10 @@ python3 tools/live_integration_check.py
 
 ## Fresh-Agent Dry Run
 
+Hermes/OpenClaw-specific copy-paste prompts live in
+`docs/12-release-archive-forward-test-prompts.md` and are checked by
+`tools/forward_test_prompt_check.py`.
+
 Give an agent only the artifact directory and this task:
 
 ```text

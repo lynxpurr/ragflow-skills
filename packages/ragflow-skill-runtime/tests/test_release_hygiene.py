@@ -59,6 +59,10 @@ class ReleaseHygieneTests(unittest.TestCase):
         self.assertEqual(payload["findings"], [])
         self.assertTrue(payload["schema_identity"]["ok"])
         self.assertEqual(payload["schema_identity"]["schema"], "ragflow_schema_identity_check_v1")
+        self.assertTrue(payload["rename_governance"]["ok"])
+        self.assertEqual(payload["rename_governance"]["schema"], "ragflow_rename_governance_check_v1")
+        self.assertTrue(payload["forward_test_prompts"]["ok"])
+        self.assertEqual(payload["forward_test_prompts"]["schema"], "ragflow_forward_test_prompt_check_v1")
 
     def test_forbidden_private_path_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

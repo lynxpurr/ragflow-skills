@@ -1090,11 +1090,11 @@ Tasks:
 - [x] Add command-manifest dry-run support for live acceptance flows.
 - [x] Include local configuration checks, redacted command arrays, expected artifacts, mutation labels, and cleanup notes in command manifests.
 - [x] Add schema identity checks for `doc_manifest`, `kb_manifest`, quality, benchmark, query, trace, diagnostic, and route reports.
-- [ ] Add compatibility facade checks for deprecated command aliases or schema names when aliases exist.
-- [ ] Add explicit rename policy documentation for CLI aliases, schema migration, docs updates, downstream gates, release notes, and rollback plan.
-- [ ] Add release hygiene checks for accidental public rename drift.
+- [x] Add compatibility facade checks for deprecated command aliases or schema names when aliases exist.
+- [x] Add explicit rename policy documentation for CLI aliases, schema migration, docs updates, downstream gates, release notes, and rollback plan.
+- [x] Add release hygiene checks for accidental public rename drift.
 - [x] Add acceptance fixtures proving the command manifest does not leak secrets or private paths.
-- [ ] Add forward-test prompt templates for Hermes/OpenClaw to validate installed artifacts from release archives.
+- [x] Add forward-test prompt templates for Hermes/OpenClaw to validate installed artifacts from release archives.
 
 Exit criteria:
 

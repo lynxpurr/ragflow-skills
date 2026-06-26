@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from build_release import DIST_DIR, PUBLIC_SKILLS, ROOT, build_release
+from forward_test_prompt_check import run_forward_test_prompt_check
+from rename_governance_check import run_rename_governance_check
 from schema_identity_check import run_schema_identity_check
 
 
@@ -589,6 +591,8 @@ def run_hygiene_check(
     scan_source: bool = True,
     suite_review: bool = False,
     schema_identity: bool = True,
+    rename_governance: bool = True,
+    forward_test_prompts: bool = True,
 ) -> dict[str, Any]:
     if rebuild:
         build_release(dist_dir)
@@ -628,6 +632,14 @@ def run_hygiene_check(
         schema_identity_payload = run_schema_identity_check(root=ROOT)
         payload["schema_identity"] = schema_identity_payload
         payload["ok"] = bool(payload["ok"] and schema_identity_payload["ok"])
+    if rename_governance:
+        rename_governance_payload = run_rename_governance_check(root=ROOT)
+        payload["rename_governance"] = rename_governance_payload
+        payload["ok"] = bool(payload["ok"] and rename_governance_payload["ok"])
+    if forward_test_prompts:
+        forward_test_prompt_payload = run_forward_test_prompt_check(root=ROOT)
+        payload["forward_test_prompts"] = forward_test_prompt_payload
+        payload["ok"] = bool(payload["ok"] and forward_test_prompt_payload["ok"])
     return payload
 
 
@@ -638,6 +650,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dist-only", action="store_true", help="Skip public source checks")
     parser.add_argument("--suite-review", action="store_true", help="Run static public skill suite drift checks")
     parser.add_argument("--skip-schema-identity", action="store_true", help="Skip static schema identity checks")
+    parser.add_argument("--skip-rename-governance", action="store_true", help="Skip static rename governance checks")
+    parser.add_argument("--skip-forward-test-prompts", action="store_true", help="Skip host-agent forward-test prompt checks")
     args = parser.parse_args(argv)
 
     payload = run_hygiene_check(
@@ -646,6 +660,8 @@ def main(argv: list[str] | None = None) -> int:
         scan_source=not args.dist_only,
         suite_review=args.suite_review,
         schema_identity=not args.skip_schema_identity,
+        rename_governance=not args.skip_rename_governance,
+        forward_test_prompts=not args.skip_forward_test_prompts,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if payload["ok"] else 1
