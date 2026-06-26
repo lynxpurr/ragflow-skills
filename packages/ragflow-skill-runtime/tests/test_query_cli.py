@@ -242,6 +242,42 @@ class QueryCliTests(unittest.TestCase):
         self.assertIn("RAGFlow Query Rewrite Plan", markdown)
         self.assertIn("how to configure runtime", markdown)
 
+    def test_agentic_plan_command_writes_plan_outputs(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_json = root / "agentic_plan.json"
+            report_md = root / "agentic_plan.md"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "agentic-plan",
+                        "Compare runtime configuration and metadata routing tradeoffs",
+                        "--max-subqueries",
+                        "2",
+                        "--reflection-budget",
+                        "1",
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            report_json_exists = report_json.exists()
+            report_md_exists = report_md.exists()
+            markdown = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(payload["schema"], "ragflow_agentic_plan_v1")
+        self.assertEqual(payload["trace_template"]["schema"], "ragflow_agentic_trace_v1")
+        self.assertEqual(payload["summary"]["llm_calls"], 0)
+        self.assertTrue(report_json_exists)
+        self.assertTrue(report_md_exists)
+        self.assertIn("RAGFlow Agentic Plan", markdown)
+
     def test_ask_rewrite_and_multi_query_record_trace_and_retrievals(self) -> None:
         class RewriteClient(FakeQueryClient):
             def retrieve(self, *, question, dataset_ids, top_k=5, similarity_threshold=None):

@@ -1561,6 +1561,17 @@ raise SystemExit(code)
         rewrite_help,
         required_output="Plan deterministic query rewrite variants",
     )
+    agentic_plan_help = _run_command(
+        [python_executable, str(query_script), "agentic-plan", "--help"],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query agentic-plan help",
+        agentic_plan_help,
+        required_output="Plan deterministic agentic query orchestration",
+    )
 
     routing_config = work_root / "routing_config.json"
     route_queries = work_root / "route_queries.json"
@@ -1914,6 +1925,8 @@ raise SystemExit(code)
     query_fusion_test_md = work_root / "query_fusion_test.md"
     query_rewrite_json = work_root / "query_rewrite.json"
     query_rewrite_md = work_root / "query_rewrite.md"
+    query_agentic_plan_json = work_root / "query_agentic_plan.json"
+    query_agentic_plan_md = work_root / "query_agentic_plan.md"
     query_output.write_text(
         json.dumps(
             {
@@ -2272,6 +2285,36 @@ raise SystemExit(code)
         produced.append(query_rewrite_json)
     if query_rewrite_md.exists():
         produced.append(query_rewrite_md)
+
+    query_agentic_plan = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "agentic-plan",
+            "Compare release artifact portability and repository source context tradeoffs",
+            "--max-subqueries",
+            "3",
+            "--reflection-budget",
+            "1",
+            "--report-json",
+            str(query_agentic_plan_json),
+            "--report-md",
+            str(query_agentic_plan_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query agentic plan",
+        query_agentic_plan,
+        required_output='"schema": "ragflow_agentic_plan_v1"',
+    )
+    if query_agentic_plan_json.exists():
+        produced.append(query_agentic_plan_json)
+    if query_agentic_plan_md.exists():
+        produced.append(query_agentic_plan_md)
 
     missing_config = _run_command(
         [

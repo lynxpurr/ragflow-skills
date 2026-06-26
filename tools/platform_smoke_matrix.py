@@ -715,6 +715,27 @@ rewrite_payload = json.loads(stdout.getvalue())
 if rewrite_payload.get("schema") != "ragflow_query_rewrite_plan_v1":
     raise SystemExit(14)
 
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    agentic_plan_code = module.main([
+        "agentic-plan",
+        "Compare runtime configuration and metadata routing tradeoffs",
+        "--max-subqueries",
+        "3",
+        "--reflection-budget",
+        "1",
+        "--report-json",
+        str(artifacts_dir / "query_agentic_plan.json"),
+        "--report-md",
+        str(artifacts_dir / "query_agentic_plan.md"),
+        "--json",
+    ])
+if agentic_plan_code != 0:
+    raise SystemExit(agentic_plan_code)
+agentic_plan_payload = json.loads(stdout.getvalue())
+if agentic_plan_payload.get("schema") != "ragflow_agentic_plan_v1":
+    raise SystemExit(17)
+
 multi_query_path = artifacts_dir / "query_multi_input.json"
 multi_query_path.write_text(
     json.dumps({{"queries": [{{"id": "rewrite-cn", "query": "运行时 配置"}}]}}, ensure_ascii=False, indent=2)
@@ -2165,6 +2186,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_trace.md",
         artifacts_dir / "query_rewrite.json",
         artifacts_dir / "query_rewrite.md",
+        artifacts_dir / "query_agentic_plan.json",
+        artifacts_dir / "query_agentic_plan.md",
         artifacts_dir / "query_multi.json",
         artifacts_dir / "query_multi_trace.json",
         artifacts_dir / "citation_audit.json",

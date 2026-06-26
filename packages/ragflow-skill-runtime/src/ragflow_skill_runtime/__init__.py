@@ -1,6 +1,13 @@
 """Portable runtime primitives for public RAGFlow skills."""
 
 from .auth import AuthError, load_api_key
+from .agentic import (
+    AGENTIC_PLAN_SCHEMA,
+    AGENTIC_TRACE_SCHEMA,
+    AgenticPlanError,
+    build_agentic_plan,
+    render_agentic_plan_markdown,
+)
 from .config import (
     ConfigError,
     DocToMdConfig,

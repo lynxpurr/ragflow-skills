@@ -971,10 +971,10 @@ Tasks:
 - [ ] Add `ragflow-query session inspect`.
 - [ ] Implement deterministic pronoun/follow-up detection for recent session context.
 - [ ] Enforce session turn count and token budget limits.
-- [ ] Add `ragflow_agentic_plan_v1` and `ragflow_agentic_trace_v1`.
-- [ ] Add `ragflow-query agentic-plan`.
+- [x] Add `ragflow_agentic_plan_v1` and `ragflow_agentic_trace_v1`.
+- [x] Add `ragflow-query agentic-plan`.
 - [ ] Add `ragflow-query agentic-answer` behind explicit LLM config.
-- [ ] Implement query complexity classification with deterministic fallback.
+- [x] Implement query complexity classification with deterministic fallback.
 - [ ] Implement bounded query decomposition and sub-query retrieval.
 - [ ] Implement optional reflection with a strict iteration budget.
 - [ ] Synthesize answers only from retrieved evidence.

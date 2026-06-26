@@ -596,6 +596,13 @@ Capabilities:
 The existing `ask --mode agentic --host-assisted` remains the recommended default for
 agents that can synthesize answers themselves.
 
+Current public implementation adds `ragflow-query agentic-plan` as a deterministic
+non-executing planner. It emits `ragflow_agentic_plan_v1` with a
+`ragflow_agentic_trace_v1` template, classifies intent and complexity, plans bounded
+sub-queries, records a reflection budget, and leaves retrieval, reflection, and synthesis
+to later explicit execution paths. The planner does not call an LLM, retrieve from
+RAGFlow, or mutate RAGFlow.
+
 ## Feature Design 10: Generation Evaluation
 
 ### Problem

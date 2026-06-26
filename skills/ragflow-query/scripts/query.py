@@ -28,6 +28,7 @@ def bootstrap_core() -> None:
 bootstrap_core()
 
 from ragflow_skill_runtime import (  # noqa: E402
+    AgenticPlanError,
     ConfigError,
     CentroidRoutingError,
     NormalizedChunk,
@@ -37,6 +38,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     RetrievalError,
     RoutingError,
     audit_citations,
+    build_agentic_plan,
     build_centroid_index,
     build_centroid_plan,
     build_query_rewrite_plan,
@@ -59,6 +61,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     query_rerank_ab_report,
     render_citation_audit_markdown,
     render_answer_evaluation_markdown,
+    render_agentic_plan_markdown,
     render_centroid_build_markdown,
     render_centroid_plan_markdown,
     render_query_cross_language_ab_markdown,
@@ -573,6 +576,25 @@ def _rewrite(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _agentic_plan(args: argparse.Namespace) -> int:
+    try:
+        report = build_agentic_plan(
+            args.question,
+            retrieval_mode=args.retrieval_mode,
+            rewrite_mode=args.rewrite,
+            max_subqueries=args.max_subqueries,
+            reflection_budget=args.reflection_budget,
+            require_citations=args.require_citations,
+        )
+    except AgenticPlanError as exc:
+        return _error(str(exc), json_output=args.json)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_agentic_plan_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _audit_citations(args: argparse.Namespace) -> int:
     try:
         query_payload = _read_json(args.query_output)
@@ -838,6 +860,22 @@ def build_parser() -> argparse.ArgumentParser:
     rewrite.add_argument("--report-md", help="Optional Markdown report output path")
     rewrite.add_argument("--json", action="store_true", help="Emit JSON report")
     rewrite.set_defaults(func=_rewrite)
+
+    agentic_plan = sub.add_parser(
+        "agentic-plan",
+        help="Plan deterministic agentic query orchestration",
+        description="Plan deterministic agentic query orchestration",
+    )
+    agentic_plan.add_argument("question", help="Question to plan")
+    agentic_plan.add_argument("--retrieval-mode", choices=["auto", "direct"], default="auto")
+    agentic_plan.add_argument("--rewrite", choices=["none", "simple", "translate"], default="simple")
+    agentic_plan.add_argument("--max-subqueries", type=int, default=4)
+    agentic_plan.add_argument("--reflection-budget", type=int, default=0)
+    agentic_plan.add_argument("--no-require-citations", dest="require_citations", action="store_false")
+    agentic_plan.add_argument("--report-json", help="Optional JSON report output path")
+    agentic_plan.add_argument("--report-md", help="Optional Markdown report output path")
+    agentic_plan.add_argument("--json", action="store_true", help="Emit JSON report")
+    agentic_plan.set_defaults(func=_agentic_plan, require_citations=True)
 
     audit = sub.add_parser("audit-citations", help="Audit host-generated answer citations")
     audit.add_argument("--query-output", required=True, help="JSON output from query.py ask")
