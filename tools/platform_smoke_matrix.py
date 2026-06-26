@@ -913,6 +913,59 @@ rerank_payload = json.loads(stdout.getvalue())
 if rerank_payload.get("schema") != "ragflow_query_rerank_ab_report_v1":
     raise SystemExit(9)
 
+cross_language_candidate = artifacts_dir / "query_cross_language_candidate.json"
+cross_language_candidate.write_text(
+    json.dumps(
+        {{
+            "ok": True,
+            "question": "Where is the translated bridge term?",
+            "dataset_ids": ["ds-platform-smoke"],
+            "chunks": [
+                {{
+                    "chunk_id": "platform-translated",
+                    "content": "translated bridge term only match",
+                    "document_name": "translated.md",
+                    "similarity": 0.7,
+                }},
+                {{
+                    "chunk_id": "platform-known",
+                    "content": "portable validation chunk with known term",
+                    "document_name": "platform-smoke.md",
+                    "similarity": 0.62,
+                }},
+            ],
+            "metadata": {{"retrieval_ms": 12.0}},
+        }},
+        ensure_ascii=False,
+        indent=2,
+    )
+    + "\\n",
+    encoding="utf-8",
+)
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    cross_language_code = module.main([
+        "cross-language-ab",
+        "--baseline-output",
+        str(rerank_query_input),
+        "--candidate-output",
+        str(cross_language_candidate),
+        "--baseline-label",
+        "original",
+        "--candidate-label",
+        "translated",
+        "--report-json",
+        str(artifacts_dir / "query_cross_language_ab.json"),
+        "--report-md",
+        str(artifacts_dir / "query_cross_language_ab.md"),
+        "--json",
+    ])
+if cross_language_code != 0:
+    raise SystemExit(cross_language_code)
+cross_language_payload = json.loads(stdout.getvalue())
+if cross_language_payload.get("schema") != "ragflow_cross_language_ab_report_v1":
+    raise SystemExit(12)
+
 fusion_source = artifacts_dir / "query_fusion_source.json"
 fusion_source.write_text(
     json.dumps(
@@ -1003,7 +1056,7 @@ fusion_test_payload = json.loads(stdout.getvalue())
 if fusion_test_payload.get("schema") != "ragflow_fusion_test_report_v1":
     raise SystemExit(11)
 
-print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload, "pollution": pollution_payload, "rerank": rerank_payload, "fusion": fusion_payload, "fusion_test": fusion_test_payload}}, ensure_ascii=False))
+print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload, "pollution": pollution_payload, "rerank": rerank_payload, "cross_language": cross_language_payload, "fusion": fusion_payload, "fusion_test": fusion_test_payload}}, ensure_ascii=False))
 """,
         encoding="utf-8",
     )
@@ -1956,6 +2009,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_pollution.md",
         artifacts_dir / "query_rerank_ab.json",
         artifacts_dir / "query_rerank_ab.md",
+        artifacts_dir / "query_cross_language_ab.json",
+        artifacts_dir / "query_cross_language_ab.md",
         artifacts_dir / "query_fusion.json",
         artifacts_dir / "query_fusion.md",
         artifacts_dir / "query_fusion_test.json",

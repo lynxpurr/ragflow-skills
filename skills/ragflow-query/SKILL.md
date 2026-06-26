@@ -29,6 +29,7 @@ python scripts/query.py audit-citations --query-output ./run/query.json --answer
 python scripts/query.py diagnose-result --query-output ./run/query.json --trace-json ./run/query_trace.json --citation-audit ./run/citation_audit.json --report-json ./run/query_diagnostic.json --report-md ./run/query_diagnostic.md
 python scripts/query.py pollution-report --query-output ./run/query.json --expanded-term translated-term --report-json ./run/query_pollution.json --report-md ./run/query_pollution.md
 python scripts/query.py rerank-ab --query-output ./run/query.json --rerank-json ./run/external_rerank.json --expected-term "known term" --report-json ./run/query_rerank_ab.json --report-md ./run/query_rerank_ab.md
+python scripts/query.py cross-language-ab --baseline-output ./run/query_original.json --candidate-output ./run/query_translated.json --baseline-label original --candidate-label translated --report-json ./run/query_cross_language_ab.json --report-md ./run/query_cross_language_ab.md --json
 python scripts/query.py fusion --query-output ./run/kb_a_query.json --query-output ./run/kb_b_query.json --report-json ./run/fusion.json --report-md ./run/fusion.md
 ```
 
@@ -53,6 +54,7 @@ Notes:
 - Use `diagnose-result` to review weak retrieval, default routing, missing expected terms, and citation-audit findings from saved artifacts.
 - Use `pollution-report` on saved `ask --json` outputs to review likely expansion/BM25 bridge-term pollution. It is offline and advisory; pass `--expanded-term` or `--expanded-terms-json` when translated or rewritten terms are available.
 - Use `rerank-ab` on saved `ask --json` outputs and optional host-owned rerank JSON to compare RAGFlow order with a candidate ordering. It is offline; without `--rerank-json`, it uses deterministic evidence scores as the candidate order.
+- Use `cross-language-ab` on saved original and translated/reconfigured `ask --json` outputs to compare zero-result rate, chunk-count delta, top-1 stability, top-similarity delta, and latency delta before changing defaults.
 - Use `fusion` on multiple saved `ask --json` outputs to build an offline reciprocal-rank-fusion report with per-source rank contributions and deduplicated chunks.
 - Use `fusion-test` on a cases file that points at saved query outputs to verify expected top chunks, expected terms, and minimum source contributions offline.
 - Use `rewrite` or `ask --rewrite simple|translate` for deterministic offline query planning; `hyde` is reserved for a host-owned LLM adapter.

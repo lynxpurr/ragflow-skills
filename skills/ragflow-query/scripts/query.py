@@ -51,10 +51,12 @@ from ragflow_skill_runtime import (  # noqa: E402
     load_routing_config,
     normalize_retrieval_response,
     query_fusion_report,
+    query_cross_language_ab_report,
     query_pollution_report,
     query_rerank_ab_report,
     render_citation_audit_markdown,
     render_centroid_plan_markdown,
+    render_query_cross_language_ab_markdown,
     render_query_fusion_markdown,
     render_query_fusion_test_markdown,
     render_query_diagnostic_markdown,
@@ -124,6 +126,24 @@ def _write_json(path: str | None, data: Any) -> None:
 
 def _read_json(path: str | Path) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _read_query_outputs(paths: list[str], *, label: str) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for path in paths:
+        raw = _read_json(path)
+        items: list[Any]
+        if isinstance(raw, list):
+            items = raw
+        elif isinstance(raw, dict) and isinstance(raw.get("payloads"), list):
+            items = raw["payloads"]
+        else:
+            items = [raw]
+        for index, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                raise ValueError(f"{label} query output must be a JSON object: {path}#{index}")
+            payloads.append(item)
+    return payloads
 
 
 def _utc_now() -> str:
@@ -605,6 +625,27 @@ def _rerank_ab(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _cross_language_ab(args: argparse.Namespace) -> int:
+    try:
+        baseline_payloads = _read_query_outputs(args.baseline_output, label="baseline")
+        candidate_payloads = _read_query_outputs(args.candidate_output, label="candidate")
+        report = query_cross_language_ab_report(
+            baseline_payloads,
+            candidate_payloads,
+            baseline_label=args.baseline_label,
+            candidate_label=args.candidate_label,
+            min_top1_stability=args.min_top1_stability,
+            max_examples=args.max_examples,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_cross_language_ab_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _fusion(args: argparse.Namespace) -> int:
     try:
         payloads = []
@@ -753,6 +794,18 @@ def build_parser() -> argparse.ArgumentParser:
     rerank.add_argument("--report-md", help="Optional Markdown report output path")
     rerank.add_argument("--json", action="store_true", help="Emit JSON report")
     rerank.set_defaults(func=_rerank_ab)
+
+    cross_language = sub.add_parser("cross-language-ab", help="Compare saved baseline and cross-language query outputs")
+    cross_language.add_argument("--baseline-output", action="append", required=True, help="Saved baseline query output JSON; repeatable")
+    cross_language.add_argument("--candidate-output", action="append", required=True, help="Saved candidate query output JSON; repeatable")
+    cross_language.add_argument("--baseline-label", default="baseline", help="Label for baseline outputs")
+    cross_language.add_argument("--candidate-label", default="candidate", help="Label for candidate outputs")
+    cross_language.add_argument("--min-top1-stability", type=float, default=0.8)
+    cross_language.add_argument("--max-examples", type=int, default=10)
+    cross_language.add_argument("--report-json", help="Optional JSON report output path")
+    cross_language.add_argument("--report-md", help="Optional Markdown report output path")
+    cross_language.add_argument("--json", action="store_true", help="Emit JSON report")
+    cross_language.set_defaults(func=_cross_language_ab)
 
     fusion = sub.add_parser("fusion", help="Fuse saved query outputs with reciprocal rank fusion")
     fusion.add_argument("--query-output", action="append", required=True, help="JSON output from query.py ask; repeatable")

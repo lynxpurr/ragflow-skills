@@ -11,10 +11,12 @@ from ragflow_skill_runtime.observability import (
     diagnose_query_result,
     evidence_from_query_payload,
     load_fusion_test_cases,
+    query_cross_language_ab_report,
     query_fusion_report,
     query_pollution_report,
     query_rerank_ab_report,
     render_citation_audit_markdown,
+    render_query_cross_language_ab_markdown,
     render_query_diagnostic_markdown,
     render_query_fusion_markdown,
     render_query_fusion_test_markdown,
@@ -214,6 +216,62 @@ class ObservabilityTests(unittest.TestCase):
         self.assertIn("top_rank_changed", {issue["code"] for issue in report["issues"]})
         self.assertIn("best.md", markdown)
         self.assertIn("RAGFlow Query Rerank A/B Report", markdown)
+
+    def test_query_cross_language_ab_report_compares_saved_outputs(self) -> None:
+        baseline = [
+            {
+                "question": "runtime config",
+                "chunks": [{"chunk_id": "shared", "content": "Runtime config evidence.", "document_name": "runtime.md", "similarity": 0.9}],
+                "metadata": {"retrieval_ms": 10.0},
+            },
+            {
+                "question": "translation support",
+                "chunks": [{"chunk_id": "baseline-only", "content": "Baseline evidence.", "document_name": "baseline.md", "similarity": 0.8}],
+                "metadata": {"retrieval_ms": 12.0},
+            },
+            {
+                "question": "localized evidence",
+                "chunks": [{"chunk_id": "localized", "content": "Localized evidence.", "document_name": "localized.md", "similarity": 0.7}],
+                "metadata": {"retrieval_ms": 8.0},
+            },
+        ]
+        candidate = [
+            {
+                "question": "runtime config",
+                "chunks": [{"chunk_id": "shared", "content": "Runtime config evidence.", "document_name": "runtime.md", "similarity": 0.88}],
+                "metadata": {"retrieval_ms": 14.0},
+            },
+            {
+                "question": "translation support",
+                "chunks": [{"chunk_id": "candidate-only", "content": "Candidate translated evidence.", "document_name": "candidate.md", "similarity": 0.6}],
+                "metadata": {"retrieval_ms": 16.0},
+            },
+            {
+                "question": "localized evidence",
+                "chunks": [],
+                "metadata": {"retrieval_ms": 11.0},
+            },
+        ]
+
+        report = query_cross_language_ab_report(
+            baseline,
+            candidate,
+            baseline_label="original",
+            candidate_label="translate",
+            min_top1_stability=0.8,
+        )
+        markdown = render_query_cross_language_ab_markdown(report)
+
+        self.assertEqual(report["schema"], "ragflow_cross_language_ab_report_v1")
+        self.assertEqual(report["status"], "REVIEW")
+        self.assertAlmostEqual(report["summary"]["zero_result_rate_delta"], 0.3333)
+        self.assertEqual(report["summary"]["top1_stability_rate"], 0.5)
+        self.assertLess(report["summary"]["average_chunk_count_delta"], 0)
+        self.assertGreater(report["summary"]["average_latency_delta_ms"], 0)
+        issue_codes = {issue["code"] for issue in report["issues"]}
+        self.assertIn("candidate_zero_result_regression", issue_codes)
+        self.assertIn("top1_stability_below_threshold", issue_codes)
+        self.assertIn("RAGFlow Cross-Language A/B Report", markdown)
 
     def test_query_fusion_report_deduplicates_and_explains_rrf(self) -> None:
         source_a = {

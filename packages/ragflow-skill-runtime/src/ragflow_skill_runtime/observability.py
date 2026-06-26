@@ -16,6 +16,7 @@ CITATION_AUDIT_SCHEMA = "ragflow_citation_audit_v1"
 QUERY_DIAGNOSTIC_SCHEMA = "ragflow_query_diagnostic_report_v1"
 QUERY_POLLUTION_REPORT_SCHEMA = "ragflow_query_pollution_report_v1"
 QUERY_RERANK_AB_REPORT_SCHEMA = "ragflow_query_rerank_ab_report_v1"
+QUERY_CROSS_LANGUAGE_AB_REPORT_SCHEMA = "ragflow_cross_language_ab_report_v1"
 FUSION_REPORT_SCHEMA = "ragflow_fusion_report_v1"
 FUSION_TEST_REPORT_SCHEMA = "ragflow_fusion_test_report_v1"
 
@@ -850,6 +851,370 @@ def _chunk_identity(chunk: Mapping[str, Any]) -> str:
                 return f"sha256:{value}"
             return value
     return stable_chunk_hash(chunk)
+
+
+def _mean(values: Sequence[float]) -> float:
+    return round(sum(values) / len(values), 4) if values else 0.0
+
+
+def _payload_metadata(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    metadata = payload.get("metadata")
+    return metadata if isinstance(metadata, Mapping) else {}
+
+
+def _payload_latency_ms(payload: Mapping[str, Any]) -> float | None:
+    metadata = _payload_metadata(payload)
+    trace = payload.get("trace") if isinstance(payload.get("trace"), Mapping) else {}
+    timings = trace.get("timings_ms") if isinstance(trace.get("timings_ms"), Mapping) else {}
+    for mapping in (metadata, timings, payload):
+        if not isinstance(mapping, Mapping):
+            continue
+        for key in ("retrieval_ms", "duration_ms", "latency_ms", "total"):
+            value = _as_float(mapping.get(key))
+            if value is not None:
+                return value
+    return None
+
+
+def _top_chunk_summary(payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    chunks = _query_chunks(payload)
+    if not chunks:
+        return None
+    chunk = chunks[0]
+    return {
+        "identity": _chunk_identity(chunk),
+        "stable_hash": stable_chunk_hash(chunk),
+        "document_name": chunk.get("document_name"),
+        "document_id": chunk.get("document_id"),
+        "chunk_id": _chunk_field(chunk, ("chunk_id", "id", "source_chunk_id")),
+        "similarity": _as_float(chunk.get("similarity")),
+        "content_preview": _preview(_chunk_text(chunk)),
+    }
+
+
+def _query_output_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
+    chunks = _query_chunks(payload)
+    top_chunk = _top_chunk_summary(payload)
+    metadata = _payload_metadata(payload)
+    return {
+        "question": payload.get("question"),
+        "dataset_ids": payload.get("dataset_ids", []),
+        "mode": payload.get("mode"),
+        "rewrite": metadata.get("rewrite"),
+        "fusion": metadata.get("fusion"),
+        "chunk_count": len(chunks),
+        "zero_result": len(chunks) == 0,
+        "top_chunk": top_chunk,
+        "top_similarity": top_chunk.get("similarity") if isinstance(top_chunk, Mapping) else None,
+        "latency_ms": _payload_latency_ms(payload),
+    }
+
+
+def _paired_query_outputs(
+    baseline_payloads: Sequence[Mapping[str, Any]],
+    candidate_payloads: Sequence[Mapping[str, Any]],
+    issues: list[dict[str, Any]],
+) -> list[tuple[int, Mapping[str, Any], Mapping[str, Any]]]:
+    pair_count = min(len(baseline_payloads), len(candidate_payloads))
+    if len(baseline_payloads) != len(candidate_payloads):
+        _append_issue(
+            issues,
+            severity="warning",
+            code="query_output_count_mismatch",
+            message="baseline and candidate output counts differ; extra outputs are ignored",
+            detail={"baseline_count": len(baseline_payloads), "candidate_count": len(candidate_payloads)},
+        )
+    if pair_count == 0:
+        _append_issue(
+            issues,
+            severity="error",
+            code="query_outputs_missing",
+            message="at least one baseline and one candidate query output are required",
+        )
+        return []
+    return [(index, baseline_payloads[index], candidate_payloads[index]) for index in range(pair_count)]
+
+
+def query_cross_language_ab_report(
+    baseline_payloads: Sequence[Mapping[str, Any]],
+    candidate_payloads: Sequence[Mapping[str, Any]],
+    *,
+    baseline_label: str = "baseline",
+    candidate_label: str = "candidate",
+    min_top1_stability: float = 0.8,
+    max_examples: int = 10,
+) -> dict[str, Any]:
+    """Compare saved baseline and cross-language query outputs without live retrieval."""
+
+    issues: list[dict[str, Any]] = []
+    if not 0.0 <= min_top1_stability <= 1.0:
+        _append_issue(
+            issues,
+            severity="error",
+            code="min_top1_stability_invalid",
+            message="min_top1_stability must be between 0 and 1",
+        )
+    if max_examples <= 0:
+        _append_issue(
+            issues,
+            severity="error",
+            code="max_examples_invalid",
+            message="max_examples must be positive",
+        )
+        max_examples = 1
+
+    pairs = _paired_query_outputs(baseline_payloads, candidate_payloads, issues)
+    cases: list[dict[str, Any]] = []
+    chunk_deltas: list[float] = []
+    similarity_deltas: list[float] = []
+    latency_deltas: list[float] = []
+    comparable_top1 = 0
+    stable_top1 = 0
+
+    for index, baseline_payload, candidate_payload in pairs:
+        baseline = _query_output_summary(baseline_payload)
+        candidate = _query_output_summary(candidate_payload)
+        baseline_question = str(baseline.get("question") or "")
+        candidate_question = str(candidate.get("question") or "")
+        if baseline_question and candidate_question and baseline_question != candidate_question:
+            _append_issue(
+                issues,
+                severity="info",
+                code="question_text_changed",
+                message="baseline and candidate question text differ",
+                detail={"case_index": index, "baseline_question": baseline_question, "candidate_question": candidate_question},
+            )
+        baseline_top = baseline.get("top_chunk") if isinstance(baseline.get("top_chunk"), Mapping) else None
+        candidate_top = candidate.get("top_chunk") if isinstance(candidate.get("top_chunk"), Mapping) else None
+        top1_stable = None
+        if baseline_top and candidate_top:
+            comparable_top1 += 1
+            top1_stable = baseline_top.get("identity") == candidate_top.get("identity")
+            if top1_stable:
+                stable_top1 += 1
+        chunk_delta = int(candidate["chunk_count"]) - int(baseline["chunk_count"])
+        chunk_deltas.append(float(chunk_delta))
+        baseline_similarity = baseline.get("top_similarity")
+        candidate_similarity = candidate.get("top_similarity")
+        similarity_delta = None
+        if isinstance(baseline_similarity, (int, float)) and isinstance(candidate_similarity, (int, float)):
+            similarity_delta = round(float(candidate_similarity) - float(baseline_similarity), 4)
+            similarity_deltas.append(similarity_delta)
+        baseline_latency = baseline.get("latency_ms")
+        candidate_latency = candidate.get("latency_ms")
+        latency_delta = None
+        if isinstance(baseline_latency, (int, float)) and isinstance(candidate_latency, (int, float)):
+            latency_delta = round(float(candidate_latency) - float(baseline_latency), 4)
+            latency_deltas.append(latency_delta)
+        if not baseline["zero_result"] and candidate["zero_result"]:
+            _append_issue(
+                issues,
+                severity="warning",
+                code="candidate_zero_result_regression",
+                message="candidate output returned zero chunks where baseline had evidence",
+                detail={"case_index": index, "question": baseline_question or candidate_question},
+            )
+        elif baseline["zero_result"] and not candidate["zero_result"]:
+            _append_issue(
+                issues,
+                severity="info",
+                code="candidate_zero_result_improvement",
+                message="candidate output recovered chunks where baseline returned none",
+                detail={"case_index": index, "question": baseline_question or candidate_question},
+            )
+        cases.append(
+            {
+                "id": f"case-{index + 1}",
+                "question": baseline_question or candidate_question,
+                "baseline": baseline,
+                "candidate": candidate,
+                "delta": {
+                    "chunk_count": chunk_delta,
+                    "top_similarity": similarity_delta,
+                    "latency_ms": latency_delta,
+                },
+                "top1_stable": top1_stable,
+            }
+        )
+
+    case_count = len(cases)
+    baseline_zero_count = sum(1 for case in cases if case["baseline"]["zero_result"])
+    candidate_zero_count = sum(1 for case in cases if case["candidate"]["zero_result"])
+    baseline_chunk_counts = [float(case["baseline"]["chunk_count"]) for case in cases]
+    candidate_chunk_counts = [float(case["candidate"]["chunk_count"]) for case in cases]
+    baseline_similarities = [
+        float(case["baseline"]["top_similarity"])
+        for case in cases
+        if isinstance(case["baseline"].get("top_similarity"), (int, float))
+    ]
+    candidate_similarities = [
+        float(case["candidate"]["top_similarity"])
+        for case in cases
+        if isinstance(case["candidate"].get("top_similarity"), (int, float))
+    ]
+    baseline_latencies = [
+        float(case["baseline"]["latency_ms"])
+        for case in cases
+        if isinstance(case["baseline"].get("latency_ms"), (int, float))
+    ]
+    candidate_latencies = [
+        float(case["candidate"]["latency_ms"])
+        for case in cases
+        if isinstance(case["candidate"].get("latency_ms"), (int, float))
+    ]
+    top1_stability_rate = _rate(stable_top1, comparable_top1)
+    baseline_zero_rate = _rate(baseline_zero_count, case_count)
+    candidate_zero_rate = _rate(candidate_zero_count, case_count)
+    avg_baseline_chunks = _mean(baseline_chunk_counts)
+    avg_candidate_chunks = _mean(candidate_chunk_counts)
+    avg_baseline_similarity = _mean(baseline_similarities)
+    avg_candidate_similarity = _mean(candidate_similarities)
+    avg_baseline_latency = _mean(baseline_latencies)
+    avg_candidate_latency = _mean(candidate_latencies)
+
+    if comparable_top1 and top1_stability_rate < min_top1_stability:
+        _append_issue(
+            issues,
+            severity="warning",
+            code="top1_stability_below_threshold",
+            message="candidate top-1 evidence changed more often than the configured threshold allows",
+            detail={"top1_stability_rate": top1_stability_rate, "min_top1_stability": min_top1_stability},
+        )
+    if candidate_zero_rate > baseline_zero_rate:
+        _append_issue(
+            issues,
+            severity="warning",
+            code="zero_result_rate_regression",
+            message="candidate zero-result rate is higher than baseline",
+            detail={"baseline_zero_result_rate": baseline_zero_rate, "candidate_zero_result_rate": candidate_zero_rate},
+        )
+    if avg_candidate_chunks + 0.5 < avg_baseline_chunks:
+        _append_issue(
+            issues,
+            severity="warning",
+            code="average_chunk_count_drop",
+            message="candidate average chunk count dropped versus baseline",
+            detail={"baseline_average_chunk_count": avg_baseline_chunks, "candidate_average_chunk_count": avg_candidate_chunks},
+        )
+    if similarity_deltas and _mean(similarity_deltas) < -0.05:
+        _append_issue(
+            issues,
+            severity="warning",
+            code="top_similarity_regression",
+            message="candidate top similarity decreased versus baseline",
+            detail={"average_top_similarity_delta": _mean(similarity_deltas)},
+        )
+    if latency_deltas and _mean(latency_deltas) > 0:
+        _append_issue(
+            issues,
+            severity="info",
+            code="latency_increase",
+            message="candidate average latency increased versus baseline",
+            detail={"average_latency_delta_ms": _mean(latency_deltas)},
+        )
+
+    examples = [
+        case
+        for case in cases
+        if case.get("top1_stable") is False
+        or case["delta"].get("chunk_count")
+        or (isinstance(case["delta"].get("top_similarity"), (int, float)) and abs(float(case["delta"]["top_similarity"])) >= 0.05)
+    ][:max_examples]
+    status = _severity_status(issues)
+    return {
+        "ok": status != "FAIL",
+        "schema": QUERY_CROSS_LANGUAGE_AB_REPORT_SCHEMA,
+        "status": status,
+        "baseline_label": baseline_label,
+        "candidate_label": candidate_label,
+        "summary": {
+            "case_count": case_count,
+            "baseline_zero_result_rate": baseline_zero_rate,
+            "candidate_zero_result_rate": candidate_zero_rate,
+            "zero_result_rate_delta": round(candidate_zero_rate - baseline_zero_rate, 4),
+            "baseline_average_chunk_count": avg_baseline_chunks,
+            "candidate_average_chunk_count": avg_candidate_chunks,
+            "average_chunk_count_delta": round(avg_candidate_chunks - avg_baseline_chunks, 4),
+            "top1_comparable_count": comparable_top1,
+            "top1_stable_count": stable_top1,
+            "top1_stability_rate": top1_stability_rate,
+            "baseline_average_top_similarity": avg_baseline_similarity,
+            "candidate_average_top_similarity": avg_candidate_similarity,
+            "average_top_similarity_delta": _mean(similarity_deltas),
+            "baseline_average_latency_ms": avg_baseline_latency,
+            "candidate_average_latency_ms": avg_candidate_latency,
+            "average_latency_delta_ms": _mean(latency_deltas),
+            "issue_count": len(issues),
+            "errors": sum(1 for issue in issues if issue["severity"] == "error"),
+            "warnings": sum(1 for issue in issues if issue["severity"] == "warning"),
+            "infos": sum(1 for issue in issues if issue["severity"] == "info"),
+        },
+        "cases": cases,
+        "examples": examples,
+        "issues": issues,
+        "recommendations": [
+            "Reject cross-language or retrieval-setting changes that increase zero-result rate without a benchmark-backed reason.",
+            "Investigate top-1 changes before enabling translated or expanded queries by default.",
+            "Use benchmark gates when moving from saved-output A/B reports to live retrieval settings.",
+        ],
+    }
+
+
+def render_query_cross_language_ab_markdown(report: Mapping[str, Any]) -> str:
+    """Render a compact Markdown report for saved-output cross-language A/B checks."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Cross-Language A/B Report",
+        "",
+        f"- ok: `{str(report.get('ok', False)).lower()}`",
+        f"- status: `{report.get('status', '')}`",
+        f"- baseline: `{report.get('baseline_label', 'baseline')}`",
+        f"- candidate: `{report.get('candidate_label', 'candidate')}`",
+        f"- cases: `{summary.get('case_count', 0)}`",
+        f"- zero_result_rate_delta: `{summary.get('zero_result_rate_delta', 0)}`",
+        f"- average_chunk_count_delta: `{summary.get('average_chunk_count_delta', 0)}`",
+        f"- top1_stability_rate: `{summary.get('top1_stability_rate', 0)}`",
+        f"- average_top_similarity_delta: `{summary.get('average_top_similarity_delta', 0)}`",
+        f"- average_latency_delta_ms: `{summary.get('average_latency_delta_ms', 0)}`",
+        "",
+        "## Examples",
+        "",
+    ]
+    examples = report.get("examples", []) if isinstance(report.get("examples"), list) else []
+    if not examples:
+        lines.append("- None")
+    else:
+        lines.extend(
+            [
+                "| case | chunks delta | top-1 stable | similarity delta | latency delta ms | question |",
+                "| --- | ---: | --- | ---: | ---: | --- |",
+            ]
+        )
+        for case in examples:
+            if not isinstance(case, Mapping):
+                continue
+            delta = case.get("delta") if isinstance(case.get("delta"), Mapping) else {}
+            question = str(case.get("question", "")).replace("|", "\\|")
+            lines.append(
+                "| {case_id} | `{chunk_delta}` | `{stable}` | `{similarity_delta}` | `{latency_delta}` | {question} |".format(
+                    case_id=case.get("id", ""),
+                    chunk_delta=delta.get("chunk_count", ""),
+                    stable=case.get("top1_stable"),
+                    similarity_delta=delta.get("top_similarity", ""),
+                    latency_delta=delta.get("latency_ms", ""),
+                    question=question,
+                )
+            )
+    lines.extend(["", "## Issues", ""])
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    if not issues:
+        lines.append("- None")
+    else:
+        for issue in issues:
+            if isinstance(issue, Mapping):
+                lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    return "\n".join(lines) + "\n"
 
 
 def _rerank_score(item: Any) -> float | None:

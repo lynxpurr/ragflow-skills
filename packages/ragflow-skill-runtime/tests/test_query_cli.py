@@ -589,6 +589,80 @@ class QueryCliTests(unittest.TestCase):
         self.assertIn("RAGFlow Query Rerank A/B Report", markdown)
         self.assertIn("best.md", markdown)
 
+    def test_cross_language_ab_can_write_json_and_markdown(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline = root / "baseline.json"
+            candidate = root / "candidate.json"
+            report_json = root / "cross_language_ab.json"
+            report_md = root / "cross_language_ab.md"
+            baseline.write_text(
+                json.dumps(
+                    {
+                        "question": "runtime config",
+                        "chunks": [
+                            {
+                                "chunk_id": "shared",
+                                "content": "Runtime config evidence.",
+                                "document_name": "runtime.md",
+                                "similarity": 0.9,
+                            }
+                        ],
+                        "metadata": {"retrieval_ms": 10.0},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            candidate.write_text(
+                json.dumps(
+                    {
+                        "question": "runtime config",
+                        "chunks": [
+                            {
+                                "chunk_id": "translated",
+                                "content": "Translated runtime config evidence.",
+                                "document_name": "translated.md",
+                                "similarity": 0.7,
+                            }
+                        ],
+                        "metadata": {"retrieval_ms": 15.0},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "cross-language-ab",
+                        "--baseline-output",
+                        str(baseline),
+                        "--candidate-output",
+                        str(candidate),
+                        "--baseline-label",
+                        "original",
+                        "--candidate-label",
+                        "translate",
+                        "--min-top1-stability",
+                        "0.9",
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            report_json_exists = report_json.exists()
+            markdown = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["schema"], "ragflow_cross_language_ab_report_v1")
+        self.assertEqual(payload["summary"]["top1_stability_rate"], 0.0)
+        self.assertTrue(report_json_exists)
+        self.assertIn("RAGFlow Cross-Language A/B Report", markdown)
+
     def test_fusion_can_write_json_and_markdown(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:

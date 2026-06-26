@@ -941,7 +941,7 @@ Tasks:
 - [ ] Add bounded centroid build execution with `--batch-size`, checkpoint, resume, and dynamic embedding config.
 - [ ] Add centroid scoring as a tie-breaker after explicit hints and user-specified KBs.
 - [x] Add route regression summaries by category, locale, and negative-query class.
-- [ ] Add cross-language A/B reports for retrieval setting changes, including zero-result rate, chunk count delta, top-1 stability, similarity delta, and latency.
+- [x] Add cross-language A/B reports for retrieval setting changes, including zero-result rate, chunk count delta, top-1 stability, similarity delta, and latency.
 - [x] Add benchmark-derived retrieval parameter suggestions.
 - [x] Add config linting for `kb_routing_hints` versus per-KB descriptive `hints` confusion.
 - [x] Add tests proving no private routing examples are embedded in public fixtures.

@@ -1753,6 +1753,8 @@ raise SystemExit(code)
     query_rerank_input = work_root / "query_rerank.json"
     query_rerank_json = work_root / "query_rerank_ab.json"
     query_rerank_md = work_root / "query_rerank_ab.md"
+    query_cross_language_json = work_root / "query_cross_language_ab.json"
+    query_cross_language_md = work_root / "query_cross_language_ab.md"
     query_fusion_source = work_root / "query_fusion_source.json"
     query_fusion_cases = work_root / "query_fusion_cases.json"
     query_fusion_json = work_root / "query_fusion.json"
@@ -1947,6 +1949,39 @@ raise SystemExit(code)
         produced.append(query_rerank_json)
     if query_rerank_md.exists():
         produced.append(query_rerank_md)
+
+    query_cross_language = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "cross-language-ab",
+            "--baseline-output",
+            str(query_output),
+            "--candidate-output",
+            str(query_fusion_source),
+            "--baseline-label",
+            "original",
+            "--candidate-label",
+            "translated",
+            "--report-json",
+            str(query_cross_language_json),
+            "--report-md",
+            str(query_cross_language_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query cross-language ab report",
+        query_cross_language,
+        required_output='"schema": "ragflow_cross_language_ab_report_v1"',
+    )
+    if query_cross_language_json.exists():
+        produced.append(query_cross_language_json)
+    if query_cross_language_md.exists():
+        produced.append(query_cross_language_md)
 
     query_fusion = _run_command(
         [
