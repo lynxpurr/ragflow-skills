@@ -279,6 +279,7 @@ def _run(args: argparse.Namespace) -> int:
                         label="MINERU_ENABLE_FORMULA",
                     ),
                     process_attempts=process_attempts,
+                    allow_image_fallback=not args.no_image_fallback,
                 )
             except (UnicodeDecodeError, OSError, DocConvertError) as exc:
                 if args.strict:
@@ -722,6 +723,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quality-report-md", help="Optional Markdown quality report sidecar name under the output directory")
     parser.add_argument("--runtime-report-name", default="runtime_report.json", help="Runtime process cleanup report sidecar name; written when local process-backed converters run")
     parser.add_argument("--runtime-report-md", help="Optional Markdown runtime report sidecar name under the output directory")
+    parser.add_argument("--no-image-fallback", action="store_true", help="Skip source-image Markdown fallback when OCR/conversion is unavailable")
     parser.add_argument("--no-recursive", action="store_true", help="Do not recurse into input directories")
     parser.add_argument("--strict", action="store_true", help="Fail on the first skipped file")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")

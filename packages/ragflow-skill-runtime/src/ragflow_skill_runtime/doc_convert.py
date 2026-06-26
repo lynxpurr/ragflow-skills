@@ -32,6 +32,7 @@ MARKDOWN_EXTENSIONS = {".md", ".markdown", ".mdown", ".mkd"}
 TEXT_EXTENSIONS = {".txt", ".text"}
 HTML_EXTENSIONS = {".html", ".htm"}
 BUILTIN_EXTENSIONS = MARKDOWN_EXTENSIONS | TEXT_EXTENSIONS | HTML_EXTENSIONS
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 PANDOC_AUTO_EXTENSIONS = {
     ".docx",
     ".epub",
@@ -1402,6 +1403,47 @@ def pandoc_convert(source: SourceDocument) -> str:
     return result.stdout
 
 
+def image_fallback_markdown(
+    source: SourceDocument,
+    *,
+    asset_output_dir: str | Path | None,
+) -> str:
+    """Preserve an unconverted source image as Markdown that requires review."""
+
+    if asset_output_dir is None:
+        raise DocConvertError("image fallback requires an asset output directory")
+    suffix = source.path.suffix.lower()
+    if suffix not in IMAGE_EXTENSIONS:
+        raise DocConvertError(f"image fallback only supports image files: {source.source_path}")
+    digest = sha256_file(source.path)
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(source.source_path).stem).strip(".-") or "image"
+    image_name = f"{stem}-{digest[:12]}{suffix}"
+    output_dir = Path(asset_output_dir) / "images"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    destination = output_dir / image_name
+    if source.path.resolve() != destination.resolve():
+        shutil.copy2(source.path, destination)
+    title = Path(source.source_path).stem or "Image"
+    alt = title.replace("[", "").replace("]", "").strip() or "source image"
+    return (
+        f"# {title}\n\n"
+        "> Source image preserved for manual review because OCR/conversion was unavailable.\n\n"
+        f"![{alt}](images/{image_name})\n"
+    )
+
+
+def _image_fallback_result(
+    source: SourceDocument,
+    *,
+    warnings: list[str],
+    asset_output_dir: str | Path | None,
+) -> tuple[str, list[str]]:
+    warnings.append(
+        "image_fallback_review_required: source image preserved because OCR/conversion was unavailable"
+    )
+    return image_fallback_markdown(source, asset_output_dir=asset_output_dir), warnings
+
+
 def convert_source_to_markdown(
     source: SourceDocument,
     *,
@@ -1423,6 +1465,7 @@ def convert_source_to_markdown(
     mineru_is_ocr: bool = False,
     mineru_enable_formula: bool = True,
     process_attempts: list[dict[str, Any]] | None = None,
+    allow_image_fallback: bool = False,
 ) -> tuple[str, list[str]]:
     """Convert one source document to Markdown and return warnings."""
 
@@ -1456,6 +1499,8 @@ def convert_source_to_markdown(
             ), warnings
         except DocConvertError as exc:
             if backend == "mineru-cli":
+                if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                    return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
                 raise
             warnings.append(str(exc))
 
@@ -1469,22 +1514,59 @@ def convert_source_to_markdown(
             warnings.append(str(exc))
 
     if backend in {"auto", "remote"} and remote_url:
-        return remote_convert(
-            source,
-            remote_url=remote_url,
-            api_key=remote_api_key,
-            timeout=remote_timeout,
-        ), warnings
+        try:
+            return remote_convert(
+                source,
+                remote_url=remote_url,
+                api_key=remote_api_key,
+                timeout=remote_timeout,
+            ), warnings
+        except DocConvertError:
+            if backend == "remote" and allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
+            raise
     if backend == "remote" and not remote_url:
+        if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+            return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
         raise DocConvertError("remote backend requires --remote-url")
     if backend == "auto" and suffix in MINERU_AUTO_EXTENSIONS and _should_try_mineru_service_auto(
         mineru_base_url,
         mineru_api_key,
     ):
-        if mineru_base_url.rstrip("/").endswith("/agent"):
-            return mineru_agent_convert(
+        try:
+            if mineru_base_url.rstrip("/").endswith("/agent"):
+                return mineru_agent_convert(
+                    source,
+                    base_url=mineru_base_url,
+                    api_key=mineru_api_key,
+                    timeout=mineru_timeout,
+                    poll_interval=mineru_poll_interval,
+                    language=mineru_language,
+                    page_range=mineru_page_range,
+                    enable_table=mineru_enable_table,
+                    is_ocr=mineru_is_ocr,
+                    enable_formula=mineru_enable_formula,
+                ), warnings
+            return mineru_sync_convert(
                 source,
                 base_url=mineru_base_url,
+                api_key=mineru_api_key,
+                timeout=mineru_timeout,
+                language=mineru_language,
+                page_range=mineru_page_range,
+                enable_table=mineru_enable_table,
+                is_ocr=mineru_is_ocr,
+                enable_formula=mineru_enable_formula,
+            ), warnings
+        except DocConvertError:
+            if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
+            raise
+    if backend in {"mineru", "mineru-agent"}:
+        try:
+            return mineru_agent_convert(
+                source,
+                base_url=mineru_base_url or DEFAULT_MINERU_BASE_URL,
                 api_key=mineru_api_key,
                 timeout=mineru_timeout,
                 poll_interval=mineru_poll_interval,
@@ -1494,44 +1576,34 @@ def convert_source_to_markdown(
                 is_ocr=mineru_is_ocr,
                 enable_formula=mineru_enable_formula,
             ), warnings
-        return mineru_sync_convert(
-            source,
-            base_url=mineru_base_url,
-            api_key=mineru_api_key,
-            timeout=mineru_timeout,
-            language=mineru_language,
-            page_range=mineru_page_range,
-            enable_table=mineru_enable_table,
-            is_ocr=mineru_is_ocr,
-            enable_formula=mineru_enable_formula,
-        ), warnings
-    if backend in {"mineru", "mineru-agent"}:
-        return mineru_agent_convert(
-            source,
-            base_url=mineru_base_url or DEFAULT_MINERU_BASE_URL,
-            api_key=mineru_api_key,
-            timeout=mineru_timeout,
-            poll_interval=mineru_poll_interval,
-            language=mineru_language,
-            page_range=mineru_page_range,
-            enable_table=mineru_enable_table,
-            is_ocr=mineru_is_ocr,
-            enable_formula=mineru_enable_formula,
-        ), warnings
+        except DocConvertError:
+            if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
+            raise
     if backend in {"mineru-sync", "mineru-local"}:
         if not mineru_base_url:
+            if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
             raise DocConvertError("mineru-sync backend requires --mineru-base-url or MINERU_BASE_URL")
-        return mineru_sync_convert(
-            source,
-            base_url=mineru_base_url,
-            api_key=mineru_api_key,
-            timeout=mineru_timeout,
-            language=mineru_language,
-            page_range=mineru_page_range,
-            enable_table=mineru_enable_table,
-            is_ocr=mineru_is_ocr,
-            enable_formula=mineru_enable_formula,
-        ), warnings
+        try:
+            return mineru_sync_convert(
+                source,
+                base_url=mineru_base_url,
+                api_key=mineru_api_key,
+                timeout=mineru_timeout,
+                language=mineru_language,
+                page_range=mineru_page_range,
+                enable_table=mineru_enable_table,
+                is_ocr=mineru_is_ocr,
+                enable_formula=mineru_enable_formula,
+            ), warnings
+        except DocConvertError:
+            if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
+            raise
+
+    if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+        return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
 
     supported = ", ".join(sorted(BUILTIN_EXTENSIONS))
     attempted = f"; attempted fallback: {'; '.join(warnings)}" if warnings else ""

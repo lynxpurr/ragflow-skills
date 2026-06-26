@@ -1454,6 +1454,46 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     )
     _record_command_check(checks, "doc-to-md passthrough", convert_result, required_stdout='"ok": true')
     doc_manifest = handoff_dir / "doc_manifest.json"
+    image_input = workspace / "image-fallback-input"
+    image_input.mkdir(parents=True, exist_ok=True)
+    (image_input / "diagram.png").write_bytes(b"fake platform image fallback bytes")
+    image_handoff = workspace / "image-fallback-handoff"
+    image_fallback_result = _run_command(
+        [
+            sys.executable,
+            str(convert_script),
+            "--input",
+            str(image_input),
+            "--output",
+            str(image_handoff),
+            "--backend",
+            "remote",
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "doc-to-md image fallback",
+        image_fallback_result,
+        required_stdout='"status": "PASS_WITH_REVIEW"',
+    )
+    image_quality = image_handoff / "quality_report.json"
+    image_quality_status = None
+    image_count = 0
+    if image_quality.exists():
+        image_quality_status = json.loads(image_quality.read_text(encoding="utf-8")).get("gate", {}).get("status")
+        image_count = len(list((image_handoff / "documents" / "images").glob("diagram-*.png")))
+    image_review_ok = image_quality_status == "PASS_WITH_REVIEW" and image_count == 1
+    checks.append(
+        {
+            "name": "image fallback preserves source image with review gate",
+            "ok": image_review_ok,
+            "returncode": 0 if image_review_ok else 1,
+            "error": "" if image_review_ok else f"status={image_quality_status}, copied_images={image_count}",
+        }
+    )
     package_result = _run_command(
         [
             sys.executable,
@@ -2397,6 +2437,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
 
     artifact_files = [
         doc_manifest,
+        workspace / "image-fallback-handoff" / "doc_manifest.json",
+        workspace / "image-fallback-handoff" / "quality_report.json",
         mineru_doc_manifest,
         workspace / "mineru-cli-handoff" / "doc_manifest.json",
         workspace / "mineru-cli-handoff" / "runtime_report.json",
@@ -2480,6 +2522,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "validation_report.json",
         artifacts_dir / "validation_report.md",
     ]
+    artifact_files.extend((workspace / "image-fallback-handoff" / "documents" / "images").glob("diagram-*.png"))
     ok = all(check["ok"] for check in checks)
     return {
         "id": profile.id,

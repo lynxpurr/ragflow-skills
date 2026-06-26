@@ -75,6 +75,8 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("vendored runtime present", check_names)
         self.assertIn("doc-to-md passthrough", check_names)
         self.assertIn("quality_report produced", check_names)
+        self.assertIn("doc-to-md image fallback", check_names)
+        self.assertIn("image fallback preserves source image with review gate", check_names)
         self.assertIn("doc-to-md mineru-cli auto", check_names)
         self.assertIn("mineru-cli doc_manifest produced", check_names)
         self.assertIn("mineru-cli local image asset copied", check_names)

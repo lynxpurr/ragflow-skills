@@ -726,6 +726,49 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(attempt["cleanup"]["leftover_process_count"], 0)
         self.assertEqual(manifest["runtime_report"], "runtime_report.json")
 
+    def test_convert_image_fallback_preserves_source_image_for_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "handoff"
+            input_dir.mkdir()
+            source_bytes = b"fake image bytes"
+            (input_dir / "diagram.png").write_bytes(source_bytes)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                    "--backend",
+                    "remote",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+            markdown = (output_dir / "documents" / "diagram.md").read_text(encoding="utf-8")
+            quality_report = json.loads((output_dir / "quality_report.json").read_text(encoding="utf-8"))
+            manifest = json.loads((output_dir / "doc_manifest.json").read_text(encoding="utf-8"))
+            copied_images = list((output_dir / "documents" / "images").glob("diagram-*.png"))
+            copied_image_bytes = copied_images[0].read_bytes() if copied_images else None
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["quality_gate"]["status"], "PASS_WITH_REVIEW")
+        self.assertEqual(quality_report["gate"]["status"], "PASS_WITH_REVIEW")
+        self.assertEqual(manifest["quality_gate"]["status"], "PASS_WITH_REVIEW")
+        self.assertIn("Source image preserved for manual review", markdown)
+        self.assertIn("![diagram](images/diagram-", markdown)
+        self.assertEqual(len(copied_images), 1)
+        self.assertEqual(copied_image_bytes, source_bytes)
+        self.assertEqual(quality_report["documents"][0]["image_count"], 1)
+        self.assertEqual(quality_report["documents"][0]["issues"][0]["issue_type"], "conversion_warning")
+
     def test_convert_auto_prefers_mineru_cli_for_pdf(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1025,6 +1068,7 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertIn("--mineru-cli-path", result.stdout)
         self.assertIn("--quality-report-name", result.stdout)
         self.assertIn("--runtime-report-name", result.stdout)
+        self.assertIn("--no-image-fallback", result.stdout)
         self.assertIn("backend probe", result.stdout)
         self.assertIn("backend warmup", result.stdout)
         self.assertIn("segment-plan", result.stdout)

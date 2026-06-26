@@ -52,6 +52,8 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertEqual(profile["config_mode"], "env")
         self.assertTrue(profile["ok"], profile)
         check_names = [item["name"] for item in profile["checks"]]
+        self.assertIn("doc-to-md image fallback", check_names)
+        self.assertIn("image fallback preserves source image with review gate", check_names)
         self.assertIn("doc-to-md mineru-cli auto backend", check_names)
         self.assertIn("mineru-cli markdown produced", check_names)
         self.assertIn("mineru-cli local image asset copied", check_names)
@@ -73,6 +75,14 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("mineru-cli-handoff/runtime_report.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("image-fallback-handoff/quality_report.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any("/image-fallback-handoff/documents/images/diagram-" in path for path in profile["artifacts"]),
             profile["artifacts"],
         )
         self.assertTrue(

@@ -980,7 +980,9 @@ attempts in `ragflow_doc_runtime_report_v1` when they run, including timeout cle
 signals sent, and leftover process counts without storing full command lines or host paths.
 `ragflow-doc-to-md backend warmup` now runs only when the user supplies an explicit tiny
 fixture with `--fixture`, emits `ragflow_doc_backend_warmup_report_v1`, and can fail CI via
-`--fail-on-failed`.
+`--fail-on-failed`. Main document conversion now preserves image sources as Markdown
+fallbacks when OCR/conversion is unavailable, copies the source image into the handoff, and
+marks the quality gate `PASS_WITH_REVIEW`.
 
 ## Feature Design 19: Contract, Packaging, And Compatibility Gates
 

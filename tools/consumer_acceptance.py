@@ -293,6 +293,53 @@ def _run_no_network_checks(
     if quality_report.exists():
         produced.append(quality_report)
 
+    image_input = work_root / "image-fallback-input"
+    image_input.mkdir(parents=True, exist_ok=True)
+    (image_input / "diagram.png").write_bytes(b"fake image fallback bytes")
+    image_handoff = work_root / "image-fallback-handoff"
+    image_fallback_result = _run_command(
+        [
+            python_executable,
+            str(convert_script),
+            "--input",
+            str(image_input),
+            "--output",
+            str(image_handoff),
+            "--backend",
+            "remote",
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "doc-to-md image fallback",
+        image_fallback_result,
+        required_output='"status": "PASS_WITH_REVIEW"',
+    )
+    image_manifest = image_handoff / "doc_manifest.json"
+    image_quality = image_handoff / "quality_report.json"
+    _record_file_check(checks, "image fallback doc_manifest produced", image_manifest)
+    _record_file_check(checks, "image fallback quality_report produced", image_quality)
+    if image_manifest.exists():
+        produced.append(image_manifest)
+    if image_quality.exists():
+        quality_status = json.loads(image_quality.read_text(encoding="utf-8")).get("gate", {}).get("status")
+        copied_image_paths = list((image_handoff / "documents" / "images").glob("diagram-*.png"))
+        image_count = len(copied_image_paths)
+        review_ok = quality_status == "PASS_WITH_REVIEW" and image_count == 1
+        checks.append(
+            {
+                "name": "image fallback preserves source image with review gate",
+                "ok": review_ok,
+                "path": str(image_quality),
+                "error": "" if review_ok else f"status={quality_status}, copied_images={image_count}",
+            }
+        )
+        produced.append(image_quality)
+        produced.extend(copied_image_paths)
+
     package_result = _run_command(
         [
             python_executable,
