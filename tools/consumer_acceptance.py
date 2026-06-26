@@ -1742,6 +1742,77 @@ raise SystemExit(code)
     for path in (centroid_plan_json, centroid_plan_md):
         if path.exists():
             produced.append(path)
+    centroid_chunk_snapshot = work_root / "centroid_chunk_snapshot.json"
+    centroid_chunk_snapshot.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_chunk_snapshot_v1",
+                "chunks": [
+                    {
+                        "dataset_id": "ds-consumer-acceptance",
+                        "document_name": "sample.md",
+                        "chunk_id": "centroid-chunk-1",
+                        "stable_hash": "sha256:consumer-centroid-1",
+                        "content": "This release artifact can build centroids from snapshot-owned vectors.",
+                        "embedding": [1.0, 0.0, 0.0],
+                    },
+                    {
+                        "dataset_id": "ds-consumer-acceptance",
+                        "document_name": "sample.md",
+                        "chunk_id": "centroid-chunk-2",
+                        "stable_hash": "sha256:consumer-centroid-2",
+                        "content": "Bounded centroid build writes checkpoint and index artifacts offline.",
+                        "embedding": [0.0, 1.0, 0.0],
+                    },
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    centroid_build_json = work_root / "centroid_build.json"
+    centroid_build_md = work_root / "centroid_build.md"
+    centroid_checkpoint = work_root / "centroid.checkpoint.json"
+    centroid_index = work_root / "centroids.built.json"
+    centroid_build = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "centroid",
+            "build",
+            "--kb-manifest",
+            str(benchmark_manifest),
+            "--chunk-snapshot",
+            str(centroid_chunk_snapshot),
+            "--index-output",
+            str(centroid_index),
+            "--checkpoint",
+            str(centroid_checkpoint),
+            "--batch-size",
+            "8",
+            "--embedding-model",
+            "example-embedding",
+            "--embedding-dimension",
+            "3",
+            "--report-json",
+            str(centroid_build_json),
+            "--report-md",
+            str(centroid_build_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query centroid build",
+        centroid_build,
+        required_output='"ragflow_route_centroid_build_report_v1"',
+    )
+    for path in (centroid_chunk_snapshot, centroid_build_json, centroid_build_md, centroid_checkpoint, centroid_index):
+        if path.exists():
+            produced.append(path)
 
     query_output = work_root / "query_output.json"
     citation_audit_json = work_root / "citation_audit.json"

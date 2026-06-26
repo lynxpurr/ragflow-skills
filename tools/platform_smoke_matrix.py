@@ -1952,6 +1952,70 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         centroid_plan_result,
         required_stdout='"ragflow_route_centroid_build_plan_v1"',
     )
+    centroid_chunk_snapshot = artifacts_dir / "centroid_chunk_snapshot.json"
+    centroid_chunk_snapshot.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_chunk_snapshot_v1",
+                "chunks": [
+                    {
+                        "dataset_id": "ds-platform-smoke",
+                        "document_name": "platform-smoke.md",
+                        "chunk_id": "centroid-chunk-1",
+                        "stable_hash": "sha256:platform-centroid-1",
+                        "content": "Platform smoke can build centroids from snapshot-owned vectors.",
+                        "embedding": [1.0, 0.0, 0.0],
+                    },
+                    {
+                        "dataset_id": "ds-platform-smoke",
+                        "document_name": "platform-smoke.md",
+                        "chunk_id": "centroid-chunk-2",
+                        "stable_hash": "sha256:platform-centroid-2",
+                        "content": "Centroid build remains offline and writes checkpoint artifacts.",
+                        "embedding": [0.0, 1.0, 0.0],
+                    },
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    centroid_build_result = _run_command(
+        [
+            sys.executable,
+            str(query_script),
+            "centroid",
+            "build",
+            "--kb-manifest",
+            str(kb_manifest),
+            "--chunk-snapshot",
+            str(centroid_chunk_snapshot),
+            "--index-output",
+            str(artifacts_dir / "centroids.built.json"),
+            "--checkpoint",
+            str(artifacts_dir / "centroid.checkpoint.json"),
+            "--batch-size",
+            "8",
+            "--embedding-model",
+            "example-embedding",
+            "--embedding-dimension",
+            "3",
+            "--report-json",
+            str(artifacts_dir / "centroid_build.json"),
+            "--report-md",
+            str(artifacts_dir / "centroid_build.md"),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query centroid build",
+        centroid_build_result,
+        required_stdout='"ragflow_route_centroid_build_report_v1"',
+    )
     query_runner = workspace / "query_runner.py"
     _write_query_runner(
         runner_path=query_runner,
@@ -2020,6 +2084,11 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "route_diagnose.md",
         artifacts_dir / "centroid_plan.json",
         artifacts_dir / "centroid_plan.md",
+        artifacts_dir / "centroid_chunk_snapshot.json",
+        artifacts_dir / "centroid_build.json",
+        artifacts_dir / "centroid_build.md",
+        artifacts_dir / "centroid.checkpoint.json",
+        artifacts_dir / "centroids.built.json",
         artifacts_dir / "profile_lint.md",
         artifacts_dir / "candidate_profile_set.json",
         artifacts_dir / "profile_experiment_matrix.md",

@@ -1069,6 +1069,90 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["ready_centroid_count"], 1)
         self.assertIn("RAGFlow Centroid Build Plan", markdown)
 
+    def test_centroid_build_writes_index_checkpoint_and_reports(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "kb_manifest.json"
+            snapshot = root / "chunk_snapshot.json"
+            index_output = root / "centroids.json"
+            checkpoint = root / "centroid.checkpoint.json"
+            report_json = root / "centroid_build.json"
+            report_md = root / "centroid_build.md"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-technical", "name": "kb:technical"},
+                        "documents": [{"document_id": "doc-1", "chunk_count": 2}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "chunks": [
+                            {
+                                "dataset_id": "ds-technical",
+                                "stable_hash": "sha256:chunk1",
+                                "content": "Centroid build evidence one.",
+                                "embedding": [1.0, 2.0],
+                            },
+                            {
+                                "dataset_id": "ds-technical",
+                                "stable_hash": "sha256:chunk2",
+                                "content": "Centroid build evidence two.",
+                                "embedding": [3.0, 4.0],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "centroid",
+                        "build",
+                        "--kb-manifest",
+                        str(manifest),
+                        "--chunk-snapshot",
+                        str(snapshot),
+                        "--embedding-model",
+                        "example-embedding",
+                        "--embedding-dimension",
+                        "2",
+                        "--batch-size",
+                        "16",
+                        "--checkpoint",
+                        str(checkpoint),
+                        "--index-output",
+                        str(index_output),
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            file_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            index_payload = json.loads(index_output.read_text(encoding="utf-8"))
+            checkpoint_payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+            markdown = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["schema"], "ragflow_route_centroid_build_report_v1")
+        self.assertEqual(file_payload["summary"]["completed"], True)
+        self.assertEqual(index_payload["schema"], "ragflow_route_centroid_index_v1")
+        self.assertEqual(index_payload["centroids"][0]["vector"], [2.0, 3.0])
+        self.assertEqual(checkpoint_payload["schema"], "ragflow_route_centroid_build_checkpoint_v1")
+        self.assertIn("RAGFlow Centroid Build Report", markdown)
+
     def test_auto_mode_uses_routing_config_with_fake_client(self) -> None:
         module = load_query_module()
         module.RAGFlowClient = FakeQueryClient

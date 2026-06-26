@@ -184,7 +184,7 @@ schema production and the later phase owns consumption or live workflow integrat
 | 8. Query Rewrite, HyDE, And Cross-Language Expansion | `ragflow-query` | Phase 28 | `rewrite`, `ask --rewrite ...`, `ask --multi-query` | trace fields for original/generated/translated queries | deterministic rewrite tests, LLM-config gating tests |
 | 9. Experimental Agentic Synthesis | `ragflow-query` | Phase 30 | `agentic-plan`, `agentic-answer`, `agentic-eval` | `ragflow_agentic_plan_v1`, `ragflow_agentic_trace_v1` | offline planner tests, explicit LLM-config tests, citation audit compatibility |
 | 10. Generation Evaluation | `ragflow-query` | Phase 30 | `evaluate-answer` | answer evaluation report | deterministic citation/support tests, abstention tests |
-| 11. Routing Quality Upgrade | `ragflow-query` | Phase 29 | `route-report`, `route-diagnose`, `centroid build --plan-only` | route report, centroid index schema | route regression fixtures, no-private-route scan |
+| 11. Routing Quality Upgrade | `ragflow-query` | Phase 29 | `route-report`, `route-diagnose`, `centroid build --plan-only`, `centroid build` | route report, centroid build report, centroid index schema | route regression fixtures, no-private-route scan |
 | 12. Runtime Resilience And Sanitized Reports | shared runtime, all skills | Phase 31 | retry/rate-limit/cache/checkpoint helpers, `--redaction-report` | sanitized report schema, partial-failure reports, cache stats | fake-secret redaction tests, timeout/fallback tests |
 | 13. Benchmark Governance | `ragflow-kb-build` | Phase 26 | `benchmark import/sample/preflight/trend/delta/gate/summarize` | normalized benchmark manifest, `queries.json`, `qrels.json`, `qa.json` | import/sample/preflight tests, delta/gate tests |
 | 14. Grounded QA And Evidence Mapping | `ragflow-kb-build` | Phase 26 | `qa generate/validate/map-evidence`, `segment-metadata report` | grounded QA and evidence mapping artifacts | evidence-span validation tests, generated-QA gate tests |
@@ -651,8 +651,8 @@ used per-KB retrieval parameters, centroid coverage, and strong route regression
 - no shipped private route tables.
 
 Centroid generation should follow an idempotent bounded-batch pattern: dry-run first,
-process at most `N` KBs per run, record progress, and resume without duplicating completed
-work.
+consume only user-owned snapshot vectors, process at most `N` chunks per run, record
+progress, and resume without duplicating completed work.
 
 ## Feature Design 12: Runtime Resilience And Sanitized Reports
 

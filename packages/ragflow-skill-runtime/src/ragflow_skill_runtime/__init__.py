@@ -134,12 +134,17 @@ from .query_rewrite import (
     render_query_rewrite_markdown,
 )
 from .centroid_routing import (
+    CENTROID_BUILD_CHECKPOINT_SCHEMA,
     CENTROID_BUILD_PLAN_SCHEMA,
+    CENTROID_BUILD_REPORT_SCHEMA,
     CENTROID_INDEX_SCHEMA,
     CentroidRoutingError,
+    build_centroid_index,
     build_centroid_plan,
+    render_centroid_build_markdown,
     render_centroid_plan_markdown,
     write_centroid_plan,
+    write_centroid_report,
 )
 from .ragflow_client import RAGFlowClient
 from .profiles import (
@@ -375,7 +380,9 @@ __all__ = [
     "CHUNK_SNAPSHOT_SCHEMA",
     "CITATION_AUDIT_SCHEMA",
     "CANDIDATE_PROFILE_SET_SCHEMA",
+    "CENTROID_BUILD_CHECKPOINT_SCHEMA",
     "CENTROID_BUILD_PLAN_SCHEMA",
+    "CENTROID_BUILD_REPORT_SCHEMA",
     "CENTROID_INDEX_SCHEMA",
     "CentroidRoutingError",
     "EvidenceWeight",
@@ -425,6 +432,7 @@ __all__ = [
     "audit_citations",
     "build_query_trace",
     "build_query_rewrite_plan",
+    "build_centroid_index",
     "build_centroid_plan",
     "compare_validation_reports",
     "convert_source_to_markdown",
@@ -515,6 +523,7 @@ __all__ = [
     "render_suppression_report_markdown",
     "render_citation_audit_markdown",
     "render_query_cross_language_ab_markdown",
+    "render_centroid_build_markdown",
     "render_best_profile_markdown",
     "render_optimization_cleanup_plan_markdown",
     "render_optimization_plan_markdown",
@@ -565,6 +574,7 @@ __all__ = [
     "wait_for_document_states",
     "weight_evidence",
     "write_centroid_plan",
+    "write_centroid_report",
 ]
 
 __version__ = "0.1.0"
