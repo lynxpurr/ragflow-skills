@@ -367,6 +367,25 @@ def _run_no_network_checks(
             }
         )
         produced.append(mineru_cli_quality)
+    mineru_cli_runtime = mineru_cli_output / "runtime_report.json"
+    _record_file_check(checks, "mineru-cli runtime_report produced", mineru_cli_runtime)
+    if mineru_cli_runtime.exists():
+        runtime_payload = json.loads(mineru_cli_runtime.read_text(encoding="utf-8"))
+        runtime_summary = runtime_payload.get("summary", {})
+        runtime_ok = (
+            runtime_payload.get("schema") == "ragflow_doc_runtime_report_v1"
+            and runtime_summary.get("process_attempts") == 1
+            and runtime_summary.get("success") == 1
+        )
+        checks.append(
+            {
+                "name": "mineru-cli runtime report summarizes process attempt",
+                "ok": runtime_ok,
+                "path": str(mineru_cli_runtime),
+                "error": "" if runtime_ok else f"unexpected runtime summary: {runtime_summary}",
+            }
+        )
+        produced.append(mineru_cli_runtime)
 
     backend_probe_json = work_root / "backend_probe.json"
     backend_probe_md = work_root / "backend_probe.md"

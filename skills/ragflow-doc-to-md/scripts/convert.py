@@ -43,6 +43,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     load_doc_manifest_payload,
     load_skill_config,
     make_doc_manifest_payload,
+    make_doc_runtime_report_payload,
     make_quality_report_payload,
     materialize_segments,
     plan_markdown_segmentation,
@@ -51,6 +52,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     probe_conversion_backends,
     quality_documents_from_manifest,
     render_backend_probe_markdown,
+    render_doc_runtime_markdown,
     render_quality_markdown,
     safe_markdown_name,
     sha256_file,
@@ -118,6 +120,29 @@ def _sidecar_path(root: Path, name: str | None) -> Path | None:
     if path.is_absolute():
         return path
     return root / path
+
+
+def _write_runtime_report(
+    *,
+    output_root: Path,
+    args: argparse.Namespace,
+    process_attempts: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, Path | None, Path | None]:
+    if not process_attempts:
+        return None, None, None
+    report = make_doc_runtime_report_payload(
+        output_root=output_root,
+        process_attempts=process_attempts,
+    )
+    report_json_path = _sidecar_path(output_root, args.runtime_report_name)
+    if report_json_path:
+        report_json_path.parent.mkdir(parents=True, exist_ok=True)
+        report_json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    report_md_path = _sidecar_path(output_root, args.runtime_report_md)
+    if report_md_path:
+        report_md_path.parent.mkdir(parents=True, exist_ok=True)
+        report_md_path.write_text(render_doc_runtime_markdown(report), encoding="utf-8")
+    return report, report_json_path, report_md_path
 
 
 def _config_or_arg(args: argparse.Namespace, field: str, config_value, default=None):
@@ -202,6 +227,7 @@ def _run(args: argparse.Namespace) -> int:
         used_names: set[str] = set()
         converted: list[ConvertedDocument] = []
         skipped: list[dict[str, str]] = []
+        process_attempts: list[dict[str, Any]] = []
 
         for source in sources:
             output_name = safe_markdown_name(source, used=used_names)
@@ -250,9 +276,15 @@ def _run(args: argparse.Namespace) -> int:
                         True,
                         label="MINERU_ENABLE_FORMULA",
                     ),
+                    process_attempts=process_attempts,
                 )
             except (UnicodeDecodeError, OSError, DocConvertError) as exc:
                 if args.strict:
+                    _write_runtime_report(
+                        output_root=output_root,
+                        args=args,
+                        process_attempts=process_attempts,
+                    )
                     raise DocConvertError(str(exc)) from exc
                 skipped.append({"source_path": source.source_path, "reason": str(exc)})
                 continue
@@ -268,6 +300,11 @@ def _run(args: argparse.Namespace) -> int:
                 )
             )
 
+        runtime_report, runtime_report_path, runtime_report_md_path = _write_runtime_report(
+            output_root=output_root,
+            args=args,
+            process_attempts=process_attempts,
+        )
         if not converted:
             raise DocConvertError("no documents were converted")
 
@@ -294,6 +331,10 @@ def _run(args: argparse.Namespace) -> int:
             quality_report_md_path.parent.mkdir(parents=True, exist_ok=True)
             quality_report_md_path.write_text(render_quality_markdown(quality_report), encoding="utf-8")
             manifest["quality_report_md"] = args.quality_report_md
+        if runtime_report_path:
+            manifest["runtime_report"] = args.runtime_report_name
+        if runtime_report_md_path:
+            manifest["runtime_report_md"] = args.runtime_report_md
         manifest["quality_gate"] = quality_report["gate"]
         manifest_path = output_root / args.manifest_name
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -304,6 +345,8 @@ def _run(args: argparse.Namespace) -> int:
                 "doc_manifest": str(manifest_path),
                 "quality_report": str(quality_report_path) if quality_report_path else None,
                 "quality_gate": quality_report["gate"],
+                "runtime_report": str(runtime_report_path) if runtime_report_path else None,
+                "runtime_summary": runtime_report["summary"] if runtime_report else None,
                 "document_count": len(converted),
                 "skipped": skipped,
             }
@@ -575,6 +618,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest-name", default="doc_manifest.json")
     parser.add_argument("--quality-report-name", default="quality_report.json", help="Quality report sidecar name under the output directory")
     parser.add_argument("--quality-report-md", help="Optional Markdown quality report sidecar name under the output directory")
+    parser.add_argument("--runtime-report-name", default="runtime_report.json", help="Runtime process cleanup report sidecar name; written when local process-backed converters run")
+    parser.add_argument("--runtime-report-md", help="Optional Markdown runtime report sidecar name under the output directory")
     parser.add_argument("--no-recursive", action="store_true", help="Do not recurse into input directories")
     parser.add_argument("--strict", action="store_true", help="Fail on the first skipped file")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")

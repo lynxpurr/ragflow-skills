@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
@@ -59,6 +60,8 @@ MINERU_AUTO_EXTENSIONS = {
 DEFAULT_MINERU_BASE_URL = "https://mineru.net/api/v1/agent"
 BACKEND_PROBE_REPORT_SCHEMA = "ragflow_doc_backend_probe_report_v1"
 BACKEND_PROBE_STATUSES = ("available", "missing", "wrong_protocol", "timeout", "not_configured")
+DOC_RUNTIME_REPORT_SCHEMA = "ragflow_doc_runtime_report_v1"
+PROCESS_ATTEMPT_STATUSES = ("success", "failed", "timeout", "execution_error")
 CONVERSION_BACKENDS = (
     "builtin",
     "pandoc",
@@ -996,6 +999,320 @@ def copy_local_markdown_assets(
     return HTML_IMAGE_SRC_RE.sub(replace_html, markdown)
 
 
+def _short_executable_name(command: list[str]) -> str:
+    executable = command[0] if command else ""
+    return Path(executable).name or executable
+
+
+def _coerce_timeout_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _read_linux_process_stat(pid: int) -> tuple[int, str, str] | None:
+    try:
+        stat = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    close = stat.rfind(")")
+    if close < 0:
+        return None
+    name_start = stat.find("(")
+    name = stat[name_start + 1 : close] if name_start >= 0 else str(pid)
+    fields = stat[close + 2 :].split()
+    if len(fields) < 3:
+        return None
+    try:
+        process_group_id = int(fields[2])
+    except ValueError:
+        return None
+    return process_group_id, name, fields[0]
+
+
+def _collect_process_group_members(process_group_id: int, *, direct_pid: int) -> list[dict[str, Any]]:
+    proc_root = Path("/proc")
+    if os.name != "posix" or not proc_root.is_dir():
+        return []
+    members: list[dict[str, Any]] = []
+    current_pid = os.getpid()
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == current_pid:
+            continue
+        stat = _read_linux_process_stat(pid)
+        if not stat:
+            continue
+        member_group_id, name, state = stat
+        if member_group_id != process_group_id:
+            continue
+        members.append(
+            {
+                "pid": pid,
+                "name": name,
+                "state": state,
+                "direct_child": pid == direct_pid,
+            }
+        )
+    return sorted(members, key=lambda item: int(item["pid"]))
+
+
+def _cleanup_timed_out_process(
+    process: subprocess.Popen[str],
+    *,
+    process_group_id: int | None,
+) -> dict[str, Any]:
+    kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+    cleanup: dict[str, Any] = {
+        "attempted": True,
+        "method": "process_group" if os.name == "posix" and process_group_id is not None else "process",
+        "signals_sent": [],
+        "process_exited": False,
+        "leftover_processes": [],
+        "leftover_process_count": 0,
+    }
+    use_process_group = (
+        os.name == "posix"
+        and process_group_id is not None
+        and process_group_id != os.getpgrp()
+    )
+
+    def send_signal(sig: signal.Signals, name: str) -> None:
+        try:
+            if use_process_group:
+                os.killpg(process_group_id, sig)
+            elif sig == signal.SIGTERM:
+                process.terminate()
+            else:
+                process.kill()
+            cleanup["signals_sent"].append(name)
+        except ProcessLookupError:
+            return
+        except OSError as exc:
+            cleanup.setdefault("errors", []).append(f"{name}: {exc.__class__.__name__}")
+
+    send_signal(signal.SIGTERM, "SIGTERM")
+    try:
+        process.wait(timeout=0.5)
+    except subprocess.TimeoutExpired:
+        pass
+
+    leftovers = (
+        _collect_process_group_members(process_group_id, direct_pid=process.pid)
+        if use_process_group
+        else []
+    )
+    if process.poll() is None or leftovers:
+        send_signal(kill_signal, "SIGKILL" if kill_signal != signal.SIGTERM else "KILL")
+        try:
+            process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            pass
+
+    cleanup["process_exited"] = process.poll() is not None
+    final_leftovers = (
+        _collect_process_group_members(process_group_id, direct_pid=process.pid)
+        if use_process_group
+        else []
+    )
+    cleanup["leftover_processes"] = final_leftovers
+    cleanup["leftover_process_count"] = len(final_leftovers)
+    return cleanup
+
+
+def _close_process_pipes(process: subprocess.Popen[str]) -> None:
+    for stream in (process.stdout, process.stderr):
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+
+def _run_local_process_with_cleanup(
+    command: list[str],
+    *,
+    timeout: float,
+    backend: str,
+    source_path: str,
+) -> tuple[subprocess.CompletedProcess[str] | None, dict[str, Any]]:
+    started_at = datetime.now(timezone.utc).isoformat()
+    started = time.monotonic()
+    event: dict[str, Any] = {
+        "backend": backend,
+        "source_path": source_path,
+        "executable": _short_executable_name(command),
+        "timeout_seconds": timeout,
+        "started_at": started_at,
+    }
+    try:
+        process = subprocess.Popen(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=os.name == "posix",
+        )
+    except OSError as exc:
+        event.update(
+            {
+                "status": "execution_error",
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                "returncode": None,
+                "error_type": exc.__class__.__name__,
+                "cleanup": {
+                    "attempted": False,
+                    "method": "none",
+                    "signals_sent": [],
+                    "process_exited": False,
+                    "leftover_processes": [],
+                    "leftover_process_count": 0,
+                },
+            }
+        )
+        return None, event
+
+    event["pid"] = process.pid
+    process_group_id: int | None = None
+    if os.name == "posix":
+        try:
+            process_group_id = os.getpgid(process.pid)
+        except OSError:
+            process_group_id = None
+
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        cleanup = _cleanup_timed_out_process(process, process_group_id=process_group_id)
+        _close_process_pipes(process)
+        event.update(
+            {
+                "status": "timeout",
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                "returncode": process.returncode,
+                "cleanup": cleanup,
+            }
+        )
+        return (
+            subprocess.CompletedProcess(
+                command,
+                process.returncode,
+                _coerce_timeout_output(exc.stdout),
+                _coerce_timeout_output(exc.stderr),
+            ),
+            event,
+        )
+
+    status = "success" if process.returncode == 0 else "failed"
+    event.update(
+        {
+            "status": status,
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "returncode": process.returncode,
+            "cleanup": {
+                "attempted": False,
+                "method": "none",
+                "signals_sent": [],
+                "process_exited": True,
+                "leftover_processes": [],
+                "leftover_process_count": 0,
+            },
+        }
+    )
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr), event
+
+
+def make_doc_runtime_report_payload(
+    *,
+    output_root: str | Path,
+    process_attempts: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Create a portable report for local process-backed conversion attempts."""
+
+    normalized = [dict(attempt) for attempt in process_attempts]
+    cleanups = [
+        item.get("cleanup", {}) if isinstance(item.get("cleanup"), Mapping) else {}
+        for item in normalized
+    ]
+    summary = {
+        "process_attempts": len(normalized),
+        "success": sum(1 for item in normalized if item.get("status") == "success"),
+        "failed": sum(1 for item in normalized if item.get("status") == "failed"),
+        "timeout": sum(1 for item in normalized if item.get("status") == "timeout"),
+        "execution_error": sum(1 for item in normalized if item.get("status") == "execution_error"),
+        "cleanup_attempts": sum(1 for cleanup in cleanups if cleanup.get("attempted")),
+        "leftover_processes": sum(
+            int(cleanup.get("leftover_process_count", 0) or 0)
+            for cleanup in cleanups
+        ),
+    }
+    summary["incomplete_cleanup"] = sum(
+        1
+        for cleanup in cleanups
+        if cleanup.get("attempted")
+        and (
+            not cleanup.get("process_exited")
+            or int(cleanup.get("leftover_process_count", 0) or 0) > 0
+        )
+    )
+    return {
+        "schema": DOC_RUNTIME_REPORT_SCHEMA,
+        "version": "0.1",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source_root": ".",
+        "output_root": ".",
+        "summary": summary,
+        "process_attempts": normalized,
+    }
+
+
+def render_doc_runtime_markdown(report: Mapping[str, Any]) -> str:
+    """Render a compact Markdown runtime report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Doc Runtime Report",
+        "",
+        f"- schema: `{report.get('schema', DOC_RUNTIME_REPORT_SCHEMA)}`",
+        f"- process attempts: `{summary.get('process_attempts', 0)}`",
+        f"- success: `{summary.get('success', 0)}`",
+        f"- failed: `{summary.get('failed', 0)}`",
+        f"- timeout: `{summary.get('timeout', 0)}`",
+        f"- cleanup attempts: `{summary.get('cleanup_attempts', 0)}`",
+        f"- leftover processes: `{summary.get('leftover_processes', 0)}`",
+        f"- incomplete cleanup: `{summary.get('incomplete_cleanup', 0)}`",
+        "",
+        "| Source | Backend | Status | Cleanup | Leftovers |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    attempts = report.get("process_attempts", [])
+    if isinstance(attempts, list):
+        for item in attempts:
+            if not isinstance(item, Mapping):
+                continue
+            cleanup = item.get("cleanup", {}) if isinstance(item.get("cleanup"), Mapping) else {}
+            cleanup_state = "attempted" if cleanup.get("attempted") else "not needed"
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        str(item.get("source_path", "")),
+                        str(item.get("backend", "")),
+                        str(item.get("status", "")),
+                        cleanup_state,
+                        str(cleanup.get("leftover_process_count", 0)),
+                    ]
+                )
+                + " |"
+            )
+    return "\n".join(lines) + "\n"
+
+
 def mineru_cli_convert(
     source: SourceDocument,
     *,
@@ -1003,6 +1320,7 @@ def mineru_cli_convert(
     cli_backend: str | None = None,
     timeout: float = 300.0,
     asset_output_dir: str | Path | None = None,
+    process_attempts: list[dict[str, Any]] | None = None,
 ) -> str:
     """Convert one file through an installed local MinerU CLI."""
 
@@ -1026,18 +1344,22 @@ def mineru_cli_convert(
             "-o",
             str(output_dir),
         ]
-        try:
-            result = subprocess.run(
-                command,
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise DocConvertError(f"MinerU CLI timed out after {timeout:g}s for {source.source_path}") from exc
-        except OSError as exc:
-            raise DocConvertError(f"MinerU CLI could not be executed: {exc}") from exc
+        result, process_attempt = _run_local_process_with_cleanup(
+            command,
+            timeout=timeout,
+            backend="mineru-cli",
+            source_path=source.source_path,
+        )
+        if process_attempts is not None:
+            process_attempts.append(process_attempt)
+
+        if process_attempt["status"] == "timeout":
+            raise DocConvertError(f"MinerU CLI timed out after {timeout:g}s for {source.source_path}")
+        if process_attempt["status"] == "execution_error":
+            error_type = process_attempt.get("error_type", "OSError")
+            raise DocConvertError(f"MinerU CLI could not be executed: {error_type}")
+        if result is None:
+            raise DocConvertError(f"MinerU CLI did not return a process result for {source.source_path}")
 
         if result.returncode != 0:
             detail = _short_process_detail(result)
@@ -1098,6 +1420,7 @@ def convert_source_to_markdown(
     mineru_enable_table: bool = True,
     mineru_is_ocr: bool = False,
     mineru_enable_formula: bool = True,
+    process_attempts: list[dict[str, Any]] | None = None,
 ) -> tuple[str, list[str]]:
     """Convert one source document to Markdown and return warnings."""
 
@@ -1127,6 +1450,7 @@ def convert_source_to_markdown(
                 cli_backend=mineru_cli_backend,
                 timeout=mineru_timeout,
                 asset_output_dir=asset_output_dir,
+                process_attempts=process_attempts,
             ), warnings
         except DocConvertError as exc:
             if backend == "mineru-cli":

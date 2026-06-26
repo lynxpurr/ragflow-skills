@@ -453,6 +453,25 @@ def _run_mineru_env_check(
             "error": "" if cli_quality_status == "PASS" else f"expected PASS, got {cli_quality_status}",
         }
     )
+    cli_runtime_path = mineru_cli_output / "runtime_report.json"
+    cli_runtime_summary = None
+    cli_runtime_ok = False
+    if cli_runtime_path.exists():
+        cli_runtime_payload = json.loads(cli_runtime_path.read_text(encoding="utf-8"))
+        cli_runtime_summary = cli_runtime_payload.get("summary", {})
+        cli_runtime_ok = (
+            cli_runtime_payload.get("schema") == "ragflow_doc_runtime_report_v1"
+            and cli_runtime_summary.get("process_attempts") == 1
+            and cli_runtime_summary.get("success") == 1
+        )
+    checks.append(
+        {
+            "name": "mineru-cli runtime report summarizes process attempt",
+            "ok": cli_runtime_ok,
+            "returncode": 0 if cli_runtime_ok else 1,
+            "error": "" if cli_runtime_ok else f"unexpected runtime summary: {cli_runtime_summary}",
+        }
+    )
     sync_markdown_path = mineru_sync_output / "documents" / "mineru.md"
     sync_ok = sync_markdown_path.exists() and "MinerU Sync Service Smoke" in sync_markdown_path.read_text(
         encoding="utf-8"
@@ -2352,6 +2371,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         doc_manifest,
         mineru_doc_manifest,
         workspace / "mineru-cli-handoff" / "doc_manifest.json",
+        workspace / "mineru-cli-handoff" / "runtime_report.json",
         workspace / "mineru-sync-handoff" / "doc_manifest.json",
         workspace / "backend_probe.json",
         workspace / "backend_probe.md",

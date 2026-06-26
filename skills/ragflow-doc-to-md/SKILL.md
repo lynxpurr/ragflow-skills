@@ -80,6 +80,7 @@ Notes:
 - `quality_gate.status` is written into `doc_manifest.json`; `ragflow-kb-build` blocks `BLOCKED` handoffs unless the user passes `--allow-blocked`.
 - Use `--strict` when skipped files should fail the run.
 - Use `backend probe` before live conversion to classify backends as `available`, `missing`, `wrong_protocol`, `timeout`, or `not_configured`. It does not convert files, and endpoint checks require explicit `--network-check`.
+- When a local process-backed converter such as `mineru-cli` runs, `runtime_report.json` records process attempt status, timeout cleanup, and leftover process counts. Use `--runtime-report-md` for a Markdown copy.
 - Use `inspect` to regenerate a quality report from an existing handoff.
 - Use `segment-plan` before splitting long Markdown; use `split` when the user wants materialized `segments/*.md` that can be ingested as an ordinary Markdown directory.
 - The `mineru-cli` backend runs a local MinerU executable as `mineru -b <backend> -p <source> -o <temp-output>` and reads the Markdown file it produces. Set the path with `MINERU_CLI_PATH`, `mineru.cli_path`, or `--mineru-cli-path`; default CLI backend is `pipeline`.

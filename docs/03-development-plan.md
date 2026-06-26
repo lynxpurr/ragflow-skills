@@ -1003,7 +1003,7 @@ Tasks:
 - [x] Add `ragflow-doc-to-md backend probe`.
 - [x] Classify conversion backends as `available`, `missing`, `wrong_protocol`, `timeout`, or `not_configured`.
 - [ ] Add optional `ragflow-doc-to-md backend warmup` for tiny user-approved converter fixtures.
-- [ ] Add timeout cleanup and leftover-process reporting for local CLI/process-backed conversion attempts.
+- [x] Add timeout cleanup and leftover-process reporting for local CLI/process-backed conversion attempts.
 - [ ] Preserve image fallback as `PASS_WITH_REVIEW` with source image retained when OCR/conversion is unavailable.
 - [ ] Add `ragflow-kb-build model-providers probe`.
 - [ ] Probe configured RAGFlow embedding/rerank provider registration and request shape when credentials are present.

@@ -56,6 +56,7 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("mineru-cli markdown produced", check_names)
         self.assertIn("mineru-cli local image asset copied", check_names)
         self.assertIn("mineru-cli quality gate passes with local image", check_names)
+        self.assertIn("mineru-cli runtime report summarizes process attempt", check_names)
         self.assertIn("doc-to-md mineru env backend", check_names)
         self.assertIn("mineru service markdown produced", check_names)
         self.assertIn("doc-to-md mineru-sync env backend", check_names)
@@ -67,6 +68,10 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("mineru-cli-handoff/doc_manifest.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("mineru-cli-handoff/runtime_report.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
         self.assertTrue(

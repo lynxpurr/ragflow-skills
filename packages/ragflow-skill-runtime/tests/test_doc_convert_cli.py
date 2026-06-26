@@ -70,6 +70,17 @@ def _write_fake_mineru_cli_with_image(path: Path) -> Path:
     return path
 
 
+def _write_slow_mineru_cli(path: Path) -> Path:
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import time\n"
+        "time.sleep(5)\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
 class DocConvertCliTests(unittest.TestCase):
     def test_convert_passthrough_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -667,6 +678,54 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(quality_report["gate"]["status"], "PASS")
         self.assertEqual(manifest["quality_gate"]["status"], "PASS")
 
+    def test_convert_mineru_cli_timeout_writes_runtime_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "handoff"
+            input_dir.mkdir()
+            (input_dir / "ok.md").write_text("# OK\n", encoding="utf-8")
+            (input_dir / "slow.pdf").write_bytes(b"%PDF slow")
+            fake_cli = _write_slow_mineru_cli(root / "mineru")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                    "--backend",
+                    "mineru-cli",
+                    "--mineru-cli-path",
+                    str(fake_cli),
+                    "--mineru-timeout",
+                    "0.1",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+            report = json.loads((output_dir / "runtime_report.json").read_text(encoding="utf-8"))
+            manifest = json.loads((output_dir / "doc_manifest.json").read_text(encoding="utf-8"))
+            attempt = report["process_attempts"][0]
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(payload["document_count"], 1)
+        self.assertEqual(payload["runtime_summary"]["timeout"], 1)
+        self.assertEqual(payload["skipped"][0]["source_path"], "slow.pdf")
+        self.assertEqual(report["schema"], "ragflow_doc_runtime_report_v1")
+        self.assertEqual(report["summary"]["cleanup_attempts"], 1)
+        self.assertEqual(report["summary"]["leftover_processes"], 0)
+        self.assertEqual(attempt["status"], "timeout")
+        self.assertTrue(attempt["cleanup"]["attempted"])
+        self.assertTrue(attempt["cleanup"]["process_exited"])
+        self.assertEqual(attempt["cleanup"]["leftover_process_count"], 0)
+        self.assertEqual(manifest["runtime_report"], "runtime_report.json")
+
     def test_convert_auto_prefers_mineru_cli_for_pdf(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -965,6 +1024,7 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertIn("--mineru-base-url", result.stdout)
         self.assertIn("--mineru-cli-path", result.stdout)
         self.assertIn("--quality-report-name", result.stdout)
+        self.assertIn("--runtime-report-name", result.stdout)
         self.assertIn("backend probe", result.stdout)
         self.assertIn("segment-plan", result.stdout)
         self.assertIn("--strict", result.stdout)

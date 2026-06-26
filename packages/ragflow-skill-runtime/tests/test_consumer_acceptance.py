@@ -79,6 +79,7 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("mineru-cli doc_manifest produced", check_names)
         self.assertIn("mineru-cli local image asset copied", check_names)
         self.assertIn("mineru-cli quality gate passes with local image", check_names)
+        self.assertIn("mineru-cli runtime report summarizes process attempt", check_names)
         self.assertIn("doc-to-md backend probe", check_names)
         self.assertIn("doc-to-md inspect quality", check_names)
         self.assertIn("doc-to-md segment plan", check_names)
