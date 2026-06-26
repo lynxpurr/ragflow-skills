@@ -15,6 +15,8 @@ python scripts/query.py --base-url https://ragflow.example.test --api-key "$RAGF
 python scripts/query.py --config /path/to/ragflow-config.local.yaml ask "Question" --kb-manifest ./kb_manifest.json --mode direct --json
 python scripts/query.py --config /path/to/ragflow-config.local.yaml ask "Question" --dataset-id ds-a --dataset-id ds-b --fusion rrf --json
 python scripts/query.py rewrite "Question" --rewrite simple --report-json ./run/rewrite.json --report-md ./run/rewrite.md --json
+python scripts/query.py intent classify "Compare runtime config versus metadata routing" --report-json ./run/intent.json --report-md ./run/intent.md --json
+python scripts/query.py intent route "What about it?" --report-json ./run/intent_route.json --report-md ./run/intent_route.md --json
 python scripts/query.py agentic-plan "Compare runtime configuration and metadata routing tradeoffs" --max-subqueries 3 --reflection-budget 1 --report-json ./run/agentic_plan.json --report-md ./run/agentic_plan.md --json
 python scripts/query.py ask "Question" --dataset-id ds-a --rewrite simple --multi-query ./fixtures/multi-query.json --trace-json ./run/query_trace.json --json
 python scripts/query.py fusion-test --cases ./fixtures/fusion-test-cases.json --report-json ./run/fusion_test.json --report-md ./run/fusion_test.md --json
@@ -65,6 +67,7 @@ Notes:
 - Use `fusion` on multiple saved `ask --json` outputs to build an offline reciprocal-rank-fusion report with per-source rank contributions and deduplicated chunks.
 - Use `fusion-test` on a cases file that points at saved query outputs to verify expected top chunks, expected terms, and minimum source contributions offline.
 - Use `rewrite` or `ask --rewrite simple|translate` for deterministic offline query planning; `hyde` is reserved for a host-owned LLM adapter.
+- Use `intent classify` and `intent route` to classify `knowledge_query`, `comparison`, `clarification_needed`, and `out_of_scope` requests before retrieval. These commands are offline and include confidence plus low-confidence disclaimers.
 - Use `agentic-plan` to create a deterministic, non-executing plan for classification, bounded sub-query planning, optional reflection budget, and host-owned synthesis/citation policy. It does not retrieve, mutate RAGFlow, or call an LLM.
 - Use `ask --multi-query` with a host-owned JSON file when you need to preserve multiple original/generated queries in the trace and retrieval payload.
 - See `templates/host-assisted-response.example.json`, `templates/query-trace.example.json`, `templates/citation-audit.example.json`, and `templates/query-diagnostic.example.json` for expected payload shapes.

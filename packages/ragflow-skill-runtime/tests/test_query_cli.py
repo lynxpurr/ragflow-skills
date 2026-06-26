@@ -242,6 +242,63 @@ class QueryCliTests(unittest.TestCase):
         self.assertIn("RAGFlow Query Rewrite Plan", markdown)
         self.assertIn("how to configure runtime", markdown)
 
+    def test_intent_commands_write_reports(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            intent_json = root / "intent.json"
+            intent_md = root / "intent.md"
+            route_json = root / "route.json"
+            route_md = root / "route.md"
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                classify_code = module.main(
+                    [
+                        "intent",
+                        "classify",
+                        "Compare runtime config versus metadata routing",
+                        "--report-json",
+                        str(intent_json),
+                        "--report-md",
+                        str(intent_md),
+                        "--json",
+                    ]
+                )
+            intent_payload = json.loads(stdout.getvalue())
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                route_code = module.main(
+                    [
+                        "intent",
+                        "route",
+                        "What about it?",
+                        "--report-json",
+                        str(route_json),
+                        "--report-md",
+                        str(route_md),
+                        "--json",
+                    ]
+                )
+            route_payload = json.loads(stdout.getvalue())
+
+            intent_json_exists = intent_json.exists()
+            route_json_exists = route_json.exists()
+            intent_markdown = intent_md.read_text(encoding="utf-8")
+            route_markdown = route_md.read_text(encoding="utf-8")
+
+        self.assertEqual(classify_code, 0)
+        self.assertEqual(intent_payload["schema"], "ragflow_query_intent_v1")
+        self.assertEqual(intent_payload["intent"], "comparison")
+        self.assertTrue(intent_json_exists)
+        self.assertIn("RAGFlow Query Intent", intent_markdown)
+        self.assertEqual(route_code, 0)
+        self.assertEqual(route_payload["schema"], "ragflow_query_route_decision_v1")
+        self.assertEqual(route_payload["status"], "clarification")
+        self.assertTrue(route_json_exists)
+        self.assertIn("RAGFlow Query Route Decision", route_markdown)
+
     def test_agentic_plan_command_writes_plan_outputs(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:

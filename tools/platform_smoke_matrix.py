@@ -717,6 +717,42 @@ if rewrite_payload.get("schema") != "ragflow_query_rewrite_plan_v1":
 
 stdout = StringIO()
 with contextlib.redirect_stdout(stdout):
+    intent_code = module.main([
+        "intent",
+        "classify",
+        "Compare runtime config versus metadata routing",
+        "--report-json",
+        str(artifacts_dir / "query_intent.json"),
+        "--report-md",
+        str(artifacts_dir / "query_intent.md"),
+        "--json",
+    ])
+if intent_code != 0:
+    raise SystemExit(intent_code)
+intent_payload = json.loads(stdout.getvalue())
+if intent_payload.get("schema") != "ragflow_query_intent_v1":
+    raise SystemExit(18)
+
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    intent_route_code = module.main([
+        "intent",
+        "route",
+        "What about it?",
+        "--report-json",
+        str(artifacts_dir / "query_intent_route.json"),
+        "--report-md",
+        str(artifacts_dir / "query_intent_route.md"),
+        "--json",
+    ])
+if intent_route_code != 0:
+    raise SystemExit(intent_route_code)
+intent_route_payload = json.loads(stdout.getvalue())
+if intent_route_payload.get("schema") != "ragflow_query_route_decision_v1":
+    raise SystemExit(19)
+
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
     agentic_plan_code = module.main([
         "agentic-plan",
         "Compare runtime configuration and metadata routing tradeoffs",
@@ -2186,6 +2222,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_trace.md",
         artifacts_dir / "query_rewrite.json",
         artifacts_dir / "query_rewrite.md",
+        artifacts_dir / "query_intent.json",
+        artifacts_dir / "query_intent.md",
+        artifacts_dir / "query_intent_route.json",
+        artifacts_dir / "query_intent_route.md",
         artifacts_dir / "query_agentic_plan.json",
         artifacts_dir / "query_agentic_plan.md",
         artifacts_dir / "query_multi.json",

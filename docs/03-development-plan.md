@@ -960,11 +960,11 @@ host-assisted evidence as the default recommended workflow.
 
 Tasks:
 
-- [ ] Add `ragflow_query_intent_v1` and `ragflow_query_route_decision_v1`.
-- [ ] Add `ragflow-query intent classify`.
-- [ ] Add `ragflow-query intent route`.
-- [ ] Classify `knowledge_query`, `comparison`, `clarification_needed`, and `out_of_scope`.
-- [ ] Return confidence and low-confidence disclaimers in structured JSON.
+- [x] Add `ragflow_query_intent_v1` and `ragflow_query_route_decision_v1`.
+- [x] Add `ragflow-query intent classify`.
+- [x] Add `ragflow-query intent route`.
+- [x] Classify `knowledge_query`, `comparison`, `clarification_needed`, and `out_of_scope`.
+- [x] Return confidence and low-confidence disclaimers in structured JSON.
 - [ ] Add normalized retrieval statuses: `success`, `empty`, `low_quality`, `needs_refinement`, `clarification`, `rejected`, `error`, `timeout`, and `partial`.
 - [ ] Add `ragflow_query_session_v1`.
 - [ ] Add `ragflow-query session enrich`.

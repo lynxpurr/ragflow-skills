@@ -873,6 +873,12 @@ Capabilities:
 This layer should be deterministic by default and LLM-assisted only when explicitly
 configured.
 
+Current public implementation adds deterministic `ragflow-query intent classify` and
+`ragflow-query intent route`. They emit `ragflow_query_intent_v1` and
+`ragflow_query_route_decision_v1`, classify `knowledge_query`, `comparison`,
+`clarification_needed`, and `out_of_scope`, include confidence labels and low-confidence
+disclaimers, and do not retrieve, mutate RAGFlow, or call an LLM.
+
 ## Feature Design 17: Skill Suite Review And Drift Control
 
 ### Problem

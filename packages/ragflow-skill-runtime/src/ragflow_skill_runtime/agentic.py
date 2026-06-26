@@ -5,6 +5,13 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping
 
+from .query_intent import (
+    QueryIntentError,
+    classify_query_intent,
+    normalize_query_question,
+    tokenize_query_text,
+)
+
 
 AGENTIC_PLAN_SCHEMA = "ragflow_agentic_plan_v1"
 AGENTIC_TRACE_SCHEMA = "ragflow_agentic_trace_v1"
@@ -12,69 +19,6 @@ AGENTIC_TRACE_SCHEMA = "ragflow_agentic_trace_v1"
 
 class AgenticPlanError(ValueError):
     """Raised when an agentic plan cannot be built safely."""
-
-
-def _normalize_question(value: Any) -> str:
-    if not isinstance(value, str):
-        raise AgenticPlanError("question must be a string")
-    normalized = re.sub(r"\s+", " ", value).strip()
-    if not normalized:
-        raise AgenticPlanError("question must be non-empty")
-    return normalized
-
-
-def _tokens(text: str) -> list[str]:
-    return re.findall(r"[0-9A-Za-z_\u4e00-\u9fff]+", text.lower())
-
-
-def _contains_any(text: str, patterns: tuple[str, ...]) -> bool:
-    return any(re.search(pattern, text) for pattern in patterns)
-
-
-def _classify_intent(question: str, tokens: list[str]) -> dict[str, Any]:
-    lowered = question.lower()
-    pronouns = {"it", "this", "that", "they", "them", "those", "these", "它", "这个", "那个"}
-    comparison_patterns = (
-        r"\bcompare\b",
-        r"\bdifference\b",
-        r"\bdifferences\b",
-        r"\bversus\b",
-        r"\bvs\.?\b",
-        r"\bpros and cons\b",
-        r"\btrade-?offs?\b",
-        r"\bwhich is better\b",
-    )
-    current_external_patterns = (
-        r"\bweather\b",
-        r"\bstock price\b",
-        r"\bsports score\b",
-        r"\blatest news\b",
-        r"\btoday'?s news\b",
-        r"\bflight status\b",
-    )
-    if len(tokens) <= 4 and (set(tokens) & pronouns or lowered in {"what about it?", "how about it?"}):
-        return {
-            "intent": "clarification_needed",
-            "confidence": 0.72,
-            "reasons": ["short follow-up contains unresolved pronoun"],
-        }
-    if _contains_any(lowered, current_external_patterns):
-        return {
-            "intent": "out_of_scope",
-            "confidence": 0.68,
-            "reasons": ["question appears to require current external data outside saved KB evidence"],
-        }
-    if _contains_any(lowered, comparison_patterns):
-        return {
-            "intent": "comparison",
-            "confidence": 0.82,
-            "reasons": ["comparison marker detected"],
-        }
-    return {
-        "intent": "knowledge_query",
-        "confidence": 0.78,
-        "reasons": ["default deterministic knowledge-query classification"],
-    }
 
 
 def _classify_complexity(question: str, tokens: list[str], intent: str) -> dict[str, Any]:
@@ -145,7 +89,7 @@ def _subqueries(question: str, *, intent: str, complexity: str, max_subqueries: 
     lowered = question.lower()
     raw_parts = re.split(r"\b(?:and|then|also|versus|vs)\b|[;；]", question, flags=re.I)
     candidates = [_clause_to_query(part) for part in raw_parts]
-    candidates = [item for item in candidates if len(_tokens(item)) >= 2]
+    candidates = [item for item in candidates if len(tokenize_query_text(item)) >= 2]
     if intent == "comparison" and len(candidates) < 2:
         candidates.extend([f"{question.rstrip('?.!')} key criteria", f"{question.rstrip('?.!')} differences"])
     if "pros and cons" in lowered and not any("pros" in item.lower() for item in candidates):
@@ -175,7 +119,10 @@ def build_agentic_plan(
 ) -> dict[str, Any]:
     """Build a deterministic, non-executing agentic query plan."""
 
-    original_query = _normalize_question(question)
+    try:
+        original_query = normalize_query_question(question)
+    except QueryIntentError as exc:
+        raise AgenticPlanError(str(exc)) from exc
     normalized_retrieval_mode = str(retrieval_mode or "auto").strip().lower()
     if normalized_retrieval_mode not in {"auto", "direct"}:
         raise AgenticPlanError("retrieval_mode must be one of: auto, direct")
@@ -187,8 +134,8 @@ def build_agentic_plan(
     if not isinstance(reflection_budget, int) or reflection_budget < 0 or reflection_budget > 3:
         raise AgenticPlanError("reflection_budget must be an integer between 0 and 3")
 
-    token_values = _tokens(original_query)
-    intent = _classify_intent(original_query, token_values)
+    token_values = tokenize_query_text(original_query)
+    intent = classify_query_intent(original_query)
     complexity = _classify_complexity(original_query, token_values, str(intent["intent"]))
     subqueries = _subqueries(
         original_query,

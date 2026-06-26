@@ -1561,6 +1561,13 @@ raise SystemExit(code)
         rewrite_help,
         required_output="Plan deterministic query rewrite variants",
     )
+    intent_help = _run_command([python_executable, str(query_script), "intent", "--help"], cwd=work_root, env=env)
+    _record_command_check(
+        checks,
+        "query intent help",
+        intent_help,
+        required_output="Classify query intent offline",
+    )
     agentic_plan_help = _run_command(
         [python_executable, str(query_script), "agentic-plan", "--help"],
         cwd=work_root,
@@ -1925,6 +1932,10 @@ raise SystemExit(code)
     query_fusion_test_md = work_root / "query_fusion_test.md"
     query_rewrite_json = work_root / "query_rewrite.json"
     query_rewrite_md = work_root / "query_rewrite.md"
+    query_intent_json = work_root / "query_intent.json"
+    query_intent_md = work_root / "query_intent.md"
+    query_intent_route_json = work_root / "query_intent_route.json"
+    query_intent_route_md = work_root / "query_intent_route.md"
     query_agentic_plan_json = work_root / "query_agentic_plan.json"
     query_agentic_plan_md = work_root / "query_agentic_plan.md"
     query_output.write_text(
@@ -2285,6 +2296,60 @@ raise SystemExit(code)
         produced.append(query_rewrite_json)
     if query_rewrite_md.exists():
         produced.append(query_rewrite_md)
+
+    query_intent = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "intent",
+            "classify",
+            "Compare release artifact portability versus repository source context",
+            "--report-json",
+            str(query_intent_json),
+            "--report-md",
+            str(query_intent_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query intent classify",
+        query_intent,
+        required_output='"schema": "ragflow_query_intent_v1"',
+    )
+    if query_intent_json.exists():
+        produced.append(query_intent_json)
+    if query_intent_md.exists():
+        produced.append(query_intent_md)
+
+    query_intent_route = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "intent",
+            "route",
+            "What about it?",
+            "--report-json",
+            str(query_intent_route_json),
+            "--report-md",
+            str(query_intent_route_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query intent route",
+        query_intent_route,
+        required_output='"schema": "ragflow_query_route_decision_v1"',
+    )
+    if query_intent_route_json.exists():
+        produced.append(query_intent_route_json)
+    if query_intent_route_md.exists():
+        produced.append(query_intent_route_md)
 
     query_agentic_plan = _run_command(
         [
