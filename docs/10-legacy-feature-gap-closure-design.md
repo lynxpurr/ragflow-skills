@@ -930,6 +930,12 @@ Checks:
 This should remain a static/offline release check. It should not load private old skills or
 scan outside the current repository in normal release mode.
 
+Implementation status: the first `--suite-review` gate is implemented as an offline
+release-hygiene mode. It validates public `SKILL.md` frontmatter, required shared
+references, shared-reference hash drift, broken relative links, stale/private references,
+and high-overlap skill descriptions with fixture coverage. Version/date drift, repeated
+warning centralization, and compatibility-reference checks remain open.
+
 ## Feature Design 18: Runtime Capability, Model Provider, And Fallback Gates
 
 ### Problem

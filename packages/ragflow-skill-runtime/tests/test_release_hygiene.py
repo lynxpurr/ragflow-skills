@@ -11,7 +11,39 @@ TOOLS_DIR = ROOT / "tools"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from release_hygiene_check import run_hygiene_check, scan_forbidden_patterns  # noqa: E402
+from release_hygiene_check import run_hygiene_check, run_suite_review, scan_forbidden_patterns  # noqa: E402
+
+
+PUBLIC_SKILLS = ("ragflow-doc-to-md", "ragflow-kb-build", "ragflow-query")
+
+
+def _write_skill_fixture(
+    skills_root: Path,
+    skill_name: str,
+    *,
+    description: str,
+    body: str = "",
+    host_reference: str = "shared host setup\n",
+    onboarding_reference: str | None = "shared onboarding prompt\n",
+) -> None:
+    skill_root = skills_root / skill_name
+    references = skill_root / "references"
+    references.mkdir(parents=True, exist_ok=True)
+    (skill_root / "SKILL.md").write_text(
+        f"""---
+name: {skill_name}
+description: {description}
+---
+
+# {skill_name}
+
+{body}
+""",
+        encoding="utf-8",
+    )
+    (references / "host-agent-setup.md").write_text(host_reference, encoding="utf-8")
+    if onboarding_reference is not None:
+        (references / "user-onboarding-prompt.md").write_text(onboarding_reference, encoding="utf-8")
 
 
 class ReleaseHygieneTests(unittest.TestCase):
@@ -38,6 +70,59 @@ class ReleaseHygieneTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0].check, "personal_home_path")
         self.assertEqual(findings[0].line, 1)
+
+    def test_suite_review_passes_for_public_skills(self) -> None:
+        payload = run_suite_review()
+
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["schema"], "ragflow_skill_suite_review_v1")
+        self.assertEqual(payload["summary"]["skill_count"], 3)
+        self.assertEqual(payload["findings"], [])
+
+    def test_suite_review_reports_static_drift_findings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skills_root = Path(tmp) / "skills"
+            for skill_name in PUBLIC_SKILLS:
+                _write_skill_fixture(
+                    skills_root,
+                    skill_name,
+                    description=f"{skill_name} handles a distinct public workflow.",
+                )
+            _write_skill_fixture(
+                skills_root,
+                "ragflow-doc-to-md",
+                description="Document conversion workflow.",
+                body="See [missing](references/missing.md).\nDo not mention dedao private adapters.\n",
+                host_reference="drifted host setup\n",
+            )
+            (skills_root / "ragflow-query" / "references" / "user-onboarding-prompt.md").unlink()
+
+            payload = run_suite_review(skills_root=skills_root, public_skills=PUBLIC_SKILLS)
+
+        checks = {finding["check"] for finding in payload["findings"]}
+        self.assertFalse(payload["ok"], payload)
+        self.assertIn("skill_suite_broken_link", checks)
+        self.assertIn("skill_suite_private_reference", checks)
+        self.assertIn("skill_suite_missing_reference", checks)
+        self.assertIn("skill_suite_reference_drift", checks)
+
+    def test_suite_review_reports_description_overlap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skills_root = Path(tmp) / "skills"
+            duplicate_description = "Convert and validate portable RAGFlow artifacts for host agents."
+            _write_skill_fixture(skills_root, "ragflow-doc-to-md", description=duplicate_description)
+            _write_skill_fixture(skills_root, "ragflow-kb-build", description=duplicate_description)
+            _write_skill_fixture(
+                skills_root,
+                "ragflow-query",
+                description="Run query retrieval for saved RAGFlow knowledge bases.",
+            )
+
+            payload = run_suite_review(skills_root=skills_root, public_skills=PUBLIC_SKILLS)
+
+        checks = {finding["check"] for finding in payload["findings"]}
+        self.assertFalse(payload["ok"], payload)
+        self.assertIn("skill_suite_description_overlap", checks)
 
 
 if __name__ == "__main__":

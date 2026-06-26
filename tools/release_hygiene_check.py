@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -49,6 +50,33 @@ PRIVATE_FILE_NAMES = {
 }
 
 ALLOW_MARKER = "release-hygiene: allow"
+SUITE_REVIEW_SCHEMA = "ragflow_skill_suite_review_v1"
+REQUIRED_REFERENCE_FILES = (
+    "host-agent-setup.md",
+    "user-onboarding-prompt.md",
+)
+MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
+DESCRIPTION_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "for",
+    "from",
+    "in",
+    "into",
+    "needs",
+    "of",
+    "or",
+    "the",
+    "to",
+    "use",
+    "when",
+    "with",
+}
+STALE_REFERENCE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("skill_suite_stale_reference", re.compile(r"\b(?:ragflux|ragflow-saas|kb ops)\b", re.IGNORECASE)),
+    ("skill_suite_private_reference", re.compile(r"dedao|得到|薛兆丰|opc-bridge|shared-infra", re.IGNORECASE)),  # release-hygiene: allow
+)
 
 FORBIDDEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("personal_home_path", re.compile(r"/(?:home|Users)/[A-Za-z0-9._-]+(?:/|$)")),
@@ -253,6 +281,267 @@ def validate_skill_frontmatter(skill_root: Path, *, base: Path) -> list[Finding]
     return findings
 
 
+def _skill_frontmatter_values(skill_root: Path) -> dict[str, str]:
+    skill_md = skill_root / "SKILL.md"
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    if not text.startswith("---\n"):
+        return {}
+    end = text.find("\n---", 4)
+    if end == -1:
+        return {}
+    values: dict[str, str] = {}
+    for line in text[4:end].splitlines():
+        if not line.strip() or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def _suite_markdown_files(skill_root: Path) -> list[Path]:
+    files = [skill_root / "SKILL.md"]
+    references_dir = skill_root / "references"
+    if references_dir.exists():
+        files.extend(sorted(path for path in references_dir.glob("*.md") if path.is_file()))
+    return files
+
+
+def _clean_markdown_link_target(raw_target: str) -> str:
+    target = raw_target.strip()
+    if target.startswith("<") and ">" in target:
+        target = target[1 : target.index(">")]
+    elif " " in target:
+        target = target.split(None, 1)[0]
+    target = target.strip("<>")
+    target = target.split("#", 1)[0].split("?", 1)[0]
+    return target.strip()
+
+
+def _is_external_or_anchor_link(target: str) -> bool:
+    if not target or target.startswith("#"):
+        return True
+    if target.startswith(("http://", "https://", "mailto:")):
+        return True
+    return bool(re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target))
+
+
+def scan_markdown_links(skill_root: Path, *, base: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    for path in _suite_markdown_files(skill_root):
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            for match in MARKDOWN_LINK_RE.finditer(line):
+                target = _clean_markdown_link_target(match.group(1))
+                if _is_external_or_anchor_link(target):
+                    continue
+                if target.startswith("/"):
+                    findings.append(
+                        Finding(
+                            check="skill_suite_absolute_link",
+                            path=_relative(path, base),
+                            line=line_no,
+                            message="SKILL.md and references must use relative links, anchors, or external URLs",
+                        )
+                    )
+                    continue
+                resolved = (path.parent / target).resolve()
+                try:
+                    resolved.relative_to(skill_root.resolve())
+                except ValueError:
+                    findings.append(
+                        Finding(
+                            check="skill_suite_link_escapes_skill",
+                            path=_relative(path, base),
+                            line=line_no,
+                            message=f"relative link escapes the skill directory: {target}",
+                        )
+                    )
+                    continue
+                if not resolved.exists():
+                    findings.append(
+                        Finding(
+                            check="skill_suite_broken_link",
+                            path=_relative(path, base),
+                            line=line_no,
+                            message=f"broken relative link: {target}",
+                        )
+                    )
+    return findings
+
+
+def scan_stale_skill_references(skill_root: Path, *, base: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    for path in _suite_markdown_files(skill_root):
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            if ALLOW_MARKER in line:
+                continue
+            for label, pattern in STALE_REFERENCE_PATTERNS:
+                if pattern.search(line):
+                    findings.append(
+                        Finding(
+                            check=label,
+                            path=_relative(path, base),
+                            line=line_no,
+                            message="stale, private, or removed skill reference found",
+                        )
+                    )
+    return findings
+
+
+def validate_required_references(
+    skill_root: Path,
+    *,
+    base: Path,
+    required_reference_files: tuple[str, ...] = REQUIRED_REFERENCE_FILES,
+) -> list[Finding]:
+    findings: list[Finding] = []
+    references_dir = skill_root / "references"
+    for filename in required_reference_files:
+        path = references_dir / filename
+        if not path.exists():
+            findings.append(
+                Finding(
+                    check="skill_suite_missing_reference",
+                    path=_relative(path, base),
+                    message=f"missing shared reference file: {filename}",
+                )
+            )
+    return findings
+
+
+def validate_shared_reference_hashes(
+    skills_root: Path,
+    *,
+    base: Path,
+    public_skills: tuple[str, ...],
+    required_reference_files: tuple[str, ...] = REQUIRED_REFERENCE_FILES,
+) -> list[Finding]:
+    findings: list[Finding] = []
+    for filename in required_reference_files:
+        digests: dict[str, list[str]] = {}
+        for skill_name in public_skills:
+            path = skills_root / skill_name / "references" / filename
+            if not path.exists():
+                continue
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            digests.setdefault(digest, []).append(skill_name)
+        if len(digests) > 1:
+            findings.append(
+                Finding(
+                    check="skill_suite_reference_drift",
+                    path=_relative(skills_root, base),
+                    message=f"shared reference file differs across skills: {filename}",
+                )
+            )
+    return findings
+
+
+def _description_tokens(description: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", description.lower())
+        if len(token) > 2 and token not in DESCRIPTION_STOPWORDS
+    }
+
+
+def detect_description_overlap(
+    skills_root: Path,
+    *,
+    base: Path,
+    public_skills: tuple[str, ...],
+    threshold: float = 0.78,
+) -> list[Finding]:
+    findings: list[Finding] = []
+    descriptions: dict[str, str] = {}
+    for skill_name in public_skills:
+        values = _skill_frontmatter_values(skills_root / skill_name)
+        description = values.get("description", "")
+        if description:
+            descriptions[skill_name] = description
+    names = sorted(descriptions)
+    for left_index, left_name in enumerate(names):
+        left_tokens = _description_tokens(descriptions[left_name])
+        if not left_tokens:
+            continue
+        for right_name in names[left_index + 1 :]:
+            right_tokens = _description_tokens(descriptions[right_name])
+            if not right_tokens:
+                continue
+            union = left_tokens | right_tokens
+            score = len(left_tokens & right_tokens) / len(union) if union else 0.0
+            if descriptions[left_name] == descriptions[right_name] or score >= threshold:
+                findings.append(
+                    Finding(
+                        check="skill_suite_description_overlap",
+                        path=_relative(skills_root / left_name / "SKILL.md", base),
+                        message=(
+                            f"description overlaps with {right_name}/SKILL.md "
+                            f"(jaccard={score:.2f})"
+                        ),
+                    )
+                )
+    return findings
+
+
+def run_suite_review(
+    *,
+    skills_root: Path = ROOT / "skills",
+    public_skills: tuple[str, ...] = PUBLIC_SKILLS,
+) -> dict[str, Any]:
+    """Run static suite-drift checks over the public skill set."""
+
+    skills_root = skills_root.resolve()
+    findings: list[Finding] = []
+    checked_files: list[str] = []
+    for skill_name in public_skills:
+        skill_root = skills_root / skill_name
+        if not skill_root.exists():
+            findings.append(
+                Finding(
+                    check="skill_suite_missing_skill",
+                    path=_relative(skill_root, skills_root),
+                    message="public skill directory is missing",
+                )
+            )
+            continue
+        findings.extend(validate_skill_frontmatter(skill_root, base=skills_root))
+        findings.extend(validate_required_references(skill_root, base=skills_root))
+        findings.extend(scan_markdown_links(skill_root, base=skills_root))
+        findings.extend(scan_stale_skill_references(skill_root, base=skills_root))
+        checked_files.extend(_relative(path, skills_root) for path in _suite_markdown_files(skill_root) if path.exists())
+
+    findings.extend(
+        validate_shared_reference_hashes(
+            skills_root,
+            base=skills_root,
+            public_skills=public_skills,
+        )
+    )
+    findings.extend(detect_description_overlap(skills_root, base=skills_root, public_skills=public_skills))
+    return {
+        "ok": not findings,
+        "schema": SUITE_REVIEW_SCHEMA,
+        "skills_root": str(skills_root),
+        "public_skills": list(public_skills),
+        "required_reference_files": list(REQUIRED_REFERENCE_FILES),
+        "summary": {
+            "skill_count": len(public_skills),
+            "checked_file_count": len(checked_files),
+            "finding_count": len(findings),
+        },
+        "checked_files": sorted(checked_files),
+        "findings": [finding.to_dict() for finding in findings],
+    }
+
+
 def validate_release_shape(dist_dir: Path) -> list[Finding]:
     findings = []
     if not dist_dir.exists():
@@ -297,6 +586,7 @@ def run_hygiene_check(
     dist_dir: Path = DIST_DIR,
     rebuild: bool = True,
     scan_source: bool = True,
+    suite_review: bool = False,
 ) -> dict[str, Any]:
     if rebuild:
         build_release(dist_dir)
@@ -319,7 +609,7 @@ def run_hygiene_check(
         for skill_name in PUBLIC_SKILLS:
             findings.extend(validate_skill_frontmatter(ROOT / "skills" / skill_name, base=ROOT))
 
-    return {
+    payload: dict[str, Any] = {
         "ok": not findings,
         "dist": str(dist_dir),
         "rebuilt": rebuild,
@@ -328,6 +618,11 @@ def run_hygiene_check(
         "public_skills": list(PUBLIC_SKILLS),
         "findings": [finding.to_dict() for finding in findings],
     }
+    if suite_review:
+        suite_payload = run_suite_review(skills_root=ROOT / "skills", public_skills=PUBLIC_SKILLS)
+        payload["suite_review"] = suite_payload
+        payload["ok"] = bool(payload["ok"] and suite_payload["ok"])
+    return payload
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -335,12 +630,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dist", default=str(DIST_DIR), help="Release artifact directory")
     parser.add_argument("--no-build", action="store_true", help="Check an existing dist directory")
     parser.add_argument("--dist-only", action="store_true", help="Skip public source checks")
+    parser.add_argument("--suite-review", action="store_true", help="Run static public skill suite drift checks")
     args = parser.parse_args(argv)
 
     payload = run_hygiene_check(
         dist_dir=Path(args.dist).resolve(),
         rebuild=not args.no_build,
         scan_source=not args.dist_only,
+        suite_review=args.suite_review,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if payload["ok"] else 1

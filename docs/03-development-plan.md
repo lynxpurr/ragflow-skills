@@ -1045,17 +1045,17 @@ three public skills.
 
 Tasks:
 
-- [ ] Add `tools/release_hygiene_check.py --suite-review`.
-- [ ] Validate `SKILL.md` frontmatter in all three public skills.
-- [ ] Detect stale references to removed, private, or old-skill names.
-- [ ] Detect shared reference/template drift across the three skills.
-- [ ] Detect broken relative links in `SKILL.md` and `references/`.
-- [ ] Detect trigger/description overlap that could confuse host-agent skill selection.
+- [x] Add `tools/release_hygiene_check.py --suite-review`.
+- [x] Validate `SKILL.md` frontmatter in all three public skills.
+- [x] Detect stale references to removed, private, or old-skill names.
+- [x] Detect shared reference/template drift across the three skills.
+- [x] Detect broken relative links in `SKILL.md` and `references/`.
+- [x] Detect trigger/description overlap that could confuse host-agent skill selection.
 - [ ] Detect version/date drift between docs, release manifest, and skill metadata.
 - [ ] Detect repeated warnings that should be centralized in a single reference.
 - [ ] Detect accidental naming drift from old or experimental product names.
 - [ ] Validate compatibility references for deprecated aliases and schema names.
-- [ ] Add fixture coverage for intentional drift, broken links, duplicate shared docs, and private references.
+- [x] Add fixture coverage for intentional drift, broken links, duplicate shared docs, and private references.
 
 Exit criteria:
 
