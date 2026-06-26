@@ -1895,6 +1895,8 @@ raise SystemExit(code)
     query_output = work_root / "query_output.json"
     citation_audit_json = work_root / "citation_audit.json"
     citation_audit_md = work_root / "citation_audit.md"
+    query_answer_eval_json = work_root / "query_answer_eval.json"
+    query_answer_eval_md = work_root / "query_answer_eval.md"
     query_diagnostic_json = work_root / "query_diagnostic.json"
     query_diagnostic_md = work_root / "query_diagnostic.md"
     query_pollution_json = work_root / "query_pollution.json"
@@ -2003,6 +2005,38 @@ raise SystemExit(code)
         produced.append(citation_audit_json)
     if citation_audit_md.exists():
         produced.append(citation_audit_md)
+
+    query_answer_eval = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "evaluate-answer",
+            "--query-output",
+            str(query_output),
+            "--answer",
+            "The release artifact can run without repository source context [1].",
+            "--expected-term",
+            "release",
+            "--require-citation",
+            "--report-json",
+            str(query_answer_eval_json),
+            "--report-md",
+            str(query_answer_eval_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query answer evaluation",
+        query_answer_eval,
+        required_output='"schema": "ragflow_answer_evaluation_report_v1"',
+    )
+    if query_answer_eval_json.exists():
+        produced.append(query_answer_eval_json)
+    if query_answer_eval_md.exists():
+        produced.append(query_answer_eval_md)
 
     query_diagnostic = _run_command(
         [

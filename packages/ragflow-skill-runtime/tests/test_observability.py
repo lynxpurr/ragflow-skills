@@ -6,15 +6,18 @@ import unittest
 from pathlib import Path
 
 from ragflow_skill_runtime.observability import (
+    ANSWER_EVALUATION_REPORT_SCHEMA,
     audit_citations,
     build_query_trace,
     diagnose_query_result,
+    evaluate_answer,
     evidence_from_query_payload,
     load_fusion_test_cases,
     query_cross_language_ab_report,
     query_fusion_report,
     query_pollution_report,
     query_rerank_ab_report,
+    render_answer_evaluation_markdown,
     render_citation_audit_markdown,
     render_query_cross_language_ab_markdown,
     render_query_diagnostic_markdown,
@@ -91,6 +94,63 @@ class ObservabilityTests(unittest.TestCase):
         self.assertFalse(report["ok"])
         self.assertEqual(report["metrics"]["invalid_citation_count"], 1)
         self.assertIn("invalid_citation", markdown)
+
+    def test_answer_evaluation_passes_grounded_cited_answer(self) -> None:
+        payload = {
+            "question": "what supports calibration control?",
+            "evidence": [
+                {
+                    "rank": 1,
+                    "score": 0.92,
+                    "content_preview": "The retrieved evidence supports calibration control.",
+                    "document_name": "controls.md",
+                }
+            ],
+        }
+
+        report = evaluate_answer(
+            payload,
+            "Calibration control is supported by the retrieved evidence [1].",
+            expected_terms=["calibration control"],
+            require_citation=True,
+            min_cited_evidence_score=0.5,
+        )
+        markdown = render_answer_evaluation_markdown(report)
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["schema"], ANSWER_EVALUATION_REPORT_SCHEMA)
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["summary"]["citation_count"], 1)
+        self.assertEqual(report["expected_terms"]["answer_hits"], ["calibration control"])
+        self.assertIn("RAGFlow Answer Evaluation", markdown)
+
+    def test_answer_evaluation_fails_missing_required_citation(self) -> None:
+        payload = {
+            "question": "what supports calibration control?",
+            "evidence": [{"rank": 1, "content_preview": "Calibration control evidence."}],
+        }
+
+        report = evaluate_answer(
+            payload,
+            "Calibration control is supported.",
+            expected_terms=["calibration control"],
+            require_citation=True,
+        )
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["status"], "FAIL")
+        self.assertIn("missing_citations", {issue["code"] for issue in report["issues"]})
+
+    def test_answer_evaluation_handles_no_evidence_abstention(self) -> None:
+        payload = {"question": "unknown", "chunks": []}
+
+        abstained = evaluate_answer(payload, "I don't know because there is no retrieved evidence.", allow_abstain=True)
+        unsupported = evaluate_answer(payload, "The answer is definitely available.")
+
+        self.assertTrue(abstained["ok"])
+        self.assertEqual(abstained["status"], "PASS")
+        self.assertFalse(unsupported["ok"])
+        self.assertIn("answer_without_evidence", {issue["code"] for issue in unsupported["issues"]})
 
     def test_evidence_from_query_payload_derives_when_absent(self) -> None:
         payload = {

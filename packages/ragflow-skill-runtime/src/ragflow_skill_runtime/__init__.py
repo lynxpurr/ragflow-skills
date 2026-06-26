@@ -96,6 +96,7 @@ from .manifests import (
     load_kb_manifest,
 )
 from .observability import (
+    ANSWER_EVALUATION_REPORT_SCHEMA,
     CITATION_AUDIT_SCHEMA,
     FUSION_REPORT_SCHEMA,
     FUSION_TEST_REPORT_SCHEMA,
@@ -108,6 +109,7 @@ from .observability import (
     audit_citations,
     build_query_trace,
     diagnose_query_result,
+    evaluate_answer,
     evidence_from_query_payload,
     load_fusion_test_cases,
     load_pollution_terms,
@@ -116,6 +118,7 @@ from .observability import (
     query_pollution_report,
     query_rerank_ab_report,
     render_query_fusion_test_markdown,
+    render_answer_evaluation_markdown,
     render_citation_audit_markdown,
     render_query_cross_language_ab_markdown,
     render_query_fusion_markdown,

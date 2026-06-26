@@ -28,6 +28,7 @@ python scripts/query.py centroid build --kb-manifest ./kb_manifest.json --chunk-
 python scripts/query.py --config /path/to/ragflow-config.local.yaml ask "Question" --mode auto --routing-config ./routing-config.json --json
 python scripts/query.py --config /path/to/ragflow-config.local.yaml ask "Question" --kb-manifest ./kb_manifest.json --mode agentic --host-assisted --json --trace-json ./run/query_trace.json --trace-md ./run/query_trace.md
 python scripts/query.py audit-citations --query-output ./run/query.json --answer-file ./run/answer.md --report-json ./run/citation_audit.json --report-md ./run/citation_audit.md
+python scripts/query.py evaluate-answer --query-output ./run/query.json --answer-file ./run/answer.md --expected-term "known term" --require-citation --report-json ./run/answer_eval.json --report-md ./run/answer_eval.md --json
 python scripts/query.py diagnose-result --query-output ./run/query.json --trace-json ./run/query_trace.json --citation-audit ./run/citation_audit.json --report-json ./run/query_diagnostic.json --report-md ./run/query_diagnostic.md
 python scripts/query.py pollution-report --query-output ./run/query.json --expanded-term translated-term --report-json ./run/query_pollution.json --report-md ./run/query_pollution.md
 python scripts/query.py rerank-ab --query-output ./run/query.json --rerank-json ./run/external_rerank.json --expected-term "known term" --report-json ./run/query_rerank_ab.json --report-md ./run/query_rerank_ab.md
@@ -55,6 +56,7 @@ Notes:
 - `--mode agentic --host-assisted` still retrieves from RAGFlow; the host agent performs final synthesis from returned evidence.
 - `ask` returns deterministic evidence weights and can write `--trace-json` / `--trace-md` for host-agent debugging.
 - Use `audit-citations` after host synthesis to check simple numeric citations like `[1]` against retrieved evidence.
+- Use `evaluate-answer` after host synthesis for deterministic offline answer checks: required citations, citation reachability, unsupported uncited statements, expected terms, cited evidence score, and no-evidence abstention behavior. It does not call an LLM evaluator.
 - Use `diagnose-result` to review weak retrieval, default routing, missing expected terms, and citation-audit findings from saved artifacts.
 - Use `pollution-report` on saved `ask --json` outputs to review likely expansion/BM25 bridge-term pollution. It is offline and advisory; pass `--expanded-term` or `--expanded-terms-json` when translated or rewritten terms are available.
 - Use `rerank-ab` on saved `ask --json` outputs and optional host-owned rerank JSON to compare RAGFlow order with a candidate ordering. It is offline; without `--rerank-json`, it uses deterministic evidence scores as the candidate order.

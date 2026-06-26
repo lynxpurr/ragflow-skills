@@ -379,6 +379,8 @@ class QueryCliTests(unittest.TestCase):
             query_output = root / "query.json"
             audit_json = root / "audit.json"
             audit_md = root / "audit.md"
+            answer_eval_json = root / "answer_eval.json"
+            answer_eval_md = root / "answer_eval.md"
             diagnostic_json = root / "diagnostic.json"
             diagnostic_md = root / "diagnostic.md"
             stdout = io.StringIO()
@@ -427,6 +429,27 @@ class QueryCliTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
+                answer_eval_code = module.main(
+                    [
+                        "evaluate-answer",
+                        "--query-output",
+                        str(query_output),
+                        "--answer",
+                        "The answer is supported by the retrieved evidence [1].",
+                        "--expected-term",
+                        "answer",
+                        "--require-citation",
+                        "--report-json",
+                        str(answer_eval_json),
+                        "--report-md",
+                        str(answer_eval_md),
+                        "--json",
+                    ]
+                )
+            answer_eval_payload = json.loads(stdout.getvalue())
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
                 diagnostic_code = module.main(
                     [
                         "diagnose-result",
@@ -457,6 +480,11 @@ class QueryCliTests(unittest.TestCase):
             self.assertTrue(audit_payload["ok"])
             self.assertTrue(audit_json.exists())
             self.assertIn("RAGFlow Citation Audit", audit_md.read_text(encoding="utf-8"))
+            self.assertEqual(answer_eval_code, 0)
+            self.assertTrue(answer_eval_payload["ok"])
+            self.assertEqual(answer_eval_payload["schema"], "ragflow_answer_evaluation_report_v1")
+            self.assertTrue(answer_eval_json.exists())
+            self.assertIn("RAGFlow Answer Evaluation", answer_eval_md.read_text(encoding="utf-8"))
             self.assertEqual(diagnostic_code, 0)
             self.assertTrue(diagnostic_payload["ok"])
             self.assertEqual(diagnostic_payload["schema"], "ragflow_query_diagnostic_report_v1")

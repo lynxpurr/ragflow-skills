@@ -42,6 +42,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     build_query_rewrite_plan,
     build_query_trace,
     diagnose_query_result,
+    evaluate_answer,
     evidence_from_query_payload,
     load_pollution_terms,
     load_route_test_queries,
@@ -57,6 +58,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     query_pollution_report,
     query_rerank_ab_report,
     render_citation_audit_markdown,
+    render_answer_evaluation_markdown,
     render_centroid_build_markdown,
     render_centroid_plan_markdown,
     render_query_cross_language_ab_markdown,
@@ -592,6 +594,31 @@ def _audit_citations(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _evaluate_answer(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        answer = args.answer
+        if args.answer_file:
+            answer = Path(args.answer_file).read_text(encoding="utf-8")
+        report = evaluate_answer(
+            query_payload,
+            answer or "",
+            expected_terms=args.expected_term,
+            require_citation=args.require_citation,
+            allow_abstain=args.allow_abstain,
+            min_cited_evidence_score=args.min_cited_evidence_score,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_answer_evaluation_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _diagnose_result(args: argparse.Namespace) -> int:
     try:
         query_payload = _read_json(args.query_output)
@@ -821,6 +848,20 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--report-md", help="Optional Markdown report output path")
     audit.add_argument("--json", action="store_true", help="Emit JSON report")
     audit.set_defaults(func=_audit_citations)
+
+    evaluate = sub.add_parser("evaluate-answer", help="Evaluate a host-generated answer offline")
+    evaluate.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    evaluate_answer_group = evaluate.add_mutually_exclusive_group(required=True)
+    evaluate_answer_group.add_argument("--answer", help="Host-generated answer text")
+    evaluate_answer_group.add_argument("--answer-file", help="File containing host-generated answer text")
+    evaluate.add_argument("--expected-term", action="append", default=[], help="Expected term; repeatable")
+    evaluate.add_argument("--require-citation", action="store_true", help="Fail when evidence exists but answer lacks citations")
+    evaluate.add_argument("--allow-abstain", action="store_true", help="Allow no-evidence abstention wording")
+    evaluate.add_argument("--min-cited-evidence-score", type=float, help="Warn when cited evidence scores are below this threshold")
+    evaluate.add_argument("--report-json", help="Optional JSON report output path")
+    evaluate.add_argument("--report-md", help="Optional Markdown report output path")
+    evaluate.add_argument("--json", action="store_true", help="Emit JSON report")
+    evaluate.set_defaults(func=_evaluate_answer)
 
     diagnose = sub.add_parser("diagnose-result", help="Diagnose a saved query result")
     diagnose.add_argument("--query-output", required=True, help="JSON output from query.py ask")

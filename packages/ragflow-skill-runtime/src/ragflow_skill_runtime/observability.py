@@ -13,6 +13,7 @@ from .retrieval import NormalizedChunk, stable_chunk_hash
 
 TRACE_SCHEMA = "ragflow_query_trace_v1"
 CITATION_AUDIT_SCHEMA = "ragflow_citation_audit_v1"
+ANSWER_EVALUATION_REPORT_SCHEMA = "ragflow_answer_evaluation_report_v1"
 QUERY_DIAGNOSTIC_SCHEMA = "ragflow_query_diagnostic_report_v1"
 QUERY_POLLUTION_REPORT_SCHEMA = "ragflow_query_pollution_report_v1"
 QUERY_RERANK_AB_REPORT_SCHEMA = "ragflow_query_rerank_ab_report_v1"
@@ -664,6 +665,28 @@ def _sentence_candidates(answer: str) -> list[str]:
     ]
 
 
+def _answer_abstained(answer: str) -> bool:
+    normalized = answer.strip().lower()
+    if not normalized:
+        return False
+    patterns = (
+        "cannot answer",
+        "can't answer",
+        "not enough information",
+        "insufficient information",
+        "no retrieved evidence",
+        "no evidence",
+        "i don't know",
+        "unable to determine",
+        "无法回答",
+        "不能回答",
+        "没有足够",
+        "未检索到",
+        "不知道",
+    )
+    return any(pattern in normalized for pattern in patterns)
+
+
 def audit_citations(answer: str, evidence: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Audit simple numeric citations in a host-generated answer."""
 
@@ -796,6 +819,222 @@ def _append_issue(
     if detail:
         item["detail"] = dict(detail)
     issues.append(item)
+
+
+def evaluate_answer(
+    query_payload: Mapping[str, Any],
+    answer: str,
+    *,
+    expected_terms: Sequence[str] | None = None,
+    require_citation: bool = False,
+    allow_abstain: bool = False,
+    min_cited_evidence_score: float | None = None,
+    citation_audit: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Evaluate a host-generated answer with deterministic offline checks."""
+
+    answer_text = str(answer or "")
+    answer_stripped = answer_text.strip()
+    expected_input: Any = expected_terms
+    if expected_input is not None and not isinstance(expected_input, (str, list)):
+        expected_input = list(expected_input)
+    expected = _strict_string_list(expected_input, field_name="expected_terms")
+    evidence = evidence_from_query_payload(query_payload)
+    audit = dict(citation_audit) if isinstance(citation_audit, Mapping) else audit_citations(answer_text, evidence)
+    abstained = _answer_abstained(answer_text)
+    issues: list[dict[str, Any]] = []
+
+    if not answer_stripped:
+        _append_issue(
+            issues,
+            severity="error",
+            code="empty_answer",
+            message="answer text is empty",
+        )
+
+    audit_issues = audit.get("issues", []) if isinstance(audit.get("issues"), list) else []
+    for issue in audit_issues:
+        if not isinstance(issue, Mapping):
+            continue
+        severity = str(issue.get("severity") or "warning")
+        code = str(issue.get("code") or "citation_audit_issue")
+        if code == "unsupported_uncited_statement" and not evidence and abstained and allow_abstain:
+            continue
+        if require_citation and code == "missing_citations":
+            severity = "error"
+        _append_issue(
+            issues,
+            severity=severity,
+            code=code,
+            message=str(issue.get("message") or code),
+            detail={key: value for key, value in issue.items() if key not in {"severity", "code", "message"}},
+        )
+
+    audit_metrics = audit.get("metrics", {}) if isinstance(audit.get("metrics"), Mapping) else {}
+    citation_count = int(audit_metrics.get("citation_count", 0) or 0)
+    if require_citation and evidence and citation_count == 0 and not any(
+        issue.get("code") == "missing_citations" for issue in issues
+    ):
+        _append_issue(
+            issues,
+            severity="error",
+            code="missing_citations",
+            message="answer contains no numeric citations such as [1]",
+        )
+
+    if not evidence and answer_stripped and not abstained:
+        _append_issue(
+            issues,
+            severity="error",
+            code="answer_without_evidence",
+            message="answer provides substantive text even though query output has no evidence",
+        )
+    if not evidence and allow_abstain and answer_stripped and not abstained:
+        _append_issue(
+            issues,
+            severity="warning",
+            code="missing_abstention",
+            message="answer did not use an abstention/no-evidence phrasing despite empty evidence",
+        )
+    if evidence and abstained and not allow_abstain:
+        _append_issue(
+            issues,
+            severity="warning",
+            code="unnecessary_abstention",
+            message="answer appears to abstain even though retrieved evidence is available",
+        )
+
+    answer_lower = answer_text.lower()
+    evidence_text = "\n".join(
+        [str(item.get("content_preview") or "") for item in evidence if isinstance(item, Mapping)]
+        + [_chunk_text(chunk) for chunk in _query_chunks(query_payload)]
+    ).lower()
+    answer_hits = [term for term in expected if term.lower() in answer_lower]
+    evidence_hits = [term for term in expected if term.lower() in evidence_text]
+    missing_from_answer = [term for term in expected if term not in answer_hits]
+    missing_from_evidence = [term for term in expected if term not in evidence_hits]
+    missing_from_both = [term for term in expected if term in missing_from_answer and term in missing_from_evidence]
+    if missing_from_answer:
+        _append_issue(
+            issues,
+            severity="warning",
+            code="expected_terms_missing_from_answer",
+            message="answer is missing expected terms",
+            detail={"terms": missing_from_answer},
+        )
+    if missing_from_both:
+        _append_issue(
+            issues,
+            severity="warning",
+            code="expected_terms_missing_from_evidence",
+            message="expected terms are absent from both answer and retrieved evidence",
+            detail={"terms": missing_from_both},
+        )
+
+    cited_ranks = []
+    citations = audit.get("citations") if isinstance(audit.get("citations"), Mapping) else {}
+    if isinstance(citations.get("cited_ranks"), list):
+        cited_ranks = [rank for rank in citations["cited_ranks"] if isinstance(rank, int)]
+    evidence_by_rank = _evidence_by_rank(evidence)
+    cited_scores = [
+        float(evidence_by_rank[rank].get("score"))
+        for rank in cited_ranks
+        if rank in evidence_by_rank and isinstance(evidence_by_rank[rank].get("score"), (int, float))
+    ]
+    if min_cited_evidence_score is not None and cited_scores and max(cited_scores) < min_cited_evidence_score:
+        _append_issue(
+            issues,
+            severity="warning",
+            code="low_cited_evidence_score",
+            message="all cited evidence scores are below the configured threshold",
+            detail={"max_cited_evidence_score": max(cited_scores), "min_cited_evidence_score": min_cited_evidence_score},
+        )
+
+    status = _severity_status(issues)
+    return {
+        "ok": status != "FAIL",
+        "schema": ANSWER_EVALUATION_REPORT_SCHEMA,
+        "status": status,
+        "question": query_payload.get("question"),
+        "answer": {
+            "chars": len(answer_text),
+            "preview": _preview(answer_text),
+            "abstained": abstained,
+        },
+        "summary": {
+            "evidence_count": len(evidence),
+            "citation_count": citation_count,
+            "invalid_citation_count": int(audit_metrics.get("invalid_citation_count", 0) or 0),
+            "unsupported_uncited_statement_count": int(audit_metrics.get("unsupported_uncited_statement_count", 0) or 0),
+            "expected_term_count": len(expected),
+            "answer_expected_term_hit_count": len(answer_hits),
+            "evidence_expected_term_hit_count": len(evidence_hits),
+            "missing_expected_term_count": len(missing_from_answer),
+            "cited_evidence_count": len(cited_ranks),
+            "max_cited_evidence_score": round(max(cited_scores), 4) if cited_scores else None,
+            "abstained": abstained,
+            "issue_count": len(issues),
+            "errors": sum(1 for issue in issues if issue["severity"] == "error"),
+            "warnings": sum(1 for issue in issues if issue["severity"] == "warning"),
+            "infos": sum(1 for issue in issues if issue["severity"] == "info"),
+        },
+        "expected_terms": {
+            "requested": expected,
+            "answer_hits": answer_hits,
+            "evidence_hits": evidence_hits,
+            "missing_from_answer": missing_from_answer,
+            "missing_from_evidence": missing_from_evidence,
+        },
+        "citation_audit": audit,
+        "issues": issues,
+        "recommendations": [
+            "Require numeric citations when host synthesis is expected to quote or summarize retrieved evidence.",
+            "Use abstention wording when retrieval returns no evidence or low-quality evidence.",
+            "Review unsupported uncited statements before exposing generated answers to end users.",
+        ],
+    }
+
+
+def render_answer_evaluation_markdown(report: Mapping[str, Any]) -> str:
+    """Render a compact Markdown answer evaluation report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    answer = report.get("answer", {}) if isinstance(report.get("answer"), Mapping) else {}
+    lines = [
+        "# RAGFlow Answer Evaluation",
+        "",
+        f"- ok: `{str(report.get('ok', False)).lower()}`",
+        f"- status: `{report.get('status', '')}`",
+        f"- evidence_count: `{summary.get('evidence_count', 0)}`",
+        f"- citation_count: `{summary.get('citation_count', 0)}`",
+        f"- invalid_citation_count: `{summary.get('invalid_citation_count', 0)}`",
+        f"- unsupported_uncited_statement_count: `{summary.get('unsupported_uncited_statement_count', 0)}`",
+        f"- missing_expected_term_count: `{summary.get('missing_expected_term_count', 0)}`",
+        f"- abstained: `{str(bool(answer.get('abstained'))).lower()}`",
+        "",
+        "## Issues",
+        "",
+    ]
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    if not issues:
+        lines.append("- None")
+    else:
+        for issue in issues:
+            if isinstance(issue, Mapping):
+                lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    expected_terms = report.get("expected_terms", {}) if isinstance(report.get("expected_terms"), Mapping) else {}
+    requested = expected_terms.get("requested", []) if isinstance(expected_terms.get("requested"), list) else []
+    if requested:
+        lines.extend(["", "## Expected Terms", ""])
+        lines.append("- requested: " + ", ".join(f"`{term}`" for term in requested))
+        lines.append(
+            "- answer_hits: "
+            + (", ".join(f"`{term}`" for term in expected_terms.get("answer_hits", [])) or "`none`")
+        )
+    preview = answer.get("preview")
+    if isinstance(preview, str) and preview:
+        lines.extend(["", "## Answer Preview", "", preview])
+    return "\n".join(lines) + "\n"
 
 
 def _reference_variants(value: Any) -> set[str]:

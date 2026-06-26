@@ -618,6 +618,13 @@ MVP checks:
 - answer includes unsupported-claim warnings;
 - abstention behavior can be checked when no chunks are returned.
 
+Current implementation:
+
+- `ragflow-query evaluate-answer` emits `ragflow_answer_evaluation_report_v1`;
+- checks are deterministic and offline, reusing saved `ask --json` outputs and numeric
+  citation audit behavior;
+- no LLM/RAGAS backend is invoked by the MVP.
+
 Optional LLM/RAGAS backend:
 
 - faithfulness;

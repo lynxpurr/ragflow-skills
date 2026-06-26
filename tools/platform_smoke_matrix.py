@@ -776,6 +776,29 @@ if not audit_payload.get("ok"):
 
 stdout = StringIO()
 with contextlib.redirect_stdout(stdout):
+    answer_eval_code = module.main([
+        "evaluate-answer",
+        "--query-output",
+        str(artifacts_dir / "query_host_assisted.json"),
+        "--answer-file",
+        str(answer_path),
+        "--expected-term",
+        "known term",
+        "--require-citation",
+        "--report-json",
+        str(artifacts_dir / "query_answer_eval.json"),
+        "--report-md",
+        str(artifacts_dir / "query_answer_eval.md"),
+        "--json",
+    ])
+if answer_eval_code != 0:
+    raise SystemExit(answer_eval_code)
+answer_eval_payload = json.loads(stdout.getvalue())
+if answer_eval_payload.get("schema") != "ragflow_answer_evaluation_report_v1":
+    raise SystemExit(16)
+
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
     diagnostic_code = module.main([
         "diagnose-result",
         "--query-output",
@@ -2146,6 +2169,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_multi_trace.json",
         artifacts_dir / "citation_audit.json",
         artifacts_dir / "citation_audit.md",
+        artifacts_dir / "query_answer_eval.json",
+        artifacts_dir / "query_answer_eval.md",
         artifacts_dir / "query_diagnostic.json",
         artifacts_dir / "query_diagnostic.md",
         artifacts_dir / "query_pollution.json",
