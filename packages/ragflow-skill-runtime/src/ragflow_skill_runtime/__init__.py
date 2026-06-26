@@ -5,6 +5,7 @@ from .agentic import (
     AGENTIC_PLAN_SCHEMA,
     AGENTIC_TRACE_SCHEMA,
     AgenticPlanError,
+    build_agentic_execution_trace,
     build_agentic_plan,
     render_agentic_plan_markdown,
 )
@@ -486,6 +487,7 @@ __all__ = [
     "ValidationQuery",
     "ValidationReport",
     "audit_citations",
+    "build_agentic_execution_trace",
     "build_query_trace",
     "build_query_rewrite_plan",
     "build_query_session_inspection",

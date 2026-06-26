@@ -639,6 +639,15 @@ class QueryCliTests(unittest.TestCase):
         self.assertIn("retrievals", payload)
         self.assertIn("fusion", payload)
         self.assertEqual(payload["trace"]["agentic_plan"]["trace_template"]["llm_calls"], 0)
+        self.assertEqual(payload["agentic_trace"]["schema"], "ragflow_agentic_trace_v1")
+        self.assertEqual(payload["agentic_trace"]["status"], "retrieval_executed")
+        self.assertEqual(payload["agentic_trace"]["retrieval_calls"], 3)
+        self.assertEqual(payload["agentic_trace"]["llm_calls"], 0)
+        self.assertIsNone(payload["agentic_trace"]["model"])
+        self.assertEqual(payload["agentic_trace"]["estimated_tokens"], 0)
+        self.assertEqual(payload["agentic_trace"]["cost_trace"]["estimated_total_usd"], 0.0)
+        self.assertEqual(payload["metadata"]["agentic_trace"]["schema"], "ragflow_agentic_trace_v1")
+        self.assertEqual(payload["trace"]["agentic_trace"]["cost_trace"]["estimated_total_usd"], 0.0)
         self.assertEqual(payload["retrieval_status"], "success")
 
     def test_ask_can_write_trace_and_audit_citations(self) -> None:

@@ -730,6 +730,13 @@ if agentic_plan.get("summary", {{}}).get("generated_subquery_count", 0) < 1:
     raise SystemExit(26)
 if agentic_retrieval_payload.get("metadata", {{}}).get("retrieval_call_count", 0) < 2:
     raise SystemExit(27)
+agentic_trace = agentic_retrieval_payload.get("agentic_trace", {{}})
+if agentic_trace.get("schema") != "ragflow_agentic_trace_v1":
+    raise SystemExit(28)
+if agentic_trace.get("llm_calls") != 0:
+    raise SystemExit(29)
+if agentic_trace.get("cost_trace", {{}}).get("estimated_total_usd") != 0.0:
+    raise SystemExit(30)
 (artifacts_dir / "query_agentic_retrieval.json").write_text(
     json.dumps(agentic_retrieval_payload, ensure_ascii=False, indent=2) + "\\n",
     encoding="utf-8",

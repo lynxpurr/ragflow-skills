@@ -604,8 +604,11 @@ or mutate RAGFlow.
 
 `ragflow-query ask --mode agentic --host-assisted` can execute the bounded retrieval
 queries from that deterministic plan and return fused evidence plus the agentic plan in
-JSON output and trace data. It still does not run reflection or synthesize an answer;
-host-owned synthesis remains the required final step.
+JSON output and trace data. The retrieval execution also emits `ragflow_agentic_trace_v1`
+with retrieval latency, planned versus actual retrieval calls, zero script-owned LLM calls,
+model `null`, deterministic token estimates, and zero estimated script-owned LLM cost. It
+still does not run reflection or synthesize an answer; host-owned synthesis remains the
+required final step.
 
 ## Feature Design 10: Generation Evaluation
 

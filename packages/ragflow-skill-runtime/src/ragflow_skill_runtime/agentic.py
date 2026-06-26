@@ -83,6 +83,30 @@ def _dedupe_queries(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
+def _safe_non_negative_int(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_non_negative_float(value: Any) -> float:
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _retrieval_query_token_count(retrieval_queries: Any) -> int:
+    if not isinstance(retrieval_queries, list):
+        return 0
+    total = 0
+    for item in retrieval_queries:
+        if isinstance(item, Mapping):
+            total += len(tokenize_query_text(str(item.get("query") or "")))
+    return total
+
+
 def _subqueries(question: str, *, intent: str, complexity: str, max_subqueries: int) -> list[dict[str, Any]]:
     if max_subqueries <= 0 or complexity == "simple" or intent in {"clarification_needed", "out_of_scope"}:
         return []
@@ -156,6 +180,7 @@ def build_agentic_plan(
         )
         retrieval_queries.extend(subqueries)
     retrieval_queries = _dedupe_queries(retrieval_queries)
+    retrieval_query_tokens = _retrieval_query_token_count(retrieval_queries)
 
     if intent["intent"] == "clarification_needed":
         status = "needs_clarification"
@@ -272,6 +297,24 @@ def build_agentic_plan(
             "model": None,
             "estimated_tokens": 0,
             "estimated_cost_usd": 0.0,
+            "token_estimate": {
+                "question_tokens": len(token_values),
+                "retrieval_query_tokens": retrieval_query_tokens,
+                "script_llm_input_tokens": 0,
+                "script_llm_output_tokens": 0,
+                "script_llm_total_tokens": 0,
+            },
+            "cost_trace": {
+                "currency": "USD",
+                "model": None,
+                "estimated_total_usd": 0.0,
+                "script_owned_llm_estimated_usd": 0.0,
+                "retrieval_estimated_usd": None,
+                "notes": [
+                    "agentic plan does not execute script-owned LLM calls",
+                    "RAGFlow retrieval billing is provider-owned and not estimated",
+                ],
+            },
         },
         "guards": {
             "llm_generation": "disabled",
@@ -291,6 +334,81 @@ def build_agentic_plan(
             "reflection_budget": reflection_budget,
         },
         "warnings": warnings,
+    }
+
+
+def build_agentic_execution_trace(
+    plan: Mapping[str, Any],
+    *,
+    retrieval_call_count: int = 0,
+    retrieval_latency_ms: float | None = None,
+    started_at: str | None = None,
+    finished_at: str | None = None,
+    llm_call_count: int = 0,
+    reflection_iterations: int = 0,
+    model: str | None = None,
+    estimated_cost_usd: float = 0.0,
+) -> dict[str, Any]:
+    """Build an execution trace for a deterministic agentic retrieval run."""
+
+    if not isinstance(plan, Mapping) or plan.get("schema") != AGENTIC_PLAN_SCHEMA:
+        raise AgenticPlanError("agentic plan must be a ragflow_agentic_plan_v1 object")
+    retrieval_queries = plan.get("retrieval_queries", [])
+    planned_retrieval_call_count = len(retrieval_queries) if isinstance(retrieval_queries, list) else 0
+    actual_retrieval_calls = _safe_non_negative_int(retrieval_call_count)
+    actual_llm_calls = _safe_non_negative_int(llm_call_count)
+    actual_reflections = _safe_non_negative_int(reflection_iterations)
+    latency_ms = round(_safe_non_negative_float(retrieval_latency_ms), 3) if retrieval_latency_ms is not None else None
+    query_token_count = len(tokenize_query_text(str(plan.get("question") or "")))
+    retrieval_query_tokens = _retrieval_query_token_count(retrieval_queries)
+    plan_status = str(plan.get("status") or "")
+    if plan_status in {"needs_clarification", "rejected"}:
+        status = plan_status
+    elif actual_retrieval_calls:
+        status = "retrieval_executed"
+    else:
+        status = "not_executed"
+    script_llm_total_tokens = 0
+    cost_usd = round(_safe_non_negative_float(estimated_cost_usd), 8)
+    parameters = plan.get("parameters", {}) if isinstance(plan.get("parameters"), Mapping) else {}
+    return {
+        "schema": AGENTIC_TRACE_SCHEMA,
+        "status": status,
+        "plan_schema": plan.get("schema"),
+        "plan_status": plan_status,
+        "llm_calls": actual_llm_calls,
+        "retrieval_calls": actual_retrieval_calls,
+        "planned_retrieval_call_count": planned_retrieval_call_count,
+        "reflection_iterations": actual_reflections,
+        "reflection_budget": _safe_non_negative_int(parameters.get("reflection_budget", 0)),
+        "latency_ms": latency_ms,
+        "timings_ms": {
+            "retrieval": latency_ms,
+        },
+        "model": model,
+        "estimated_tokens": script_llm_total_tokens,
+        "estimated_cost_usd": cost_usd,
+        "token_estimate": {
+            "question_tokens": query_token_count,
+            "retrieval_query_tokens": retrieval_query_tokens,
+            "script_llm_input_tokens": 0,
+            "script_llm_output_tokens": 0,
+            "script_llm_total_tokens": script_llm_total_tokens,
+        },
+        "cost_trace": {
+            "currency": "USD",
+            "model": model,
+            "estimated_total_usd": cost_usd,
+            "script_owned_llm_estimated_usd": cost_usd,
+            "retrieval_estimated_usd": None,
+            "notes": [
+                "no script-owned LLM calls were made",
+                "RAGFlow retrieval billing is provider-owned and not estimated",
+            ],
+        },
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "script_owned_synthesis": False,
     }
 
 
