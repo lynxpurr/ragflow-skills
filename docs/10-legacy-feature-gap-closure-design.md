@@ -968,6 +968,11 @@ Capabilities:
   success, and direct retrieval fallback;
 - emit fallback coverage and fallback success-rate metrics.
 
+Implementation status: backend probes/warmup, image fallback review gates, model-provider
+probes, adapter request-shape probes, `ragflow-query endpoint-report`,
+`ragflow-query fallback-test`, and the shared report sanitizer are implemented. Broader
+`--redaction-report` coverage remains open.
+
 All reports must redact endpoints according to release settings and must not include real
 API keys or host-specific paths.
 

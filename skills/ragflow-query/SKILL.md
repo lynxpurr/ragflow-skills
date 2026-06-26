@@ -20,8 +20,10 @@ python scripts/query.py intent route "What about it?" --report-json ./run/intent
 python scripts/query.py session inspect --session ./run/session.json --report-json ./run/session_inspect.json --report-md ./run/session_inspect.md --json
 python scripts/query.py session enrich "What about it?" --session ./run/session.json --report-json ./run/session_enrich.json --report-md ./run/session_enrich.md --json
 python scripts/query.py agentic-plan "Compare runtime configuration and metadata routing tradeoffs" --max-subqueries 3 --reflection-budget 1 --report-json ./run/agentic_plan.json --report-md ./run/agentic_plan.md --json
+python scripts/query.py --config /path/to/ragflow-config.local.yaml endpoint-report --endpoint embedding=http://vpn-endpoint.local:8080/v1 --report-json ./run/query_endpoint_report.json --report-md ./run/query_endpoint_report.md --redaction-report ./run/query_endpoint_redaction.json --json
 python scripts/query.py ask "Question" --dataset-id ds-a --rewrite simple --multi-query ./fixtures/multi-query.json --trace-json ./run/query_trace.json --json
 python scripts/query.py fusion-test --cases ./fixtures/fusion-test-cases.json --report-json ./run/fusion_test.json --report-md ./run/fusion_test.md --json
+python scripts/query.py fallback-test --report-json ./run/fallback_test.json --report-md ./run/fallback_test.md --json
 python scripts/query.py list-kbs --routing-config ./templates/routing-config.example.json
 python scripts/query.py route "Which API configuration should I use?" --routing-config ./templates/routing-config.example.json --json
 python scripts/query.py route "Which API configuration should I use?" --routing-config ./routing-config.json --centroid-index ./run/centroids.json --query-vector-json ./run/query_vector.json --json
@@ -69,10 +71,12 @@ Notes:
 - Use `cross-language-ab` on saved original and translated/reconfigured `ask --json` outputs to compare zero-result rate, chunk-count delta, top-1 stability, top-similarity delta, and latency delta before changing defaults.
 - Use `fusion` on multiple saved `ask --json` outputs to build an offline reciprocal-rank-fusion report with per-source rank contributions and deduplicated chunks.
 - Use `fusion-test` on a cases file that points at saved query outputs to verify expected top chunks, expected terms, and minimum source contributions offline.
+- Use `fallback-test` to run offline fixtures for LLM unavailable, malformed JSON, network timeout, partial failure, and direct retrieval fallback coverage; it reports fallback success-rate metrics without calling RAGFlow or an LLM.
 - Use `rewrite` or `ask --rewrite simple|translate` for deterministic offline query planning; `hyde` is reserved for a host-owned LLM adapter.
 - Use `intent classify` and `intent route` to classify `knowledge_query`, `comparison`, `clarification_needed`, and `out_of_scope` requests before retrieval. These commands are offline and include confidence plus low-confidence disclaimers.
 - Use `session inspect` and `session enrich` with user-owned `ragflow_query_session_v1` JSON to bound recent context, detect short follow-ups/pronouns, and enrich queries without retrieval or LLM calls.
 - Use `agentic-plan` to create a deterministic, non-executing plan for classification, bounded sub-query planning, optional reflection budget, and host-owned synthesis/citation policy. It does not retrieve, mutate RAGFlow, or call an LLM.
+- Use `endpoint-report` before live query work to classify configured RAGFlow/LLM/extra endpoints as local, LAN, VPN/private, or public; it writes redacted URL summaries, can emit `--redaction-report`, and only runs reachability checks when `--network-check` is passed.
 - Use `ask --multi-query` with a host-owned JSON file when you need to preserve multiple original/generated queries in the trace and retrieval payload.
 - See `templates/host-assisted-response.example.json`, `templates/query-trace.example.json`, `templates/citation-audit.example.json`, and `templates/query-diagnostic.example.json` for expected payload shapes.
 - Release artifacts are smoke-tested against a fake RAGFlow endpoint for both direct and host-assisted query paths.

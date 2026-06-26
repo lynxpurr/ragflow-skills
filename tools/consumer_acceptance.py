@@ -882,6 +882,7 @@ def _run_no_network_checks(
 
     model_provider_json = work_root / "model_provider_probe.json"
     model_provider_md = work_root / "model_provider_probe.md"
+    model_provider_redaction = work_root / "model_provider_redaction.json"
     with _model_provider_server() as model_provider_base_url:
         model_provider_result = _run_command(
             [
@@ -905,6 +906,8 @@ def _run_no_network_checks(
                 str(model_provider_json),
                 "--report-md",
                 str(model_provider_md),
+                "--redaction-report",
+                str(model_provider_redaction),
                 "--json",
             ],
             cwd=work_root,
@@ -916,7 +919,7 @@ def _run_no_network_checks(
         model_provider_result,
         required_output='"schema": "ragflow_model_provider_probe_report_v1"',
     )
-    for path in (model_provider_json, model_provider_md):
+    for path in (model_provider_json, model_provider_md, model_provider_redaction):
         if path.exists():
             produced.append(path)
 
@@ -1822,6 +1825,42 @@ raise SystemExit(code)
         agentic_plan_help,
         required_output="Plan deterministic agentic query orchestration",
     )
+    endpoint_report_json = work_root / "query_endpoint_report.json"
+    endpoint_report_md = work_root / "query_endpoint_report.md"
+    endpoint_redaction_json = work_root / "query_endpoint_redaction.json"
+    fake_lan_endpoint = "https://" + ".".join(("192", "168", "10", "20")) + ":9380"
+    fake_vpn_endpoint = "vpn=http://" + ".".join(("100", "64", "10", "20")) + ":8080/v1?token=fake-secret"
+    endpoint_report = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "endpoint-report",
+            "--base-url",
+            fake_lan_endpoint,
+            "--api-key",
+            "consumer-fake-key",
+            "--endpoint",
+            fake_vpn_endpoint,
+            "--report-json",
+            str(endpoint_report_json),
+            "--report-md",
+            str(endpoint_report_md),
+            "--redaction-report",
+            str(endpoint_redaction_json),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query endpoint-report",
+        endpoint_report,
+        required_output='"schema": "ragflow_query_endpoint_report_v1"',
+    )
+    for path in (endpoint_report_json, endpoint_report_md, endpoint_redaction_json):
+        if path.exists():
+            produced.append(path)
 
     routing_config = work_root / "routing_config.json"
     route_queries = work_root / "route_queries.json"
@@ -2173,6 +2212,8 @@ raise SystemExit(code)
     query_fusion_md = work_root / "query_fusion.md"
     query_fusion_test_json = work_root / "query_fusion_test.json"
     query_fusion_test_md = work_root / "query_fusion_test.md"
+    query_fallback_test_json = work_root / "query_fallback_test.json"
+    query_fallback_test_md = work_root / "query_fallback_test.md"
     query_rewrite_json = work_root / "query_rewrite.json"
     query_rewrite_md = work_root / "query_rewrite.md"
     query_intent_json = work_root / "query_intent.json"
@@ -2531,6 +2572,31 @@ raise SystemExit(code)
         produced.append(query_fusion_test_json)
     if query_fusion_test_md.exists():
         produced.append(query_fusion_test_md)
+
+    query_fallback_test = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "fallback-test",
+            "--report-json",
+            str(query_fallback_test_json),
+            "--report-md",
+            str(query_fallback_test_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query fallback test report",
+        query_fallback_test,
+        required_output='"schema": "ragflow_query_fallback_test_report_v1"',
+    )
+    if query_fallback_test_json.exists():
+        produced.append(query_fallback_test_json)
+    if query_fallback_test_md.exists():
+        produced.append(query_fallback_test_md)
 
     query_rewrite = _run_command(
         [

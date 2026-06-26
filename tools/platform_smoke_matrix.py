@@ -597,6 +597,8 @@ def _run_model_provider_probe_check(
                 str(artifacts_dir / "model_provider_probe.json"),
                 "--report-md",
                 str(artifacts_dir / "model_provider_probe.md"),
+                "--redaction-report",
+                str(artifacts_dir / "model_provider_redaction.json"),
                 "--json",
             ],
             cwd=workspace,
@@ -1419,7 +1421,25 @@ fusion_test_payload = json.loads(stdout.getvalue())
 if fusion_test_payload.get("schema") != "ragflow_fusion_test_report_v1":
     raise SystemExit(11)
 
-print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload, "pollution": pollution_payload, "rerank": rerank_payload, "cross_language": cross_language_payload, "fusion": fusion_payload, "fusion_test": fusion_test_payload}}, ensure_ascii=False))
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    fallback_test_code = module.main([
+        "fallback-test",
+        "--report-json",
+        str(artifacts_dir / "query_fallback_test.json"),
+        "--report-md",
+        str(artifacts_dir / "query_fallback_test.md"),
+        "--json",
+    ])
+if fallback_test_code != 0:
+    raise SystemExit(fallback_test_code)
+fallback_test_payload = json.loads(stdout.getvalue())
+if fallback_test_payload.get("schema") != "ragflow_query_fallback_test_report_v1":
+    raise SystemExit(13)
+if fallback_test_payload.get("summary", {{}}).get("covered_required_mode_count") != len(fallback_test_payload.get("required_failure_modes", [])):
+    raise SystemExit(14)
+
+print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload, "pollution": pollution_payload, "rerank": rerank_payload, "cross_language": cross_language_payload, "fusion": fusion_payload, "fusion_test": fusion_test_payload, "fallback_test": fallback_test_payload}}, ensure_ascii=False))
 """,
         encoding="utf-8",
     )
@@ -2210,6 +2230,57 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     )
 
     query_script = script_root / "ragflow-query" / "scripts" / "query.py"
+    fake_lan_endpoint = "https://" + ".".join(("192", "168", "10", "20")) + ":9380"
+    fake_vpn_endpoint = "vpn=http://" + ".".join(("100", "64", "10", "20")) + ":8080/v1?token=fake-secret"
+    endpoint_report_result = _run_command(
+        [
+            sys.executable,
+            str(query_script),
+            "endpoint-report",
+            "--base-url",
+            fake_lan_endpoint,
+            "--api-key",
+            "platform-fake-key",
+            "--endpoint",
+            fake_vpn_endpoint,
+            "--report-json",
+            str(artifacts_dir / "query_endpoint_report.json"),
+            "--report-md",
+            str(artifacts_dir / "query_endpoint_report.md"),
+            "--redaction-report",
+            str(artifacts_dir / "query_endpoint_redaction.json"),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query endpoint-report",
+        endpoint_report_result,
+        required_stdout='"schema": "ragflow_query_endpoint_report_v1"',
+    )
+    fallback_test_result = _run_command(
+        [
+            sys.executable,
+            str(query_script),
+            "fallback-test",
+            "--report-json",
+            str(artifacts_dir / "query_fallback_test.json"),
+            "--report-md",
+            str(artifacts_dir / "query_fallback_test.md"),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query fallback-test",
+        fallback_test_result,
+        required_stdout='"schema": "ragflow_query_fallback_test_report_v1"',
+    )
+
     routing_config = artifacts_dir / "routing_config.json"
     route_queries = artifacts_dir / "route_queries.json"
     route_tie_queries = artifacts_dir / "route_tie_queries.json"
@@ -2553,6 +2624,11 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         workspace / "backend_warmup.json",
         workspace / "backend_warmup.md",
         kb_manifest,
+        artifacts_dir / "query_endpoint_report.json",
+        artifacts_dir / "query_endpoint_report.md",
+        artifacts_dir / "query_endpoint_redaction.json",
+        artifacts_dir / "query_fallback_test.json",
+        artifacts_dir / "query_fallback_test.md",
         artifacts_dir / "query_direct.json",
         artifacts_dir / "query_host_assisted.json",
         artifacts_dir / "query_agentic_retrieval.json",
@@ -2607,6 +2683,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "profile_experiment_matrix.md",
         artifacts_dir / "model_provider_probe.json",
         artifacts_dir / "model_provider_probe.md",
+        artifacts_dir / "model_provider_redaction.json",
         artifacts_dir / "metadata.template.json",
         artifacts_dir / "tagset.template.json",
         artifacts_dir / "benchmark" / "manifest.json",

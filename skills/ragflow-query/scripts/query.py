@@ -48,11 +48,14 @@ from ragflow_skill_runtime import (  # noqa: E402
     build_query_rewrite_plan,
     classify_query_intent,
     build_query_session_inspection,
+    build_query_endpoint_report,
     build_query_trace,
     diagnose_query_result,
     evaluate_answer,
+    configured_private_hosts_from_urls,
     evidence_from_query_payload,
     load_pollution_terms,
+    load_query_fallback_test_cases,
     load_query_session,
     load_route_test_queries,
     load_config,
@@ -79,6 +82,8 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_query_session_enrichment_markdown,
     render_query_session_inspection_markdown,
     render_query_diagnostic_markdown,
+    render_query_endpoint_report_markdown,
+    render_query_fallback_test_markdown,
     render_query_pollution_markdown,
     render_query_rerank_ab_markdown,
     render_query_rewrite_markdown,
@@ -88,6 +93,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_route_report_markdown,
     render_route_test_markdown,
     run_fusion_tests,
+    run_query_fallback_tests,
     resolve_dataset_ids,
     route_question,
     route_query_intent,
@@ -95,6 +101,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     run_route_diagnose,
     run_route_report,
     run_route_tests,
+    sanitize_report_payload,
     weight_evidence,
     write_centroid_plan,
     write_centroid_report,
@@ -118,11 +125,13 @@ def _error(message: str, *, json_output: bool, details: dict[str, Any] | None = 
 
 def _load_runtime(args: argparse.Namespace):
     overrides = {}
-    if args.base_url:
+    if getattr(args, "base_url", None):
         overrides["base_url"] = args.base_url
-    if args.api_key:
+    if getattr(args, "api_key", None):
         overrides["api_key"] = args.api_key
-    return load_config(config_file=args.config, overrides=overrides)
+    if getattr(args, "timeout", None) is not None:
+        overrides["timeout"] = args.timeout
+    return load_config(config_file=getattr(args, "config", None), overrides=overrides)
 
 
 def _routing_config_path(args: argparse.Namespace) -> str | None:
@@ -941,6 +950,77 @@ def _fusion_test(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _fallback_test(args: argparse.Namespace) -> int:
+    try:
+        cases = load_query_fallback_test_cases(args.cases)
+        report = run_query_fallback_tests(cases)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_fallback_test_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _parse_endpoint_args(values: list[str]) -> list[dict[str, Any]]:
+    endpoints: list[dict[str, Any]] = []
+    for index, raw in enumerate(values or [], start=1):
+        value = str(raw).strip()
+        if not value:
+            continue
+        label = f"custom_{index}"
+        url = value
+        if "=" in value and not value.lower().startswith(("http://", "https://")):
+            candidate_label, candidate_url = value.split("=", 1)
+            if candidate_url.strip():
+                label = candidate_label.strip() or label
+                url = candidate_url.strip()
+        endpoints.append({"label": label, "kind": "custom", "url": url})
+    return endpoints
+
+
+def _sanitize_endpoint_report(report: dict[str, Any], args: argparse.Namespace, runtime: Any, endpoints: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        runtime.base_url,
+        runtime.llm_base_url,
+        *(endpoint.get("url") for endpoint in endpoints if isinstance(endpoint.get("url"), str)),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        explicit_secrets=[runtime.api_key, runtime.llm_api_key],
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[getattr(args, "config", None)],
+    )
+    return sanitized, redaction_report
+
+
+def _endpoint_report(args: argparse.Namespace) -> int:
+    try:
+        runtime = _load_runtime(args)
+        timeout = args.timeout if args.timeout is not None else runtime.timeout or 5.0
+        endpoints = _parse_endpoint_args(args.endpoint)
+        report = build_query_endpoint_report(
+            ragflow_base_url=runtime.base_url,
+            ragflow_api_key=runtime.api_key,
+            llm_base_url=runtime.llm_base_url,
+            llm_api_key=runtime.llm_api_key,
+            extra_endpoints=endpoints,
+            network_check=args.network_check,
+            timeout=timeout,
+            verify_ssl=True if runtime.verify_ssl is None else bool(runtime.verify_ssl),
+        )
+        report, redaction_report = _sanitize_endpoint_report(report, args, runtime, endpoints)
+    except (ConfigError, ValueError) as exc:
+        return _error(str(exc), json_output=args.json)
+    _write_json(args.report_json, report)
+    _write_json(args.redaction_report, redaction_report)
+    _write_text(args.report_md, render_query_endpoint_report_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _add_runtime_options(parser: argparse.ArgumentParser, *, suppress_defaults: bool = False) -> None:
     default = argparse.SUPPRESS if suppress_defaults else None
     parser.add_argument("--config", default=default, help="Path to JSON or simple YAML config")
@@ -1164,6 +1244,33 @@ def build_parser() -> argparse.ArgumentParser:
     fusion_test.add_argument("--report-md", help="Optional Markdown report output path")
     fusion_test.add_argument("--json", action="store_true", help="Emit JSON report")
     fusion_test.set_defaults(func=_fusion_test)
+
+    fallback_test = sub.add_parser("fallback-test", help="Run offline fallback coverage fixtures")
+    fallback_test.add_argument("--cases", help="Optional fallback test cases JSON; defaults to built-in coverage")
+    fallback_test.add_argument("--report-json", help="Optional JSON report output path")
+    fallback_test.add_argument("--report-md", help="Optional Markdown report output path")
+    fallback_test.add_argument("--json", action="store_true", help="Emit JSON report")
+    fallback_test.set_defaults(func=_fallback_test)
+
+    endpoint_report = sub.add_parser("endpoint-report", help="Classify query endpoints and optional reachability")
+    _add_runtime_options(endpoint_report, suppress_defaults=True)
+    endpoint_report.add_argument(
+        "--endpoint",
+        action="append",
+        default=[],
+        help="Extra endpoint URL or label=url to classify; repeatable",
+    )
+    endpoint_report.add_argument(
+        "--network-check",
+        action="store_true",
+        help="Run redacted HEAD reachability checks; disabled by default",
+    )
+    endpoint_report.add_argument("--timeout", type=float, help="Reachability timeout in seconds")
+    endpoint_report.add_argument("--report-json", help="Optional JSON report output path")
+    endpoint_report.add_argument("--report-md", help="Optional Markdown report output path")
+    endpoint_report.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    endpoint_report.add_argument("--json", action="store_true", help="Emit JSON report")
+    endpoint_report.set_defaults(func=_endpoint_report)
 
     centroid = sub.add_parser("centroid", help="Plan or build optional centroid routing artifacts")
     centroid_sub = centroid.add_subparsers(dest="centroid_command", required=True)

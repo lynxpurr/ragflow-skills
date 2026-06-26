@@ -66,6 +66,8 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("doc-to-md backend probe", check_names)
         self.assertIn("doc-to-md backend warmup", check_names)
         self.assertIn("kb model-providers probe", check_names)
+        self.assertIn("query endpoint-report", check_names)
+        self.assertIn("query fallback-test", check_names)
         self.assertTrue(
             any(path.endswith("mineru-handoff/doc_manifest.json") for path in profile["artifacts"]),
             profile["artifacts"],
@@ -96,6 +98,26 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("model_provider_probe.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("model_provider_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_endpoint_report.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_endpoint_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_fallback_test.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_fallback_test.md") for path in profile["artifacts"]),
             profile["artifacts"],
         )
         self.assertTrue(

@@ -101,6 +101,58 @@ class QueryCliTests(unittest.TestCase):
         )
         self.assertEqual(code, 2)
 
+    def test_endpoint_report_command_writes_redacted_reports(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_json = root / "endpoint_report.json"
+            report_md = root / "endpoint_report.md"
+            redaction_json = root / "endpoint_redaction.json"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "endpoint-report",
+                        "--base-url",
+                        "https://192.168.10.20:9380",
+                        "--api-key",
+                        "secret-key",
+                        "--endpoint",
+                        "vpn=http://100.64.10.20:8080/v1?token=fake-secret",
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
+                        "--json",
+                    ]
+                )
+            output = stdout.getvalue()
+            payload = json.loads(output)
+            report_text = report_json.read_text(encoding="utf-8")
+            file_payload = json.loads(report_text)
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
+            markdown = report_md.read_text(encoding="utf-8")
+
+        combined = "\n".join([output, report_text, redaction_text, markdown])
+        self.assertEqual(code, 0, output)
+        self.assertEqual(payload["schema"], "ragflow_query_endpoint_report_v1")
+        self.assertEqual(file_payload["schema"], "ragflow_query_endpoint_report_v1")
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["target_counts"]["explicit_secrets"], 1)
+        self.assertGreaterEqual(redaction_payload["target_counts"]["private_hosts"], 1)
+        self.assertEqual(payload["endpoints"][0]["endpoint"]["network_zone"], "lan")
+        self.assertEqual(payload["endpoints"][1]["endpoint"]["network_zone"], "vpn")
+        self.assertIn("RAGFlow Query Endpoint Report", markdown)
+        self.assertIn("<lan-host>", combined)
+        self.assertIn("<vpn-host>", combined)
+        self.assertNotIn("192.168.10.20", combined)
+        self.assertNotIn("100.64.10.20", combined)
+        self.assertNotIn("secret-key", combined)
+        self.assertNotIn("fake-secret", combined)
+
     def test_kb_manifest_can_supply_dataset_id_before_network(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:
@@ -1164,6 +1216,40 @@ class QueryCliTests(unittest.TestCase):
         self.assertTrue(report_md_exists)
         self.assertIn("RAGFlow Fusion Test Report", markdown)
         self.assertIn("shared-evidence", markdown)
+
+    def test_fallback_test_can_write_json_and_markdown(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_json = root / "fallback_test.json"
+            report_md = root / "fallback_test.md"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "fallback-test",
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            file_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            markdown = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(payload["schema"], "ragflow_query_fallback_test_report_v1")
+        self.assertEqual(file_payload["schema"], "ragflow_query_fallback_test_report_v1")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(
+            payload["summary"]["covered_required_mode_count"],
+            len(payload["required_failure_modes"]),
+        )
+        self.assertEqual(payload["summary"]["fallback_success_rate"], 1.0)
+        self.assertIn("RAGFlow Query Fallback Test Report", markdown)
+        self.assertIn("direct-retrieval-fallback", markdown)
 
     def test_route_commands_use_routing_config(self) -> None:
         module = load_query_module()

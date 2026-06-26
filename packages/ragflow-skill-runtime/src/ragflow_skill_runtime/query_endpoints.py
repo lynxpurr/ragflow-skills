@@ -1,0 +1,485 @@
+"""Endpoint classification and reachability reports for ragflow-query."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import ipaddress
+import re
+import socket
+import ssl
+import time
+from typing import Any, Mapping, Sequence
+from urllib import error, request
+from urllib.parse import urlparse
+
+
+QUERY_ENDPOINT_REPORT_SCHEMA = "ragflow_query_endpoint_report_v1"
+QUERY_ENDPOINT_REACHABILITY_STATUSES = (
+    "not_configured",
+    "invalid_url",
+    "not_checked",
+    "reachable",
+    "unauthorized",
+    "missing",
+    "wrong_protocol",
+    "timeout",
+    "unreachable",
+    "error",
+)
+
+_HTTP_URL_RE = re.compile(r"https?://[^\s\"']+")
+_LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
+_LAN_NETWORKS = (
+    ipaddress.ip_network((3232235520, 16)),
+    ipaddress.ip_network((2886729728, 12)),
+)
+_VPN_NETWORKS = (
+    ipaddress.ip_network((167772160, 8)),
+    ipaddress.ip_network((1681915904, 10)),
+)
+
+
+def _sanitize_message(value: str) -> str:
+    return _HTTP_URL_RE.sub("<redacted-url>", str(value))
+
+
+def _clean_label(value: str | None, *, fallback: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    cleaned = re.sub(r"[^A-Za-z0-9_.:-]+", "_", text).strip("_")
+    if not cleaned or "http:" in cleaned.lower() or "https:" in cleaned.lower():
+        return fallback
+    return cleaned[:64]
+
+
+def _endpoint_kind(value: str | None) -> str:
+    text = str(value or "custom").strip().lower()
+    cleaned = re.sub(r"[^a-z0-9_-]+", "_", text).strip("_")
+    return cleaned[:32] or "custom"
+
+
+def _strip_ipv6_brackets(host: str) -> str:
+    if host.startswith("[") and host.endswith("]"):
+        return host[1:-1]
+    return host
+
+
+def classify_endpoint_host(host: str | None) -> str:
+    """Classify an endpoint host without returning the host itself."""
+
+    if not host:
+        return "unknown"
+    lowered = _strip_ipv6_brackets(str(host).strip().lower())
+    if lowered in _LOCAL_HOSTNAMES:
+        return "local"
+    try:
+        ip = ipaddress.ip_address(lowered)
+    except ValueError:
+        if lowered.endswith((".local", ".lan")):
+            return "lan"
+        if "." not in lowered:
+            return "hostname"
+        return "public"
+
+    if ip.is_loopback:
+        return "local"
+    if ip.version == 4:
+        for network in _LAN_NETWORKS:
+            if ip in network:
+                return "lan"
+        for network in _VPN_NETWORKS:
+            if ip in network:
+                return "vpn"
+    if ip.is_link_local:
+        return "lan"
+    if ip.is_private:
+        return "private"
+    if ip.is_global:
+        return "public"
+    return "private"
+
+
+def _host_token(network_zone: str) -> str:
+    tokens = {
+        "local": "<local-host>",
+        "lan": "<lan-host>",
+        "vpn": "<vpn-host>",
+        "private": "<private-host>",
+        "public": "<public-host>",
+        "hostname": "<hostname>",
+    }
+    return tokens.get(network_zone, "<host>")
+
+
+def _path_depth(path: str) -> int:
+    return len([part for part in path.split("/") if part])
+
+
+def _port_configured(parsed: Any) -> bool:
+    try:
+        return parsed.port is not None
+    except ValueError:
+        return True
+
+
+def _valid_endpoint_url(url: str | None) -> tuple[bool, str]:
+    if not url:
+        return False, "endpoint URL is not configured"
+    parsed = urlparse(str(url))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False, "endpoint URL must use http or https"
+    try:
+        parsed.port
+    except ValueError:
+        return False, "endpoint URL port is invalid"
+    return True, f"{parsed.scheme} endpoint configured"
+
+
+def endpoint_url_summary(url: str | None) -> dict[str, Any]:
+    """Return a redaction-safe endpoint URL summary."""
+
+    if not url:
+        return {"configured": False, "valid": False}
+    parsed = urlparse(str(url))
+    valid, reason = _valid_endpoint_url(str(url))
+    network_zone = classify_endpoint_host(parsed.hostname)
+    path_configured = bool(parsed.path and parsed.path != "/")
+    redacted = None
+    if parsed.scheme:
+        redacted = f"{parsed.scheme}://{_host_token(network_zone)}"
+        if _port_configured(parsed):
+            redacted += ":<port>"
+        if path_configured:
+            redacted += "/<path>"
+        if parsed.query:
+            redacted += "?<query>"
+        if parsed.fragment:
+            redacted += "#<fragment>"
+    return {
+        "configured": True,
+        "valid": valid,
+        "reason": reason,
+        "scheme": parsed.scheme or None,
+        "https": parsed.scheme == "https",
+        "network_zone": network_zone,
+        "redacted_url": redacted,
+        "host_redacted": _host_token(network_zone),
+        "port_configured": _port_configured(parsed),
+        "path_configured": path_configured,
+        "path_depth": _path_depth(parsed.path),
+        "query_configured": bool(parsed.query),
+        "fragment_configured": bool(parsed.fragment),
+    }
+
+
+def _ssl_context(*, verify_ssl: bool) -> ssl.SSLContext | None:
+    if verify_ssl:
+        return None
+    return ssl._create_unverified_context()
+
+
+def _network_probe(
+    url: str,
+    *,
+    api_key: str | None,
+    timeout: float,
+    verify_ssl: bool,
+) -> tuple[str, str, int | None]:
+    headers = {
+        "Accept": "application/json,text/plain,*/*",
+        "User-Agent": "ragflow-query-endpoint-report",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = request.Request(url, method="HEAD", headers=headers)
+    try:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
+            return "reachable", f"endpoint responded with HTTP {resp.status}", resp.status
+    except error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            return "unauthorized", "endpoint exists but credentials were rejected or required", exc.code
+        if exc.code == 404:
+            return "missing", "endpoint returned HTTP 404", exc.code
+        if exc.code in {400, 405, 415} or 200 <= exc.code < 500:
+            return "reachable", f"endpoint responded with HTTP {exc.code}; service is reachable", exc.code
+        if 500 <= exc.code < 600:
+            return "error", f"endpoint returned HTTP {exc.code}", exc.code
+        return "wrong_protocol", f"endpoint returned HTTP {exc.code}", exc.code
+    except TimeoutError:
+        return "timeout", f"endpoint check timed out after {timeout:g}s", None
+    except socket.timeout:
+        return "timeout", f"endpoint check timed out after {timeout:g}s", None
+    except error.URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            return "timeout", f"endpoint check timed out after {timeout:g}s", None
+        return "unreachable", f"endpoint check failed: {_sanitize_message(str(exc.reason))}", None
+    except OSError as exc:
+        return "unreachable", f"endpoint check failed: {_sanitize_message(str(exc))}", None
+
+
+def _endpoint_report_entry(
+    *,
+    label: str,
+    kind: str,
+    url: str | None,
+    api_key_configured: bool,
+    api_key: str | None,
+    network_check: bool,
+    timeout: float,
+    verify_ssl: bool,
+) -> dict[str, Any]:
+    summary = endpoint_url_summary(url)
+    checks: list[dict[str, Any]] = [
+        {"name": "url_configured", "ok": bool(url)},
+        {"name": "http_url", "ok": bool(summary.get("valid"))},
+        {"name": "https", "ok": summary.get("https") if summary.get("configured") else None},
+        {"name": "api_key_configured", "ok": bool(api_key_configured)},
+    ]
+    if not url:
+        checks.append({"name": "network_check", "ok": None, "skipped": True})
+        return {
+            "label": label,
+            "kind": kind,
+            "status": "not_configured",
+            "endpoint": summary,
+            "api_key_configured": bool(api_key_configured),
+            "checks": checks,
+            "reason": "endpoint URL is not configured",
+        }
+    if not summary.get("valid"):
+        checks.append({"name": "network_check", "ok": None, "skipped": True})
+        return {
+            "label": label,
+            "kind": kind,
+            "status": "invalid_url",
+            "endpoint": summary,
+            "api_key_configured": bool(api_key_configured),
+            "checks": checks,
+            "reason": str(summary.get("reason") or "endpoint URL is invalid"),
+        }
+    if not network_check:
+        checks.append({"name": "network_check", "ok": None, "skipped": True})
+        return {
+            "label": label,
+            "kind": kind,
+            "status": "not_checked",
+            "endpoint": summary,
+            "api_key_configured": bool(api_key_configured),
+            "checks": checks,
+            "reason": "network check disabled",
+        }
+
+    started = time.monotonic()
+    status, reason, http_status = _network_probe(
+        str(url),
+        api_key=api_key,
+        timeout=timeout,
+        verify_ssl=verify_ssl,
+    )
+    checks.append({"name": "network_check", "ok": status in {"reachable", "unauthorized"}})
+    entry: dict[str, Any] = {
+        "label": label,
+        "kind": kind,
+        "status": status if status in QUERY_ENDPOINT_REACHABILITY_STATUSES else "error",
+        "endpoint": summary,
+        "api_key_configured": bool(api_key_configured),
+        "checks": checks,
+        "latency_ms": round((time.monotonic() - started) * 1000, 3),
+        "reason": reason,
+    }
+    if http_status is not None:
+        entry["http_status"] = http_status
+    return entry
+
+
+def _normal_endpoint_specs(extra_endpoints: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for index, endpoint in enumerate(extra_endpoints or [], start=1):
+        if not isinstance(endpoint, Mapping):
+            continue
+        fallback = f"custom_{index}"
+        entries.append(
+            {
+                "label": _clean_label(str(endpoint.get("label") or ""), fallback=fallback),
+                "kind": _endpoint_kind(str(endpoint.get("kind") or "custom")),
+                "url": endpoint.get("url"),
+                "api_key_configured": bool(endpoint.get("api_key_configured")),
+                "api_key": endpoint.get("api_key") if isinstance(endpoint.get("api_key"), str) else None,
+            }
+        )
+    return entries
+
+
+def _issue_for_entry(entry: Mapping[str, Any]) -> dict[str, Any] | None:
+    status = str(entry.get("status") or "")
+    label = str(entry.get("label") or "endpoint")
+    endpoint = entry.get("endpoint") if isinstance(entry.get("endpoint"), Mapping) else {}
+    if status == "invalid_url":
+        return {
+            "severity": "error",
+            "code": "endpoint_invalid_url",
+            "message": f"{label} endpoint URL is invalid: {entry.get('reason')}",
+            "recommendation": "Use a full http:// or https:// endpoint URL.",
+        }
+    if status in {"timeout", "unreachable", "error", "wrong_protocol"}:
+        return {
+            "severity": "error",
+            "code": f"endpoint_{status}",
+            "message": f"{label} endpoint check failed: {entry.get('reason')}",
+            "recommendation": "Check network route, service health, protocol, and timeout settings.",
+        }
+    if status in {"missing", "unauthorized"}:
+        return {
+            "severity": "warning",
+            "code": f"endpoint_{status}",
+            "message": f"{label} endpoint responded with status `{status}`: {entry.get('reason')}",
+            "recommendation": "Confirm the endpoint path and credentials before running live retrieval.",
+        }
+    if endpoint.get("network_zone") == "public" and endpoint.get("scheme") == "http":
+        return {
+            "severity": "warning",
+            "code": "endpoint_public_http",
+            "message": f"{label} endpoint is public and not HTTPS.",
+            "recommendation": "Prefer HTTPS for public endpoints or keep the endpoint on a private network.",
+        }
+    if endpoint.get("query_configured"):
+        return {
+            "severity": "warning",
+            "code": "endpoint_url_query",
+            "message": f"{label} endpoint URL includes a query string.",
+            "recommendation": "Move tokens and credentials to headers or config fields instead of URL query parameters.",
+        }
+    return None
+
+
+def build_query_endpoint_report(
+    *,
+    ragflow_base_url: str | None,
+    ragflow_api_key: str | None = None,
+    llm_base_url: str | None = None,
+    llm_api_key: str | None = None,
+    extra_endpoints: Sequence[Mapping[str, Any]] | None = None,
+    network_check: bool = False,
+    timeout: float = 5.0,
+    verify_ssl: bool = True,
+) -> dict[str, Any]:
+    """Build a redaction-safe endpoint report for query workflows."""
+
+    if timeout <= 0:
+        raise ValueError("endpoint report timeout must be greater than zero")
+
+    specs = [
+        {
+            "label": "ragflow_api",
+            "kind": "ragflow",
+            "url": ragflow_base_url,
+            "api_key_configured": bool(ragflow_api_key),
+            "api_key": ragflow_api_key,
+        }
+    ]
+    if llm_base_url:
+        specs.append(
+            {
+                "label": "llm_api",
+                "kind": "llm",
+                "url": llm_base_url,
+                "api_key_configured": bool(llm_api_key),
+                "api_key": llm_api_key,
+            }
+        )
+    specs.extend(_normal_endpoint_specs(extra_endpoints))
+
+    endpoints = [
+        _endpoint_report_entry(
+            label=str(spec["label"]),
+            kind=str(spec["kind"]),
+            url=spec.get("url") if isinstance(spec.get("url"), str) else None,
+            api_key_configured=bool(spec.get("api_key_configured")),
+            api_key=spec.get("api_key") if isinstance(spec.get("api_key"), str) else None,
+            network_check=network_check,
+            timeout=timeout,
+            verify_ssl=verify_ssl,
+        )
+        for spec in specs
+    ]
+    status_counts = {status: 0 for status in QUERY_ENDPOINT_REACHABILITY_STATUSES}
+    zone_counts: dict[str, int] = {}
+    https_count = 0
+    configured_count = 0
+    for entry in endpoints:
+        status = str(entry.get("status"))
+        status_counts[status] = status_counts.get(status, 0) + 1
+        endpoint = entry.get("endpoint") if isinstance(entry.get("endpoint"), Mapping) else {}
+        if endpoint.get("configured"):
+            configured_count += 1
+        if endpoint.get("https"):
+            https_count += 1
+        zone = str(endpoint.get("network_zone") or "unknown")
+        zone_counts[zone] = zone_counts.get(zone, 0) + 1
+
+    issues = [issue for issue in (_issue_for_entry(entry) for entry in endpoints) if issue]
+    error_count = sum(1 for issue in issues if issue.get("severity") == "error")
+    warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
+    return {
+        "schema": QUERY_ENDPOINT_REPORT_SCHEMA,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "ok": error_count == 0,
+        "network_check": bool(network_check),
+        "timeout_seconds": timeout,
+        "verify_ssl": bool(verify_ssl),
+        "allowed_statuses": list(QUERY_ENDPOINT_REACHABILITY_STATUSES),
+        "summary": {
+            "endpoint_count": len(endpoints),
+            "configured_endpoint_count": configured_count,
+            "https_endpoint_count": https_count,
+            "checked_endpoint_count": len(endpoints) if network_check else 0,
+            "reachable_endpoint_count": status_counts.get("reachable", 0),
+            "warning_count": warning_count,
+            "error_count": error_count,
+        },
+        "status_counts": status_counts,
+        "network_zone_counts": zone_counts,
+        "endpoints": endpoints,
+        "issues": issues,
+    }
+
+
+def render_query_endpoint_report_markdown(report: Mapping[str, Any]) -> str:
+    """Render a compact Markdown endpoint report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Query Endpoint Report",
+        "",
+        f"- schema: `{report.get('schema', QUERY_ENDPOINT_REPORT_SCHEMA)}`",
+        f"- ok: `{str(report.get('ok', False)).lower()}`",
+        f"- network_check: `{str(report.get('network_check', False)).lower()}`",
+        f"- endpoints: `{summary.get('endpoint_count', 0)}`",
+        f"- configured: `{summary.get('configured_endpoint_count', 0)}`",
+        f"- https: `{summary.get('https_endpoint_count', 0)}`",
+        f"- reachable: `{summary.get('reachable_endpoint_count', 0)}`",
+        "",
+        "| endpoint | status | zone | scheme | URL summary | reason |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for entry in report.get("endpoints", []) if isinstance(report.get("endpoints"), list) else []:
+        if not isinstance(entry, Mapping):
+            continue
+        endpoint = entry.get("endpoint") if isinstance(entry.get("endpoint"), Mapping) else {}
+        reason = str(entry.get("reason", "")).replace("|", "\\|")
+        lines.append(
+            f"| `{entry.get('label', '')}` | `{entry.get('status', '')}` | "
+            f"`{endpoint.get('network_zone', '')}` | `{endpoint.get('scheme', '')}` | "
+            f"`{endpoint.get('redacted_url', '')}` | {reason} |"
+        )
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    if issues:
+        lines.extend(["", "## Issues", ""])
+        for issue in issues:
+            if not isinstance(issue, Mapping):
+                continue
+            lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+            if issue.get("recommendation"):
+                lines.append(f"  Recommendation: {issue.get('recommendation')}")
+    return "\n".join(lines).rstrip() + "\n"

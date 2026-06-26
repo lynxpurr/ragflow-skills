@@ -1010,9 +1010,9 @@ Tasks:
 - [x] Probe configured embedding/rerank adapter request shape when explicit adapter endpoints are present.
 - [ ] Warn when an embedding model change requires KB rebuild or re-parse.
 - [x] Add fake endpoint tests for empty-input embedding/rerank adapter behavior.
-- [ ] Add `ragflow-query endpoint-report` for local/LAN/VPN/HTTPS endpoint classification and redacted reachability summaries.
-- [ ] Add `ragflow-query fallback-test`.
-- [ ] Cover LLM unavailable, malformed LLM JSON, network timeout, partial failure, direct retrieval fallback, and fallback metrics.
+- [x] Add `ragflow-query endpoint-report` for local/LAN/VPN/HTTPS endpoint classification and redacted reachability summaries.
+- [x] Add `ragflow-query fallback-test`.
+- [x] Cover LLM unavailable, malformed LLM JSON, network timeout, partial failure, direct retrieval fallback, and fallback metrics.
 - [ ] Add retry/backoff policy helpers with retry budgets recorded in traces.
 - [ ] Add token-bucket rate limiter for RAGFlow and optional LLM calls.
 - [ ] Add circuit-breaker state for repeated service failures during a run.
@@ -1022,7 +1022,7 @@ Tasks:
 - [ ] Add metrics collector for counters, gauges, and latency histograms with p50/p95/p99 summaries.
 - [ ] Add checkpoint/resume helpers for bounded long-running jobs such as centroid build, benchmark import, optimize, and report generation.
 - [ ] Add partial-failure report schemas for timeout, partial, and skipped profiles.
-- [ ] Add a shared report sanitizer for API keys, bearer tokens, configured private hosts, home paths, and local config paths.
+- [x] Add a shared report sanitizer for API keys, bearer tokens, configured private hosts, home paths, and local config paths.
 - [ ] Add `--redaction-report` to relevant commands.
 - [ ] Extend release hygiene to scan generated reports and examples.
 - [ ] Add acceptance fixtures that intentionally include fake secrets and verify redaction.

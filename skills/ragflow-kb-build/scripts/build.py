@@ -44,6 +44,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     map_grounded_qa_evidence,
     merge_metadata_payloads,
     probe_model_providers,
+    configured_private_hosts_from_urls,
     render_handoff_inspection_markdown,
     render_governance_markdown,
     render_model_provider_probe_markdown,
@@ -70,6 +71,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     generate_grounded_qa,
     validate_grounded_qa,
     wait_for_document_states,
+    sanitize_report_payload,
 )
 from ragflow_skill_runtime.benchmark_governance import BenchmarkGovernanceError  # noqa: E402
 from ragflow_skill_runtime.config import ConfigError  # noqa: E402
@@ -625,6 +627,17 @@ def _run_optimize_cleanup_plan(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _sanitize_model_provider_report(report: dict[str, Any], args: argparse.Namespace, config: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [config.base_url, args.embedding_adapter_url, args.rerank_adapter_url]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        explicit_secrets=[config.api_key, args.embedding_adapter_api_key, args.rerank_adapter_api_key],
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[args.config],
+    )
+    return sanitized, redaction_report
+
+
 def _run_model_providers_probe(args: argparse.Namespace) -> int:
     try:
         overrides: dict[str, Any] = {}
@@ -649,7 +662,9 @@ def _run_model_providers_probe(args: argparse.Namespace) -> int:
             rerank_adapter_shape=args.rerank_adapter_shape,
             adapter_timeout=args.adapter_timeout,
         )
+        report, redaction_report = _sanitize_model_provider_report(report, args, config)
         _write_json_file(args.report_json, report)
+        _write_json_file(args.redaction_report, redaction_report)
         _write_text_file(args.report_md, render_model_provider_probe_markdown(report))
         _dump_json(report)
         return 0 if report["ok"] else 1
@@ -698,6 +713,7 @@ def build_model_providers_parser() -> argparse.ArgumentParser:
     probe.add_argument("--adapter-timeout", type=float, default=5.0, help="Adapter empty-input probe timeout seconds")
     probe.add_argument("--report-json", help="Optional JSON probe report path")
     probe.add_argument("--report-md", help="Optional Markdown probe report path")
+    probe.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     probe.add_argument("--json", action="store_true", help="Emit JSON errors")
     probe.set_defaults(func=_run_model_providers_probe)
 

@@ -284,6 +284,7 @@ class KbBuildCliTests(unittest.TestCase):
             root = Path(tmp)
             report_json = root / "model_providers.json"
             report_md = root / "model_providers.md"
+            redaction_json = root / "model_provider_redaction.json"
             result = subprocess.run(
                 [
                     sys.executable,
@@ -306,6 +307,8 @@ class KbBuildCliTests(unittest.TestCase):
                     str(report_json),
                     "--report-md",
                     str(report_md),
+                    "--redaction-report",
+                    str(redaction_json),
                     "--json",
                 ],
                 text=True,
@@ -315,6 +318,7 @@ class KbBuildCliTests(unittest.TestCase):
             )
             payload = json.loads(result.stdout)
             report_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            redaction_payload = json.loads(redaction_json.read_text(encoding="utf-8"))
             markdown = report_md.read_text(encoding="utf-8")
 
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -326,6 +330,9 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["handled_empty_input_adapter_count"], 2)
         self.assertTrue(all(check["found"] for check in payload["expected_model_checks"]))
         self.assertEqual(report_payload["summary"]["provider_count"], 1)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["target_counts"]["explicit_secrets"], 1)
+        self.assertGreaterEqual(redaction_payload["target_counts"]["private_hosts"], 1)
         self.assertIn("RAGFlow Model Provider Probe", markdown)
 
     def test_inspect_handoff_via_build_subcommand(self) -> None:

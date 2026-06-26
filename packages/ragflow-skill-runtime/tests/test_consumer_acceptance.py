@@ -97,6 +97,8 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("query host-assisted help", check_names)
         self.assertIn("query rewrite help", check_names)
         self.assertIn("query rewrite report", check_names)
+        self.assertIn("query endpoint-report", check_names)
+        self.assertIn("query fallback test report", check_names)
         self.assertIn("query missing config guard", check_names)
         self.assertIn("live build skipped", check_names)
         self.assertTrue(payload["reports"]["json"].endswith("consumer-acceptance-report.json"))
