@@ -1067,6 +1067,7 @@ raise SystemExit(code)
     benchmark_gate_md = work_root / "benchmark_gate.md"
     benchmark_trend_md = work_root / "benchmark_trend.md"
     benchmark_delta_md = work_root / "benchmark_delta.md"
+    benchmark_suggest_md = work_root / "benchmark_suggest.md"
     qa_generated = work_root / "qa.generated.json"
     qa_generate_md = work_root / "qa_generate.md"
     qa_validate_md = work_root / "qa_validate.md"
@@ -1441,6 +1442,35 @@ raise SystemExit(code)
         benchmark_delta_result,
         required_output='"schema": "ragflow_benchmark_delta_report_v1"',
     )
+    benchmark_suggest_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "benchmark",
+            "suggest",
+            "--report",
+            str(benchmark_report_json),
+            "--baseline-report",
+            str(baseline_benchmark_report_json),
+            "--gate-config",
+            str(benchmark_gate),
+            "--current-top-k",
+            "3",
+            "--current-similarity-threshold",
+            "0.25",
+            "--report-md",
+            str(benchmark_suggest_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build benchmark suggest",
+        benchmark_suggest_result,
+        required_output='"schema": "ragflow_benchmark_retrieval_suggestion_report_v1"',
+    )
     for path in (
         benchmark_dir / "manifest.json",
         benchmark_dir / "queries.json",
@@ -1471,6 +1501,7 @@ raise SystemExit(code)
         benchmark_gate_md,
         benchmark_trend_md,
         benchmark_delta_md,
+        benchmark_suggest_md,
     ):
         if path.exists():
             produced.append(path)

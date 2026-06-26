@@ -10,6 +10,7 @@ from ragflow_skill_runtime.benchmark_governance import (
     BENCHMARK_GATE_REPORT_SCHEMA,
     BENCHMARK_IMPORT_REPORT_SCHEMA,
     BENCHMARK_PREFLIGHT_REPORT_SCHEMA,
+    BENCHMARK_RETRIEVAL_SUGGESTION_REPORT_SCHEMA,
     BENCHMARK_SAMPLE_REPORT_SCHEMA,
     BENCHMARK_SUMMARY_REPORT_SCHEMA,
     BENCHMARK_TREND_REPORT_SCHEMA,
@@ -27,6 +28,7 @@ from ragflow_skill_runtime.benchmark_governance import (
     preflight_benchmark_dataset,
     sample_benchmark_dataset,
     snapshot_chunks,
+    suggest_benchmark_retrieval_parameters,
     summarize_benchmark_report,
     render_suppression_report_markdown,
     suppression_report_payload,
@@ -532,6 +534,76 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertAlmostEqual(trend["delta"]["mrr"]["absolute"], 0.2)
         self.assertEqual(delta["schema"], BENCHMARK_DELTA_REPORT_SCHEMA)
         self.assertIn("mrr", delta["summary"]["improved"])
+
+    def test_benchmark_retrieval_suggestions_from_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline = root / "baseline.json"
+            current = root / "current.json"
+            gate = root / "gate.json"
+            baseline.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "benchmark": {
+                            "metrics": {
+                                "hit_rate": 1.0,
+                                "mrr": 0.9,
+                                "precision_at_k": 0.7,
+                                "recall_at_k": 1.0,
+                                "ndcg_at_k": 0.95,
+                                "map_at_k": 0.9,
+                                "empty_result_rate": 0.0,
+                                "strict_chunk_recall_at_k": 1.0,
+                                "expected_chunk_hit_rate": 1.0,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            current.write_text(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "dataset": {"id": "ds-1", "name": "kb:test"},
+                        "benchmark": {
+                            "cutoff": 3,
+                            "metrics": {
+                                "hit_rate": 0.5,
+                                "mrr": 0.4,
+                                "precision_at_k": 0.5,
+                                "recall_at_k": 0.5,
+                                "ndcg_at_k": 0.45,
+                                "map_at_k": 0.4,
+                                "empty_result_rate": 0.5,
+                                "strict_chunk_recall_at_k": 0.5,
+                                "expected_chunk_hit_rate": 0.5,
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            gate.write_text(json.dumps({"thresholds": {"min_hit_rate": 0.9, "max_empty_result_rate": 0.0}}), encoding="utf-8")
+
+            report = suggest_benchmark_retrieval_parameters(
+                report_path=current,
+                baseline_report_path=baseline,
+                gate_config_path=gate,
+                current_similarity_threshold=0.35,
+            )
+
+        self.assertEqual(report["schema"], BENCHMARK_RETRIEVAL_SUGGESTION_REPORT_SCHEMA)
+        self.assertEqual(report["status"], "REVIEW")
+        self.assertEqual(report["current_parameters"]["retrieval.top_k"], 3)
+        suggestions = {item["parameter"]: item for item in report["retrieval_parameter_suggestions"]}
+        self.assertEqual(suggestions["retrieval.top_k"]["action"], "increase")
+        self.assertGreater(suggestions["retrieval.top_k"]["suggested"], 3)
+        self.assertEqual(suggestions["retrieval.similarity_threshold"]["action"], "lower")
+        self.assertLess(suggestions["retrieval.similarity_threshold"]["suggested"], 0.35)
+        self.assertIn("hit_rate", report["delta"])
+        self.assertFalse(report["gate"]["ok"], report["gate"])
 
     def test_trend_and_delta_reports_root_cause_regression_hints(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

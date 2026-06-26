@@ -56,6 +56,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     segment_metadata_report_file,
     render_optimization_plan_markdown,
     snapshot_chunks,
+    suggest_benchmark_retrieval_parameters,
     summarize_optimization_results,
     summarize_benchmark_report,
     suppression_report_file,
@@ -450,6 +451,23 @@ def _run_benchmark_delta(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_benchmark_suggest(args: argparse.Namespace) -> int:
+    try:
+        report = suggest_benchmark_retrieval_parameters(
+            report_path=args.report,
+            baseline_report_path=args.baseline_report,
+            gate_config_path=args.gate_config,
+            current_top_k=args.current_top_k,
+            current_similarity_threshold=args.current_similarity_threshold,
+        )
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow Benchmark Retrieval Suggestions"))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (BenchmarkGovernanceError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _run_suppression_report(args: argparse.Namespace) -> int:
     try:
         report = suppression_report_file(
@@ -771,6 +789,17 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     delta.add_argument("--report-md", help="Optional delta report Markdown path")
     delta.add_argument("--json", action="store_true", help="Emit JSON errors")
     delta.set_defaults(func=_run_benchmark_delta)
+
+    suggest = subparsers.add_parser("suggest", help="Suggest retrieval parameter experiments from a benchmark report")
+    suggest.add_argument("--report", required=True, help="Current benchmark validation report JSON")
+    suggest.add_argument("--baseline-report", help="Optional prior benchmark validation report JSON")
+    suggest.add_argument("--gate-config", help="Optional benchmark gate threshold JSON")
+    suggest.add_argument("--current-top-k", type=int, help="Current retrieval top_k, defaults to benchmark cutoff when available")
+    suggest.add_argument("--current-similarity-threshold", type=float, help="Current retrieval similarity threshold")
+    suggest.add_argument("--report-json", help="Optional suggestion report JSON path")
+    suggest.add_argument("--report-md", help="Optional suggestion report Markdown path")
+    suggest.add_argument("--json", action="store_true", help="Emit JSON errors")
+    suggest.set_defaults(func=_run_benchmark_suggest)
 
     return parser
 

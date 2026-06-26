@@ -532,6 +532,7 @@ class KbBuildCliTests(unittest.TestCase):
             gate_md = root / "benchmark_gate.md"
             trend_md = root / "benchmark_trend.md"
             delta_md = root / "benchmark_delta.md"
+            suggest_md = root / "benchmark_suggest.md"
             queries.write_text(
                 json.dumps({"queries": [{"id": "q1", "question": "What is supported?", "metadata": {"type": "fact"}}]}),
                 encoding="utf-8",
@@ -761,12 +762,38 @@ class KbBuildCliTests(unittest.TestCase):
                 check=False,
                 env=_env(),
             )
+            suggest_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "suggest",
+                    "--report",
+                    str(report),
+                    "--baseline-report",
+                    str(baseline_report),
+                    "--gate-config",
+                    str(gate),
+                    "--current-top-k",
+                    "3",
+                    "--current-similarity-threshold",
+                    "0.25",
+                    "--report-md",
+                    str(suggest_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
             snapshot_md_text = snapshot_md.read_text(encoding="utf-8") if snapshot_md.exists() else ""
             preflight_md_text = preflight_md.read_text(encoding="utf-8") if preflight_md.exists() else ""
             sample_md_text = sample_md.read_text(encoding="utf-8") if sample_md.exists() else ""
             gate_md_text = gate_md.read_text(encoding="utf-8") if gate_md.exists() else ""
             trend_md_text = trend_md.read_text(encoding="utf-8") if trend_md.exists() else ""
             delta_md_text = delta_md.read_text(encoding="utf-8") if delta_md.exists() else ""
+            suggest_md_text = suggest_md.read_text(encoding="utf-8") if suggest_md.exists() else ""
 
         self.assertEqual(import_result.returncode, 0, import_result.stdout)
         self.assertIn('"schema": "ragflow_benchmark_import_report_v1"', import_result.stdout)
@@ -788,6 +815,9 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(delta_result.returncode, 0, delta_result.stdout)
         self.assertIn("ragflow_benchmark_delta_report_v1", delta_result.stdout)
         self.assertIn("RAGFlow Benchmark Delta Report", delta_md_text)
+        self.assertEqual(suggest_result.returncode, 0, suggest_result.stdout)
+        self.assertIn("ragflow_benchmark_retrieval_suggestion_report_v1", suggest_result.stdout)
+        self.assertIn("RAGFlow Benchmark Retrieval Suggestions", suggest_md_text)
 
     def test_suppression_report_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

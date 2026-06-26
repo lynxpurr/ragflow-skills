@@ -37,6 +37,7 @@ python scripts/build.py benchmark summarize --report ./run/benchmark_report.json
 python scripts/build.py benchmark gate --report ./run/benchmark_report.json --gate-config ./templates/benchmark-gate.example.json --report-md ./run/benchmark_gate.md
 python scripts/build.py benchmark trend --report ./run/benchmark_report.json --baseline-report ./run/baseline_benchmark_report.json --gate-config ./templates/benchmark-gate.example.json --report-md ./run/benchmark_trend.md
 python scripts/build.py benchmark delta --report ./run/benchmark_report.json --baseline-report ./run/baseline_benchmark_report.json --report-md ./run/benchmark_delta.md
+python scripts/build.py benchmark suggest --report ./run/benchmark_report.json --baseline-report ./run/baseline_benchmark_report.json --gate-config ./templates/benchmark-gate.example.json --current-top-k 3 --current-similarity-threshold 0.25 --report-md ./run/benchmark_suggestions.md
 python scripts/build.py snapshot-chunks --input ./run/benchmark_report.json --output ./run/chunk_snapshot.json --report-md ./run/chunk_snapshot.md
 python scripts/build.py suppression-report --report ./run/benchmark_report.json --tagset ./run/tagset.template.json --report-md ./run/suppression_report.md
 python scripts/build.py qa generate --source-dir ./handoff --output ./run/benchmark/qa.generated.json --count 20 --report-md ./run/qa_generate.md
@@ -78,6 +79,7 @@ Notes:
 - Use `metadata` and `tagset` subcommands to prepare advisory public metadata and tag reports offline. Metadata summaries can be attached to build reports with `--metadata`; default upload behavior is unchanged.
 - Use `benchmark import/sample/preflight/summarize/gate` and `snapshot-chunks` for offline benchmark lifecycle checks around `validate.py --level benchmark`; these commands do not touch RAGFlow.
 - Benchmark summarize/gate/trend/delta reports include deterministic root-cause hints for coverage, ranking, pollution, grounding, citation, abstention, and cost/latency regressions when matching metrics are present.
+- Use `benchmark suggest` to derive conservative `top_k` and `similarity_threshold` experiment suggestions from benchmark metrics, optional baseline deltas, and optional gate thresholds.
 - Use `suppression-report` on validation or benchmark reports to review bridge-term, source-boundary, allowed-tag, and unexpected-tag candidates. Run benchmark validation with `--include-raw --max-report-chunks ...` when tag localization needs raw chunk tags; raw payloads are opt-in, and suppression reports are advisory only.
 - Use `qa generate` to create a deterministic, offline grounded QA scaffold from exact source spans; it does not call an LLM or mutate RAGFlow.
 - Use `qa validate` before feeding generated QA into benchmark gates; it checks required questions, answers, evidence spans, and exact source-span grounding when `--sources` or `--source-dir` is provided.

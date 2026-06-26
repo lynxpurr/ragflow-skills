@@ -45,6 +45,7 @@ BENCHMARK_SUMMARY_REPORT_SCHEMA = "ragflow_benchmark_summary_report_v1"
 BENCHMARK_GATE_REPORT_SCHEMA = "ragflow_benchmark_gate_report_v1"
 BENCHMARK_TREND_REPORT_SCHEMA = "ragflow_benchmark_trend_report_v1"
 BENCHMARK_DELTA_REPORT_SCHEMA = "ragflow_benchmark_delta_report_v1"
+BENCHMARK_RETRIEVAL_SUGGESTION_REPORT_SCHEMA = "ragflow_benchmark_retrieval_suggestion_report_v1"
 SUPPRESSION_REPORT_SCHEMA = "ragflow_suppression_report_v1"
 CHUNK_SNAPSHOT_REPORT_SCHEMA = "ragflow_chunk_snapshot_report_v1"
 _SUPPRESSION_STOPWORDS = STOPWORDS | {
@@ -2229,6 +2230,323 @@ def delta_benchmark_reports(
     }
 
 
+def _retrieval_metric_evidence(
+    metrics: Mapping[str, float],
+    deltas: Mapping[str, Mapping[str, Any]],
+    keys: Iterable[str],
+) -> dict[str, Any]:
+    evidence: dict[str, Any] = {}
+    for key in keys:
+        if key in metrics:
+            evidence[key] = metrics[key]
+        if key in deltas:
+            evidence[f"{key}_delta"] = dict(deltas[key])
+    return evidence
+
+
+def _action_counts(suggestions: Iterable[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for suggestion in suggestions:
+        action = str(suggestion.get("action") or "unknown")
+        counts[action] = counts.get(action, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _suggested_top_k_values(current_top_k: int | None) -> list[int]:
+    current = current_top_k or 3
+    moderate = max(current + 1, int(math.ceil(current * 1.5)))
+    broad = max(current + 2, int(math.ceil(current * 2.0)))
+    return sorted({current, moderate, min(broad, 20)})
+
+
+def _threshold_value(value: float | None, *, direction: str) -> float | None:
+    if value is None:
+        return None
+    if direction == "lower":
+        return round(max(0.0, value - 0.05), 4)
+    if direction == "raise":
+        return round(min(1.0, value + 0.05), 4)
+    return value
+
+
+def _retrieval_suggestion(
+    *,
+    parameter: str,
+    action: str,
+    current: Any,
+    suggested: Any,
+    confidence: str,
+    reason: str,
+    evidence: Mapping[str, Any],
+    guardrail: str,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "parameter": parameter,
+        "action": action,
+        "current": current,
+        "suggested": suggested,
+        "confidence": confidence,
+        "reason": reason,
+        "evidence": dict(evidence),
+        "guardrail": guardrail,
+    }
+    return payload
+
+
+def suggest_benchmark_retrieval_parameters(
+    *,
+    report_path: str | Path,
+    baseline_report_path: str | Path | None = None,
+    gate_config_path: str | Path | None = None,
+    current_top_k: int | None = None,
+    current_similarity_threshold: float | None = None,
+) -> dict[str, Any]:
+    """Suggest conservative retrieval parameter experiments from benchmark metrics."""
+
+    if current_top_k is not None and current_top_k <= 0:
+        raise BenchmarkGovernanceError("current_top_k must be positive when provided")
+    if current_similarity_threshold is not None and not 0.0 <= current_similarity_threshold <= 1.0:
+        raise BenchmarkGovernanceError("current_similarity_threshold must be between 0 and 1 when provided")
+
+    current_report = _benchmark_payload(report_path)
+    benchmark = current_report["benchmark"]
+    metrics = _benchmark_metrics(current_report)
+    inferred_top_k = current_top_k
+    cutoff = benchmark.get("cutoff") if isinstance(benchmark, Mapping) else None
+    if inferred_top_k is None and isinstance(cutoff, (int, float)) and not isinstance(cutoff, bool) and int(cutoff) > 0:
+        inferred_top_k = int(cutoff)
+
+    baseline_metrics = load_benchmark_baseline(baseline_report_path) if baseline_report_path else None
+    deltas = _metric_delta(metrics, baseline_metrics) if baseline_metrics else {}
+    gate_result = None
+    if gate_config_path:
+        gate = load_benchmark_gate(gate_config_path)
+        baseline_delta = {
+            key: float(item["absolute"])
+            for key, item in deltas.items()
+            if isinstance(item.get("absolute"), (int, float))
+        } if deltas else None
+        gate_result = evaluate_benchmark_gate(metrics, gate=gate, baseline_delta=baseline_delta)
+
+    hit_rate = metrics.get("hit_rate", 1.0)
+    recall = metrics.get("recall_at_k", 1.0)
+    precision = metrics.get("precision_at_k", 1.0)
+    document_coverage = metrics.get("supporting_document_coverage", 1.0)
+    strict_recall = metrics.get("strict_chunk_recall_at_k", 1.0)
+    expected_hit = metrics.get("expected_chunk_hit_rate", 1.0)
+    empty_rate = metrics.get("empty_result_rate", 0.0)
+    mrr = metrics.get("mrr", hit_rate)
+    ndcg = metrics.get("ndcg_at_k", recall)
+    pollution = max(
+        metrics.get("tag_pollution_rate", 0.0),
+        metrics.get("wrong_document_rate", 0.0),
+        metrics.get("wrong_doc_rate", 0.0),
+        metrics.get("unexpected_tag_hit_rate", 0.0),
+    )
+    coverage_gap = (
+        hit_rate < 0.98
+        or recall < 0.98
+        or document_coverage < 0.98
+        or strict_recall < 1.0
+        or expected_hit < 1.0
+    )
+    ranking_gap = mrr + 0.05 < hit_rate or ndcg + 0.05 < recall
+    precision_gap = precision < 0.35
+    pollution_risk = pollution > 0.0
+
+    suggestions: list[dict[str, Any]] = []
+    coverage_keys = (
+        "hit_rate",
+        "recall_at_k",
+        "supporting_document_coverage",
+        "strict_chunk_recall_at_k",
+        "expected_chunk_hit_rate",
+        "empty_result_rate",
+    )
+    pollution_keys = (
+        "precision_at_k",
+        "tag_pollution_rate",
+        "wrong_document_rate",
+        "wrong_doc_rate",
+        "unexpected_tag_hit_rate",
+    )
+    if coverage_gap and not pollution_risk:
+        values = _suggested_top_k_values(inferred_top_k)
+        suggestions.append(
+            _retrieval_suggestion(
+                parameter="retrieval.top_k",
+                action="increase",
+                current=inferred_top_k,
+                suggested=values[-1],
+                confidence="medium" if empty_rate == 0 else "high",
+                reason="Coverage, empty-result, or strict chunk recall metrics show relevant evidence is missing.",
+                evidence=_retrieval_metric_evidence(metrics, deltas, coverage_keys),
+                guardrail="Reject the change if precision, pollution, latency, or cost regress beyond the benchmark gate.",
+            )
+        )
+    elif coverage_gap and pollution_risk:
+        suggestions.append(
+            _retrieval_suggestion(
+                parameter="retrieval.top_k",
+                action="sweep",
+                current=inferred_top_k,
+                suggested=_suggested_top_k_values(inferred_top_k),
+                confidence="medium",
+                reason="Coverage gaps coexist with pollution signals, so a paired sweep is safer than simply increasing top_k.",
+                evidence=_retrieval_metric_evidence(metrics, deltas, (*coverage_keys, *pollution_keys)),
+                guardrail="Prefer the smallest top_k that restores recall without increasing wrong-document or tag pollution.",
+            )
+        )
+    elif precision_gap or pollution_risk:
+        suggestions.append(
+            _retrieval_suggestion(
+                parameter="retrieval.top_k",
+                action="decrease",
+                current=inferred_top_k,
+                suggested=max(1, inferred_top_k - 1) if inferred_top_k else None,
+                confidence="medium",
+                reason="Precision or pollution metrics indicate too many low-quality candidates may be entering the result set.",
+                evidence=_retrieval_metric_evidence(metrics, deltas, pollution_keys),
+                guardrail="Keep recall and strict chunk recall at or above the current benchmark result.",
+            )
+        )
+    else:
+        suggestions.append(
+            _retrieval_suggestion(
+                parameter="retrieval.top_k",
+                action="hold",
+                current=inferred_top_k,
+                suggested=inferred_top_k,
+                confidence="medium",
+                reason="Benchmark retrieval coverage and pollution metrics do not justify changing top_k yet.",
+                evidence=_retrieval_metric_evidence(metrics, deltas, (*coverage_keys, *pollution_keys)),
+                guardrail="Revisit top_k only after adding harder qrels or observing regressions.",
+            )
+        )
+
+    if (empty_rate > 0 or coverage_gap) and not pollution_risk:
+        suggestions.append(
+            _retrieval_suggestion(
+                parameter="retrieval.similarity_threshold",
+                action="lower",
+                current=current_similarity_threshold,
+                suggested=_threshold_value(current_similarity_threshold, direction="lower"),
+                confidence="medium" if current_similarity_threshold is not None else "low",
+                reason="Coverage gaps without pollution suggest the cutoff may be excluding relevant evidence.",
+                evidence=_retrieval_metric_evidence(metrics, deltas, coverage_keys),
+                guardrail="Reject if wrong-document rate, tag pollution, or unsupported answers increase.",
+            )
+        )
+    elif pollution_risk or (precision_gap and not coverage_gap):
+        suggestions.append(
+            _retrieval_suggestion(
+                parameter="retrieval.similarity_threshold",
+                action="raise",
+                current=current_similarity_threshold,
+                suggested=_threshold_value(current_similarity_threshold, direction="raise"),
+                confidence="medium" if current_similarity_threshold is not None else "low",
+                reason="Pollution or low precision suggests the cutoff may be admitting noisy evidence.",
+                evidence=_retrieval_metric_evidence(metrics, deltas, pollution_keys),
+                guardrail="Reject if hit rate, recall, or strict chunk recall falls.",
+            )
+        )
+    elif ranking_gap:
+        suggestions.append(
+            _retrieval_suggestion(
+                parameter="retrieval.similarity_threshold",
+                action="sweep",
+                current=current_similarity_threshold,
+                suggested=[
+                    value
+                    for value in (
+                        _threshold_value(current_similarity_threshold, direction="lower"),
+                        current_similarity_threshold,
+                        _threshold_value(current_similarity_threshold, direction="raise"),
+                    )
+                    if value is not None
+                ] or None,
+                confidence="low",
+                reason="Ranking metrics lag behind hit rate, so threshold tuning should be tested rather than assumed.",
+                evidence=_retrieval_metric_evidence(metrics, deltas, ("hit_rate", "mrr", "recall_at_k", "ndcg_at_k")),
+                guardrail="Prefer rerank or chunk-profile fixes if threshold sweeps do not improve early precision.",
+            )
+        )
+    else:
+        suggestions.append(
+            _retrieval_suggestion(
+                parameter="retrieval.similarity_threshold",
+                action="hold",
+                current=current_similarity_threshold,
+                suggested=current_similarity_threshold,
+                confidence="medium" if current_similarity_threshold is not None else "low",
+                reason="Benchmark metrics do not show a threshold-specific retrieval gap.",
+                evidence=_retrieval_metric_evidence(metrics, deltas, (*coverage_keys, *pollution_keys)),
+                guardrail="Add a threshold sweep only when qrels expose missed evidence or noisy evidence.",
+            )
+        )
+
+    recommended_experiments = []
+    top_k_values = _suggested_top_k_values(inferred_top_k)
+    if any(item["action"] in {"increase", "sweep"} for item in suggestions if item["parameter"] == "retrieval.top_k"):
+        recommended_experiments.append(
+            {
+                "id": "top_k_recall_sweep",
+                "parameters": {"retrieval.top_k": top_k_values},
+                "success_metrics": ["hit_rate", "recall_at_k", "strict_chunk_recall_at_k", "expected_chunk_hit_rate"],
+                "guardrails": ["precision_at_k", "tag_pollution_rate", "wrong_document_rate", "empty_result_rate"],
+            }
+        )
+    if any(item["action"] in {"lower", "raise", "sweep"} for item in suggestions if item["parameter"] == "retrieval.similarity_threshold"):
+        threshold_values = [
+            value
+            for value in (
+                _threshold_value(current_similarity_threshold, direction="lower"),
+                current_similarity_threshold,
+                _threshold_value(current_similarity_threshold, direction="raise"),
+            )
+            if value is not None
+        ]
+        recommended_experiments.append(
+            {
+                "id": "similarity_threshold_sweep",
+                "parameters": {"retrieval.similarity_threshold": sorted(set(threshold_values)) if threshold_values else "provide current threshold and sweep +/-0.05"},
+                "success_metrics": ["hit_rate", "mrr", "ndcg_at_k", "precision_at_k"],
+                "guardrails": ["empty_result_rate", "strict_chunk_recall_at_k", "tag_pollution_rate", "wrong_document_rate"],
+            }
+        )
+
+    status = "REVIEW" if any(item["action"] != "hold" for item in suggestions) or (isinstance(gate_result, Mapping) and not gate_result.get("ok", True)) else "PASS"
+    return {
+        "ok": True,
+        "schema": BENCHMARK_RETRIEVAL_SUGGESTION_REPORT_SCHEMA,
+        "status": status,
+        "report": str(report_path),
+        "baseline_report": str(baseline_report_path) if baseline_report_path else None,
+        "gate_config": str(gate_config_path) if gate_config_path else None,
+        "dataset": current_report.get("dataset", {}),
+        "current_parameters": {
+            "retrieval.top_k": inferred_top_k,
+            "retrieval.similarity_threshold": current_similarity_threshold,
+        },
+        "metrics": metrics,
+        "baseline_metrics": baseline_metrics,
+        "delta": deltas,
+        "gate": gate_result,
+        "summary": {
+            "suggestion_count": len(suggestions),
+            "status": status,
+            "coverage_gap": coverage_gap,
+            "ranking_gap": ranking_gap,
+            "precision_gap": precision_gap,
+            "pollution_risk": pollution_risk,
+            "action_counts": _action_counts(suggestions),
+        },
+        "retrieval_parameter_suggestions": suggestions,
+        "recommended_experiments": recommended_experiments,
+        "quality_hints": _dedupe_hints([*_quality_hints(metrics), *_regression_hints(deltas)]),
+    }
+
+
 def _suppression_string_values(value: Any) -> list[str]:
     if isinstance(value, str):
         stripped = value.strip()
@@ -3103,5 +3421,35 @@ def render_benchmark_governance_markdown(report: Mapping[str, Any], *, title: st
         for hint in hints:
             if isinstance(hint, Mapping):
                 lines.append(f"- `{hint.get('code')}`: {hint.get('message')}")
+    suggestions = report.get("retrieval_parameter_suggestions")
+    if isinstance(suggestions, list) and suggestions:
+        lines.extend(
+            [
+                "",
+                "## Retrieval Parameter Suggestions",
+                "",
+                "| parameter | action | current | suggested | confidence | reason |",
+                "| --- | --- | ---: | ---: | --- | --- |",
+            ]
+        )
+        for suggestion in suggestions:
+            if not isinstance(suggestion, Mapping):
+                continue
+            lines.append(
+                "| {parameter} | `{action}` | `{current}` | `{suggested}` | `{confidence}` | {reason} |".format(
+                    parameter=suggestion.get("parameter", ""),
+                    action=suggestion.get("action", ""),
+                    current=suggestion.get("current", ""),
+                    suggested=suggestion.get("suggested", ""),
+                    confidence=suggestion.get("confidence", ""),
+                    reason=str(suggestion.get("reason", "")).replace("|", "\\|"),
+                )
+            )
+    experiments = report.get("recommended_experiments")
+    if isinstance(experiments, list) and experiments:
+        lines.extend(["", "## Recommended Experiments", ""])
+        for experiment in experiments:
+            if isinstance(experiment, Mapping):
+                lines.append(f"- `{experiment.get('id')}`")
     lines.append("")
     return "\n".join(lines)
