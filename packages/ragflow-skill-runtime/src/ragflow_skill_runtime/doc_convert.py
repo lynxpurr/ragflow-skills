@@ -60,6 +60,8 @@ MINERU_AUTO_EXTENSIONS = {
 DEFAULT_MINERU_BASE_URL = "https://mineru.net/api/v1/agent"
 BACKEND_PROBE_REPORT_SCHEMA = "ragflow_doc_backend_probe_report_v1"
 BACKEND_PROBE_STATUSES = ("available", "missing", "wrong_protocol", "timeout", "not_configured")
+BACKEND_WARMUP_REPORT_SCHEMA = "ragflow_doc_backend_warmup_report_v1"
+BACKEND_WARMUP_STATUSES = ("success", "failed")
 DOC_RUNTIME_REPORT_SCHEMA = "ragflow_doc_runtime_report_v1"
 PROCESS_ATTEMPT_STATUSES = ("success", "failed", "timeout", "execution_error")
 CONVERSION_BACKENDS = (
@@ -1537,6 +1539,160 @@ def convert_source_to_markdown(
         f"no converter available for {source.source_path} ({suffix or 'no extension'}); "
         f"builtin supports {supported}, or configure pandoc/remote/mineru-cli/mineru/mineru-sync backend{attempted}"
     )
+
+
+def warmup_conversion_backend(
+    *,
+    fixture_path: str | Path,
+    backend: str = "auto",
+    output_markdown: str | Path | None = None,
+    remote_url: str | None = None,
+    remote_api_key: str | None = None,
+    remote_timeout: float = 120.0,
+    mineru_base_url: str | None = None,
+    mineru_api_key: str | None = None,
+    mineru_timeout: float = 300.0,
+    mineru_poll_interval: float = 3.0,
+    mineru_cli_path: str | None = None,
+    mineru_cli_backend: str | None = None,
+    mineru_language: str = "ch",
+    mineru_page_range: str | None = None,
+    mineru_enable_table: bool = True,
+    mineru_is_ocr: bool = False,
+    mineru_enable_formula: bool = True,
+) -> dict[str, Any]:
+    """Run an explicit fixture through a configured converter and report the result."""
+
+    normalized_backend = str(backend or "auto").strip().lower()
+    if normalized_backend not in {"auto", *CONVERSION_BACKENDS}:
+        allowed = ", ".join(["auto", *CONVERSION_BACKENDS])
+        raise DocConvertError(f"backend must be one of: {allowed}")
+
+    fixture = Path(fixture_path).expanduser()
+    output_path = Path(output_markdown).expanduser() if output_markdown else None
+    fixture_entry: dict[str, Any] = {
+        "name": fixture.name,
+        "suffix": fixture.suffix.lower(),
+        "exists": fixture.is_file(),
+    }
+    process_attempts: list[dict[str, Any]] = []
+    started = time.monotonic()
+    status = "failed"
+    error_message: str | None = None
+    markdown_chars = 0
+    markdown_sha256: str | None = None
+    title: str | None = None
+    warnings: list[str] = []
+    output_written = False
+
+    if fixture.is_file():
+        try:
+            fixture_entry["bytes"] = fixture.stat().st_size
+            fixture_entry["sha256"] = sha256_file(fixture)
+            with tempfile.TemporaryDirectory(prefix="ragflow-skill-warmup-") as tmp:
+                asset_output_dir = output_path.parent if output_path else Path(tmp) / "assets"
+                source = SourceDocument(path=fixture.resolve(), source_path=fixture.name)
+                markdown, warnings = convert_source_to_markdown(
+                    source,
+                    mode="convert",
+                    backend=normalized_backend,
+                    remote_url=remote_url,
+                    remote_api_key=remote_api_key,
+                    remote_timeout=remote_timeout,
+                    mineru_base_url=mineru_base_url,
+                    mineru_api_key=mineru_api_key,
+                    mineru_timeout=mineru_timeout,
+                    mineru_poll_interval=mineru_poll_interval,
+                    mineru_cli_path=mineru_cli_path,
+                    mineru_cli_backend=mineru_cli_backend,
+                    asset_output_dir=asset_output_dir,
+                    mineru_language=mineru_language,
+                    mineru_page_range=mineru_page_range,
+                    mineru_enable_table=mineru_enable_table,
+                    mineru_is_ocr=mineru_is_ocr,
+                    mineru_enable_formula=mineru_enable_formula,
+                    process_attempts=process_attempts,
+                )
+                markdown_chars = len(markdown)
+                markdown_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+                title = extract_markdown_title(markdown)
+                if output_path:
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text(markdown, encoding="utf-8")
+                    output_written = True
+                status = "success"
+        except (DocConvertError, OSError, UnicodeDecodeError) as exc:
+            error_message = str(exc)
+    else:
+        error_message = f"fixture file not found: {fixture.name or fixture}"
+
+    runtime_report = (
+        make_doc_runtime_report_payload(output_root=".", process_attempts=process_attempts)
+        if process_attempts
+        else None
+    )
+    duration_ms = round((time.monotonic() - started) * 1000, 3)
+    summary = {
+        "status": status,
+        "duration_ms": duration_ms,
+        "markdown_chars": markdown_chars,
+        "warning_count": len(warnings),
+        "process_attempts": len(process_attempts),
+        "cleanup_attempts": runtime_report["summary"]["cleanup_attempts"] if runtime_report else 0,
+        "leftover_processes": runtime_report["summary"]["leftover_processes"] if runtime_report else 0,
+    }
+    return {
+        "ok": status == "success",
+        "schema": BACKEND_WARMUP_REPORT_SCHEMA,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "selected_backend": normalized_backend,
+        "allowed_statuses": list(BACKEND_WARMUP_STATUSES),
+        "status": status,
+        "summary": summary,
+        "fixture": fixture_entry,
+        "output": {
+            "markdown_written": output_written,
+            "markdown_name": output_path.name if output_path else None,
+            "markdown_chars": markdown_chars,
+            "markdown_sha256": markdown_sha256,
+            "title": title,
+        },
+        "warnings": warnings,
+        "error": error_message,
+        "runtime_report": runtime_report,
+    }
+
+
+def render_backend_warmup_markdown(report: Mapping[str, Any]) -> str:
+    """Render a compact Markdown backend warmup report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    fixture = report.get("fixture", {}) if isinstance(report.get("fixture"), Mapping) else {}
+    output = report.get("output", {}) if isinstance(report.get("output"), Mapping) else {}
+    lines = [
+        "# RAGFlow Doc Backend Warmup",
+        "",
+        f"- schema: `{report.get('schema', BACKEND_WARMUP_REPORT_SCHEMA)}`",
+        f"- selected_backend: `{report.get('selected_backend', '')}`",
+        f"- status: `{report.get('status', '')}`",
+        f"- fixture: `{fixture.get('name', '')}`",
+        f"- fixture suffix: `{fixture.get('suffix', '')}`",
+        f"- duration_ms: `{summary.get('duration_ms', 0)}`",
+        f"- markdown_chars: `{summary.get('markdown_chars', 0)}`",
+        f"- warnings: `{summary.get('warning_count', 0)}`",
+        f"- process_attempts: `{summary.get('process_attempts', 0)}`",
+        f"- cleanup_attempts: `{summary.get('cleanup_attempts', 0)}`",
+        f"- leftover_processes: `{summary.get('leftover_processes', 0)}`",
+        f"- markdown_written: `{str(output.get('markdown_written', False)).lower()}`",
+    ]
+    if report.get("error"):
+        error_text = str(report.get("error")).replace("|", "\\|")
+        lines.extend(["", f"Error: {error_text}"])
+    warnings = report.get("warnings", [])
+    if isinstance(warnings, list) and warnings:
+        lines.extend(["", "## Warnings", ""])
+        lines.extend(f"- {str(item)}" for item in warnings)
+    return "\n".join(lines) + "\n"
 
 
 def make_doc_manifest_payload(

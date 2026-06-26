@@ -1026,6 +1026,7 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertIn("--quality-report-name", result.stdout)
         self.assertIn("--runtime-report-name", result.stdout)
         self.assertIn("backend probe", result.stdout)
+        self.assertIn("backend warmup", result.stdout)
         self.assertIn("segment-plan", result.stdout)
         self.assertIn("--strict", result.stdout)
 
@@ -1121,6 +1122,85 @@ class DocConvertCliTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["backends"][0]["status"], "available")
+
+    def test_backend_warmup_mineru_cli_writes_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = root / "fixture.pdf"
+            fixture.write_bytes(b"%PDF warmup")
+            fake_cli = _write_fake_mineru_cli(root / "mineru")
+            report_json = root / "backend_warmup.json"
+            report_md = root / "backend_warmup.md"
+            output_markdown = root / "warmup.md"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "backend",
+                    "warmup",
+                    "--backend",
+                    "mineru-cli",
+                    "--fixture",
+                    str(fixture),
+                    "--mineru-cli-path",
+                    str(fake_cli),
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                    "--output-markdown",
+                    str(output_markdown),
+                    "--json",
+                    "--fail-on-failed",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+            report_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            markdown_report = report_md.read_text(encoding="utf-8")
+            converted_markdown = output_markdown.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["schema"], "ragflow_doc_backend_warmup_report_v1")
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["fixture"]["name"], "fixture.pdf")
+        self.assertEqual(payload["summary"]["process_attempts"], 1)
+        self.assertEqual(payload["runtime_report"]["summary"]["success"], 1)
+        self.assertEqual(report_payload["output"]["markdown_name"], "warmup.md")
+        self.assertIn("RAGFlow Doc Backend Warmup", markdown_report)
+        self.assertIn("# MinerU CLI", converted_markdown)
+
+    def test_backend_warmup_fail_on_failed_returns_nonzero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = root / "fixture.pdf"
+            fixture.write_bytes(b"%PDF warmup missing backend")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "backend",
+                    "warmup",
+                    "--backend",
+                    "remote",
+                    "--fixture",
+                    str(fixture),
+                    "--json",
+                    "--fail-on-failed",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(payload["status"], "failed")
+        self.assertIn("remote backend requires --remote-url", payload["error"])
 
 
 if __name__ == "__main__":

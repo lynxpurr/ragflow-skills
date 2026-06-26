@@ -378,6 +378,28 @@ def _run_mineru_env_check(
             cwd=workspace,
             env=env,
         )
+        backend_warmup_result = _run_command(
+            [
+                sys.executable,
+                str(convert_script),
+                "backend",
+                "warmup",
+                "--backend",
+                "mineru-cli",
+                "--fixture",
+                str(mineru_input / "mineru.pdf"),
+                "--mineru-cli-path",
+                str(fake_mineru_cli),
+                "--report-json",
+                str(workspace / "backend_warmup.json"),
+                "--report-md",
+                str(workspace / "backend_warmup.md"),
+                "--json",
+                "--fail-on-failed",
+            ],
+            cwd=workspace,
+            env=env,
+        )
     finally:
         server.shutdown()
         server.server_close()
@@ -406,6 +428,12 @@ def _run_mineru_env_check(
         "doc-to-md backend probe",
         backend_probe_result,
         required_stdout='"schema": "ragflow_doc_backend_probe_report_v1"',
+    )
+    _record_command_check(
+        checks,
+        "doc-to-md backend warmup",
+        backend_warmup_result,
+        required_stdout='"schema": "ragflow_doc_backend_warmup_report_v1"',
     )
     markdown_path = mineru_output / "documents" / "mineru.md"
     ok = markdown_path.exists() and "MinerU Service Smoke" in markdown_path.read_text(
@@ -2375,6 +2403,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         workspace / "mineru-sync-handoff" / "doc_manifest.json",
         workspace / "backend_probe.json",
         workspace / "backend_probe.md",
+        workspace / "backend_warmup.json",
+        workspace / "backend_warmup.md",
         kb_manifest,
         artifacts_dir / "query_direct.json",
         artifacts_dir / "query_host_assisted.json",

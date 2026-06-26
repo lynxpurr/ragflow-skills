@@ -419,6 +419,41 @@ def _run_no_network_checks(
     if backend_probe_md.exists():
         produced.append(backend_probe_md)
 
+    backend_warmup_json = work_root / "backend_warmup.json"
+    backend_warmup_md = work_root / "backend_warmup.md"
+    backend_warmup_result = _run_command(
+        [
+            python_executable,
+            str(convert_script),
+            "backend",
+            "warmup",
+            "--backend",
+            "mineru-cli",
+            "--fixture",
+            str(mineru_cli_input / "sample.pdf"),
+            "--mineru-cli-path",
+            str(fake_mineru_cli),
+            "--report-json",
+            str(backend_warmup_json),
+            "--report-md",
+            str(backend_warmup_md),
+            "--json",
+            "--fail-on-failed",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "doc-to-md backend warmup",
+        backend_warmup_result,
+        required_output='"schema": "ragflow_doc_backend_warmup_report_v1"',
+    )
+    if backend_warmup_json.exists():
+        produced.append(backend_warmup_json)
+    if backend_warmup_md.exists():
+        produced.append(backend_warmup_md)
+
     inspect_result = _run_command(
         [
             python_executable,

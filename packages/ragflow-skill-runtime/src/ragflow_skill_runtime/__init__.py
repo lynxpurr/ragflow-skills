@@ -23,6 +23,8 @@ from .config import (
 from .doc_convert import (
     BACKEND_PROBE_REPORT_SCHEMA,
     BACKEND_PROBE_STATUSES,
+    BACKEND_WARMUP_REPORT_SCHEMA,
+    BACKEND_WARMUP_STATUSES,
     ConvertedDocument,
     DOC_RUNTIME_REPORT_SCHEMA,
     DocConvertError,
@@ -36,10 +38,12 @@ from .doc_convert import (
     make_doc_runtime_report_payload,
     probe_conversion_backends,
     render_backend_probe_markdown,
+    render_backend_warmup_markdown,
     render_doc_runtime_markdown,
     safe_markdown_name,
     sha256_file,
     text_to_markdown,
+    warmup_conversion_backend,
 )
 from .doc_quality import (
     BLOCKED,

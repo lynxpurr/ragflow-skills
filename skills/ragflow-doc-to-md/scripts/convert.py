@@ -52,10 +52,12 @@ from ragflow_skill_runtime import (  # noqa: E402
     probe_conversion_backends,
     quality_documents_from_manifest,
     render_backend_probe_markdown,
+    render_backend_warmup_markdown,
     render_doc_runtime_markdown,
     render_quality_markdown,
     safe_markdown_name,
     sha256_file,
+    warmup_conversion_backend,
 )
 
 
@@ -504,6 +506,87 @@ def _run_backend_probe(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_backend_warmup(args: argparse.Namespace) -> int:
+    try:
+        config = load_skill_config(config_file=args.config)
+        backend = args.backend or config.doc_to_md.backend or "auto"
+        remote_timeout = (
+            _remote_timeout(args)
+            if args.remote_timeout is not None
+            else config.doc_to_md.remote_timeout or 120.0
+        )
+        report = warmup_conversion_backend(
+            fixture_path=args.fixture,
+            backend=backend,
+            output_markdown=args.output_markdown,
+            remote_url=_config_or_arg(args, "remote_url", config.doc_to_md.remote_url),
+            remote_api_key=_remote_api_key(args, config),
+            remote_timeout=remote_timeout,
+            mineru_base_url=_config_or_arg(args, "mineru_base_url", config.mineru.base_url),
+            mineru_api_key=_config_or_arg(args, "mineru_api_key", config.mineru.api_key),
+            mineru_timeout=_float_config_or_arg(
+                args,
+                "mineru_timeout",
+                config.mineru.timeout,
+                300.0,
+                label="MINERU_TIMEOUT",
+            ),
+            mineru_poll_interval=_float_config_or_arg(
+                args,
+                "mineru_poll_interval",
+                config.mineru.poll_interval,
+                3.0,
+                label="MINERU_POLL_INTERVAL",
+            ),
+            mineru_cli_path=_config_or_arg(args, "mineru_cli_path", config.mineru.cli_path),
+            mineru_cli_backend=_config_or_arg(
+                args,
+                "mineru_cli_backend",
+                config.mineru.cli_backend,
+                "pipeline",
+            )
+            or "pipeline",
+            mineru_language=_config_or_arg(args, "mineru_language", config.mineru.language, "ch") or "ch",
+            mineru_page_range=_config_or_arg(args, "mineru_page_range", config.mineru.page_range),
+            mineru_enable_table=_bool_config_or_arg(
+                args,
+                "mineru_enable_table",
+                config.mineru.enable_table,
+                True,
+                label="MINERU_ENABLE_TABLE",
+            ),
+            mineru_is_ocr=_bool_config_or_arg(
+                args,
+                "mineru_is_ocr",
+                config.mineru.is_ocr,
+                False,
+                label="MINERU_IS_OCR",
+            ),
+            mineru_enable_formula=_bool_config_or_arg(
+                args,
+                "mineru_enable_formula",
+                config.mineru.enable_formula,
+                True,
+                label="MINERU_ENABLE_FORMULA",
+            ),
+        )
+        if args.report_json:
+            report_json = Path(args.report_json)
+            report_json.parent.mkdir(parents=True, exist_ok=True)
+            report_json.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        if args.report_md:
+            report_md = Path(args.report_md)
+            report_md.parent.mkdir(parents=True, exist_ok=True)
+            report_md.write_text(render_backend_warmup_markdown(report), encoding="utf-8")
+        if args.json or not args.report_json:
+            _dump_json(report)
+        if args.fail_on_failed and report.get("status") != "success":
+            return 1
+        return 0
+    except (DocConvertError, OSError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _add_segmentation_threshold_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--soft-max-chars", type=int, default=DEFAULT_SOFT_MAX_CHARS)
     parser.add_argument("--hard-max-chars", type=int, default=DEFAULT_HARD_MAX_CHARS)
@@ -569,10 +652,10 @@ def build_postprocess_parser() -> argparse.ArgumentParser:
 
 def _add_backend_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", help="Unified config file; defaults to RAGFLOW_CONFIG or .ragflow/config*.yaml")
-    parser.add_argument("--backend", choices=sorted(BACKEND_CHOICES), help="Backend to probe; auto probes all known backends")
+    parser.add_argument("--backend", choices=sorted(BACKEND_CHOICES), help="Backend to inspect; auto uses configured backend selection")
     parser.add_argument("--remote-url", help="Remote conversion endpoint; defaults to DOC_TO_MD_REMOTE_URL")
     parser.add_argument("--mineru-base-url", help="MinerU service base URL")
-    parser.add_argument("--mineru-api-key", help="MinerU API key; only presence is reported")
+    parser.add_argument("--mineru-api-key", help="MinerU API key; probe reports presence only, warmup uses it for service calls")
     parser.add_argument("--mineru-cli-path", help="Local MinerU CLI path; defaults to MINERU_CLI_PATH or PATH lookup")
 
 
@@ -588,13 +671,32 @@ def build_backend_parser() -> argparse.ArgumentParser:
     probe.add_argument("--fail-on-unavailable", action="store_true", help="Return non-zero when the selected backend is unavailable")
     probe.add_argument("--json", action="store_true", help="Emit JSON")
     probe.set_defaults(func=_run_backend_probe)
+    warmup = sub.add_parser("warmup", help="Run an explicit fixture through a configured conversion backend")
+    _add_backend_config_args(warmup)
+    warmup.add_argument("--fixture", required=True, help="Tiny user-approved fixture file to convert")
+    warmup.add_argument("--output-markdown", help="Optional converted Markdown output path")
+    warmup.add_argument("--remote-api-key", help="Remote conversion bearer token; defaults to DOC_TO_MD_REMOTE_API_KEY")
+    warmup.add_argument("--remote-timeout", type=float, help="Remote conversion timeout in seconds; defaults to DOC_TO_MD_TIMEOUT or 120")
+    warmup.add_argument("--mineru-timeout", type=float, help="MinerU parse timeout in seconds; defaults to MINERU_TIMEOUT or 300")
+    warmup.add_argument("--mineru-poll-interval", type=float, help="MinerU parse polling interval; defaults to MINERU_POLL_INTERVAL or 3")
+    warmup.add_argument("--mineru-cli-backend", help="Local MinerU CLI backend passed with -b; defaults to MINERU_CLI_BACKEND, mineru.cli_backend, or pipeline")
+    warmup.add_argument("--mineru-language", help="MinerU language option; defaults to MINERU_LANGUAGE or ch")
+    warmup.add_argument("--mineru-page-range", help="MinerU page range; defaults to MINERU_PAGE_RANGE")
+    warmup.add_argument("--mineru-enable-table", help="MinerU table parsing true/false; defaults to MINERU_ENABLE_TABLE or true")
+    warmup.add_argument("--mineru-is-ocr", help="MinerU OCR mode true/false; defaults to MINERU_IS_OCR or false")
+    warmup.add_argument("--mineru-enable-formula", help="MinerU formula parsing true/false; defaults to MINERU_ENABLE_FORMULA or true")
+    warmup.add_argument("--report-json", help="Optional backend warmup JSON report path")
+    warmup.add_argument("--report-md", help="Optional backend warmup Markdown report path")
+    warmup.add_argument("--fail-on-failed", action="store_true", help="Return non-zero when warmup conversion fails")
+    warmup.add_argument("--json", action="store_true", help="Emit JSON")
+    warmup.set_defaults(func=_run_backend_warmup)
     return parser
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Convert documents into a Markdown handoff bundle",
-        epilog="Commands: backend probe, inspect, segment-plan, split.",
+        epilog="Commands: backend probe, backend warmup, inspect, segment-plan, split.",
     )
     parser.add_argument("--input", required=True, help="Input file or directory")
     parser.add_argument("--output", required=True, help="Output handoff directory")
