@@ -579,6 +579,68 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(code, 0, stdout.getvalue())
         self.assertIn('"host_assisted": true', stdout.getvalue().lower())
 
+    def test_agentic_host_assisted_retrieves_bounded_subqueries(self) -> None:
+        class AgenticClient(FakeQueryClient):
+            def retrieve(self, *, question, dataset_ids, top_k=5, similarity_threshold=None):
+                FakeQueryClient.last_request = {
+                    "question": question,
+                    "dataset_ids": dataset_ids,
+                    "top_k": top_k,
+                    "similarity_threshold": similarity_threshold,
+                }
+                FakeQueryClient.requests.append(FakeQueryClient.last_request)
+                return {
+                    "data": {
+                        "chunks": [
+                            {
+                                "id": question.lower().replace(" ", "-"),
+                                "content_with_weight": f"agentic evidence for {question}",
+                                "docnm_kwd": "agentic.md",
+                                "similarity": 0.86,
+                                "kb_id": dataset_ids[0],
+                            }
+                        ]
+                    }
+                }
+
+        module = load_query_module()
+        module.RAGFlowClient = AgenticClient
+        FakeQueryClient.requests = []
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = module.main(
+                [
+                    "--base-url",
+                    "https://ragflow.example.test",
+                    "--api-key",
+                    "test-key",
+                    "ask",
+                    "Compare runtime configuration and metadata routing tradeoffs",
+                    "--mode",
+                    "agentic",
+                    "--host-assisted",
+                    "--dataset-id",
+                    "ds-1",
+                    "--max-subqueries",
+                    "2",
+                    "--reflection-budget",
+                    "1",
+                    "--include-trace",
+                    "--json",
+                ]
+            )
+        payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(payload["agentic_plan"]["schema"], "ragflow_agentic_plan_v1")
+        self.assertEqual(payload["agentic_plan"]["summary"]["generated_subquery_count"], 2)
+        self.assertEqual(payload["metadata"]["retrieval_call_count"], 3)
+        self.assertEqual(len(FakeQueryClient.requests), 3)
+        self.assertIn("retrievals", payload)
+        self.assertIn("fusion", payload)
+        self.assertEqual(payload["trace"]["agentic_plan"]["trace_template"]["llm_calls"], 0)
+        self.assertEqual(payload["retrieval_status"], "success")
+
     def test_ask_can_write_trace_and_audit_citations(self) -> None:
         module = load_query_module()
         module.RAGFlowClient = FakeQueryClient

@@ -599,9 +599,13 @@ agents that can synthesize answers themselves.
 Current public implementation adds `ragflow-query agentic-plan` as a deterministic
 non-executing planner. It emits `ragflow_agentic_plan_v1` with a
 `ragflow_agentic_trace_v1` template, classifies intent and complexity, plans bounded
-sub-queries, records a reflection budget, and leaves retrieval, reflection, and synthesis
-to later explicit execution paths. The planner does not call an LLM, retrieve from
-RAGFlow, or mutate RAGFlow.
+sub-queries, records a reflection budget, and does not call an LLM, retrieve from RAGFlow,
+or mutate RAGFlow.
+
+`ragflow-query ask --mode agentic --host-assisted` can execute the bounded retrieval
+queries from that deterministic plan and return fused evidence plus the agentic plan in
+JSON output and trace data. It still does not run reflection or synthesize an answer;
+host-owned synthesis remains the required final step.
 
 ## Feature Design 10: Generation Evaluation
 

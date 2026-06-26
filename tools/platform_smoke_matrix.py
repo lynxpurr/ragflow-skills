@@ -702,6 +702,41 @@ for mode, extra, output_name in [
 
 stdout = StringIO()
 with contextlib.redirect_stdout(stdout):
+    agentic_retrieval_code = module.main(
+        runtime_args
+        + [
+            "ask",
+            "Compare runtime configuration and metadata routing tradeoffs",
+            "--kb-manifest",
+            str(kb_manifest),
+            "--mode",
+            "agentic",
+            "--host-assisted",
+            "--max-subqueries",
+            "2",
+            "--reflection-budget",
+            "1",
+            "--include-trace",
+            "--json",
+        ]
+    )
+if agentic_retrieval_code != 0:
+    raise SystemExit(agentic_retrieval_code)
+agentic_retrieval_payload = json.loads(stdout.getvalue())
+agentic_plan = agentic_retrieval_payload.get("agentic_plan", {{}})
+if agentic_plan.get("schema") != "ragflow_agentic_plan_v1":
+    raise SystemExit(25)
+if agentic_plan.get("summary", {{}}).get("generated_subquery_count", 0) < 1:
+    raise SystemExit(26)
+if agentic_retrieval_payload.get("metadata", {{}}).get("retrieval_call_count", 0) < 2:
+    raise SystemExit(27)
+(artifacts_dir / "query_agentic_retrieval.json").write_text(
+    json.dumps(agentic_retrieval_payload, ensure_ascii=False, indent=2) + "\\n",
+    encoding="utf-8",
+)
+
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
     rewrite_code = module.main([
         "rewrite",
         "How do I configure runtime?",
@@ -2282,6 +2317,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         kb_manifest,
         artifacts_dir / "query_direct.json",
         artifacts_dir / "query_host_assisted.json",
+        artifacts_dir / "query_agentic_retrieval.json",
         artifacts_dir / "query_trace.json",
         artifacts_dir / "query_trace.md",
         artifacts_dir / "query_rewrite.json",

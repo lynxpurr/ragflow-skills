@@ -58,7 +58,7 @@ Notes:
 - Route-test queries may set `expected_no_route: true` for negative/out-of-scope cases; this passes when no positive hint route is selected, even if a default KB fallback is present.
 - Use `route-diagnose` offline to classify route-test failures as missing hints, missing KB config, priority conflicts, regex-order issues, acceptable ambiguity, or low-confidence fallback.
 - `ask --fusion rrf` retrieves each selected dataset separately when multiple dataset IDs are present, then returns an offline fusion report and fused evidence order.
-- `--mode agentic --host-assisted` still retrieves from RAGFlow; the host agent performs final synthesis from returned evidence.
+- `--mode agentic --host-assisted` builds a deterministic `ragflow_agentic_plan_v1`, executes bounded sub-query retrieval, and returns evidence for host synthesis. It does not call an LLM or synthesize an answer.
 - `ask` returns deterministic evidence weights and can write `--trace-json` / `--trace-md` for host-agent debugging.
 - `ask --json` includes `retrieval_status` plus a `ragflow_retrieval_status_v1` report so hosts can distinguish `success`, `empty`, `low_quality`, `needs_refinement`, `clarification`, `rejected`, `error`, `timeout`, and `partial`.
 - Use `audit-citations` after host synthesis to check simple numeric citations like `[1]` against retrieved evidence.

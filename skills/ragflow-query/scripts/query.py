@@ -320,8 +320,10 @@ def _ask(args: argparse.Namespace) -> int:
     retrieval_duration_ms = 0.0
     retrieval_calls = 0
     rewrite_plan = None
+    agentic_plan = None
     retrieval_payloads: list[dict[str, Any]] = []
-    rewrite_active = bool(args.multi_query or args.rewrite != "none")
+    agentic_active = mode == "agentic" and args.host_assisted
+    rewrite_active = bool(args.multi_query or args.rewrite != "none") and not agentic_active
 
     if mode == "agentic" and not args.host_assisted:
         return _error(
@@ -361,25 +363,40 @@ def _ask(args: argparse.Namespace) -> int:
             if args.similarity_threshold is not None
             else routed_params.get("similarity_threshold")
         )
-        multi_queries = load_multi_query_file(args.multi_query) if args.multi_query else []
-        rewrite_plan = build_query_rewrite_plan(
-            args.question,
-            mode=args.rewrite,
-            multi_queries=multi_queries,
-            llm_configured=_llm_configured(config),
-        )
+        if agentic_active:
+            agentic_plan = build_agentic_plan(
+                args.question,
+                retrieval_mode="direct",
+                rewrite_mode=args.rewrite,
+                max_subqueries=args.max_subqueries,
+                reflection_budget=args.reflection_budget,
+            )
+            retrieval_queries = list(agentic_plan.get("retrieval_queries", []))
+        else:
+            multi_queries = load_multi_query_file(args.multi_query) if args.multi_query else []
+            rewrite_plan = build_query_rewrite_plan(
+                args.question,
+                mode=args.rewrite,
+                multi_queries=multi_queries,
+                llm_configured=_llm_configured(config),
+            )
+            retrieval_queries = rewrite_plan["retrieval_queries"]
         retrieval_start = time.perf_counter()
-        retrieval_payloads, chunks, fusion_report, retrieval_calls = _retrieve_query_payloads(
-            client=client,
-            retrieval_queries=rewrite_plan["retrieval_queries"],
-            dataset_ids=dataset_ids,
-            top_k=effective_top_k,
-            similarity_threshold=effective_similarity_threshold,
-            fusion=args.fusion,
-            include_raw=args.include_raw,
-        )
+        if retrieval_queries:
+            retrieval_payloads, chunks, fusion_report, retrieval_calls = _retrieve_query_payloads(
+                client=client,
+                retrieval_queries=retrieval_queries,
+                dataset_ids=dataset_ids,
+                top_k=effective_top_k,
+                similarity_threshold=effective_similarity_threshold,
+                fusion=args.fusion,
+                include_raw=args.include_raw,
+            )
+        else:
+            chunks = []
+            fusion_report = None
         retrieval_duration_ms = (time.perf_counter() - retrieval_start) * 1000
-    except (ConfigError, QueryRewriteError, RetrievalError, RoutingError, ValueError, OSError, RuntimeError) as exc:
+    except (AgenticPlanError, ConfigError, QueryRewriteError, RetrievalError, RoutingError, ValueError, OSError, RuntimeError) as exc:
         status_report = normalize_retrieval_status(error=exc)
         return _error(
             str(exc),
@@ -394,7 +411,17 @@ def _ask(args: argparse.Namespace) -> int:
     finished_at = _utc_now()
     route_payload = route_result.to_dict() if route_result else None
     evidence = weight_evidence(args.question, chunks)
-    status_report = normalize_retrieval_status(chunks=chunks, evidence=evidence)
+    agentic_retrieval_status = None
+    if agentic_plan and agentic_plan.get("status") in {"needs_clarification", "rejected"}:
+        agentic_retrieval_status = str(agentic_plan["status"])
+    status_report = normalize_retrieval_status(
+        chunks=chunks,
+        evidence=evidence,
+        intent_status=agentic_retrieval_status,
+    )
+    trace_warnings = [str(item) for item in agentic_plan.get("warnings", [])] if agentic_plan else []
+    if not chunks:
+        trace_warnings.append("retrieval returned zero chunks")
     trace = build_query_trace(
         question=args.question,
         requested_mode=args.mode,
@@ -412,11 +439,13 @@ def _ask(args: argparse.Namespace) -> int:
         },
         started_at=started_at,
         finished_at=finished_at,
-        warnings=[] if chunks else ["retrieval returned zero chunks"],
+        warnings=trace_warnings,
         rewrite_plan=rewrite_plan if rewrite_active else None,
         retrieval_status=status_report,
         retrieval_call_count=retrieval_calls,
     )
+    if agentic_plan:
+        trace["agentic_plan"] = agentic_plan
     if fusion_report:
         trace["fusion"] = fusion_report
     _write_json(args.trace_json, trace)
@@ -442,6 +471,7 @@ def _ask(args: argparse.Namespace) -> int:
             "retrieval_ms": round(retrieval_duration_ms, 3),
             "retrieval_call_count": retrieval_calls,
             **({"rewrite_plan": rewrite_plan} if rewrite_active and rewrite_plan else {}),
+            **({"agentic_plan": agentic_plan} if agentic_plan else {}),
             "evidence_count": len(evidence),
             **({"fusion_report": fusion_report} if fusion_report else {}),
             **({"route": route_payload} if route_payload else {}),
@@ -454,10 +484,12 @@ def _ask(args: argparse.Namespace) -> int:
         "retrieval_status": status_report["status"],
         "retrieval_status_report": status_report,
     }
-    if retrieval_payloads and (args.multi_query or args.rewrite != "none" or args.fusion == "rrf"):
+    if retrieval_payloads and (agentic_plan or args.multi_query or args.rewrite != "none" or args.fusion == "rrf"):
         payload["retrievals"] = retrieval_payloads
     if rewrite_active and rewrite_plan:
         payload["rewrite"] = rewrite_plan
+    if agentic_plan:
+        payload["agentic_plan"] = agentic_plan
     if fusion_report:
         payload["fusion"] = fusion_report
     if args.include_trace:
@@ -1139,6 +1171,8 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--rewrite", choices=["none", "simple", "translate", "hyde"], default="none", help="Opt-in query rewrite planning before retrieval")
     ask.add_argument("--multi-query", help="JSON file with additional host-owned query variants")
     ask.add_argument("--host-assisted", action="store_true", help="Return evidence for host agent synthesis")
+    ask.add_argument("--max-subqueries", type=int, default=4, help="Maximum deterministic subqueries for --mode agentic --host-assisted")
+    ask.add_argument("--reflection-budget", type=int, default=0, help="Record a strict reflection budget in the agentic plan; reflection is not executed")
     ask.add_argument("--json", action="store_true", help="Emit JSON")
     ask.add_argument("--include-raw", action="store_true", help="Include raw RAGFlow chunks in JSON")
     ask.add_argument("--include-trace", action="store_true", help="Include full query trace in JSON output")

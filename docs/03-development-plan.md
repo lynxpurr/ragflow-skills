@@ -975,7 +975,7 @@ Tasks:
 - [x] Add `ragflow-query agentic-plan`.
 - [ ] Add `ragflow-query agentic-answer` behind explicit LLM config.
 - [x] Implement query complexity classification with deterministic fallback.
-- [ ] Implement bounded query decomposition and sub-query retrieval.
+- [x] Implement bounded query decomposition and sub-query retrieval.
 - [ ] Implement optional reflection with a strict iteration budget.
 - [ ] Synthesize answers only from retrieved evidence.
 - [ ] Emit citations compatible with `audit-citations`.
