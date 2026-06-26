@@ -971,6 +971,12 @@ Capabilities:
 All reports must redact endpoints according to release settings and must not include real
 API keys or host-specific paths.
 
+Current public implementation adds `ragflow-doc-to-md backend probe`, which emits
+`ragflow_doc_backend_probe_report_v1` and classifies configured conversion backends as
+`available`, `missing`, `wrong_protocol`, `timeout`, or `not_configured`. By default it
+performs local/configuration checks only; bounded endpoint reachability is opt-in through
+`--network-check`.
+
 ## Feature Design 19: Contract, Packaging, And Compatibility Gates
 
 ### Problem

@@ -48,7 +48,9 @@ from ragflow_skill_runtime import (  # noqa: E402
     plan_markdown_segmentation,
     postprocess_handoff,
     postprocess_single_markdown,
+    probe_conversion_backends,
     quality_documents_from_manifest,
+    render_backend_probe_markdown,
     render_quality_markdown,
     safe_markdown_name,
     sha256_file,
@@ -425,6 +427,40 @@ def _run_postprocess(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_backend_probe(args: argparse.Namespace) -> int:
+    try:
+        config = load_skill_config(config_file=args.config)
+        backend = args.backend or config.doc_to_md.backend or "auto"
+        report = probe_conversion_backends(
+            backend=backend,
+            remote_url=_config_or_arg(args, "remote_url", config.doc_to_md.remote_url),
+            mineru_base_url=_config_or_arg(args, "mineru_base_url", config.mineru.base_url),
+            mineru_api_key=_config_or_arg(args, "mineru_api_key", config.mineru.api_key),
+            mineru_cli_path=_config_or_arg(args, "mineru_cli_path", config.mineru.cli_path),
+            network_check=args.network_check,
+            timeout=args.probe_timeout,
+        )
+        if args.report_json:
+            report_json = Path(args.report_json)
+            report_json.parent.mkdir(parents=True, exist_ok=True)
+            report_json.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        if args.report_md:
+            report_md = Path(args.report_md)
+            report_md.parent.mkdir(parents=True, exist_ok=True)
+            report_md.write_text(render_backend_probe_markdown(report), encoding="utf-8")
+        if args.json or not args.report_json:
+            _dump_json(report)
+        if args.fail_on_unavailable:
+            statuses = [item.get("status") for item in report.get("backends", []) if isinstance(item, dict)]
+            if "available" not in statuses:
+                return 1
+            if report.get("selected_backend") != "auto" and any(status != "available" for status in statuses):
+                return 1
+        return 0
+    except (DocConvertError, OSError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _add_segmentation_threshold_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--soft-max-chars", type=int, default=DEFAULT_SOFT_MAX_CHARS)
     parser.add_argument("--hard-max-chars", type=int, default=DEFAULT_HARD_MAX_CHARS)
@@ -488,10 +524,34 @@ def build_postprocess_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _add_backend_config_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--config", help="Unified config file; defaults to RAGFLOW_CONFIG or .ragflow/config*.yaml")
+    parser.add_argument("--backend", choices=sorted(BACKEND_CHOICES), help="Backend to probe; auto probes all known backends")
+    parser.add_argument("--remote-url", help="Remote conversion endpoint; defaults to DOC_TO_MD_REMOTE_URL")
+    parser.add_argument("--mineru-base-url", help="MinerU service base URL")
+    parser.add_argument("--mineru-api-key", help="MinerU API key; only presence is reported")
+    parser.add_argument("--mineru-cli-path", help="Local MinerU CLI path; defaults to MINERU_CLI_PATH or PATH lookup")
+
+
+def build_backend_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Inspect document conversion backend readiness")
+    sub = parser.add_subparsers(dest="backend_command", required=True)
+    probe = sub.add_parser("probe", help="Probe configured conversion backend readiness")
+    _add_backend_config_args(probe)
+    probe.add_argument("--network-check", action="store_true", help="Attempt a bounded endpoint reachability check")
+    probe.add_argument("--probe-timeout", type=float, default=2.0, help="Maximum seconds for each network probe")
+    probe.add_argument("--report-json", help="Optional backend probe JSON report path")
+    probe.add_argument("--report-md", help="Optional backend probe Markdown report path")
+    probe.add_argument("--fail-on-unavailable", action="store_true", help="Return non-zero when the selected backend is unavailable")
+    probe.add_argument("--json", action="store_true", help="Emit JSON")
+    probe.set_defaults(func=_run_backend_probe)
+    return parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Convert documents into a Markdown handoff bundle",
-        epilog="Quality and segmentation commands: inspect, segment-plan, split.",
+        epilog="Commands: backend probe, inspect, segment-plan, split.",
     )
     parser.add_argument("--input", required=True, help="Input file or directory")
     parser.add_argument("--output", required=True, help="Output handoff directory")
@@ -536,6 +596,9 @@ def main(argv: list[str] | None = None) -> int:
             return _run_package(build_package_parser().parse_args(command_args))
         if command == "postprocess":
             return _run_postprocess(build_postprocess_parser().parse_args(command_args))
+        if command == "backend":
+            parsed = build_backend_parser().parse_args(command_args)
+            return parsed.func(parsed)
     return _run(build_parser().parse_args(actual_argv))
 
 

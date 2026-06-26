@@ -368,6 +368,38 @@ def _run_no_network_checks(
         )
         produced.append(mineru_cli_quality)
 
+    backend_probe_json = work_root / "backend_probe.json"
+    backend_probe_md = work_root / "backend_probe.md"
+    backend_probe_result = _run_command(
+        [
+            python_executable,
+            str(convert_script),
+            "backend",
+            "probe",
+            "--backend",
+            "mineru-cli",
+            "--mineru-cli-path",
+            str(fake_mineru_cli),
+            "--report-json",
+            str(backend_probe_json),
+            "--report-md",
+            str(backend_probe_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "doc-to-md backend probe",
+        backend_probe_result,
+        required_output='"schema": "ragflow_doc_backend_probe_report_v1"',
+    )
+    if backend_probe_json.exists():
+        produced.append(backend_probe_json)
+    if backend_probe_md.exists():
+        produced.append(backend_probe_md)
+
     inspect_result = _run_command(
         [
             python_executable,

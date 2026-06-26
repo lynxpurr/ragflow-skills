@@ -60,12 +60,17 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("mineru service markdown produced", check_names)
         self.assertIn("doc-to-md mineru-sync env backend", check_names)
         self.assertIn("mineru-sync service markdown produced", check_names)
+        self.assertIn("doc-to-md backend probe", check_names)
         self.assertTrue(
             any(path.endswith("mineru-handoff/doc_manifest.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
         self.assertTrue(
             any(path.endswith("mineru-cli-handoff/doc_manifest.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("backend_probe.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
         self.assertTrue(

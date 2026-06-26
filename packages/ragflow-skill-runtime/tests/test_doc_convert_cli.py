@@ -965,8 +965,102 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertIn("--mineru-base-url", result.stdout)
         self.assertIn("--mineru-cli-path", result.stdout)
         self.assertIn("--quality-report-name", result.stdout)
+        self.assertIn("backend probe", result.stdout)
         self.assertIn("segment-plan", result.stdout)
         self.assertIn("--strict", result.stdout)
+
+    def test_backend_probe_builtin_writes_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_json = root / "backend_probe.json"
+            report_md = root / "backend_probe.md"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "backend",
+                    "probe",
+                    "--backend",
+                    "builtin",
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+            report_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            markdown = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["schema"], "ragflow_doc_backend_probe_report_v1")
+        self.assertEqual(payload["backends"][0]["backend"], "builtin")
+        self.assertEqual(payload["backends"][0]["status"], "available")
+        self.assertEqual(report_payload["summary"]["available"], 1)
+        self.assertIn("RAGFlow Doc Backend Probe", markdown)
+
+    def test_backend_probe_classifies_remote_config_gaps(self) -> None:
+        missing = subprocess.run(
+            [sys.executable, str(CONVERT_SCRIPT), "backend", "probe", "--backend", "remote", "--json"],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_env(),
+        )
+        wrong_protocol = subprocess.run(
+            [
+                sys.executable,
+                str(CONVERT_SCRIPT),
+                "backend",
+                "probe",
+                "--backend",
+                "remote",
+                "--remote-url",
+                "ftp://converter.example.test/convert",
+                "--json",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_env(),
+        )
+
+        self.assertEqual(missing.returncode, 0, missing.stderr)
+        self.assertEqual(wrong_protocol.returncode, 0, wrong_protocol.stderr)
+        self.assertEqual(json.loads(missing.stdout)["backends"][0]["status"], "not_configured")
+        self.assertEqual(json.loads(wrong_protocol.stdout)["backends"][0]["status"], "wrong_protocol")
+
+    def test_backend_probe_mineru_cli_uses_configured_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_cli = _write_fake_mineru_cli(root / "mineru")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "backend",
+                    "probe",
+                    "--backend",
+                    "mineru-cli",
+                    "--mineru-cli-path",
+                    str(fake_cli),
+                    "--json",
+                    "--fail-on-unavailable",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["backends"][0]["status"], "available")
 
 
 if __name__ == "__main__":

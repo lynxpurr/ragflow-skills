@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
 import time
@@ -19,7 +20,7 @@ from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 from urllib import error, request
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 
 class DocConvertError(RuntimeError):
@@ -56,6 +57,18 @@ MINERU_AUTO_EXTENSIONS = {
     ".webp",
 }
 DEFAULT_MINERU_BASE_URL = "https://mineru.net/api/v1/agent"
+BACKEND_PROBE_REPORT_SCHEMA = "ragflow_doc_backend_probe_report_v1"
+BACKEND_PROBE_STATUSES = ("available", "missing", "wrong_protocol", "timeout", "not_configured")
+CONVERSION_BACKENDS = (
+    "builtin",
+    "pandoc",
+    "mineru-cli",
+    "remote",
+    "mineru",
+    "mineru-agent",
+    "mineru-sync",
+    "mineru-local",
+)
 MINERU_DONE_STATE = "done"
 MINERU_FAILED_STATE = "failed"
 MARKDOWN_IMAGE_RE = re.compile(r"(!\[[^\]]*]\()([^)]+)(\))")
@@ -607,6 +620,242 @@ def resolve_mineru_cli_path(cli_path: str | None = None) -> str | None:
     if path.exists() and path.is_file():
         return str(path.resolve())
     return None
+
+
+def _valid_http_url(value: str | None) -> tuple[bool, str]:
+    if not value:
+        return False, "endpoint URL is not configured"
+    parsed = urlparse(str(value))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False, "endpoint URL must use http or https"
+    return True, f"{parsed.scheme} endpoint configured"
+
+
+def _network_probe(url: str, *, timeout: float) -> tuple[str, list[str]]:
+    req = request.Request(url, method="HEAD", headers={"User-Agent": "ragflow-doc-to-md-backend-probe"})
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            return "available", [f"endpoint responded with HTTP {resp.status}"]
+    except error.HTTPError as exc:
+        if exc.code in {401, 403, 405, 415} or 200 <= exc.code < 500 and exc.code != 404:
+            return "available", [f"endpoint responded with HTTP {exc.code}; service is reachable"]
+        return "wrong_protocol", [f"endpoint responded with HTTP {exc.code}"]
+    except TimeoutError:
+        return "timeout", [f"endpoint probe timed out after {timeout:g}s"]
+    except socket.timeout:
+        return "timeout", [f"endpoint probe timed out after {timeout:g}s"]
+    except error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError) or isinstance(exc.reason, socket.timeout):
+            return "timeout", [f"endpoint probe timed out after {timeout:g}s"]
+        return "missing", [f"endpoint probe failed: {exc.reason}"]
+    except OSError as exc:
+        return "missing", [f"endpoint probe failed: {exc}"]
+
+
+def _probe_http_backend(
+    *,
+    backend: str,
+    url: str | None,
+    network_check: bool,
+    timeout: float,
+    requires_api_key: bool = False,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    valid, reason = _valid_http_url(url)
+    checks = [{"name": "url_configured", "ok": bool(url)}, {"name": "http_url", "ok": valid}]
+    if requires_api_key:
+        checks.append({"name": "api_key_configured", "ok": bool(api_key)})
+    if not url or requires_api_key and not api_key:
+        reasons = [reason] if not url else ["API key is not configured"]
+        return _backend_probe_entry(backend, "not_configured", reasons, checks)
+    if not valid:
+        return _backend_probe_entry(backend, "wrong_protocol", [reason], checks)
+    if network_check:
+        status, reasons = _network_probe(str(url), timeout=timeout)
+        checks.append({"name": "network_check", "ok": status == "available"})
+        return _backend_probe_entry(backend, status, reasons, checks)
+    checks.append({"name": "network_check", "ok": None, "skipped": True})
+    return _backend_probe_entry(
+        backend,
+        "available",
+        [reason, "network check disabled"],
+        checks,
+    )
+
+
+def _backend_probe_entry(
+    backend: str,
+    status: str,
+    reasons: list[str],
+    checks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "backend": backend,
+        "status": status if status in BACKEND_PROBE_STATUSES else "missing",
+        "reasons": reasons,
+        "checks": checks,
+    }
+
+
+def _probe_single_backend(
+    backend: str,
+    *,
+    remote_url: str | None = None,
+    mineru_base_url: str | None = None,
+    mineru_api_key: str | None = None,
+    mineru_cli_path: str | None = None,
+    network_check: bool = False,
+    timeout: float = 2.0,
+) -> dict[str, Any]:
+    if backend == "builtin":
+        return _backend_probe_entry(
+            backend,
+            "available",
+            ["built-in Markdown, text, and HTML conversion is always available"],
+            [{"name": "builtin_converter", "ok": True}],
+        )
+    if backend == "pandoc":
+        resolved = shutil.which("pandoc")
+        return _backend_probe_entry(
+            backend,
+            "available" if resolved else "missing",
+            ["pandoc executable found"] if resolved else ["pandoc executable was not found on PATH"],
+            [{"name": "pandoc_on_path", "ok": bool(resolved)}],
+        )
+    if backend == "mineru-cli":
+        resolved = resolve_mineru_cli_path(mineru_cli_path)
+        checks = [
+            {"name": "cli_path_configured", "ok": bool(mineru_cli_path or os.environ.get("MINERU_CLI_PATH"))},
+            {"name": "mineru_on_path", "ok": bool(shutil.which("mineru"))},
+            {"name": "resolved_cli", "ok": bool(resolved)},
+        ]
+        if not resolved:
+            return _backend_probe_entry(
+                backend,
+                "missing",
+                ["mineru executable was not found from config, environment, or PATH"],
+                checks,
+            )
+        return _backend_probe_entry(backend, "available", ["mineru executable resolved"], checks)
+    if backend == "remote":
+        return _probe_http_backend(
+            backend=backend,
+            url=remote_url,
+            network_check=network_check,
+            timeout=timeout,
+        )
+    if backend in {"mineru", "mineru-agent"}:
+        base_url = mineru_base_url or DEFAULT_MINERU_BASE_URL
+        return _probe_http_backend(
+            backend=backend,
+            url=base_url,
+            network_check=network_check,
+            timeout=timeout,
+            requires_api_key=True,
+            api_key=mineru_api_key,
+        )
+    if backend in {"mineru-sync", "mineru-local"}:
+        if mineru_base_url and str(mineru_base_url).rstrip("/").endswith("/agent"):
+            return _backend_probe_entry(
+                backend,
+                "wrong_protocol",
+                ["mineru-sync expects a synchronous service base URL, not the MinerU Agent API URL"],
+                [{"name": "sync_base_url_shape", "ok": False}],
+            )
+        parse_url = _mineru_sync_parse_url(mineru_base_url) if mineru_base_url else None
+        return _probe_http_backend(
+            backend=backend,
+            url=parse_url,
+            network_check=network_check,
+            timeout=timeout,
+        )
+    return _backend_probe_entry(
+        backend,
+        "wrong_protocol",
+        [f"unsupported backend: {backend}"],
+        [{"name": "known_backend", "ok": False}],
+    )
+
+
+def probe_conversion_backends(
+    *,
+    backend: str = "auto",
+    remote_url: str | None = None,
+    mineru_base_url: str | None = None,
+    mineru_api_key: str | None = None,
+    mineru_cli_path: str | None = None,
+    network_check: bool = False,
+    timeout: float = 2.0,
+) -> dict[str, Any]:
+    """Probe configured document conversion backend readiness without converting files."""
+
+    normalized_backend = str(backend or "auto").strip().lower()
+    if normalized_backend not in {"auto", *CONVERSION_BACKENDS}:
+        allowed = ", ".join(["auto", *CONVERSION_BACKENDS])
+        raise DocConvertError(f"backend must be one of: {allowed}")
+    if timeout <= 0:
+        raise DocConvertError("probe timeout must be greater than zero")
+    backends = list(CONVERSION_BACKENDS) if normalized_backend == "auto" else [normalized_backend]
+    entries = [
+        _probe_single_backend(
+            item,
+            remote_url=remote_url,
+            mineru_base_url=mineru_base_url,
+            mineru_api_key=mineru_api_key,
+            mineru_cli_path=mineru_cli_path,
+            network_check=network_check,
+            timeout=timeout,
+        )
+        for item in backends
+    ]
+    status_counts = {status: 0 for status in BACKEND_PROBE_STATUSES}
+    for entry in entries:
+        status_counts[str(entry.get("status"))] = status_counts.get(str(entry.get("status")), 0) + 1
+    return {
+        "ok": True,
+        "schema": BACKEND_PROBE_REPORT_SCHEMA,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "selected_backend": normalized_backend,
+        "network_check": bool(network_check),
+        "timeout_seconds": timeout,
+        "allowed_statuses": list(BACKEND_PROBE_STATUSES),
+        "summary": {
+            "backend_count": len(entries),
+            "available": status_counts.get("available", 0),
+            "missing": status_counts.get("missing", 0),
+            "wrong_protocol": status_counts.get("wrong_protocol", 0),
+            "timeout": status_counts.get("timeout", 0),
+            "not_configured": status_counts.get("not_configured", 0),
+        },
+        "backends": entries,
+    }
+
+
+def render_backend_probe_markdown(report: Mapping[str, Any]) -> str:
+    """Render a compact Markdown backend probe report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Doc Backend Probe",
+        "",
+        f"- schema: `{report.get('schema', BACKEND_PROBE_REPORT_SCHEMA)}`",
+        f"- selected_backend: `{report.get('selected_backend', '')}`",
+        f"- network_check: `{str(report.get('network_check', False)).lower()}`",
+        f"- available: `{summary.get('available', 0)}`",
+        f"- missing: `{summary.get('missing', 0)}`",
+        f"- wrong_protocol: `{summary.get('wrong_protocol', 0)}`",
+        f"- timeout: `{summary.get('timeout', 0)}`",
+        f"- not_configured: `{summary.get('not_configured', 0)}`",
+        "",
+        "| backend | status | reasons |",
+        "| --- | --- | --- |",
+    ]
+    for entry in report.get("backends", []):
+        if not isinstance(entry, Mapping):
+            continue
+        reasons = "; ".join(str(item) for item in entry.get("reasons", []) if str(item)).replace("|", "\\|")
+        lines.append(f"| `{entry.get('backend', '')}` | `{entry.get('status', '')}` | {reasons} |")
+    return "\n".join(lines) + "\n"
 
 
 def _short_process_detail(result: subprocess.CompletedProcess[str]) -> str:
