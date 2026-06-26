@@ -1836,6 +1836,38 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         route_diagnose_result,
         required_stdout='"ragflow_route_diagnose_report_v1"',
     )
+    centroid_plan_result = _run_command(
+        [
+            sys.executable,
+            str(query_script),
+            "centroid",
+            "build",
+            "--plan-only",
+            "--kb-manifest",
+            str(kb_manifest),
+            "--chunk-snapshot",
+            str(chunk_snapshot),
+            "--index-output",
+            str(artifacts_dir / "centroids.json"),
+            "--embedding-model",
+            "example-embedding",
+            "--embedding-dimension",
+            "3",
+            "--report-json",
+            str(artifacts_dir / "centroid_plan.json"),
+            "--report-md",
+            str(artifacts_dir / "centroid_plan.md"),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query centroid build plan-only",
+        centroid_plan_result,
+        required_stdout='"ragflow_route_centroid_build_plan_v1"',
+    )
     query_runner = workspace / "query_runner.py"
     _write_query_runner(
         runner_path=query_runner,
@@ -1900,6 +1932,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "route_test.md",
         artifacts_dir / "route_report.md",
         artifacts_dir / "route_diagnose.md",
+        artifacts_dir / "centroid_plan.json",
+        artifacts_dir / "centroid_plan.md",
         artifacts_dir / "profile_lint.md",
         artifacts_dir / "candidate_profile_set.json",
         artifacts_dir / "profile_experiment_matrix.md",

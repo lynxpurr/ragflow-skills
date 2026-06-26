@@ -29,6 +29,7 @@ bootstrap_core()
 
 from ragflow_skill_runtime import (  # noqa: E402
     ConfigError,
+    CentroidRoutingError,
     NormalizedChunk,
     QueryResult,
     QueryRewriteError,
@@ -36,6 +37,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     RetrievalError,
     RoutingError,
     audit_citations,
+    build_centroid_plan,
     build_query_rewrite_plan,
     build_query_trace,
     diagnose_query_result,
@@ -52,6 +54,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     query_pollution_report,
     query_rerank_ab_report,
     render_citation_audit_markdown,
+    render_centroid_plan_markdown,
     render_query_fusion_markdown,
     render_query_fusion_test_markdown,
     render_query_diagnostic_markdown,
@@ -69,6 +72,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     run_route_report,
     run_route_tests,
     weight_evidence,
+    write_centroid_plan,
 )
 
 
@@ -455,6 +459,31 @@ def _route_diagnose(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _centroid_build(args: argparse.Namespace) -> int:
+    if not args.plan_only:
+        return _error("centroid build currently supports --plan-only only", json_output=args.json)
+    try:
+        report = build_centroid_plan(
+            kb_manifest_paths=args.kb_manifest,
+            chunk_snapshot_paths=args.chunk_snapshot,
+            index_output=args.index_output,
+            embedding_provider=args.embedding_provider,
+            embedding_model=args.embedding_model,
+            embedding_dimension=args.embedding_dimension,
+            batch_size=args.batch_size,
+            checkpoint_path=args.checkpoint,
+            resume=args.resume,
+        )
+    except (CentroidRoutingError, OSError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.report_json:
+        write_centroid_plan(args.report_json, report)
+    _write_text(args.report_md, render_centroid_plan_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _rewrite(args: argparse.Namespace) -> int:
     try:
         config = _load_runtime(args) if args.rewrite == "hyde" else None
@@ -744,6 +773,24 @@ def build_parser() -> argparse.ArgumentParser:
     fusion_test.add_argument("--report-md", help="Optional Markdown report output path")
     fusion_test.add_argument("--json", action="store_true", help="Emit JSON report")
     fusion_test.set_defaults(func=_fusion_test)
+
+    centroid = sub.add_parser("centroid", help="Plan optional centroid routing artifacts")
+    centroid_sub = centroid.add_subparsers(dest="centroid_command", required=True)
+    centroid_build = centroid_sub.add_parser("build", help="Plan centroid index construction")
+    centroid_build.add_argument("--plan-only", action="store_true", help="Only write a non-mutating build plan")
+    centroid_build.add_argument("--kb-manifest", action="append", default=[], help="User-owned kb_manifest.json; repeatable")
+    centroid_build.add_argument("--chunk-snapshot", action="append", default=[], help="User-owned ragflow_chunk_snapshot_v1 JSON; repeatable")
+    centroid_build.add_argument("--index-output", help="Planned centroid index output path")
+    centroid_build.add_argument("--embedding-provider", help="Planned embedding provider label")
+    centroid_build.add_argument("--embedding-model", help="Planned embedding model")
+    centroid_build.add_argument("--embedding-dimension", type=int, help="Planned embedding vector dimension")
+    centroid_build.add_argument("--batch-size", type=int, default=64, help="Planned build batch size")
+    centroid_build.add_argument("--checkpoint", help="Planned checkpoint path for a future bounded build")
+    centroid_build.add_argument("--resume", action="store_true", help="Plan a resumable centroid build")
+    centroid_build.add_argument("--report-json", help="Optional JSON plan output path")
+    centroid_build.add_argument("--report-md", help="Optional Markdown plan output path")
+    centroid_build.add_argument("--json", action="store_true", help="Emit JSON plan")
+    centroid_build.set_defaults(func=_centroid_build)
 
     ask = sub.add_parser("ask", help="Ask a question against RAGFlow")
     _add_runtime_options(ask, suppress_defaults=True)

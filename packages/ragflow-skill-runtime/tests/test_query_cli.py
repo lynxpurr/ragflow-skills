@@ -927,6 +927,74 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(route_diagnose_file_payload["schema"], "ragflow_route_diagnose_report_v1")
         self.assertIn("RAGFlow Route Diagnosis", route_diagnose_markdown)
 
+    def test_centroid_build_plan_only_writes_reports(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "kb_manifest.json"
+            snapshot = root / "chunk_snapshot.json"
+            report_json = root / "centroid_plan.json"
+            report_md = root / "centroid_plan.md"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-technical", "name": "kb:technical"},
+                        "documents": [{"document_id": "doc-1", "chunk_count": 1}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "chunks": [
+                            {
+                                "dataset_id": "ds-technical",
+                                "stable_hash": "sha256:chunk",
+                                "content": "Centroid planning evidence.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "centroid",
+                        "build",
+                        "--plan-only",
+                        "--kb-manifest",
+                        str(manifest),
+                        "--chunk-snapshot",
+                        str(snapshot),
+                        "--embedding-model",
+                        "example-embedding",
+                        "--embedding-dimension",
+                        "3",
+                        "--index-output",
+                        str(root / "centroids.json"),
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            file_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            markdown = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["schema"], "ragflow_route_centroid_build_plan_v1")
+        self.assertEqual(file_payload["index_schema"], "ragflow_route_centroid_index_v1")
+        self.assertEqual(payload["summary"]["ready_centroid_count"], 1)
+        self.assertIn("RAGFlow Centroid Build Plan", markdown)
+
     def test_auto_mode_uses_routing_config_with_fake_client(self) -> None:
         module = load_query_module()
         module.RAGFlowClient = FakeQueryClient

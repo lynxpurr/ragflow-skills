@@ -1674,6 +1674,43 @@ raise SystemExit(code)
     for path in (route_diagnose_json, route_diagnose_md):
         if path.exists():
             produced.append(path)
+    centroid_plan_json = work_root / "centroid_plan.json"
+    centroid_plan_md = work_root / "centroid_plan.md"
+    centroid_plan = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "centroid",
+            "build",
+            "--plan-only",
+            "--kb-manifest",
+            str(benchmark_manifest),
+            "--chunk-snapshot",
+            str(benchmark_chunk_snapshot),
+            "--index-output",
+            str(work_root / "centroids.json"),
+            "--embedding-model",
+            "example-embedding",
+            "--embedding-dimension",
+            "3",
+            "--report-json",
+            str(centroid_plan_json),
+            "--report-md",
+            str(centroid_plan_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query centroid build plan-only",
+        centroid_plan,
+        required_output='"ragflow_route_centroid_build_plan_v1"',
+    )
+    for path in (centroid_plan_json, centroid_plan_md):
+        if path.exists():
+            produced.append(path)
 
     query_output = work_root / "query_output.json"
     citation_audit_json = work_root / "citation_audit.json"
