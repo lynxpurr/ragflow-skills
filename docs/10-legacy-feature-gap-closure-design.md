@@ -959,11 +959,11 @@ Capabilities:
 - verify timeout cleanup reports without managing a permanent service;
 - report image fallback as `PASS_WITH_REVIEW`, preserving the source image when OCR is not
   available;
-- verify RAGFlow embedding/rerank provider presence, provider display name, and basic
-  request shape when credentials are available;
+- verify RAGFlow embedding/rerank provider presence, provider display name, and read-only
+  provider response shape when credentials are available;
 - warn when an embedding model change requires KB rebuild or re-parse;
-- test optional embedding/rerank adapters for empty-input behavior using fake or configured
-  endpoints;
+- test optional embedding/rerank adapter request shape and empty-input behavior using fake
+  or configured endpoints;
 - run fallback fixtures for LLM unavailable, malformed JSON, network timeout, partial
   success, and direct retrieval fallback;
 - emit fallback coverage and fallback success-rate metrics.
@@ -983,6 +983,14 @@ fixture with `--fixture`, emits `ragflow_doc_backend_warmup_report_v1`, and can 
 `--fail-on-failed`. Main document conversion now preserves image sources as Markdown
 fallbacks when OCR/conversion is unavailable, copies the source image into the handoff, and
 marks the quality gate `PASS_WITH_REVIEW`.
+`ragflow-kb-build model-providers probe` now emits
+`ragflow_model_provider_probe_report_v1`, checks read-only candidate provider endpoints,
+records response-shape summaries, normalizes provider display names and embedding/rerank
+model entries, and can warn when expected embedding or rerank model names are not visible.
+When explicit adapter URLs are supplied, the same report now probes embedding and rerank
+empty-input request shapes with redacted endpoint summaries and classifies bounded
+HTTP 200/400/422 behavior as handled empty input. Unit, consumer-acceptance, and platform
+smoke tests use fake endpoints for these adapter probes.
 
 ## Feature Design 19: Contract, Packaging, And Compatibility Gates
 

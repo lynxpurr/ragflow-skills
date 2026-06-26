@@ -43,8 +43,10 @@ from ragflow_skill_runtime import (  # noqa: E402
     make_tagset_template_payload,
     map_grounded_qa_evidence,
     merge_metadata_payloads,
+    probe_model_providers,
     render_handoff_inspection_markdown,
     render_governance_markdown,
+    render_model_provider_probe_markdown,
     gate_benchmark_report,
     import_benchmark_dataset,
     preflight_benchmark_dataset,
@@ -623,6 +625,38 @@ def _run_optimize_cleanup_plan(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_model_providers_probe(args: argparse.Namespace) -> int:
+    try:
+        overrides: dict[str, Any] = {}
+        if args.base_url:
+            overrides["base_url"] = args.base_url
+        if args.api_key:
+            overrides["api_key"] = args.api_key
+        if args.timeout is not None:
+            overrides["timeout"] = args.timeout
+        config = load_config(config_file=args.config, overrides=overrides)
+        client = RAGFlowClient(config)
+        report = probe_model_providers(
+            client,
+            endpoint_paths=args.endpoint,
+            expected_embedding_models=args.embedding_model,
+            expected_rerank_models=args.rerank_model,
+            embedding_adapter_url=args.embedding_adapter_url,
+            embedding_adapter_api_key=args.embedding_adapter_api_key,
+            embedding_adapter_shape=args.embedding_adapter_shape,
+            rerank_adapter_url=args.rerank_adapter_url,
+            rerank_adapter_api_key=args.rerank_adapter_api_key,
+            rerank_adapter_shape=args.rerank_adapter_shape,
+            adapter_timeout=args.adapter_timeout,
+        )
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_model_provider_probe_markdown(report))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (ConfigError, OSError, RuntimeError, ValueError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def build_inspect_handoff_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Inspect a Markdown handoff and optional rich sidecars")
     parser.add_argument("--handoff", required=True, help="Handoff directory containing doc_manifest.json")
@@ -630,6 +664,43 @@ def build_inspect_handoff_parser() -> argparse.ArgumentParser:
     parser.add_argument("--report-json", help="Optional JSON inspection report path")
     parser.add_argument("--report-md", help="Optional Markdown inspection report path")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    return parser
+
+
+def build_model_providers_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Probe RAGFlow model-provider registration without mutating KBs")
+    subparsers = parser.add_subparsers(dest="model_providers_command", required=True)
+
+    probe = subparsers.add_parser("probe", help="Probe read-only model-provider endpoints")
+    probe.add_argument("--config", help="Runtime config file")
+    probe.add_argument("--base-url", help="RAGFlow base URL")
+    probe.add_argument("--api-key", help="RAGFlow API key")
+    probe.add_argument("--timeout", type=float, help="HTTP timeout seconds")
+    probe.add_argument("--endpoint", action="append", default=[], help="Provider endpoint path to probe; repeatable")
+    probe.add_argument("--embedding-model", action="append", default=[], help="Expected embedding model name; repeatable")
+    probe.add_argument("--rerank-model", action="append", default=[], help="Expected rerank model name; repeatable")
+    probe.add_argument("--embedding-adapter-url", help="Explicit embedding adapter URL for empty-input request-shape probe")
+    probe.add_argument("--embedding-adapter-api-key", help="Embedding adapter bearer token")
+    probe.add_argument(
+        "--embedding-adapter-shape",
+        choices=("openai", "generic"),
+        default="openai",
+        help="Embedding adapter request shape",
+    )
+    probe.add_argument("--rerank-adapter-url", help="Explicit rerank adapter URL for empty-input request-shape probe")
+    probe.add_argument("--rerank-adapter-api-key", help="Rerank adapter bearer token")
+    probe.add_argument(
+        "--rerank-adapter-shape",
+        choices=("cohere", "generic"),
+        default="cohere",
+        help="Rerank adapter request shape",
+    )
+    probe.add_argument("--adapter-timeout", type=float, default=5.0, help="Adapter empty-input probe timeout seconds")
+    probe.add_argument("--report-json", help="Optional JSON probe report path")
+    probe.add_argument("--report-md", help="Optional Markdown probe report path")
+    probe.add_argument("--json", action="store_true", help="Emit JSON errors")
+    probe.set_defaults(func=_run_model_providers_probe)
+
     return parser
 
 
@@ -956,6 +1027,9 @@ def main(argv: list[str] | None = None) -> int:
         command_args = actual_argv[1:]
         if command == "inspect-handoff":
             return _run_inspect_handoff(build_inspect_handoff_parser().parse_args(command_args))
+        if command == "model-providers":
+            model_provider_args = build_model_providers_parser().parse_args(command_args)
+            return model_provider_args.func(model_provider_args)
         if command == "metadata":
             metadata_args = build_metadata_parser().parse_args(command_args)
             return metadata_args.func(metadata_args)

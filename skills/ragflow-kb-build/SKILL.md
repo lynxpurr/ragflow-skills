@@ -22,6 +22,7 @@ python scripts/build.py --config /path/to/ragflow-config.local.yaml --doc-manife
 python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-en-768.json --dry-run --json
 python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --metadata ./run/metadata.merged.json --kb-name kb:project --profile ./templates/default-en-768.json --dry-run --json
 python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-en-768.json --allow-blocked
+python scripts/build.py model-providers probe --config /path/to/ragflow-config.local.yaml --embedding-model bge-m3 --rerank-model bge-reranker --embedding-adapter-url https://embedding.example/v1/embeddings --rerank-adapter-url https://rerank.example/rerank --report-md ./run/model_provider_probe.md --json
 python scripts/build.py inspect-handoff --handoff ./handoff --report-md ./run/handoff_inspection.md
 python scripts/build.py metadata generate-template --doc-manifest ./handoff/doc_manifest.json --output ./run/metadata.template.json
 python scripts/build.py metadata lint --metadata ./run/metadata.template.json --report-md ./run/metadata_lint.md
@@ -75,6 +76,7 @@ Notes:
 - When a `doc_manifest.json` contains `quality_gate.status: BLOCKED`, `build.py` refuses to upload by default. Use `--allow-blocked` only after the user explicitly accepts the risk.
 - Use `--dry-run` to validate local inputs without touching RAGFlow; dry-run prints JSON and does not write `kb_manifest.json`.
 - Use `--no-wait` only when the host platform should continue while RAGFlow parses asynchronously.
+- Use `model-providers probe` before live builds to check read-only RAGFlow model-provider endpoints, optional expected embedding/rerank model names, and explicit adapter empty-input request shapes without creating datasets.
 - Use `inspect-handoff` before upload when a `ragflow-doc-to-md package --rich` handoff includes optional sidecars.
 - Use `metadata` and `tagset` subcommands to prepare advisory public metadata and tag reports offline. Metadata summaries can be attached to build reports with `--metadata`; default upload behavior is unchanged.
 - Use `benchmark import/sample/preflight/summarize/gate` and `snapshot-chunks` for offline benchmark lifecycle checks around `validate.py --level benchmark`; these commands do not touch RAGFlow.

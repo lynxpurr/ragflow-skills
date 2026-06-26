@@ -1005,10 +1005,11 @@ Tasks:
 - [x] Add optional `ragflow-doc-to-md backend warmup` for tiny user-approved converter fixtures.
 - [x] Add timeout cleanup and leftover-process reporting for local CLI/process-backed conversion attempts.
 - [x] Preserve image fallback as `PASS_WITH_REVIEW` with source image retained when OCR/conversion is unavailable.
-- [ ] Add `ragflow-kb-build model-providers probe`.
-- [ ] Probe configured RAGFlow embedding/rerank provider registration and request shape when credentials are present.
+- [x] Add `ragflow-kb-build model-providers probe`.
+- [x] Probe configured RAGFlow embedding/rerank provider registration and read-only provider response shape when credentials are present.
+- [x] Probe configured embedding/rerank adapter request shape when explicit adapter endpoints are present.
 - [ ] Warn when an embedding model change requires KB rebuild or re-parse.
-- [ ] Add fake endpoint tests for empty-input embedding/rerank adapter behavior.
+- [x] Add fake endpoint tests for empty-input embedding/rerank adapter behavior.
 - [ ] Add `ragflow-query endpoint-report` for local/LAN/VPN/HTTPS endpoint classification and redacted reachability summaries.
 - [ ] Add `ragflow-query fallback-test`.
 - [ ] Cover LLM unavailable, malformed LLM JSON, network timeout, partial failure, direct retrieval fallback, and fallback metrics.

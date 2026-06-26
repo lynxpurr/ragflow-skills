@@ -9,7 +9,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
@@ -56,6 +58,66 @@ class FakeValidationClient:
                 ]
             }
         }
+
+
+class ModelProviderHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path == "/api/v1/llm/factories":
+            payload = {
+                "data": {
+                    "factories": [
+                        {
+                            "id": "builtin",
+                            "display_name": "Built In",
+                            "models": [
+                                {"name": "bge-m3", "type": "embedding"},
+                                {"name": "bge-reranker", "type": "rerank"},
+                            ],
+                        }
+                    ]
+                }
+            }
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def do_POST(self) -> None:  # noqa: N802
+        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        if self.path == "/embeddings":
+            body = json.dumps({"error": {"message": "empty input rejected"}}).encode("utf-8")
+            self.send_response(422)
+        elif self.path == "/rerank":
+            body = json.dumps({"results": []}).encode("utf-8")
+            self.send_response(200)
+        else:
+            body = b"{}"
+            self.send_response(404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):  # noqa: A002
+        return
+
+
+@contextlib.contextmanager
+def model_provider_server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ModelProviderHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 class KbBuildCliTests(unittest.TestCase):
@@ -216,6 +278,55 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--no-wait", result.stdout)
         self.assertIn("--parse-timeout", result.stdout)
+
+    def test_model_providers_probe_via_subprocess_writes_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, model_provider_server() as base_url:
+            root = Path(tmp)
+            report_json = root / "model_providers.json"
+            report_md = root / "model_providers.md"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "model-providers",
+                    "probe",
+                    "--base-url",
+                    base_url,
+                    "--api-key",
+                    "test-key",
+                    "--embedding-model",
+                    "bge-m3",
+                    "--rerank-model",
+                    "bge-reranker",
+                    "--embedding-adapter-url",
+                    f"{base_url}/embeddings",
+                    "--rerank-adapter-url",
+                    f"{base_url}/rerank",
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+            report_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            markdown = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["schema"], "ragflow_model_provider_probe_report_v1")
+        self.assertEqual(payload["summary"]["available_endpoint_count"], 1)
+        self.assertEqual(payload["summary"]["embedding_model_count"], 1)
+        self.assertEqual(payload["summary"]["rerank_model_count"], 1)
+        self.assertEqual(payload["summary"]["configured_adapter_count"], 2)
+        self.assertEqual(payload["summary"]["handled_empty_input_adapter_count"], 2)
+        self.assertTrue(all(check["found"] for check in payload["expected_model_checks"]))
+        self.assertEqual(report_payload["summary"]["provider_count"], 1)
+        self.assertIn("RAGFlow Model Provider Probe", markdown)
 
     def test_inspect_handoff_via_build_subcommand(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

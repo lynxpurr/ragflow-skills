@@ -231,6 +231,13 @@ from .optimization import (
     render_optimization_plan_markdown,
     summarize_optimization_results,
 )
+from .model_providers import (
+    DEFAULT_MODEL_PROVIDER_ENDPOINTS,
+    MODEL_PROVIDER_PROBE_REPORT_SCHEMA,
+    MODEL_PROVIDER_PROBE_STATUSES,
+    probe_model_providers,
+    render_model_provider_probe_markdown,
+)
 from .kb_build import (
     BuildDocument,
     BuildError,
@@ -443,6 +450,7 @@ __all__ = [
     "CITATION_AUDIT_SCHEMA",
     "DEFAULT_MIN_EVIDENCE_SCORE",
     "DEFAULT_MIN_RETRIEVAL_SIMILARITY",
+    "DEFAULT_MODEL_PROVIDER_ENDPOINTS",
     "DEFAULT_SESSION_MAX_TOKENS",
     "DEFAULT_SESSION_MAX_TURNS",
     "CANDIDATE_PROFILE_SET_SCHEMA",
@@ -471,6 +479,8 @@ __all__ = [
     "RETRIEVAL_STATUS_VALUES",
     "METADATA_LINT_REPORT_SCHEMA",
     "METADATA_MERGE_REPORT_SCHEMA",
+    "MODEL_PROVIDER_PROBE_REPORT_SCHEMA",
+    "MODEL_PROVIDER_PROBE_STATUSES",
     "OPTIMIZATION_CLEANUP_PLAN_SCHEMA",
     "OPTIMIZATION_PLAN_SCHEMA",
     "PROFILE_EXPERIMENT_RESULTS_SCHEMA",
@@ -572,6 +582,7 @@ __all__ = [
     "plan_enrichment_experiments",
     "preflight_benchmark_dataset",
     "probe_conversion_backends",
+    "probe_model_providers",
     "probe_ragflow_client",
     "postprocess_handoff",
     "postprocess_markdown_file",
@@ -637,6 +648,7 @@ __all__ = [
     "segment_metadata_report_file",
     "render_query_trace_markdown",
     "render_markdown_report",
+    "render_model_provider_probe_markdown",
     "recommend_profile",
     "render_profile_compare_markdown",
     "render_profile_lint_markdown",

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -12,7 +13,9 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -215,6 +218,66 @@ def _write_fake_mineru_cli(path: Path) -> Path:
     )
     path.chmod(0o755)
     return path
+
+
+class _ModelProviderHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path == "/api/v1/llm/factories":
+            payload = {
+                "data": {
+                    "factories": [
+                        {
+                            "id": "builtin",
+                            "display_name": "Built In",
+                            "models": [
+                                {"name": "bge-m3", "type": "embedding"},
+                                {"name": "bge-reranker", "type": "rerank"},
+                            ],
+                        }
+                    ]
+                }
+            }
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def do_POST(self) -> None:  # noqa: N802
+        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        if self.path == "/embeddings":
+            body = json.dumps({"error": {"message": "empty input rejected"}}).encode("utf-8")
+            self.send_response(422)
+        elif self.path == "/rerank":
+            body = json.dumps({"results": []}).encode("utf-8")
+            self.send_response(200)
+        else:
+            body = b"{}"
+            self.send_response(404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *args: object) -> None:
+        return
+
+
+@contextlib.contextmanager
+def _model_provider_server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _ModelProviderHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 def _write_reports(payload: dict[str, Any], reports_dir: Path) -> dict[str, str]:
@@ -816,6 +879,46 @@ def _run_no_network_checks(
         env=env,
     )
     _record_command_check(checks, "kb-build dry-run", build_result, required_output='"dry_run": true')
+
+    model_provider_json = work_root / "model_provider_probe.json"
+    model_provider_md = work_root / "model_provider_probe.md"
+    with _model_provider_server() as model_provider_base_url:
+        model_provider_result = _run_command(
+            [
+                python_executable,
+                str(build_script),
+                "model-providers",
+                "probe",
+                "--base-url",
+                model_provider_base_url,
+                "--api-key",
+                "consumer-test-key",
+                "--embedding-model",
+                "bge-m3",
+                "--rerank-model",
+                "bge-reranker",
+                "--embedding-adapter-url",
+                f"{model_provider_base_url}/embeddings",
+                "--rerank-adapter-url",
+                f"{model_provider_base_url}/rerank",
+                "--report-json",
+                str(model_provider_json),
+                "--report-md",
+                str(model_provider_md),
+                "--json",
+            ],
+            cwd=work_root,
+            env=env,
+        )
+    _record_command_check(
+        checks,
+        "kb-build model-providers probe",
+        model_provider_result,
+        required_output='"schema": "ragflow_model_provider_probe_report_v1"',
+    )
+    for path in (model_provider_json, model_provider_md):
+        if path.exists():
+            produced.append(path)
 
     inspect_handoff_report = work_root / "handoff_inspection.md"
     inspect_handoff_result = _run_command(

@@ -516,6 +516,104 @@ def _run_mineru_env_check(
     return manifest_path if manifest_path.exists() else None
 
 
+def _run_model_provider_probe_check(
+    *,
+    build_script: Path,
+    workspace: Path,
+    artifacts_dir: Path,
+    checks: list[dict[str, Any]],
+    env: dict[str, str],
+) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path == "/api/v1/llm/factories":
+                body = json.dumps(
+                    {
+                        "data": {
+                            "factories": [
+                                {
+                                    "id": "builtin",
+                                    "display_name": "Built In",
+                                    "models": [
+                                        {"name": "bge-m3", "type": "embedding"},
+                                        {"name": "bge-reranker", "type": "rerank"},
+                                    ],
+                                }
+                            ]
+                        }
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_response(404)
+            self.end_headers()
+
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            if self.path == "/embeddings":
+                body = json.dumps({"error": {"message": "empty input rejected"}}).encode("utf-8")
+                self.send_response(422)
+            elif self.path == "/rerank":
+                body = json.dumps({"results": []}).encode("utf-8")
+                self.send_response(200)
+            else:
+                body = b"{}"
+                self.send_response(404)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = _run_command(
+            [
+                sys.executable,
+                str(build_script),
+                "model-providers",
+                "probe",
+                "--base-url",
+                f"http://127.0.0.1:{server.server_port}",
+                "--api-key",
+                "smoke-key",
+                "--embedding-model",
+                "bge-m3",
+                "--rerank-model",
+                "bge-reranker",
+                "--embedding-adapter-url",
+                f"http://127.0.0.1:{server.server_port}/embeddings",
+                "--rerank-adapter-url",
+                f"http://127.0.0.1:{server.server_port}/rerank",
+                "--report-json",
+                str(artifacts_dir / "model_provider_probe.json"),
+                "--report-md",
+                str(artifacts_dir / "model_provider_probe.md"),
+                "--json",
+            ],
+            cwd=workspace,
+            env=env,
+        )
+        _record_command_check(
+            checks,
+            "kb model-providers probe",
+            result,
+            required_stdout='"schema": "ragflow_model_provider_probe_report_v1"',
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def _write_fake_kb_manifest(workspace: Path, artifacts_dir: Path) -> Path:
     manifest_path = artifacts_dir / "kb_manifest.json"
     payload = {
@@ -1596,6 +1694,13 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         env=env,
     )
     _record_command_check(checks, "kb-build dry-run", build_result, required_stdout='"dry_run": true')
+    _run_model_provider_probe_check(
+        build_script=build_script,
+        workspace=workspace,
+        artifacts_dir=artifacts_dir,
+        checks=checks,
+        env=env,
+    )
     inspect_handoff_result = _run_command(
         [
             sys.executable,
@@ -2500,6 +2605,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "profile_lint.md",
         artifacts_dir / "candidate_profile_set.json",
         artifacts_dir / "profile_experiment_matrix.md",
+        artifacts_dir / "model_provider_probe.json",
+        artifacts_dir / "model_provider_probe.md",
         artifacts_dir / "metadata.template.json",
         artifacts_dir / "tagset.template.json",
         artifacts_dir / "benchmark" / "manifest.json",
