@@ -40,7 +40,8 @@ Notes:
 - CLI mode is the v1 interface for Hermes, OpenClaw, Claude Code, opencode, and similar programming-agent tools.
 - `--mode auto` uses `--routing-config` or `RAGFLOW_ROUTING_CONFIG` when no explicit `--dataset-id`, `--kb`, or `--kb-manifest` is provided; otherwise it falls back to direct retrieval.
 - Routing config is user-owned and deterministic. Use `list-kbs`, `route`, `route-test`, `route-report`, and `route-diagnose` to inspect it before live retrieval.
-- Use `route-report` offline to review hint coverage, required route-test category gaps, ambiguous/low-confidence routes, short-hint word-boundary risks, substring conflicts, and per-KB `top_k` / `similarity_threshold` default coverage.
+- Use `route-report` offline to review hint coverage, English hint coverage by KB/category, required route-test category gaps, ambiguous/low-confidence routes, short-hint word-boundary conflicts, substring conflicts, and per-KB `top_k` / `similarity_threshold` default coverage.
+- `route-report` and `route-diagnose` warn when legacy/descriptive `kb_routing_hints` fields are present but ignored by the public routing schema; put active route hints in per-KB `hints`.
 - Route-test queries may set `expected_no_route: true` for negative/out-of-scope cases; this passes when no positive hint route is selected, even if a default KB fallback is present.
 - Use `route-diagnose` offline to classify route-test failures as missing hints, missing KB config, priority conflicts, regex-order issues, acceptable ambiguity, or low-confidence fallback.
 - `ask --fusion rrf` retrieves each selected dataset separately when multiple dataset IDs are present, then returns an offline fusion report and fused evidence order.

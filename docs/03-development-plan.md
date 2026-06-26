@@ -931,9 +931,9 @@ Tasks:
 - [x] Report hint coverage, missing route tests, ambiguous patterns, and low-confidence routes.
 - [x] Add `ragflow-query route-diagnose`.
 - [x] Classify route failures as missing hint, regex-order issue, priority conflict, acceptable ambiguity, missing KB config, or low-confidence semantic fallback.
-- [ ] Add regex ordering and substring-conflict checks.
-- [ ] Add word-boundary checks for short English names, acronyms, and product terms.
-- [ ] Add English hint coverage reporting by category and KB.
+- [x] Add regex ordering and substring-conflict checks.
+- [x] Add word-boundary checks for short English names, acronyms, and product terms.
+- [x] Add English hint coverage reporting by category and KB.
 - [x] Add comprehensive route-test categories: exact, fuzzy, short query, long query, mixed-language, negative, substring conflict, wildcard shadowing.
 - [x] Report per-KB retrieval parameter coverage and missing defaults.
 - [ ] Add optional centroid index schema generated from user-owned KB snapshots or manifests.
@@ -943,8 +943,8 @@ Tasks:
 - [x] Add route regression summaries by category, locale, and negative-query class.
 - [ ] Add cross-language A/B reports for retrieval setting changes, including zero-result rate, chunk count delta, top-1 stability, similarity delta, and latency.
 - [ ] Add benchmark-derived retrieval parameter suggestions.
-- [ ] Add config linting for `kb_routing_hints` versus per-KB descriptive `hints` confusion.
-- [ ] Add tests proving no private routing examples are embedded in public fixtures.
+- [x] Add config linting for `kb_routing_hints` versus per-KB descriptive `hints` confusion.
+- [x] Add tests proving no private routing examples are embedded in public fixtures.
 
 Exit criteria:
 

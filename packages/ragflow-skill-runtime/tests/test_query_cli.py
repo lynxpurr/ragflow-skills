@@ -790,6 +790,7 @@ class QueryCliTests(unittest.TestCase):
                                 "name": "kb:technical",
                                 "dataset_id": "ds-technical",
                                 "hints": ["api", "runtime"],
+                                "kb_routing_hints": ["ignored legacy hint"],
                                 "params": {"top_k": 5, "similarity_threshold": 0.1},
                             },
                             {
@@ -909,11 +910,16 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(route_report_code, 0)
         self.assertEqual(route_report_payload["schema"], "ragflow_route_report_v1")
         self.assertEqual(route_report_payload["summary"]["missing_route_test_count"], 2)
+        self.assertEqual(route_report_payload["summary"]["config_lint_count"], 1)
+        self.assertEqual(route_report_payload["config_lints"][0]["category"], "kb_routing_hints_confusion")
+        self.assertIn("english_hint_coverage", route_report_payload)
         self.assertGreater(route_report_payload["summary"]["route_test_category_gap_count"], 0)
         self.assertIn("required_route_test_categories", route_report_payload)
         self.assertEqual(route_report_file_payload["schema"], "ragflow_route_report_v1")
         self.assertIn("RAGFlow Route Report", route_report_markdown)
         self.assertIn("Missing Route Tests", route_report_markdown)
+        self.assertIn("Config Lints", route_report_markdown)
+        self.assertIn("English Hint Coverage", route_report_markdown)
         self.assertIn("Required Route-Test Categories", route_report_markdown)
         self.assertEqual(route_diagnose_code, 1)
         self.assertEqual(route_diagnose_payload["schema"], "ragflow_route_diagnose_report_v1")

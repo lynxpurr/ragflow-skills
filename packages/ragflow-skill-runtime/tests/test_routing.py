@@ -37,7 +37,7 @@ class RoutingTests(unittest.TestCase):
                         "name": "kb:technical",
                         "dataset_id": "ds-technical",
                         "description": "API configuration and runtime integration",
-                        "hints": ["api", "configuration", "runtime"],
+                        "hints": ["api", "configuration", "runtime", "ux"],
                         "params": {"top_k": 6, "similarity_threshold": 0.1},
                     },
                     {
@@ -104,9 +104,16 @@ class RoutingTests(unittest.TestCase):
             },
             {
                 "id": "fallback",
-                "question": "Unmatched onboarding question",
+                "question": "Unmatched topic question",
                 "expected": "kb:general",
                 "category": "fuzzy",
+                "locale": "en",
+            },
+            {
+                "id": "boundary",
+                "question": "luxury onboarding topic",
+                "expected": "kb:general",
+                "category": "substring_conflict",
                 "locale": "en",
             },
         ]
@@ -117,19 +124,29 @@ class RoutingTests(unittest.TestCase):
         self.assertTrue(report["ok"])
         self.assertEqual(report["schema"], "ragflow_route_report_v1")
         self.assertEqual(report["summary"]["kb_count"], 3)
-        self.assertEqual(report["summary"]["route_test_total"], 2)
+        self.assertEqual(report["summary"]["route_test_total"], 3)
         self.assertEqual(report["summary"]["missing_route_test_count"], 1)
         self.assertEqual(report["summary"]["missing_params_count"], 2)
         self.assertEqual(report["summary"]["params_coverage_count"], 1)
-        self.assertEqual(report["summary"]["route_test_category_gap_count"], len(REQUIRED_ROUTE_TEST_CATEGORIES) - 2)
+        self.assertEqual(report["summary"]["route_test_category_gap_count"], len(REQUIRED_ROUTE_TEST_CATEGORIES) - 3)
         self.assertEqual(report["hint_coverage"][1]["param_coverage"]["missing"], [])
         self.assertEqual(report["coverage_by_category"]["exact"]["total"], 1)
-        self.assertEqual(report["coverage_by_locale"]["en"]["total"], 2)
+        self.assertEqual(report["coverage_by_locale"]["en"]["total"], 3)
         self.assertTrue(report["word_boundary_hints"])
         self.assertTrue(report["substring_conflicts"])
+        self.assertEqual(report["summary"]["english_hint_count"], 8)
+        self.assertGreater(report["summary"]["english_hint_coverage_rate"], 0.0)
+        self.assertIn("english_hint_coverage", report)
+        self.assertEqual(report["english_hint_coverage"][1]["categories"]["exact"]["matched_english_hints"], ["api", "configuration"])
+        self.assertIn("fuzzy", report["english_hint_coverage"][0]["categories"])
+        self.assertTrue(report["english_hint_category_gaps"])
+        self.assertEqual(report["word_boundary_conflicts"][0]["hint"], "ux")
+        self.assertEqual(report["word_boundary_conflicts"][0]["risk_kind"], "acronym")
         self.assertIn("RAGFlow Route Report", markdown)
         self.assertIn("Missing Route Tests", markdown)
         self.assertIn("Category Coverage", markdown)
+        self.assertIn("English Hint Coverage", markdown)
+        self.assertIn("Word Boundary Conflicts", markdown)
         self.assertIn("Required Route-Test Categories", markdown)
 
     def test_route_test_category_coverage_and_expected_no_route(self) -> None:
@@ -227,6 +244,58 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("Category Summary", route_test_markdown)
         self.assertIn("Locale Summary", route_test_markdown)
         self.assertIn("Negative Query Summary", route_test_markdown)
+
+    def test_route_report_lints_kb_routing_hints_confusion(self) -> None:
+        config = RoutingConfig.from_dict(
+            {
+                "version": "0.1",
+                "kb_routing_hints": {"technical": ["api"]},
+                "knowledge_bases": [
+                    {
+                        "name": "kb:technical",
+                        "dataset_id": "ds-technical",
+                        "hints": ["api"],
+                        "kb_routing_hints": ["ignored"],
+                        "metadata": {"kb_routing_hints": ["descriptive-only"]},
+                    }
+                ],
+            }
+        )
+
+        report = run_route_report(config, [])
+        diagnose = run_route_diagnose(config, [])
+        markdown = render_route_report_markdown(report)
+
+        self.assertEqual(report["summary"]["config_lint_count"], 3)
+        self.assertEqual({item["category"] for item in report["config_lints"]}, {"kb_routing_hints_confusion"})
+        self.assertIn("knowledge_bases[0].kb_routing_hints", {item["path"] for item in report["config_lints"]})
+        self.assertIn("kb_routing_hints_confusion", {issue["category"] for issue in diagnose["issues"]})
+        self.assertIn("Config Lints", markdown)
+
+    def test_public_route_templates_use_neutral_fixtures(self) -> None:
+        root = Path(__file__).resolve().parents[3]
+        template_dir = root / "skills" / "ragflow-query" / "templates"
+        payloads = [
+            json.loads((template_dir / "routing-config.example.json").read_text(encoding="utf-8")),
+            json.loads((template_dir / "route-test-queries.example.json").read_text(encoding="utf-8")),
+        ]
+        text = json.dumps(payloads, ensure_ascii=False).lower()
+
+        forbidden_terms = {
+            "dedao",
+            "得到",
+            "薛兆丰",
+            "/home/",
+            "/users/",
+            "localhost:9380",
+            "127.0.0.1:9380",
+            "private",
+        }
+        self.assertFalse([term for term in sorted(forbidden_terms) if term in text])
+        self.assertIn("kb:general-sample", text)
+        self.assertIn("kb:technical-sample", text)
+        self.assertIn("dataset-general-sample", text)
+        self.assertIn("dataset-technical-sample", text)
 
     def test_route_diagnose_classifies_failures_and_risks(self) -> None:
         config = RoutingConfig.from_dict(

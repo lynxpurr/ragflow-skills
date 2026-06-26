@@ -28,6 +28,8 @@ REQUIRED_ROUTE_TEST_CATEGORIES = (
     "substring_conflict",
     "wildcard_shadowing",
 )
+_ENGLISH_ALPHA_RE = re.compile(r"[A-Za-z]")
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
 def _string_list(value: Any, *, field_name: str) -> list[str]:
@@ -84,6 +86,34 @@ def _normalize_route_test_category(value: str) -> str:
     return re.sub(r"[^0-9a-zA-Z]+", "_", value.strip().lower()).strip("_") or "uncategorized"
 
 
+def _is_english_hint(hint: str) -> bool:
+    return bool(_ENGLISH_ALPHA_RE.search(hint)) and not _CJK_RE.search(hint)
+
+
+def _english_hints(hints: list[str]) -> list[str]:
+    return [hint for hint in hints if _is_english_hint(hint)]
+
+
+def _word_boundary_risk_kind(hint: str) -> str | None:
+    compact = hint.strip()
+    if not compact or not _is_english_hint(compact):
+        return None
+    letters = re.sub(r"[^A-Za-z]+", "", compact)
+    tokens = _tokenize(compact)
+    if re.search(r"[A-Za-z]\d|\d[A-Za-z]|[+.#/:_-]", compact) or re.search(r"[a-z][A-Z]", compact):
+        return "product_term"
+    if letters and len(tokens) == 1 and len(letters) <= 5:
+        return "acronym"
+    if len(compact) <= 8 and len(tokens) <= 2:
+        return "short_english_name"
+    return None
+
+
+def _hint_has_word_boundary_match(hint: str, question: str) -> bool:
+    hint_tokens = _tokenize(hint)
+    return bool(hint_tokens) and hint_tokens.issubset(_tokenize(question))
+
+
 def _route_param_coverage(params: Mapping[str, Any]) -> dict[str, Any]:
     present = sorted(key for key in REQUIRED_ROUTE_PARAMS if key in params and params.get(key) is not None)
     missing = sorted(key for key in REQUIRED_ROUTE_PARAMS if key not in present)
@@ -94,6 +124,48 @@ def _route_param_coverage(params: Mapping[str, Any]) -> dict[str, Any]:
         "complete": not missing,
         "coverage": _rate(len(present), len(REQUIRED_ROUTE_PARAMS)),
     }
+
+
+def _lint_routing_config(data: Mapping[str, Any]) -> list[dict[str, Any]]:
+    lints: list[dict[str, Any]] = []
+    if "kb_routing_hints" in data:
+        lints.append(
+            {
+                "category": "kb_routing_hints_confusion",
+                "severity": "warning",
+                "path": "kb_routing_hints",
+                "reason": "top-level kb_routing_hints is ignored by the public routing schema",
+                "recommendation": "Move user-owned routing hints into knowledge_bases[].hints.",
+            }
+        )
+    raw_items = data.get("knowledge_bases") or data.get("kbs")
+    if isinstance(raw_items, list):
+        for index, item in enumerate(raw_items):
+            if not isinstance(item, Mapping):
+                continue
+            for key in ("kb_routing_hints", "routing_hints"):
+                if key in item:
+                    lints.append(
+                        {
+                            "category": "kb_routing_hints_confusion",
+                            "severity": "warning",
+                            "path": f"knowledge_bases[{index}].{key}",
+                            "reason": f"{key} is ignored; per-KB route hints must use the hints field",
+                            "recommendation": "Rename this field to hints after reviewing that the values are public and user-owned.",
+                        }
+                    )
+            metadata = item.get("metadata")
+            if isinstance(metadata, Mapping) and "kb_routing_hints" in metadata:
+                lints.append(
+                    {
+                        "category": "kb_routing_hints_confusion",
+                        "severity": "warning",
+                        "path": f"knowledge_bases[{index}].metadata.kb_routing_hints",
+                        "reason": "metadata.kb_routing_hints is descriptive metadata and is not used for route scoring",
+                        "recommendation": "Keep descriptive metadata separate from knowledge_bases[].hints.",
+                    }
+                )
+    return lints
 
 
 @dataclass(frozen=True)
@@ -137,6 +209,7 @@ class RoutingConfig:
     version: str
     knowledge_bases: list[RoutingKnowledgeBase]
     default_kb: str | None = None
+    lints: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "RoutingConfig":
@@ -166,6 +239,7 @@ class RoutingConfig:
             version=str(data.get("version") or "0.1"),
             knowledge_bases=items,
             default_kb=default_kb,
+            lints=_lint_routing_config(data),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -413,6 +487,7 @@ def _route_report_empty_route_test() -> dict[str, Any]:
         "coverage_by_category": {},
         "coverage_by_locale": {},
         "coverage_by_negative_class": {},
+        "required_route_test_categories": _route_test_category_coverage({}),
     }
 
 
@@ -433,8 +508,12 @@ def run_route_report(
     hint_coverage: dict[str, dict[str, Any]] = {}
     hint_tokens_by_kb: dict[str, set[str]] = {}
     matched_hints_by_kb: dict[str, set[str]] = {}
+    english_hints_by_kb: dict[str, list[str]] = {}
+    matched_english_hints_by_kb: dict[str, set[str]] = {}
+    english_hint_categories_by_kb: dict[str, dict[str, dict[str, Any]]] = {}
     params_coverage: dict[str, dict[str, Any]] = {}
     word_boundary_hints: list[dict[str, Any]] = []
+    word_boundary_conflicts: list[dict[str, Any]] = []
     substring_conflicts: list[dict[str, Any]] = []
     total_hints = 0
     total_hint_matches = 0
@@ -443,15 +522,27 @@ def run_route_report(
         hint_tokens = _hint_tokens(kb.hints)
         hint_tokens_by_kb[kb.name] = hint_tokens
         matched_hints_by_kb[kb.name] = set()
+        english_hints_by_kb[kb.name] = _english_hints(kb.hints)
+        matched_english_hints_by_kb[kb.name] = set()
+        english_hint_categories_by_kb[kb.name] = {}
         params_coverage[kb.name] = _route_param_coverage(kb.params)
-        short_hints = [hint for hint in kb.hints if _short_hint(hint)]
-        if short_hints:
+        short_hint_risks = [
+            {
+                "hint": hint,
+                "risk_kind": risk_kind,
+            }
+            for hint in kb.hints
+            for risk_kind in [_word_boundary_risk_kind(hint)]
+            if risk_kind
+        ]
+        if short_hint_risks:
             word_boundary_hints.append(
                 {
                     "kb": kb.name,
                     "dataset_id": kb.dataset_id,
-                    "hints": short_hints,
-                    "reason": "short hints need route-test coverage for word-boundary conflicts",
+                    "hints": [item["hint"] for item in short_hint_risks],
+                    "risks": short_hint_risks,
+                    "reason": "short English hints need route-test coverage for word-boundary conflicts",
                 }
             )
         total_hints += len(kb.hints)
@@ -491,6 +582,9 @@ def run_route_report(
             matched_hints = list(selected.matched_hints)
             total_hint_matches += len(matched_hints)
             matched_hints_by_kb[selected.kb.name].update(matched_hints)
+            matched_english_hints_by_kb[selected.kb.name].update(
+                hint for hint in matched_hints if _is_english_hint(hint)
+            )
         expected_no_route = _expects_no_route(query)
         expected = str(query.get("expected") or ("__no_route__" if expected_no_route else ""))
         selected_refs = {
@@ -502,6 +596,46 @@ def run_route_report(
             if expected_no_route
             else bool(_expected_refs({"expected": expected}) & selected_refs)
         )
+        category = _query_category(query)
+        locale = _query_locale(query)
+        expected_kb = _kb_ref(config, expected)
+        if expected_kb is not None:
+            category_bucket = english_hint_categories_by_kb[expected_kb.name].setdefault(
+                category,
+                {"query_count": 0, "passing_query_count": 0, "matched_hints": set()},
+            )
+            category_bucket["query_count"] += 1
+            if passed_case:
+                category_bucket["passing_query_count"] += 1
+            if selected and selected.kb == expected_kb:
+                category_bucket["matched_hints"].update(
+                    hint for hint in matched_hints if _is_english_hint(hint)
+                )
+        question_lower = query["question"].lower()
+        for kb in config.knowledge_bases:
+            for hint in kb.hints:
+                risk_kind = _word_boundary_risk_kind(hint)
+                hint_lower = hint.lower().strip()
+                if (
+                    not risk_kind
+                    or not hint_lower
+                    or hint_lower not in question_lower
+                    or _hint_has_word_boundary_match(hint, query["question"])
+                ):
+                    continue
+                word_boundary_conflicts.append(
+                    {
+                        "id": query["id"],
+                        "question": query["question"],
+                        "kb": kb.name,
+                        "dataset_id": kb.dataset_id,
+                        "hint": hint,
+                        "risk_kind": risk_kind,
+                        "category": category,
+                        "locale": locale,
+                        "reason": "short English hint matched as a substring rather than a word-boundary token",
+                    }
+                )
         case.update(
             {
                 "id": query["id"],
@@ -578,6 +712,52 @@ def run_route_report(
             "hint_tokens": sorted(hint_tokens_by_kb[kb.name]),
         }
 
+    english_hint_coverage: list[dict[str, Any]] = []
+    english_hint_category_gaps: list[dict[str, Any]] = []
+    for kb in config.knowledge_bases:
+        english_hints = english_hints_by_kb[kb.name]
+        matched_english_hints = matched_english_hints_by_kb[kb.name]
+        raw_categories = english_hint_categories_by_kb[kb.name]
+        category_coverage: dict[str, dict[str, Any]] = {}
+        for category in sorted(raw_categories):
+            item = raw_categories[category]
+            matched_category_hints = item.get("matched_hints", set())
+            if not isinstance(matched_category_hints, set):
+                matched_category_hints = set()
+            query_count = int(item.get("query_count", 0))
+            passing_query_count = int(item.get("passing_query_count", 0))
+            category_coverage[category] = {
+                "query_count": query_count,
+                "passing_query_count": passing_query_count,
+                "matched_english_hint_count": len(matched_category_hints),
+                "matched_english_hints": sorted(matched_category_hints),
+                "coverage": _rate(len(matched_category_hints), len(english_hints)),
+            }
+            if english_hints and query_count and not matched_category_hints:
+                english_hint_category_gaps.append(
+                    {
+                        "kb": kb.name,
+                        "dataset_id": kb.dataset_id,
+                        "category": category,
+                        "reason": "route-test category did not match any English hints for this KB",
+                    }
+                )
+        english_hint_coverage.append(
+            {
+                "name": kb.name,
+                "dataset_id": kb.dataset_id,
+                "english_hint_count": len(english_hints),
+                "matched_english_hint_count": len(matched_english_hints),
+                "coverage": _rate(len(matched_english_hints), len(english_hints)),
+                "english_hints": sorted(english_hints),
+                "matched_english_hints": sorted(matched_english_hints),
+                "unmatched_english_hints": sorted(set(english_hints) - matched_english_hints),
+                "categories": category_coverage,
+            }
+        )
+    total_english_hints = sum(len(hints) for hints in english_hints_by_kb.values())
+    total_matched_english_hints = sum(len(hints) for hints in matched_english_hints_by_kb.values())
+
     category_totals, locale_totals, negative_class_totals = _case_bucket_totals(cases)
     route_test_category_coverage = _route_test_category_coverage(category_totals)
     route_test_category_gaps = [
@@ -629,11 +809,17 @@ def run_route_report(
             "hint_count": total_hints,
             "hint_match_count": total_hint_matches,
             "hint_match_rate": _rate(total_hint_matches, total_hints),
+            "english_hint_count": total_english_hints,
+            "matched_english_hint_count": total_matched_english_hints,
+            "english_hint_coverage_rate": _rate(total_matched_english_hints, total_english_hints),
+            "english_hint_category_gap_count": len(english_hint_category_gaps),
             "params_coverage_count": complete_param_count,
             "params_coverage_rate": _rate(complete_param_count, len(params_coverage)),
             "missing_route_test_count": len(missing_route_tests),
             "missing_params_count": len(missing_params),
+            "config_lint_count": len(config.lints),
             "short_hint_kb_count": len(word_boundary_hints),
+            "word_boundary_conflict_count": len(word_boundary_conflicts),
             "substring_conflict_count": len(substring_conflicts),
             "category_count": len(category_totals),
             "locale_count": len(locale_totals),
@@ -647,10 +833,14 @@ def run_route_report(
             "route_test_total": route_test_metrics.get("total", 0) if isinstance(route_test_metrics, Mapping) else 0,
         },
         "route_test": route_test_report,
+        "config_lints": list(config.lints),
         "hint_coverage": list(hint_coverage.values()),
+        "english_hint_coverage": english_hint_coverage,
+        "english_hint_category_gaps": english_hint_category_gaps,
         "missing_route_tests": missing_route_tests,
         "missing_params": missing_params,
         "word_boundary_hints": word_boundary_hints,
+        "word_boundary_conflicts": word_boundary_conflicts,
         "substring_conflicts": substring_conflicts,
         "coverage_by_category": category_totals,
         "coverage_by_locale": locale_totals,
@@ -913,6 +1103,39 @@ def run_route_diagnose(config: RoutingConfig, queries: list[dict[str, Any]]) -> 
                 }
             )
 
+    for item in route_report.get("word_boundary_conflicts", []):
+        if isinstance(item, Mapping):
+            issues.append(
+                {
+                    "severity": "warning",
+                    "category": "word_boundary_conflict",
+                    "id": item.get("id"),
+                    "question": item.get("question"),
+                    "kb": item.get("kb"),
+                    "dataset_id": item.get("dataset_id"),
+                    "hint": item.get("hint"),
+                    "risk_kind": item.get("risk_kind"),
+                    "reason": item.get("reason"),
+                    "recommendations": [
+                        "Add a word-boundary route test or replace the short hint with a more specific phrase."
+                    ],
+                }
+            )
+
+    for item in route_report.get("config_lints", []):
+        if isinstance(item, Mapping):
+            recommendation = item.get("recommendation")
+            issues.append(
+                {
+                    "severity": item.get("severity", "warning"),
+                    "category": item.get("category", "config_lint"),
+                    "id": item.get("path"),
+                    "reason": item.get("reason"),
+                    "path": item.get("path"),
+                    "recommendations": [recommendation] if isinstance(recommendation, str) else [],
+                }
+            )
+
     by_category: dict[str, int] = {}
     by_severity: dict[str, int] = {}
     for issue in issues:
@@ -985,6 +1208,9 @@ def render_route_report_markdown(report: Mapping[str, Any]) -> str:
         f"- empty_route_rate: `{summary.get('empty_route_rate', 0)}`",
         f"- missing_route_tests: `{summary.get('missing_route_test_count', 0)}`",
         f"- missing_params: `{summary.get('missing_params_count', 0)}`",
+        f"- config_lints: `{summary.get('config_lint_count', 0)}`",
+        f"- english_hint_coverage_rate: `{summary.get('english_hint_coverage_rate', 0)}`",
+        f"- word_boundary_conflicts: `{summary.get('word_boundary_conflict_count', 0)}`",
         f"- substring_conflicts: `{summary.get('substring_conflict_count', 0)}`",
         "",
         "## KB Coverage",
@@ -1038,6 +1264,14 @@ def render_route_report_markdown(report: Mapping[str, Any]) -> str:
                     f"- `{item.get('name', '')}` `{item.get('dataset_id', '')}` missing: "
                     f"`{', '.join(str(value) for value in missing)}`"
                 )
+    lines.extend(["", "## Config Lints", ""])
+    config_lints = report.get("config_lints", []) if isinstance(report.get("config_lints"), list) else []
+    if not config_lints:
+        lines.append("- None")
+    else:
+        for item in config_lints[:10]:
+            if isinstance(item, Mapping):
+                lines.append(f"- `{item.get('path', '')}` `{item.get('category', '')}`: {item.get('reason', '')}")
     lines.extend(["", "## Category Coverage", ""])
     coverage_by_category = (
         report.get("coverage_by_category", {}) if isinstance(report.get("coverage_by_category"), Mapping) else {}
@@ -1055,6 +1289,48 @@ def render_route_report_markdown(report: Mapping[str, Any]) -> str:
                         passed=int(item.get("passed", 0)),
                         pass_rate=float(item.get("pass_rate", 0.0)),
                     )
+                )
+    lines.extend(["", "## English Hint Coverage", ""])
+    english_hint_coverage = (
+        report.get("english_hint_coverage", []) if isinstance(report.get("english_hint_coverage"), list) else []
+    )
+    if not english_hint_coverage:
+        lines.append("- None")
+    else:
+        lines.extend(
+            [
+                "| KB | english hints | matched | coverage | categories |",
+                "| --- | ---: | ---: | ---: | --- |",
+            ]
+        )
+        for item in english_hint_coverage:
+            if not isinstance(item, Mapping):
+                continue
+            categories = item.get("categories") if isinstance(item.get("categories"), Mapping) else {}
+            category_names = ", ".join(f"`{category}`" for category in sorted(categories)) or "-"
+            lines.append(
+                "| `{name}` | {english_hint_count} | {matched_english_hint_count} | "
+                "{coverage:.2f} | {categories} |".format(
+                    name=item.get("name", ""),
+                    english_hint_count=int(item.get("english_hint_count", 0)),
+                    matched_english_hint_count=int(item.get("matched_english_hint_count", 0)),
+                    coverage=float(item.get("coverage", 0.0)),
+                    categories=category_names,
+                )
+            )
+    lines.extend(["", "## English Hint Category Gaps", ""])
+    english_hint_category_gaps = (
+        report.get("english_hint_category_gaps", [])
+        if isinstance(report.get("english_hint_category_gaps"), list)
+        else []
+    )
+    if not english_hint_category_gaps:
+        lines.append("- None")
+    else:
+        for item in english_hint_category_gaps[:10]:
+            if isinstance(item, Mapping):
+                lines.append(
+                    f"- `{item.get('kb', '')}` `{item.get('category', '')}`: {item.get('reason', '')}"
                 )
     lines.extend(["", "## Required Route-Test Categories", ""])
     required_categories = (
@@ -1112,6 +1388,25 @@ def render_route_report_markdown(report: Mapping[str, Any]) -> str:
         for item in word_boundary_hints[:10]:
             if isinstance(item, Mapping):
                 lines.append(f"- `{item.get('kb', '')}`: {', '.join(str(hint) for hint in item.get('hints', []))}")
+    lines.extend(["", "## Word Boundary Conflicts", ""])
+    word_boundary_conflicts = (
+        report.get("word_boundary_conflicts", [])
+        if isinstance(report.get("word_boundary_conflicts"), list)
+        else []
+    )
+    if not word_boundary_conflicts:
+        lines.append("- None")
+    else:
+        for item in word_boundary_conflicts[:10]:
+            if isinstance(item, Mapping):
+                lines.append(
+                    "- `{id}` `{kb}` `{hint}`: {reason}".format(
+                        id=item.get("id", ""),
+                        kb=item.get("kb", ""),
+                        hint=item.get("hint", ""),
+                        reason=item.get("reason", ""),
+                    )
+                )
     lines.extend(["", "## Substring Conflicts", ""])
     substring_conflicts = report.get("substring_conflicts", []) if isinstance(report.get("substring_conflicts"), list) else []
     if not substring_conflicts:
