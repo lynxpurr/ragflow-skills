@@ -1568,6 +1568,13 @@ raise SystemExit(code)
         intent_help,
         required_output="Classify query intent offline",
     )
+    session_help = _run_command([python_executable, str(query_script), "session", "--help"], cwd=work_root, env=env)
+    _record_command_check(
+        checks,
+        "query session help",
+        session_help,
+        required_output="Inspect bounded session context offline",
+    )
     agentic_plan_help = _run_command(
         [python_executable, str(query_script), "agentic-plan", "--help"],
         cwd=work_root,
@@ -1936,6 +1943,11 @@ raise SystemExit(code)
     query_intent_md = work_root / "query_intent.md"
     query_intent_route_json = work_root / "query_intent_route.json"
     query_intent_route_md = work_root / "query_intent_route.md"
+    query_session_input = work_root / "query_session.json"
+    query_session_inspect_json = work_root / "query_session_inspect.json"
+    query_session_inspect_md = work_root / "query_session_inspect.md"
+    query_session_enrich_json = work_root / "query_session_enrich.json"
+    query_session_enrich_md = work_root / "query_session_enrich.md"
     query_agentic_plan_json = work_root / "query_agentic_plan.json"
     query_agentic_plan_md = work_root / "query_agentic_plan.md"
     query_output.write_text(
@@ -1994,6 +2006,21 @@ raise SystemExit(code)
                         "document_name": "sample.md",
                         "dataset_id": "ds-consumer-secondary",
                     },
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    query_session_input.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_query_session_v1",
+                "session_id": "consumer-session",
+                "turns": [
+                    {"role": "user", "content": "How do release artifacts run without repository source context?"},
+                    {"role": "assistant", "content": "They use vendored runtime files."},
                 ],
             },
             ensure_ascii=False,
@@ -2350,6 +2377,62 @@ raise SystemExit(code)
         produced.append(query_intent_route_json)
     if query_intent_route_md.exists():
         produced.append(query_intent_route_md)
+
+    query_session_inspect = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "session",
+            "inspect",
+            "--session",
+            str(query_session_input),
+            "--report-json",
+            str(query_session_inspect_json),
+            "--report-md",
+            str(query_session_inspect_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query session inspect",
+        query_session_inspect,
+        required_output='"schema": "ragflow_query_session_inspection_v1"',
+    )
+    for path in (query_session_input, query_session_inspect_json, query_session_inspect_md):
+        if path.exists():
+            produced.append(path)
+
+    query_session_enrich = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "session",
+            "enrich",
+            "What about it?",
+            "--session",
+            str(query_session_input),
+            "--report-json",
+            str(query_session_enrich_json),
+            "--report-md",
+            str(query_session_enrich_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query session enrich",
+        query_session_enrich,
+        required_output='"schema": "ragflow_query_session_enrichment_v1"',
+    )
+    if query_session_enrich_json.exists():
+        produced.append(query_session_enrich_json)
+    if query_session_enrich_md.exists():
+        produced.append(query_session_enrich_md)
 
     query_agentic_plan = _run_command(
         [

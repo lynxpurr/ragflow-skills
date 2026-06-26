@@ -343,6 +343,79 @@ class QueryCliTests(unittest.TestCase):
         self.assertTrue(route_json_exists)
         self.assertIn("RAGFlow Query Route Decision", route_markdown)
 
+    def test_session_commands_write_reports(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = root / "session.json"
+            inspect_json = root / "session_inspect.json"
+            inspect_md = root / "session_inspect.md"
+            enrich_json = root / "session_enrich.json"
+            enrich_md = root / "session_enrich.md"
+            session.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_query_session_v1",
+                        "session_id": "cli-session",
+                        "turns": [
+                            {"role": "user", "content": "How do I configure runtime settings?"},
+                            {"role": "assistant", "content": "Use a runtime config file."},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                inspect_code = module.main(
+                    [
+                        "session",
+                        "inspect",
+                        "--session",
+                        str(session),
+                        "--report-json",
+                        str(inspect_json),
+                        "--report-md",
+                        str(inspect_md),
+                        "--json",
+                    ]
+                )
+            inspect_payload = json.loads(stdout.getvalue())
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                enrich_code = module.main(
+                    [
+                        "session",
+                        "enrich",
+                        "What about it?",
+                        "--session",
+                        str(session),
+                        "--report-json",
+                        str(enrich_json),
+                        "--report-md",
+                        str(enrich_md),
+                        "--json",
+                    ]
+                )
+            enrich_payload = json.loads(stdout.getvalue())
+            inspect_json_exists = inspect_json.exists()
+            enrich_json_exists = enrich_json.exists()
+            inspect_markdown = inspect_md.read_text(encoding="utf-8")
+            enrich_markdown = enrich_md.read_text(encoding="utf-8")
+
+        self.assertEqual(inspect_code, 0)
+        self.assertEqual(inspect_payload["schema"], "ragflow_query_session_inspection_v1")
+        self.assertTrue(inspect_json_exists)
+        self.assertIn("RAGFlow Query Session Inspection", inspect_markdown)
+        self.assertEqual(enrich_code, 0)
+        self.assertEqual(enrich_payload["schema"], "ragflow_query_session_enrichment_v1")
+        self.assertTrue(enrich_payload["context_applied"])
+        self.assertIn("How do I configure runtime settings?", enrich_payload["enriched_question"])
+        self.assertTrue(enrich_json_exists)
+        self.assertIn("RAGFlow Query Session Enrichment", enrich_markdown)
+
     def test_agentic_plan_command_writes_plan_outputs(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:

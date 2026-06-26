@@ -755,6 +755,64 @@ intent_route_payload = json.loads(stdout.getvalue())
 if intent_route_payload.get("schema") != "ragflow_query_route_decision_v1":
     raise SystemExit(19)
 
+session_path = artifacts_dir / "query_session.json"
+session_path.write_text(
+    json.dumps(
+        {{
+            "schema": "ragflow_query_session_v1",
+            "session_id": "platform-session",
+            "turns": [
+                {{"role": "user", "content": "How do I configure runtime settings?"}},
+                {{"role": "assistant", "content": "Use a runtime config file."}},
+            ],
+        }},
+        ensure_ascii=False,
+        indent=2,
+    )
+    + "\\n",
+    encoding="utf-8",
+)
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    session_inspect_code = module.main([
+        "session",
+        "inspect",
+        "--session",
+        str(session_path),
+        "--report-json",
+        str(artifacts_dir / "query_session_inspect.json"),
+        "--report-md",
+        str(artifacts_dir / "query_session_inspect.md"),
+        "--json",
+    ])
+if session_inspect_code != 0:
+    raise SystemExit(session_inspect_code)
+session_inspect_payload = json.loads(stdout.getvalue())
+if session_inspect_payload.get("schema") != "ragflow_query_session_inspection_v1":
+    raise SystemExit(22)
+
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    session_enrich_code = module.main([
+        "session",
+        "enrich",
+        "What about it?",
+        "--session",
+        str(session_path),
+        "--report-json",
+        str(artifacts_dir / "query_session_enrich.json"),
+        "--report-md",
+        str(artifacts_dir / "query_session_enrich.md"),
+        "--json",
+    ])
+if session_enrich_code != 0:
+    raise SystemExit(session_enrich_code)
+session_enrich_payload = json.loads(stdout.getvalue())
+if session_enrich_payload.get("schema") != "ragflow_query_session_enrichment_v1":
+    raise SystemExit(23)
+if not session_enrich_payload.get("context_applied"):
+    raise SystemExit(24)
+
 stdout = StringIO()
 with contextlib.redirect_stdout(stdout):
     agentic_plan_code = module.main([
@@ -2232,6 +2290,11 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_intent.md",
         artifacts_dir / "query_intent_route.json",
         artifacts_dir / "query_intent_route.md",
+        artifacts_dir / "query_session.json",
+        artifacts_dir / "query_session_inspect.json",
+        artifacts_dir / "query_session_inspect.md",
+        artifacts_dir / "query_session_enrich.json",
+        artifacts_dir / "query_session_enrich.md",
         artifacts_dir / "query_agentic_plan.json",
         artifacts_dir / "query_agentic_plan.md",
         artifacts_dir / "query_multi.json",

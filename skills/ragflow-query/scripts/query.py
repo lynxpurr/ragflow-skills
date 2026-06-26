@@ -35,6 +35,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     QueryResult,
     QueryIntentError,
     QueryRewriteError,
+    QuerySessionError,
     RAGFlowClient,
     RetrievalError,
     RoutingError,
@@ -44,11 +45,13 @@ from ragflow_skill_runtime import (  # noqa: E402
     build_centroid_plan,
     build_query_rewrite_plan,
     classify_query_intent,
+    build_query_session_inspection,
     build_query_trace,
     diagnose_query_result,
     evaluate_answer,
     evidence_from_query_payload,
     load_pollution_terms,
+    load_query_session,
     load_route_test_queries,
     load_config,
     load_centroid_index,
@@ -71,6 +74,8 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_query_fusion_markdown,
     render_query_fusion_test_markdown,
     render_query_intent_markdown,
+    render_query_session_enrichment_markdown,
+    render_query_session_inspection_markdown,
     render_query_diagnostic_markdown,
     render_query_pollution_markdown,
     render_query_rerank_ab_markdown,
@@ -84,6 +89,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     resolve_dataset_ids,
     route_question,
     route_query_intent,
+    enrich_query_with_session,
     run_route_diagnose,
     run_route_report,
     run_route_tests,
@@ -633,6 +639,41 @@ def _intent_route(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _session_inspect(args: argparse.Namespace) -> int:
+    try:
+        session = load_query_session(args.session)
+        report = build_query_session_inspection(
+            session,
+            max_turns=args.max_turns,
+            max_tokens=args.max_tokens,
+        )
+    except (QuerySessionError, OSError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_session_inspection_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _session_enrich(args: argparse.Namespace) -> int:
+    try:
+        session = load_query_session(args.session)
+        report = enrich_query_with_session(
+            args.question,
+            session,
+            max_turns=args.max_turns,
+            max_tokens=args.max_tokens,
+        )
+    except (QuerySessionError, OSError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_session_enrichment_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _agentic_plan(args: argparse.Namespace) -> int:
     try:
         report = build_agentic_plan(
@@ -935,6 +976,26 @@ def build_parser() -> argparse.ArgumentParser:
     intent_route.add_argument("--report-md", help="Optional Markdown report output path")
     intent_route.add_argument("--json", action="store_true", help="Emit JSON report")
     intent_route.set_defaults(func=_intent_route)
+
+    session = sub.add_parser("session", help="Inspect and enrich bounded query session context")
+    session_sub = session.add_subparsers(dest="session_command", required=True)
+    session_inspect = session_sub.add_parser("inspect", help="Inspect bounded session context offline")
+    session_inspect.add_argument("--session", required=True, help="ragflow_query_session_v1 JSON or turns list")
+    session_inspect.add_argument("--max-turns", type=int, default=8)
+    session_inspect.add_argument("--max-tokens", type=int, default=400)
+    session_inspect.add_argument("--report-json", help="Optional JSON report output path")
+    session_inspect.add_argument("--report-md", help="Optional Markdown report output path")
+    session_inspect.add_argument("--json", action="store_true", help="Emit JSON report")
+    session_inspect.set_defaults(func=_session_inspect)
+    session_enrich = session_sub.add_parser("enrich", help="Enrich a follow-up query with bounded context")
+    session_enrich.add_argument("question", help="Question to enrich")
+    session_enrich.add_argument("--session", required=True, help="ragflow_query_session_v1 JSON or turns list")
+    session_enrich.add_argument("--max-turns", type=int, default=8)
+    session_enrich.add_argument("--max-tokens", type=int, default=400)
+    session_enrich.add_argument("--report-json", help="Optional JSON report output path")
+    session_enrich.add_argument("--report-md", help="Optional Markdown report output path")
+    session_enrich.add_argument("--json", action="store_true", help="Emit JSON report")
+    session_enrich.set_defaults(func=_session_enrich)
 
     agentic_plan = sub.add_parser(
         "agentic-plan",

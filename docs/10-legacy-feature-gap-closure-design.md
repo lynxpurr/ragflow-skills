@@ -884,6 +884,12 @@ disclaimers, and do not retrieve, mutate RAGFlow, or call an LLM.
 bounded to `success`, `empty`, `low_quality`, `needs_refinement`, `clarification`,
 `rejected`, `error`, `timeout`, and `partial`.
 
+Session context is implemented through deterministic `ragflow-query session inspect` and
+`ragflow-query session enrich`. They normalize user-owned `ragflow_query_session_v1`
+turns, enforce `--max-turns` and `--max-tokens`, detect short follow-ups and pronoun
+references, and enrich queries only with bounded recent context. They do not retrieve,
+mutate RAGFlow, or call an LLM.
+
 ## Feature Design 17: Skill Suite Review And Drift Control
 
 ### Problem
