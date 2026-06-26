@@ -8,6 +8,7 @@ from pathlib import Path
 from ragflow_skill_runtime.routing import (
     REQUIRED_ROUTE_TEST_CATEGORIES,
     RoutingConfig,
+    load_centroid_index,
     load_route_test_queries,
     load_routing_config,
     render_route_diagnose_markdown,
@@ -64,11 +65,81 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(result.selected.kb.name, "kb:general")
         self.assertEqual(result.selected.reason, "default")
 
+    def test_centroid_index_breaks_positive_hint_ties_only(self) -> None:
+        config = RoutingConfig.from_dict(
+            {
+                "version": "0.1",
+                "default_kb": "kb:general",
+                "knowledge_bases": [
+                    {"name": "kb:alpha", "dataset_id": "ds-alpha", "hints": ["shared"]},
+                    {"name": "kb:beta", "dataset_id": "ds-beta", "hints": ["shared"]},
+                    {"name": "kb:general", "dataset_id": "ds-general", "hints": ["general"]},
+                ],
+            }
+        )
+        centroid_index = {
+            "schema": "ragflow_route_centroid_index_v1",
+            "centroids": [
+                {"dataset_id": "ds-alpha", "status": "ready", "vector": [0.0, 1.0]},
+                {"dataset_id": "ds-beta", "status": "ready", "vector": [1.0, 0.0]},
+            ],
+        }
+
+        without_centroid = route_question(config, "shared topic")
+        with_centroid = route_question(
+            config,
+            "shared topic",
+            centroid_index=centroid_index,
+            query_vector=[1.0, 0.0],
+        )
+        no_hint = route_question(
+            config,
+            "unrelated topic",
+            centroid_index=centroid_index,
+            query_vector=[1.0, 0.0],
+        )
+        route_test = run_route_tests(
+            config,
+            [
+                {
+                    "id": "tie",
+                    "question": "shared topic",
+                    "expected": "kb:beta",
+                    "query_vector": [1.0, 0.0],
+                }
+            ],
+            centroid_index=centroid_index,
+        )
+        report = run_route_report(
+            config,
+            [
+                {
+                    "id": "tie",
+                    "question": "shared topic",
+                    "expected": "kb:beta",
+                    "query_vector": [1.0, 0.0],
+                }
+            ],
+            centroid_index=centroid_index,
+        )
+
+        self.assertEqual(without_centroid.selected.kb.name, "kb:alpha")
+        self.assertEqual(with_centroid.selected.kb.name, "kb:beta")
+        self.assertEqual(with_centroid.selected.tie_breaker, "centroid")
+        self.assertAlmostEqual(with_centroid.selected.centroid_score, 1.0)
+        self.assertEqual(no_hint.selected.kb.name, "kb:general")
+        self.assertEqual(no_hint.selected.reason, "default")
+        self.assertTrue(route_test["ok"])
+        self.assertEqual(route_test["cases"][0]["route"]["selected"]["tie_breaker"], "centroid")
+        self.assertEqual(report["summary"]["centroid_tie_breaker_count"], 1)
+        self.assertEqual(report["summary"]["ambiguous_count"], 0)
+
     def test_load_routing_config_and_route_tests(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_path = root / "routing.json"
             queries_path = root / "routes.json"
+            centroids_path = root / "centroids.json"
             config_path.write_text(json.dumps(self.sample_config().to_dict()), encoding="utf-8")
             queries_path.write_text(
                 json.dumps(
@@ -84,13 +155,19 @@ class RoutingTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            centroids_path.write_text(
+                json.dumps({"schema": "ragflow_route_centroid_index_v1", "centroids": []}),
+                encoding="utf-8",
+            )
 
             config = load_routing_config(config_path)
             queries = load_route_test_queries(queries_path)
+            centroid_index = load_centroid_index(centroids_path)
             report = run_route_tests(config, queries)
 
         self.assertTrue(report["ok"])
         self.assertEqual(report["metrics"]["accuracy"], 1.0)
+        self.assertEqual(centroid_index["schema"], "ragflow_route_centroid_index_v1")
         self.assertIn("Route Test", render_route_test_markdown(report))
 
     def test_route_report_summarizes_coverage_and_conflicts(self) -> None:

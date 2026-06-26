@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import math
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping
 
+from .centroid_routing import CENTROID_INDEX_SCHEMA
 from .config import read_config_file
 
 
@@ -52,6 +54,39 @@ def _rate(count: int | float, total: int | float) -> float:
 
 def _average(values: list[float]) -> float:
     return round(sum(values) / len(values), 4) if values else 0.0
+
+
+def _numeric_vector(value: Any, *, field_name: str) -> list[float]:
+    if not isinstance(value, list) or not value:
+        raise RoutingError(f"{field_name} must be a non-empty numeric vector")
+    vector: list[float] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            raise RoutingError(f"{field_name} must be a numeric vector")
+        vector.append(float(item))
+    return vector
+
+
+def _query_vector(value: Any, *, field_name: str = "query_vector") -> list[float] | None:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return _numeric_vector(value, field_name=field_name)
+    if isinstance(value, Mapping):
+        for key in ("query_vector", "embedding", "embedding_vector", "vector"):
+            if key in value:
+                return _numeric_vector(value[key], field_name=f"{field_name}.{key}")
+    raise RoutingError(f"{field_name} must be a vector list or object containing a vector field")
+
+
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    if len(left) != len(right):
+        raise RoutingError(f"vector dimension mismatch: expected {len(left)}, got {len(right)}")
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if not left_norm or not right_norm:
+        return 0.0
+    return sum(left_value * right_value for left_value, right_value in zip(left, right)) / (left_norm * right_norm)
 
 
 def _matches_kb_ref(value: Any, kb: "RoutingKnowledgeBase") -> bool:
@@ -257,6 +292,8 @@ class RouteCandidate:
     score: float
     matched_hints: list[str] = field(default_factory=list)
     reason: str = "hint"
+    centroid_score: float | None = None
+    tie_breaker: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -265,6 +302,8 @@ class RouteCandidate:
             "score": self.score,
             "matched_hints": list(self.matched_hints),
             "reason": self.reason,
+            "centroid_score": self.centroid_score,
+            "tie_breaker": self.tie_breaker,
             "params": self.kb.params,
             "description": self.kb.description,
         }
@@ -308,6 +347,84 @@ def load_routing_config(path: str | Path) -> RoutingConfig:
     return RoutingConfig.from_dict(data)
 
 
+def load_centroid_index(path: str | Path) -> dict[str, Any]:
+    """Load a user-owned centroid index for offline route tie-breaking."""
+
+    index_path = Path(path)
+    try:
+        data = json.loads(index_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RoutingError(f"centroid index not found: {index_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise RoutingError(f"centroid index is not valid JSON: {index_path}") from exc
+    if not isinstance(data, Mapping):
+        raise RoutingError("centroid index must be a JSON object")
+    if data.get("schema") != CENTROID_INDEX_SCHEMA:
+        raise RoutingError(f"centroid index schema must be {CENTROID_INDEX_SCHEMA}")
+    centroids = data.get("centroids")
+    if not isinstance(centroids, list):
+        raise RoutingError("centroid index centroids must be a list")
+    return dict(data)
+
+
+def _centroid_scores(
+    centroid_index: Mapping[str, Any] | None,
+    query_vector: list[float] | None,
+) -> dict[str, float]:
+    if not centroid_index or query_vector is None:
+        return {}
+    centroids = centroid_index.get("centroids")
+    if not isinstance(centroids, list):
+        raise RoutingError("centroid index centroids must be a list")
+    scores: dict[str, float] = {}
+    for index, item in enumerate(centroids):
+        if not isinstance(item, Mapping):
+            continue
+        dataset_id = item.get("dataset_id")
+        if not isinstance(dataset_id, str) or not dataset_id.strip():
+            continue
+        status = str(item.get("status") or "ready")
+        if status != "ready":
+            continue
+        vector = _numeric_vector(item.get("vector"), field_name=f"centroids[{index}].vector")
+        scores[dataset_id] = _cosine_similarity(query_vector, vector)
+    return scores
+
+
+def _apply_centroid_tie_breaker(
+    candidates: list["RouteCandidate"],
+    centroid_scores: Mapping[str, float],
+) -> list["RouteCandidate"]:
+    if not centroid_scores:
+        return sorted(candidates, key=lambda candidate: (-candidate.score, candidate.kb.name))
+    sorted_candidates = sorted(candidates, key=lambda candidate: (-candidate.score, candidate.kb.name))
+    ordered: list[RouteCandidate] = []
+    index = 0
+    while index < len(sorted_candidates):
+        score = sorted_candidates[index].score
+        group: list[RouteCandidate] = []
+        while index < len(sorted_candidates) and sorted_candidates[index].score == score:
+            candidate = sorted_candidates[index]
+            centroid_score = centroid_scores.get(candidate.kb.dataset_id)
+            group.append(replace(candidate, centroid_score=centroid_score))
+            index += 1
+        scored = [candidate for candidate in group if candidate.centroid_score is not None]
+        if score > 0 and len(group) > 1 and len(scored) >= 2:
+            group = [
+                replace(candidate, tie_breaker="centroid")
+                for candidate in sorted(
+                    group,
+                    key=lambda candidate: (
+                        candidate.centroid_score is None,
+                        -(candidate.centroid_score if candidate.centroid_score is not None else -1.0),
+                        candidate.kb.name,
+                    ),
+                )
+            ]
+        ordered.extend(group)
+    return ordered
+
+
 def _score_kb(question: str, kb: RoutingKnowledgeBase) -> RouteCandidate:
     question_lower = question.lower()
     question_tokens = _tokenize(question)
@@ -333,14 +450,21 @@ def _score_kb(question: str, kb: RoutingKnowledgeBase) -> RouteCandidate:
     return RouteCandidate(kb=kb, score=score, matched_hints=matched_hints)
 
 
-def route_question(config: RoutingConfig, question: str) -> RouteResult:
+def route_question(
+    config: RoutingConfig,
+    question: str,
+    *,
+    centroid_index: Mapping[str, Any] | None = None,
+    query_vector: list[float] | Mapping[str, Any] | None = None,
+) -> RouteResult:
     """Route a question to the best configured KB using deterministic hints."""
 
     if not question.strip():
         raise RoutingError("question is required")
-    candidates = sorted(
-        (_score_kb(question, kb) for kb in config.knowledge_bases),
-        key=lambda candidate: (-candidate.score, candidate.kb.name),
+    vector = _query_vector(query_vector) if query_vector is not None else None
+    candidates = _apply_centroid_tie_breaker(
+        [_score_kb(question, kb) for kb in config.knowledge_bases],
+        _centroid_scores(centroid_index, vector),
     )
     selected = candidates[0] if candidates and candidates[0].score > 0 else None
     if selected is None and config.default_kb:
@@ -389,6 +513,13 @@ def _route_case_metadata(query: Mapping[str, Any]) -> dict[str, str]:
     if isinstance(negative_class, str) and negative_class.strip():
         metadata["negative_class"] = negative_class.strip()
     return metadata
+
+
+def _route_query_vector(query: Mapping[str, Any]) -> list[float] | None:
+    for key in ("query_vector", "embedding", "embedding_vector", "vector"):
+        if key in query:
+            return _query_vector({key: query[key]}, field_name=f"query[{query.get('id', '?')}]")
+    return None
 
 
 def _expects_no_route(query: Mapping[str, Any]) -> bool:
@@ -494,11 +625,21 @@ def _route_report_empty_route_test() -> dict[str, Any]:
 def run_route_report(
     config: RoutingConfig,
     queries: list[dict[str, Any]] | None = None,
+    *,
+    centroid_index: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Summarize deterministic routing quality signals."""
 
     queries = list(queries or [])
-    route_results = [route_question(config, query["question"]) for query in queries]
+    route_results = [
+        route_question(
+            config,
+            query["question"],
+            centroid_index=centroid_index,
+            query_vector=_route_query_vector(query),
+        )
+        for query in queries
+    ]
     cases: list[dict[str, Any]] = []
     passed = 0
     low_confidence_cases: list[dict[str, Any]] = []
@@ -647,6 +788,8 @@ def run_route_report(
                 "matched_hints": matched_hints,
                 "selected_score": selected.score if selected else None,
                 "selected_reason": selected.reason if selected else None,
+                "selected_centroid_score": selected.centroid_score if selected else None,
+                "selected_tie_breaker": selected.tie_breaker if selected else None,
                 "candidate_count": len(result.candidates),
                 "low_confidence": bool(selected and selected.score < 2.0),
                 "ambiguous": bool(
@@ -654,6 +797,10 @@ def run_route_report(
                     and len(result.candidates) > 1
                     and result.candidates[0].score > 0
                     and result.candidates[1].score == result.candidates[0].score
+                    and not (
+                        result.candidates[0].tie_breaker == "centroid"
+                        and result.candidates[0].centroid_score != result.candidates[1].centroid_score
+                    )
                 ),
                 "empty_route": selected is None,
                 **_route_case_metadata(query),
@@ -671,7 +818,11 @@ def run_route_report(
             empty_cases.append(case)
         cases.append(case)
 
-    route_test_report = run_route_tests(config, queries) if queries else _route_report_empty_route_test()
+    route_test_report = (
+        run_route_tests(config, queries, centroid_index=centroid_index)
+        if queries
+        else _route_report_empty_route_test()
+    )
     missing_route_tests = []
     for kb in config.knowledge_bases:
         expected_cases = [case for case in cases if _matches_kb_ref(case.get("expected"), kb)]
@@ -801,6 +952,7 @@ def run_route_report(
             "low_confidence_rate": low_confidence_rate,
             "ambiguous_count": len(ambiguous_cases),
             "ambiguous_rate": ambiguous_rate,
+            "centroid_tie_breaker_count": sum(1 for case in cases if case.get("selected_tie_breaker") == "centroid"),
             "empty_route_count": len(empty_cases),
             "empty_route_rate": empty_rate,
             "route_score_average": route_score_avg,
@@ -986,6 +1138,12 @@ def _classify_route_case(
         expected_score = _candidate_score(expected_candidate)
         selected_score = _candidate_score(selected_candidate)
         if expected_score == selected_score and expected_score > 0:
+            if selected_candidate.get("tie_breaker") == "centroid":
+                return (
+                    "centroid_tie_breaker_conflict",
+                    "expected and selected KBs tied on hints, and centroid scoring favored the selected KB",
+                    ["Review the query vector, centroid index freshness, or add a more specific expected-KB hint."],
+                )
             if _truthy_metadata(expected_kb.metadata.get("regex_order_sensitive")):
                 return (
                     "regex_order_issue",
@@ -1016,10 +1174,15 @@ def _classify_route_case(
     )
 
 
-def run_route_diagnose(config: RoutingConfig, queries: list[dict[str, Any]]) -> dict[str, Any]:
+def run_route_diagnose(
+    config: RoutingConfig,
+    queries: list[dict[str, Any]],
+    *,
+    centroid_index: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Classify route-test failures and routing-rule risks without live retrieval."""
 
-    route_report = run_route_report(config, queries)
+    route_report = run_route_report(config, queries, centroid_index=centroid_index)
     cases_by_id = {str(query["id"]): query for query in queries}
     issues: list[dict[str, Any]] = []
     failed_cases = [
@@ -1058,6 +1221,8 @@ def run_route_diagnose(config: RoutingConfig, queries: list[dict[str, Any]]) -> 
                 "reason": reason,
                 "selected_score": _candidate_score(selected),
                 "selected_reason": _selected_reason(report_case, selected),
+                "selected_centroid_score": selected.get("centroid_score") if isinstance(selected, Mapping) else None,
+                "selected_tie_breaker": selected.get("tie_breaker") if isinstance(selected, Mapping) else None,
                 "top_candidates": _candidate_names(candidates, score=top_score),
                 "recommendations": recommendations,
             }
@@ -1205,6 +1370,7 @@ def render_route_report_markdown(report: Mapping[str, Any]) -> str:
         f"- route_test_pass_rate: `{summary.get('route_test_pass_rate', 0)}`",
         f"- low_confidence_rate: `{summary.get('low_confidence_rate', 0)}`",
         f"- ambiguous_rate: `{summary.get('ambiguous_rate', 0)}`",
+        f"- centroid_tie_breakers: `{summary.get('centroid_tie_breaker_count', 0)}`",
         f"- empty_route_rate: `{summary.get('empty_route_rate', 0)}`",
         f"- missing_route_tests: `{summary.get('missing_route_test_count', 0)}`",
         f"- missing_params: `{summary.get('missing_params_count', 0)}`",
@@ -1468,17 +1634,30 @@ def load_route_test_queries(path: str | Path) -> list[dict[str, Any]]:
             values = _string_set(item.get(key))
             if values:
                 query[key] = sorted(values)
+        for key in ("query_vector", "embedding", "embedding_vector", "vector"):
+            if key in item:
+                query[key] = item[key]
         queries.append(query)
     return queries
 
 
-def run_route_tests(config: RoutingConfig, queries: list[dict[str, Any]]) -> dict[str, Any]:
+def run_route_tests(
+    config: RoutingConfig,
+    queries: list[dict[str, Any]],
+    *,
+    centroid_index: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Run deterministic route regression checks."""
 
     cases = []
     passed = 0
     for query in queries:
-        result = route_question(config, query["question"])
+        result = route_question(
+            config,
+            query["question"],
+            centroid_index=centroid_index,
+            query_vector=_route_query_vector(query),
+        )
         selected = result.selected
         actual = selected.kb.name if selected else None
         actual_id = selected.kb.dataset_id if selected else None

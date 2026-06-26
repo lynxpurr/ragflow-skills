@@ -1001,6 +1001,94 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(route_diagnose_file_payload["schema"], "ragflow_route_diagnose_report_v1")
         self.assertIn("RAGFlow Route Diagnosis", route_diagnose_markdown)
 
+    def test_route_commands_can_use_centroid_tie_breaker(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            routing = root / "routing.json"
+            routes = root / "routes.json"
+            centroids = root / "centroids.json"
+            query_vector = root / "query_vector.json"
+            routing.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "knowledge_bases": [
+                            {"name": "kb:alpha", "dataset_id": "ds-alpha", "hints": ["shared"]},
+                            {"name": "kb:beta", "dataset_id": "ds-beta", "hints": ["shared"]},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            routes.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {
+                                "id": "tie",
+                                "question": "shared topic",
+                                "expected_kb": "kb:beta",
+                                "query_vector": [1.0, 0.0],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            centroids.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_route_centroid_index_v1",
+                        "centroids": [
+                            {"dataset_id": "ds-alpha", "status": "ready", "vector": [0.0, 1.0]},
+                            {"dataset_id": "ds-beta", "status": "ready", "vector": [1.0, 0.0]},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            query_vector.write_text(json.dumps({"query_vector": [1.0, 0.0]}), encoding="utf-8")
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                route_code = module.main(
+                    [
+                        "route",
+                        "shared topic",
+                        "--routing-config",
+                        str(routing),
+                        "--centroid-index",
+                        str(centroids),
+                        "--query-vector-json",
+                        str(query_vector),
+                        "--json",
+                    ]
+                )
+            route_payload = json.loads(stdout.getvalue())
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                test_code = module.main(
+                    [
+                        "route-test",
+                        "--routing-config",
+                        str(routing),
+                        "--centroid-index",
+                        str(centroids),
+                        "--queries",
+                        str(routes),
+                    ]
+                )
+            route_test_payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(route_code, 0, route_payload)
+        self.assertEqual(route_payload["selected"]["name"], "kb:beta")
+        self.assertEqual(route_payload["selected"]["tie_breaker"], "centroid")
+        self.assertEqual(test_code, 0, route_test_payload)
+        self.assertEqual(route_test_payload["metrics"]["accuracy"], 1.0)
+        self.assertEqual(route_test_payload["cases"][0]["route"]["selected"]["tie_breaker"], "centroid")
+
     def test_centroid_build_plan_only_writes_reports(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:

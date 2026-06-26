@@ -19,6 +19,7 @@ python scripts/query.py ask "Question" --dataset-id ds-a --rewrite simple --mult
 python scripts/query.py fusion-test --cases ./fixtures/fusion-test-cases.json --report-json ./run/fusion_test.json --report-md ./run/fusion_test.md --json
 python scripts/query.py list-kbs --routing-config ./templates/routing-config.example.json
 python scripts/query.py route "Which API configuration should I use?" --routing-config ./templates/routing-config.example.json --json
+python scripts/query.py route "Which API configuration should I use?" --routing-config ./routing-config.json --centroid-index ./run/centroids.json --query-vector-json ./run/query_vector.json --json
 python scripts/query.py route-test --routing-config ./templates/routing-config.example.json --queries ./templates/route-test-queries.example.json --report-md ./run/route_test.md
 python scripts/query.py route-report --routing-config ./templates/routing-config.example.json --queries ./templates/route-test-queries.example.json --report-json ./run/route_report.json --report-md ./run/route_report.md
 python scripts/query.py route-diagnose --routing-config ./templates/routing-config.example.json --queries ./templates/route-test-queries.example.json --report-json ./run/route_diagnose.json --report-md ./run/route_diagnose.md
@@ -47,6 +48,7 @@ Notes:
 - `route-report` and `route-diagnose` warn when legacy/descriptive `kb_routing_hints` fields are present but ignored by the public routing schema; put active route hints in per-KB `hints`.
 - Use `centroid build --plan-only` to review a user-owned centroid index plan from KB manifests or chunk snapshots. It does not call embedding APIs or write a centroid index.
 - Use `centroid build` without `--plan-only` only with user-owned chunk snapshots that already contain `embedding`, `embedding_vector`, or `vector` fields. It processes at most `--batch-size` chunks per run, writes `--checkpoint` and `--index-output`, resumes with `--resume`, and does not call embedding APIs or mutate RAGFlow.
+- `route`, `route-test`, `route-report`, `route-diagnose`, and `ask --mode auto` can use `--centroid-index` as a tie-breaker for equal positive hint scores. Provide `--query-vector-json` for single-query commands or per-query `query_vector` fields in route-test fixtures; the script does not generate embeddings.
 - Route-test queries may set `expected_no_route: true` for negative/out-of-scope cases; this passes when no positive hint route is selected, even if a default KB fallback is present.
 - Use `route-diagnose` offline to classify route-test failures as missing hints, missing KB config, priority conflicts, regex-order issues, acceptable ambiguity, or low-confidence fallback.
 - `ask --fusion rrf` retrieves each selected dataset separately when multiple dataset IDs are present, then returns an offline fusion report and fused evidence order.

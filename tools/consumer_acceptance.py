@@ -1564,6 +1564,9 @@ raise SystemExit(code)
 
     routing_config = work_root / "routing_config.json"
     route_queries = work_root / "route_queries.json"
+    route_tie_queries = work_root / "route_tie_queries.json"
+    route_centroids = work_root / "route_centroids.json"
+    route_query_vector = work_root / "route_query_vector.json"
     routing_config.write_text(
         json.dumps(
             {
@@ -1615,6 +1618,34 @@ raise SystemExit(code)
         ),
         encoding="utf-8",
     )
+    route_tie_queries.write_text(
+        json.dumps(
+            {
+                "queries": [
+                    {
+                        "id": "route-centroid-tie",
+                        "question": "consumer api",
+                        "expected_kb": "kb:consumer-technical",
+                        "query_vector": [1.0, 0.0],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    route_centroids.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_route_centroid_index_v1",
+                "centroids": [
+                    {"dataset_id": "ds-consumer-general", "status": "ready", "vector": [0.0, 1.0]},
+                    {"dataset_id": "ds-consumer-technical", "status": "ready", "vector": [1.0, 0.0]},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    route_query_vector.write_text(json.dumps({"query_vector": [1.0, 0.0]}), encoding="utf-8")
     list_kbs = _run_command(
         [python_executable, str(query_script), "list-kbs", "--routing-config", str(routing_config)],
         cwd=work_root,
@@ -1635,6 +1666,29 @@ raise SystemExit(code)
         env=env,
     )
     _record_command_check(checks, "query route", route_result, required_output='"dataset_id": "ds-consumer-technical"')
+    route_centroid_result = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "route",
+            "consumer api",
+            "--routing-config",
+            str(routing_config),
+            "--centroid-index",
+            str(route_centroids),
+            "--query-vector-json",
+            str(route_query_vector),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query route centroid tie-breaker",
+        route_centroid_result,
+        required_output='"tie_breaker": "centroid"',
+    )
     route_test_report = work_root / "route_test.md"
     route_test = _run_command(
         [
@@ -1652,8 +1706,32 @@ raise SystemExit(code)
         env=env,
     )
     _record_command_check(checks, "query route-test", route_test, required_output='"accuracy": 1.0')
+    route_centroid_test = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "route-test",
+            "--routing-config",
+            str(routing_config),
+            "--centroid-index",
+            str(route_centroids),
+            "--queries",
+            str(route_tie_queries),
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query route-test centroid tie-breaker",
+        route_centroid_test,
+        required_output='"accuracy": 1.0',
+    )
     if route_test_report.exists():
         produced.append(route_test_report)
+    for path in (route_tie_queries, route_centroids, route_query_vector):
+        if path.exists():
+            produced.append(path)
     route_report_json = work_root / "route_report.json"
     route_report_md = work_root / "route_report.md"
     route_report = _run_command(

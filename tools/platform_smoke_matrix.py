@@ -1802,6 +1802,9 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     query_script = script_root / "ragflow-query" / "scripts" / "query.py"
     routing_config = artifacts_dir / "routing_config.json"
     route_queries = artifacts_dir / "route_queries.json"
+    route_tie_queries = artifacts_dir / "route_tie_queries.json"
+    route_centroids = artifacts_dir / "route_centroids.json"
+    route_query_vector = artifacts_dir / "route_query_vector.json"
     routing_config.write_text(
         json.dumps(
             {
@@ -1857,6 +1860,38 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         ),
         encoding="utf-8",
     )
+    route_tie_queries.write_text(
+        json.dumps(
+            {
+                "queries": [
+                    {
+                        "id": "route-centroid-tie",
+                        "question": "platform runtime",
+                        "expected_kb": "kb:platform-technical",
+                        "query_vector": [1.0, 0.0],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    route_centroids.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_route_centroid_index_v1",
+                "centroids": [
+                    {"dataset_id": "ds-platform-general", "status": "ready", "vector": [0.0, 1.0]},
+                    {"dataset_id": "ds-platform-technical", "status": "ready", "vector": [1.0, 0.0]},
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    route_query_vector.write_text(json.dumps({"query_vector": [1.0, 0.0]}), encoding="utf-8")
     route_test_result = _run_command(
         [
             sys.executable,
@@ -1876,6 +1911,50 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         checks,
         "query route-test",
         route_test_result,
+        required_stdout='"accuracy": 1.0',
+    )
+    route_centroid_result = _run_command(
+        [
+            sys.executable,
+            str(query_script),
+            "route",
+            "platform runtime",
+            "--routing-config",
+            str(routing_config),
+            "--centroid-index",
+            str(route_centroids),
+            "--query-vector-json",
+            str(route_query_vector),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query route centroid tie-breaker",
+        route_centroid_result,
+        required_stdout='"tie_breaker": "centroid"',
+    )
+    route_centroid_test = _run_command(
+        [
+            sys.executable,
+            str(query_script),
+            "route-test",
+            "--routing-config",
+            str(routing_config),
+            "--centroid-index",
+            str(route_centroids),
+            "--queries",
+            str(route_tie_queries),
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query route-test centroid tie-breaker",
+        route_centroid_test,
         required_stdout='"accuracy": 1.0',
     )
     route_report_result = _run_command(
@@ -2082,6 +2161,9 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "route_test.md",
         artifacts_dir / "route_report.md",
         artifacts_dir / "route_diagnose.md",
+        artifacts_dir / "route_tie_queries.json",
+        artifacts_dir / "route_centroids.json",
+        artifacts_dir / "route_query_vector.json",
         artifacts_dir / "centroid_plan.json",
         artifacts_dir / "centroid_plan.md",
         artifacts_dir / "centroid_chunk_snapshot.json",

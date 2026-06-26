@@ -646,13 +646,16 @@ used per-KB retrieval parameters, centroid coverage, and strong route regression
   and product terms.
 - category, locale, and negative-class coverage reports for public route-test suites.
 - optional centroid index generated from public user-owned KB manifests or snapshots;
-- centroid scoring as a tie-breaker, not a replacement for explicit user hints;
+- centroid scoring as a tie-breaker for equal positive hint scores, not a replacement
+  for explicit user hints;
 - per-KB retrieval parameter report and benchmark-derived suggestions;
 - no shipped private route tables.
 
 Centroid generation should follow an idempotent bounded-batch pattern: dry-run first,
 consume only user-owned snapshot vectors, process at most `N` chunks per run, record
 progress, and resume without duplicating completed work.
+Centroid-aware routing should consume user-owned query vectors and must not call an
+embedding API implicitly.
 
 ## Feature Design 12: Runtime Resilience And Sanitized Reports
 

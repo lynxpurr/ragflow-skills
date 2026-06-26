@@ -46,6 +46,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     load_pollution_terms,
     load_route_test_queries,
     load_config,
+    load_centroid_index,
     load_fusion_test_cases,
     load_kb_manifest,
     load_multi_query_file,
@@ -107,11 +108,20 @@ def _routing_config_path(args: argparse.Namespace) -> str | None:
     return getattr(args, "routing_config", None) or os.environ.get("RAGFLOW_ROUTING_CONFIG")
 
 
+def _centroid_index_path(args: argparse.Namespace) -> str | None:
+    return getattr(args, "centroid_index", None) or os.environ.get("RAGFLOW_CENTROID_INDEX")
+
+
 def _load_routing(args: argparse.Namespace):
     path = _routing_config_path(args)
     if not path:
         raise RoutingError("routing config is required; pass --routing-config or set RAGFLOW_ROUTING_CONFIG")
     return load_routing_config(path)
+
+
+def _load_centroid_index(args: argparse.Namespace) -> dict[str, Any] | None:
+    path = _centroid_index_path(args)
+    return load_centroid_index(path) if path else None
 
 
 def _write_text(path: str | None, text: str) -> None:
@@ -129,6 +139,15 @@ def _write_json(path: str | None, data: Any) -> None:
 
 def _read_json(path: str | Path) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _read_query_vector(path: str | Path) -> list[float] | dict[str, Any]:
+    payload = _read_json(path)
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        return payload
+    raise ValueError("query vector JSON must be a vector list or object containing a vector field")
 
 
 def _read_query_outputs(paths: list[str], *, label: str) -> list[dict[str, Any]]:
@@ -293,7 +312,12 @@ def _ask(args: argparse.Namespace) -> int:
         client = RAGFlowClient(config)
         if mode == "auto" and not explicit_dataset_inputs and _routing_config_path(args):
             routing = _load_routing(args)
-            route_result = route_question(routing, args.question)
+            route_result = route_question(
+                routing,
+                args.question,
+                centroid_index=_load_centroid_index(args),
+                query_vector=_read_query_vector(args.query_vector_json) if args.query_vector_json else None,
+            )
             if not route_result.selected:
                 raise RoutingError("auto routing found no matching KB; pass explicit --dataset-id/--kb or add route hints")
             dataset_ids = [route_result.selected.kb.dataset_id]
@@ -429,8 +453,13 @@ def _list_kbs(args: argparse.Namespace) -> int:
 def _route(args: argparse.Namespace) -> int:
     try:
         routing = _load_routing(args)
-        result = route_question(routing, args.question)
-    except (RoutingError, OSError, RuntimeError) as exc:
+        result = route_question(
+            routing,
+            args.question,
+            centroid_index=_load_centroid_index(args),
+            query_vector=_read_query_vector(args.query_vector_json) if args.query_vector_json else None,
+        )
+    except (RoutingError, OSError, ValueError, json.JSONDecodeError, RuntimeError) as exc:
         return _error(str(exc), json_output=args.json)
     payload = result.to_dict()
     if args.json:
@@ -447,7 +476,7 @@ def _route_test(args: argparse.Namespace) -> int:
     try:
         routing = _load_routing(args)
         queries = load_route_test_queries(args.queries)
-        report = run_route_tests(routing, queries)
+        report = run_route_tests(routing, queries, centroid_index=_load_centroid_index(args))
     except (RoutingError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=True)
     _write_json(args.report_json, report)
@@ -460,7 +489,7 @@ def _route_report(args: argparse.Namespace) -> int:
     try:
         routing = _load_routing(args)
         queries = load_route_test_queries(args.queries) if args.queries else None
-        report = run_route_report(routing, queries)
+        report = run_route_report(routing, queries, centroid_index=_load_centroid_index(args))
     except (RoutingError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=True)
     _write_json(args.report_json, report)
@@ -473,7 +502,7 @@ def _route_diagnose(args: argparse.Namespace) -> int:
     try:
         routing = _load_routing(args)
         queries = load_route_test_queries(args.queries)
-        report = run_route_diagnose(routing, queries)
+        report = run_route_diagnose(routing, queries, centroid_index=_load_centroid_index(args))
     except (RoutingError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=True)
     _write_json(args.report_json, report)
@@ -717,6 +746,18 @@ def _add_routing_option(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--routing-config", help="Routing config path; defaults to RAGFLOW_ROUTING_CONFIG")
 
 
+def _add_centroid_tie_breaker_options(parser: argparse.ArgumentParser, *, include_query_vector: bool) -> None:
+    parser.add_argument(
+        "--centroid-index",
+        help="Optional centroid index path for tie-breaking equal positive hint scores",
+    )
+    if include_query_vector:
+        parser.add_argument(
+            "--query-vector-json",
+            help="JSON vector or object containing a vector field for centroid tie-breaking",
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Portable RAGFlow query CLI")
     _add_runtime_options(parser)
@@ -728,12 +769,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     route = sub.add_parser("route", help="Route a question to a configured KB")
     _add_routing_option(route)
+    _add_centroid_tie_breaker_options(route, include_query_vector=True)
     route.add_argument("question")
     route.add_argument("--json", action="store_true")
     route.set_defaults(func=_route)
 
     route_test = sub.add_parser("route-test", help="Run route regression checks")
     _add_routing_option(route_test)
+    _add_centroid_tie_breaker_options(route_test, include_query_vector=False)
     route_test.add_argument("--queries", required=True, help="Route-test queries JSON")
     route_test.add_argument("--report-json", help="Optional JSON report output path")
     route_test.add_argument("--report-md", help="Optional Markdown report output path")
@@ -741,6 +784,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     route_report = sub.add_parser("route-report", help="Summarize route quality coverage")
     _add_routing_option(route_report)
+    _add_centroid_tie_breaker_options(route_report, include_query_vector=False)
     route_report.add_argument("--queries", help="Optional route-test queries JSON")
     route_report.add_argument("--report-json", help="Optional JSON report output path")
     route_report.add_argument("--report-md", help="Optional Markdown report output path")
@@ -748,6 +792,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     route_diagnose = sub.add_parser("route-diagnose", help="Classify route-test failures")
     _add_routing_option(route_diagnose)
+    _add_centroid_tie_breaker_options(route_diagnose, include_query_vector=False)
     route_diagnose.add_argument("--queries", required=True, help="Route-test queries JSON")
     route_diagnose.add_argument("--report-json", help="Optional JSON report output path")
     route_diagnose.add_argument("--report-md", help="Optional Markdown report output path")
@@ -869,6 +914,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_routing_option(ask)
     ask.add_argument("question", help="Question to retrieve evidence for")
     ask.add_argument("--mode", choices=["auto", "direct", "agentic"], default="auto")
+    _add_centroid_tie_breaker_options(ask, include_query_vector=True)
     ask.add_argument("--dataset-id", action="append", default=[], help="RAGFlow dataset ID; repeatable")
     ask.add_argument("--kb", action="append", default=[], help="RAGFlow KB/dataset name; repeatable")
     ask.add_argument("--kb-manifest", help="Path to kb_manifest.json")

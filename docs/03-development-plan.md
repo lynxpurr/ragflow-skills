@@ -939,7 +939,7 @@ Tasks:
 - [x] Add optional centroid index schema generated from user-owned KB snapshots or manifests.
 - [x] Add `ragflow-query centroid build --plan-only` with user-owned snapshots or KB manifests.
 - [x] Add bounded centroid build execution with `--batch-size`, checkpoint, resume, and dynamic embedding config.
-- [ ] Add centroid scoring as a tie-breaker after explicit hints and user-specified KBs.
+- [x] Add centroid scoring as a tie-breaker after explicit hints and user-specified KBs.
 - [x] Add route regression summaries by category, locale, and negative-query class.
 - [x] Add cross-language A/B reports for retrieval setting changes, including zero-result rate, chunk count delta, top-1 stability, similarity delta, and latency.
 - [x] Add benchmark-derived retrieval parameter suggestions.
