@@ -965,7 +965,7 @@ Tasks:
 - [x] Add `ragflow-query intent route`.
 - [x] Classify `knowledge_query`, `comparison`, `clarification_needed`, and `out_of_scope`.
 - [x] Return confidence and low-confidence disclaimers in structured JSON.
-- [ ] Add normalized retrieval statuses: `success`, `empty`, `low_quality`, `needs_refinement`, `clarification`, `rejected`, `error`, `timeout`, and `partial`.
+- [x] Add normalized retrieval statuses: `success`, `empty`, `low_quality`, `needs_refinement`, `clarification`, `rejected`, `error`, `timeout`, and `partial`.
 - [ ] Add `ragflow_query_session_v1`.
 - [ ] Add `ragflow-query session enrich`.
 - [ ] Add `ragflow-query session inspect`.

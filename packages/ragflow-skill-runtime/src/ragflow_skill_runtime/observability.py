@@ -271,10 +271,21 @@ def build_query_trace(
     finished_at: str | None = None,
     warnings: Sequence[str] | None = None,
     rewrite_plan: Mapping[str, Any] | None = None,
+    retrieval_status: Mapping[str, Any] | None = None,
     retrieval_call_count: int = 1,
     llm_call_count: int = 0,
 ) -> dict[str, Any]:
     """Build a redaction-safe query trace payload."""
+
+    retrieval_section: dict[str, Any] = {
+        "top_k": top_k,
+        "similarity_threshold": similarity_threshold,
+        "chunk_count": chunk_count,
+    }
+    if retrieval_status:
+        retrieval_section["status"] = retrieval_status.get("status")
+        retrieval_section["status_reasons"] = list(retrieval_status.get("reasons", []))
+        retrieval_section["status_report"] = dict(retrieval_status)
 
     trace = {
         "schema": TRACE_SCHEMA,
@@ -285,11 +296,7 @@ def build_query_trace(
             "host_assisted": host_assisted,
         },
         "dataset_ids": list(dataset_ids),
-        "retrieval": {
-            "top_k": top_k,
-            "similarity_threshold": similarity_threshold,
-            "chunk_count": chunk_count,
-        },
+        "retrieval": retrieval_section,
         "route": route,
         "timings_ms": dict(timings_ms or {}),
         "cost": {
@@ -322,6 +329,7 @@ def render_query_trace_markdown(trace: Mapping[str, Any]) -> str:
         f"- dataset_ids: `{', '.join(str(item) for item in trace.get('dataset_ids', []))}`",
         f"- top_k: `{retrieval.get('top_k', '')}`",
         f"- chunk_count: `{retrieval.get('chunk_count', '')}`",
+        f"- retrieval_status: `{retrieval.get('status', '')}`",
     ]
     rewrite = trace.get("rewrite") if isinstance(trace.get("rewrite"), Mapping) else None
     if rewrite:

@@ -641,7 +641,7 @@ class FakeClient:
             "data": {{
                 "chunks": [
                     {{
-                        "content_with_weight": "portable validation chunk with known term",
+                        "content_with_weight": f"portable validation chunk with known term for {{question}}",
                         "docnm_kwd": "platform-smoke.md",
                         "similarity": 0.98,
                         "kb_id": dataset_ids[0],
@@ -690,6 +690,10 @@ for mode, extra, output_name in [
         raise SystemExit(3)
     if not payload.get("evidence"):
         raise SystemExit(5)
+    if payload.get("retrieval_status") != "success":
+        raise SystemExit(20)
+    if payload.get("retrieval_status_report", {{}}).get("schema") != "ragflow_retrieval_status_v1":
+        raise SystemExit(21)
     (artifacts_dir / output_name).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\\n",
         encoding="utf-8",
@@ -804,6 +808,8 @@ if multi_code != 0:
 multi_payload = json.loads(stdout.getvalue())
 if "retrievals" not in multi_payload or not multi_payload.get("trace", {{}}).get("rewrite"):
     raise SystemExit(15)
+if multi_payload.get("retrieval_status") != "success":
+    raise SystemExit(20)
 (artifacts_dir / "query_multi.json").write_text(
     json.dumps(multi_payload, ensure_ascii=False, indent=2) + "\\n",
     encoding="utf-8",

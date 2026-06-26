@@ -57,6 +57,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     load_multi_query_file,
     load_routing_config,
     normalize_retrieval_response,
+    normalize_retrieval_status,
     query_fusion_report,
     query_cross_language_ab_report,
     query_pollution_report,
@@ -96,8 +97,10 @@ def _json_dump(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
-def _error(message: str, *, json_output: bool) -> int:
+def _error(message: str, *, json_output: bool, details: dict[str, Any] | None = None) -> int:
     payload = {"ok": False, "error": message}
+    if details:
+        payload.update(details)
     if json_output:
         _json_dump(payload)
     else:
@@ -218,6 +221,8 @@ def _build_retrieval_payload(
     chunks: list[NormalizedChunk],
     include_raw: bool,
 ) -> dict[str, Any]:
+    evidence = weight_evidence(question, chunks)
+    status_report = normalize_retrieval_status(chunks=chunks, evidence=evidence)
     return {
         "ok": True,
         "question": question,
@@ -226,7 +231,9 @@ def _build_retrieval_payload(
         "query_kind": query_kind,
         "dataset_ids": list(dataset_ids),
         "chunks": [chunk.to_dict(include_raw=include_raw) for chunk in chunks],
-        "evidence": weight_evidence(question, chunks),
+        "evidence": evidence,
+        "retrieval_status": status_report["status"],
+        "retrieval_status_report": status_report,
     }
 
 
@@ -367,12 +374,21 @@ def _ask(args: argparse.Namespace) -> int:
         )
         retrieval_duration_ms = (time.perf_counter() - retrieval_start) * 1000
     except (ConfigError, QueryRewriteError, RetrievalError, RoutingError, ValueError, OSError, RuntimeError) as exc:
-        return _error(str(exc), json_output=args.json)
+        status_report = normalize_retrieval_status(error=exc)
+        return _error(
+            str(exc),
+            json_output=args.json,
+            details={
+                "retrieval_status": status_report["status"],
+                "retrieval_status_report": status_report,
+            },
+        )
 
     total_duration_ms = (time.perf_counter() - total_start) * 1000
     finished_at = _utc_now()
     route_payload = route_result.to_dict() if route_result else None
     evidence = weight_evidence(args.question, chunks)
+    status_report = normalize_retrieval_status(chunks=chunks, evidence=evidence)
     trace = build_query_trace(
         question=args.question,
         requested_mode=args.mode,
@@ -392,6 +408,7 @@ def _ask(args: argparse.Namespace) -> int:
         finished_at=finished_at,
         warnings=[] if chunks else ["retrieval returned zero chunks"],
         rewrite_plan=rewrite_plan if rewrite_active else None,
+        retrieval_status=status_report,
         retrieval_call_count=retrieval_calls,
     )
     if fusion_report:
@@ -411,6 +428,8 @@ def _ask(args: argparse.Namespace) -> int:
             "similarity_threshold": effective_similarity_threshold,
             "fusion": "rrf" if fusion_report else args.fusion,
             "rewrite": args.rewrite,
+            "retrieval_status": status_report["status"],
+            "retrieval_status_report": status_report,
             "chunk_count": len(chunks),
             "synthesis": "host-assisted" if args.host_assisted else "not-requested",
             "duration_ms": round(total_duration_ms, 3),
@@ -426,6 +445,8 @@ def _ask(args: argparse.Namespace) -> int:
         "ok": True,
         **result.to_dict(include_raw=args.include_raw),
         "evidence": evidence,
+        "retrieval_status": status_report["status"],
+        "retrieval_status_report": status_report,
     }
     if retrieval_payloads and (args.multi_query or args.rewrite != "none" or args.fusion == "rrf"):
         payload["retrievals"] = retrieval_payloads

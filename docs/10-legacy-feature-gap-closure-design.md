@@ -879,6 +879,11 @@ Current public implementation adds deterministic `ragflow-query intent classify`
 `clarification_needed`, and `out_of_scope`, include confidence labels and low-confidence
 disclaimers, and do not retrieve, mutate RAGFlow, or call an LLM.
 
+`ragflow-query ask` also emits a normalized `retrieval_status` and
+`ragflow_retrieval_status_v1` report in JSON output, metadata, and traces. Statuses are
+bounded to `success`, `empty`, `low_quality`, `needs_refinement`, `clarification`,
+`rejected`, `error`, `timeout`, and `partial`.
+
 ## Feature Design 17: Skill Suite Review And Drift Control
 
 ### Problem

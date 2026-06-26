@@ -63,20 +63,26 @@ class QueryCliTests(unittest.TestCase):
 
     def test_missing_dataset_returns_clear_error_before_network(self) -> None:
         module = load_query_module()
-        code = module.main(
-            [
-                "--base-url",
-                "https://ragflow.example.test",
-                "--api-key",
-                "test-key",
-                "ask",
-                "question",
-                "--mode",
-                "direct",
-                "--json",
-            ]
-        )
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = module.main(
+                [
+                    "--base-url",
+                    "https://ragflow.example.test",
+                    "--api-key",
+                    "test-key",
+                    "ask",
+                    "question",
+                    "--mode",
+                    "direct",
+                    "--json",
+                ]
+            )
+        payload = json.loads(stdout.getvalue())
+
         self.assertEqual(code, 2)
+        self.assertEqual(payload["retrieval_status"], "error")
+        self.assertEqual(payload["retrieval_status_report"]["schema"], "ragflow_retrieval_status_v1")
 
     def test_runtime_options_are_accepted_after_subcommand(self) -> None:
         module = load_query_module()
@@ -146,8 +152,45 @@ class QueryCliTests(unittest.TestCase):
                     "--json",
                 ]
             )
+        payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 0, stdout.getvalue())
-        self.assertIn('"ok": true', stdout.getvalue().lower())
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["retrieval_status"], "success")
+        self.assertEqual(payload["retrieval_status_report"]["schema"], "ragflow_retrieval_status_v1")
+        self.assertEqual(payload["metadata"]["retrieval_status"], "success")
+
+    def test_direct_mode_marks_empty_retrieval_status(self) -> None:
+        class EmptyClient(FakeQueryClient):
+            def retrieve(self, *, question, dataset_ids, top_k=5, similarity_threshold=None):
+                return {"data": {"chunks": []}}
+
+        module = load_query_module()
+        module.RAGFlowClient = EmptyClient
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = module.main(
+                [
+                    "--base-url",
+                    "https://ragflow.example.test",
+                    "--api-key",
+                    "test-key",
+                    "ask",
+                    "question",
+                    "--mode",
+                    "direct",
+                    "--dataset-id",
+                    "ds-1",
+                    "--json",
+                    "--include-trace",
+                ]
+            )
+        payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(payload["retrieval_status"], "empty")
+        self.assertEqual(payload["metadata"]["retrieval_status"], "empty")
+        self.assertEqual(payload["trace"]["retrieval"]["status"], "empty")
+        self.assertIn("retrieval returned zero chunks", payload["trace"]["warnings"])
 
     def test_direct_mode_can_fuse_multiple_dataset_results(self) -> None:
         class MultiDatasetClient(FakeQueryClient):
@@ -205,6 +248,7 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual([request["dataset_ids"] for request in FakeQueryClient.requests], [["ds-1"], ["ds-2"]])
         self.assertEqual(payload["fusion"]["schema"], "ragflow_fusion_report_v1")
         self.assertEqual(payload["metadata"]["fusion"], "rrf")
+        self.assertEqual(payload["retrieval_status"], "success")
         self.assertIn("fusion", payload["trace"])
         self.assertEqual(len(payload["chunks"]), 2)
 
@@ -567,6 +611,7 @@ class QueryCliTests(unittest.TestCase):
             self.assertIn("evidence", payload)
             self.assertIn("trace", payload)
             self.assertEqual(payload["trace"]["schema"], "ragflow_query_trace_v1")
+            self.assertEqual(payload["trace"]["retrieval"]["status"], "success")
             self.assertTrue(trace_json.exists())
             self.assertIn("RAGFlow Query Trace", trace_md.read_text(encoding="utf-8"))
             self.assertEqual(audit_code, 0)

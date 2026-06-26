@@ -58,6 +58,7 @@ Notes:
 - `ask --fusion rrf` retrieves each selected dataset separately when multiple dataset IDs are present, then returns an offline fusion report and fused evidence order.
 - `--mode agentic --host-assisted` still retrieves from RAGFlow; the host agent performs final synthesis from returned evidence.
 - `ask` returns deterministic evidence weights and can write `--trace-json` / `--trace-md` for host-agent debugging.
+- `ask --json` includes `retrieval_status` plus a `ragflow_retrieval_status_v1` report so hosts can distinguish `success`, `empty`, `low_quality`, `needs_refinement`, `clarification`, `rejected`, `error`, `timeout`, and `partial`.
 - Use `audit-citations` after host synthesis to check simple numeric citations like `[1]` against retrieved evidence.
 - Use `evaluate-answer` after host synthesis for deterministic offline answer checks: required citations, citation reachability, unsupported uncited statements, expected terms, cited evidence score, and no-evidence abstention behavior. It does not call an LLM evaluator.
 - Use `diagnose-result` to review weak retrieval, default routing, missing expected terms, and citation-audit findings from saved artifacts.
