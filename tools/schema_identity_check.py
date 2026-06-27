@@ -366,6 +366,13 @@ EXPECTED_IDENTITIES = (
         coverage_patterns=("ragflow_query_diagnostic_report_v1", "QUERY_DIAGNOSTIC_SCHEMA"),
     ),
     SchemaIdentity(
+        key="report_redaction_report",
+        group="diagnostic",
+        identity="ragflow_report_redaction_report_v1",
+        source_patterns=("ragflow_report_redaction_report_v1",),
+        coverage_patterns=("ragflow_report_redaction_report_v1", "REPORT_REDACTION_REPORT_SCHEMA"),
+    ),
+    SchemaIdentity(
         key="route_test_report",
         group="route",
         identity="ragflow_route_test_report_v1",
@@ -464,6 +471,15 @@ EXPECTED_IDENTITIES = (
         coverage_patterns=("ragflow_version_date_drift_check_v1", "run_version_date_drift_check"),
         description="Release governance report for package, manifest, docs, and skill metadata version/date drift.",
         source_roots=(Path("tools/version_date_drift_check.py"),),
+    ),
+    SchemaIdentity(
+        key="generated_report_safety_check",
+        group="release",
+        identity="ragflow_generated_report_safety_check_v1",
+        source_patterns=("ragflow_generated_report_safety_check_v1",),
+        coverage_patterns=("ragflow_generated_report_safety_check_v1", "run_generated_report_safety_check"),
+        description="Release governance report for generated-report and example redaction safety.",
+        source_roots=(Path("tools/release_hygiene_check.py"),),
     ),
 )
 

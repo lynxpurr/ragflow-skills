@@ -1,0 +1,43 @@
+{
+  "schema": "ragflow_report_redaction_report_v1",
+  "created_at": "2026-01-01T00:00:00+00:00",
+  "ok": true,
+  "summary": {
+    "changed": true,
+    "redaction_count": 3,
+    "field_count": 3,
+    "triggered_rule_count": 3
+  },
+  "target_counts": {
+    "explicit_secrets": 1,
+    "private_hosts": 1,
+    "home_paths": 1,
+    "config_paths": 1
+  },
+  "rule_counts": {
+    "explicit_secret": 0,
+    "bearer_token": 1,
+    "query_secret": 0,
+    "assignment_secret": 0,
+    "private_host": 1,
+    "home_path": 0,
+    "config_path": 1
+  },
+  "findings": [
+    {
+      "path": "$.auth",
+      "rule": "bearer_token",
+      "count": 1
+    },
+    {
+      "path": "$.endpoint_summary",
+      "rule": "private_host",
+      "count": 1
+    },
+    {
+      "path": "$.config_path",
+      "rule": "config_path",
+      "count": 1
+    }
+  ]
+}

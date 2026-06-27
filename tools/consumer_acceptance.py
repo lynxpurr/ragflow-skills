@@ -702,6 +702,43 @@ def _write_command_manifest(
     }
 
 
+def _write_generated_report_redaction_fixture(work_root: Path) -> tuple[dict[str, Any], list[Path]]:
+    report_path = work_root / "generated_report_fixture.json"
+    redaction_path = work_root / "generated_report_fixture.redaction.json"
+    fake_secret = "fake-generated-report-secret"
+    fake_config_path = str(work_root / "private" / "config.local.yaml")
+    raw_report = {
+        "schema": "ragflow_acceptance_generated_report_fixture_v1",
+        "endpoint": "http://" + ".".join(("100", "64", "10", "20")) + f":8080/v1?token={fake_secret}",
+        "message": f"api_key={fake_secret}",
+        "config_path": fake_config_path,
+    }
+    sanitized, redaction_report = sanitize_report_payload(
+        raw_report,
+        explicit_secrets=[fake_secret],
+        private_hosts=configured_private_hosts_from_urls([raw_report["endpoint"]]),
+        home_paths=[str(work_root)],
+        config_paths=[fake_config_path],
+    )
+    report_path.write_text(json.dumps(sanitized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    redaction_path.write_text(json.dumps(redaction_report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    combined = report_path.read_text(encoding="utf-8") + redaction_path.read_text(encoding="utf-8")
+    ok = (
+        fake_secret not in combined
+        and fake_config_path not in combined
+        and redaction_report["summary"]["redaction_count"] >= 3
+    )
+    return (
+        {
+            "name": "generated report redaction fixture",
+            "ok": ok,
+            "path": str(report_path),
+            "error": "" if ok else "fake generated report fixture leaked a secret or did not redact expected fields",
+        },
+        [report_path, redaction_path],
+    )
+
+
 def _run_no_network_checks(
     *,
     extract_dir: Path,
@@ -711,6 +748,10 @@ def _run_no_network_checks(
 ) -> tuple[list[dict[str, Any]], list[Path]]:
     checks: list[dict[str, Any]] = []
     produced: list[Path] = []
+
+    redaction_check, redaction_artifacts = _write_generated_report_redaction_fixture(work_root)
+    checks.append(redaction_check)
+    produced.extend(redaction_artifacts)
 
     _record_file_check(
         checks,
@@ -889,6 +930,7 @@ def _run_no_network_checks(
 
     backend_probe_json = work_root / "backend_probe.json"
     backend_probe_md = work_root / "backend_probe.md"
+    backend_probe_redaction = work_root / "backend_probe_redaction.json"
     backend_probe_result = _run_command(
         [
             python_executable,
@@ -903,6 +945,8 @@ def _run_no_network_checks(
             str(backend_probe_json),
             "--report-md",
             str(backend_probe_md),
+            "--redaction-report",
+            str(backend_probe_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -918,6 +962,8 @@ def _run_no_network_checks(
         produced.append(backend_probe_json)
     if backend_probe_md.exists():
         produced.append(backend_probe_md)
+    if backend_probe_redaction.exists():
+        produced.append(backend_probe_redaction)
 
     backend_warmup_json = work_root / "backend_warmup.json"
     backend_warmup_md = work_root / "backend_warmup.md"

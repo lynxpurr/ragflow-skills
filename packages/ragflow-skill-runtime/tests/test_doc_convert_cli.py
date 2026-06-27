@@ -1140,6 +1140,48 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(json.loads(missing.stdout)["backends"][0]["status"], "not_configured")
         self.assertEqual(json.loads(wrong_protocol.stdout)["backends"][0]["status"], "wrong_protocol")
 
+    def test_backend_probe_writes_redaction_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_json = root / "backend_probe.json"
+            redaction_json = root / "backend_probe_redaction.json"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "backend",
+                    "probe",
+                    "--backend",
+                    "mineru",
+                    "--mineru-base-url",
+                    "http://" + ".".join(("100", "64", "10", "20")) + ":8080/api/v1?token=fake-secret",
+                    "--mineru-api-key",
+                    "mineru-secret",
+                    "--report-json",
+                    str(report_json),
+                    "--redaction-report",
+                    str(redaction_json),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            report_text = report_json.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            report_payload = json.loads(report_text)
+            redaction_payload = json.loads(redaction_text)
+
+        combined = "\n".join([result.stdout, report_text, redaction_text])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(report_payload["schema"], "ragflow_doc_backend_probe_report_v1")
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["target_counts"]["explicit_secrets"], 1)
+        self.assertGreaterEqual(redaction_payload["target_counts"]["private_hosts"], 1)
+        self.assertNotIn("fake-secret", combined)
+        self.assertNotIn("mineru-secret", combined)
+
     def test_backend_probe_mineru_cli_uses_configured_executable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

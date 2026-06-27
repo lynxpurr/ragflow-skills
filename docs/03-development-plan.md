@@ -1024,17 +1024,23 @@ Tasks:
 - [ ] Add partial-failure report schemas for timeout, partial, and skipped profiles.
 - [x] Add a shared report sanitizer for API keys, bearer tokens, configured private hosts, home paths, and local config paths.
 - [ ] Add `--redaction-report` to relevant commands.
-- [ ] Extend release hygiene to scan generated reports and examples.
-- [ ] Add acceptance fixtures that intentionally include fake secrets and verify redaction.
+- [x] Extend release hygiene to scan generated reports and examples.
+- [x] Add acceptance fixtures that intentionally include fake secrets and verify redaction.
 - [ ] Add documentation for host agents explaining where sanitized reports should be stored.
+
+Status note: `--redaction-report` currently covers `ragflow-query endpoint-report`,
+`ragflow-kb-build model-providers probe`, and `ragflow-doc-to-md backend probe`. Broader
+report-command coverage and host-agent report storage guidance remain open. Release hygiene
+now scans generated reports/examples for raw sensitive literals and validates redaction
+sidecars; consumer acceptance includes a fake generated-report redaction fixture.
 
 Recommended next slices:
 
 1. Finish generated-report safety before broader runtime primitives: add focused
    `--redaction-report` coverage to report commands that may include endpoints, config
    paths, work paths, or host-supplied sidecar paths.
-2. Extend release hygiene and acceptance fixtures with fake generated reports containing
-   fake secrets/private paths, proving sanitizer behavior without live endpoints.
+2. Add host-agent documentation for where sanitized reports and redaction sidecars should
+   be stored, retained, or omitted from shared transcripts.
 3. Add the smallest shared retry/backoff and metrics helpers first, recording retry budgets
    and latency summaries in traces or reports where those helpers are used.
 4. Defer broader rate limiting, circuit breakers, cache invalidation, checkpoint/resume,

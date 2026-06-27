@@ -55,11 +55,17 @@ PRIVATE_FILE_NAMES = {
 
 ALLOW_MARKER = "release-hygiene: allow"
 SUITE_REVIEW_SCHEMA = "ragflow_skill_suite_review_v1"
+GENERATED_REPORT_SAFETY_SCHEMA = "ragflow_generated_report_safety_check_v1"
 REQUIRED_REFERENCE_FILES = (
     "host-agent-setup.md",
     "user-onboarding-prompt.md",
 )
+DEFAULT_GENERATED_REPORT_ROOTS = (
+    Path("skills"),
+    Path("tools/fixtures/generated-reports"),
+)
 MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
+REDACTION_PLACEHOLDER_RE = re.compile(r"<redacted:[^>]+>")
 DESCRIPTION_STOPWORDS = {
     "a",
     "an",
@@ -575,6 +581,115 @@ def detect_repeated_warnings(
     return findings
 
 
+def _is_redaction_sidecar(path: Path) -> bool:
+    return path.name.endswith((".redaction.json", "_redaction.json"))
+
+
+def _candidate_redaction_sidecars(path: Path) -> tuple[Path, ...]:
+    if _is_redaction_sidecar(path):
+        return ()
+    return (
+        path.with_name(f"{path.stem}.redaction.json"),
+        path.with_name(f"{path.stem}_redaction.json"),
+    )
+
+
+def _valid_redaction_sidecar(path: Path) -> bool:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    return (
+        payload.get("schema") == "ragflow_report_redaction_report_v1"
+        and payload.get("ok") is True
+        and int(summary.get("redaction_count") or 0) > 0
+    )
+
+
+def _iter_generated_report_candidates(root: Path) -> Iterable[Path]:
+    if not root.exists():
+        return
+    for path in iter_files(root):
+        if path.suffix.lower() in {".json", ".md", ".yaml", ".yml"}:
+            yield path
+
+
+def run_generated_report_safety_check(
+    *,
+    root: Path = ROOT,
+    report_roots: tuple[Path, ...] = DEFAULT_GENERATED_REPORT_ROOTS,
+) -> dict[str, Any]:
+    """Scan public generated reports/examples for raw sensitive literals and redaction sidecars."""
+
+    root = root.resolve()
+    findings: list[Finding] = []
+    checked_files: list[str] = []
+    placeholder_files: list[str] = []
+    sidecar_files: list[str] = []
+    for relative_root in report_roots:
+        report_root = (root / relative_root).resolve() if not relative_root.is_absolute() else relative_root.resolve()
+        for path in _iter_generated_report_candidates(report_root):
+            text = _read_text(path)
+            if text is None:
+                continue
+            relative_path = _relative(path, root)
+            checked_files.append(relative_path)
+            if _is_redaction_sidecar(path):
+                sidecar_files.append(relative_path)
+                if not _valid_redaction_sidecar(path):
+                    findings.append(
+                        Finding(
+                            check="generated_report_redaction_sidecar",
+                            path=relative_path,
+                            message="redaction sidecar must use ragflow_report_redaction_report_v1 with redaction_count > 0",
+                        )
+                    )
+                continue
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                if ALLOW_MARKER in line:
+                    continue
+                for label, pattern in FORBIDDEN_PATTERNS:
+                    if pattern.search(line):
+                        findings.append(
+                            Finding(
+                                check="generated_report_sensitive_literal",
+                                path=relative_path,
+                                line=line_no,
+                                message=f"generated report or example contains unredacted sensitive literal: {label}",
+                            )
+                        )
+            if REDACTION_PLACEHOLDER_RE.search(text):
+                placeholder_files.append(relative_path)
+                if not any(_valid_redaction_sidecar(sidecar) for sidecar in _candidate_redaction_sidecars(path)):
+                    findings.append(
+                        Finding(
+                            check="generated_report_missing_redaction_sidecar",
+                            path=relative_path,
+                            message="generated report with redaction placeholders must have a valid adjacent redaction sidecar",
+                        )
+                    )
+
+    return {
+        "ok": not findings,
+        "schema": GENERATED_REPORT_SAFETY_SCHEMA,
+        "root": str(root),
+        "report_roots": [_relative((root / path).resolve() if not path.is_absolute() else path.resolve(), root) for path in report_roots],
+        "summary": {
+            "checked_file_count": len(checked_files),
+            "placeholder_file_count": len(placeholder_files),
+            "sidecar_file_count": len(sidecar_files),
+            "finding_count": len(findings),
+        },
+        "checked_files": sorted(checked_files),
+        "placeholder_files": sorted(placeholder_files),
+        "sidecar_files": sorted(sidecar_files),
+        "findings": [finding.to_dict() for finding in findings],
+    }
+
+
 def run_suite_review(
     *,
     skills_root: Path = ROOT / "skills",
@@ -677,6 +792,7 @@ def run_hygiene_check(
     rename_governance: bool = True,
     forward_test_prompts: bool = True,
     version_date_drift: bool = True,
+    generated_report_safety: bool = True,
 ) -> dict[str, Any]:
     if rebuild:
         build_release(dist_dir)
@@ -728,6 +844,10 @@ def run_hygiene_check(
         version_date_drift_payload = run_version_date_drift_check(root=ROOT)
         payload["version_date_drift"] = version_date_drift_payload
         payload["ok"] = bool(payload["ok"] and version_date_drift_payload["ok"])
+    if generated_report_safety:
+        generated_report_payload = run_generated_report_safety_check(root=ROOT)
+        payload["generated_report_safety"] = generated_report_payload
+        payload["ok"] = bool(payload["ok"] and generated_report_payload["ok"])
     return payload
 
 
@@ -741,6 +861,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-rename-governance", action="store_true", help="Skip static rename governance checks")
     parser.add_argument("--skip-forward-test-prompts", action="store_true", help="Skip host-agent forward-test prompt checks")
     parser.add_argument("--skip-version-date-drift", action="store_true", help="Skip static version/date drift checks")
+    parser.add_argument("--skip-generated-report-safety", action="store_true", help="Skip generated report/example safety checks")
     args = parser.parse_args(argv)
 
     payload = run_hygiene_check(
@@ -752,6 +873,7 @@ def main(argv: list[str] | None = None) -> int:
         rename_governance=not args.skip_rename_governance,
         forward_test_prompts=not args.skip_forward_test_prompts,
         version_date_drift=not args.skip_version_date_drift,
+        generated_report_safety=not args.skip_generated_report_safety,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if payload["ok"] else 1

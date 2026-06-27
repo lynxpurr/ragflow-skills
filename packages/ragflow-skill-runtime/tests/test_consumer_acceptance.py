@@ -74,6 +74,7 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertTrue(payload["ok"], payload)
         check_names = [check["name"] for check in payload["checks"]]
         self.assertIn("vendored runtime present", check_names)
+        self.assertIn("generated report redaction fixture", check_names)
         self.assertIn("doc-to-md passthrough", check_names)
         self.assertIn("quality_report produced", check_names)
         self.assertIn("doc-to-md image fallback", check_names)

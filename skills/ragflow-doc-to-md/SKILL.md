@@ -21,7 +21,7 @@ python scripts/convert.py --input ./raw --output ./handoff --backend builtin
 python scripts/convert.py --input ./raw --output ./handoff --backend mineru-cli --mineru-cli-path /opt/mineru/bin/mineru
 python scripts/convert.py --input ./raw --output ./handoff --backend mineru
 python scripts/convert.py --input ./raw --output ./handoff --backend remote --remote-url https://converter.example/api/convert
-python scripts/convert.py backend probe --backend auto --report-json ./run/backend_probe.json --report-md ./run/backend_probe.md --json
+python scripts/convert.py backend probe --backend auto --report-json ./run/backend_probe.json --report-md ./run/backend_probe.md --redaction-report ./run/backend_probe_redaction.json --json
 python scripts/convert.py --config /path/to/ragflow-config.local.yaml --input ./raw --output ./handoff --json
 python scripts/convert.py inspect --doc-manifest ./handoff/doc_manifest.json --report-md ./handoff/quality_report.md
 python scripts/convert.py segment-plan --markdown ./handoff/documents/book.md --output ./handoff/segmentation_plan.json
@@ -77,7 +77,7 @@ Notes:
 - `doc_manifest.json` uses `source_root: "."`, so downstream `ragflow-kb-build` can consume it after the handoff directory moves.
 - `quality_gate.status` is written into `doc_manifest.json`; `ragflow-kb-build` blocks `BLOCKED` handoffs unless the user passes `--allow-blocked`.
 - Use `--strict` when skipped files should fail the run.
-- Use `backend probe` before live conversion to classify backends as `available`, `missing`, `wrong_protocol`, `timeout`, or `not_configured`. It does not convert files, and endpoint checks require explicit `--network-check`.
+- Use `backend probe` before live conversion to classify backends as `available`, `missing`, `wrong_protocol`, `timeout`, or `not_configured`. It can emit `--redaction-report`, does not convert files, and endpoint checks require explicit `--network-check`.
 - Use `backend warmup --fixture <tiny-file>` when the user has approved a small converter fixture and wants to run one bounded conversion readiness check. Add `--fail-on-failed` for CI gates.
 - Image inputs fall back to Markdown with the source image copied into `documents/images/` when OCR/conversion is unavailable; this sets `quality_gate.status` to `PASS_WITH_REVIEW`. Use `--no-image-fallback` to skip that behavior.
 - When a local process-backed converter such as `mineru-cli` runs, `runtime_report.json` records process attempt status, timeout cleanup, and leftover process counts. Use `--runtime-report-md` for a Markdown copy.

@@ -11,7 +11,12 @@ TOOLS_DIR = ROOT / "tools"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from release_hygiene_check import run_hygiene_check, run_suite_review, scan_forbidden_patterns  # noqa: E402
+from release_hygiene_check import (  # noqa: E402
+    run_generated_report_safety_check,
+    run_hygiene_check,
+    run_suite_review,
+    scan_forbidden_patterns,
+)
 
 
 PUBLIC_SKILLS = ("ragflow-doc-to-md", "ragflow-kb-build", "ragflow-query")
@@ -65,6 +70,8 @@ class ReleaseHygieneTests(unittest.TestCase):
         self.assertEqual(payload["forward_test_prompts"]["schema"], "ragflow_forward_test_prompt_check_v1")
         self.assertTrue(payload["version_date_drift"]["ok"])
         self.assertEqual(payload["version_date_drift"]["schema"], "ragflow_version_date_drift_check_v1")
+        self.assertTrue(payload["generated_report_safety"]["ok"])
+        self.assertEqual(payload["generated_report_safety"]["schema"], "ragflow_generated_report_safety_check_v1")
 
     def test_forbidden_private_path_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -78,6 +85,42 @@ class ReleaseHygieneTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0].check, "personal_home_path")
         self.assertEqual(findings[0].line, 1)
+
+    def test_generated_report_safety_accepts_sanitized_report_with_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reports = root / "reports"
+            reports.mkdir()
+            (reports / "query_endpoint_report.json").write_text(
+                '{"schema":"ragflow_query_endpoint_report_v1","url":"https://<redacted:private-host>/v1"}\n',
+                encoding="utf-8",
+            )
+            (reports / "query_endpoint_report.redaction.json").write_text(
+                '{"schema":"ragflow_report_redaction_report_v1","ok":true,"summary":{"redaction_count":1}}\n',
+                encoding="utf-8",
+            )
+
+            payload = run_generated_report_safety_check(root=root, report_roots=(Path("reports"),))
+
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["summary"]["placeholder_file_count"], 1)
+        self.assertEqual(payload["summary"]["sidecar_file_count"], 1)
+
+    def test_generated_report_safety_reports_unsanitized_literals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reports = root / "reports"
+            reports.mkdir()
+            (reports / "bad_report.json").write_text(
+                '{"schema":"demo","message":"api_key=fake-generated-report-secret","path":"/home/private-user/.ragflow/config.local.yaml"}\n',
+                encoding="utf-8",
+            )
+
+            payload = run_generated_report_safety_check(root=root, report_roots=(Path("reports"),))
+
+        checks = {finding["check"] for finding in payload["findings"]}
+        self.assertFalse(payload["ok"], payload)
+        self.assertIn("generated_report_sensitive_literal", checks)
 
     def test_suite_review_passes_for_public_skills(self) -> None:
         payload = run_suite_review()

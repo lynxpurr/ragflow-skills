@@ -993,7 +993,14 @@ Capabilities:
 Implementation status: backend probes/warmup, image fallback review gates, model-provider
 probes, adapter request-shape probes, `ragflow-query endpoint-report`,
 `ragflow-query fallback-test`, and the shared report sanitizer are implemented. Broader
-`--redaction-report` coverage remains open.
+`--redaction-report` coverage remains open, but sidecar coverage now includes
+`ragflow-doc-to-md backend probe`, `ragflow-kb-build model-providers probe`, and
+`ragflow-query endpoint-report`. Release hygiene now emits
+`ragflow_generated_report_safety_check_v1`, scanning generated reports and examples for
+raw sensitive literals and requiring valid redaction sidecars when redaction placeholders
+are present. Consumer acceptance includes a fake generated-report fixture with fake secret,
+private endpoint, and config-path inputs to prove sanitized output plus sidecar behavior
+without live endpoints.
 
 Post-Phase 35 sequencing should finish generated-report safety before broad runtime helper
 work. First extend `--redaction-report` coverage and release hygiene scans for generated

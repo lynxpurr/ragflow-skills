@@ -37,6 +37,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     QualityDocument,
     convert_source_to_markdown,
     create_rich_handoff_package,
+    configured_private_hosts_from_urls,
     discover_source_documents,
     extract_markdown_title,
     HandoffError,
@@ -56,6 +57,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_doc_runtime_markdown,
     render_quality_markdown,
     safe_markdown_name,
+    sanitize_report_payload,
     sha256_file,
     warmup_conversion_backend,
 )
@@ -477,15 +479,30 @@ def _run_backend_probe(args: argparse.Namespace) -> int:
     try:
         config = load_skill_config(config_file=args.config)
         backend = args.backend or config.doc_to_md.backend or "auto"
+        remote_url = _config_or_arg(args, "remote_url", config.doc_to_md.remote_url)
+        mineru_base_url = _config_or_arg(args, "mineru_base_url", config.mineru.base_url)
+        mineru_api_key = _config_or_arg(args, "mineru_api_key", config.mineru.api_key)
+        mineru_cli_path = _config_or_arg(args, "mineru_cli_path", config.mineru.cli_path)
         report = probe_conversion_backends(
             backend=backend,
-            remote_url=_config_or_arg(args, "remote_url", config.doc_to_md.remote_url),
-            mineru_base_url=_config_or_arg(args, "mineru_base_url", config.mineru.base_url),
-            mineru_api_key=_config_or_arg(args, "mineru_api_key", config.mineru.api_key),
-            mineru_cli_path=_config_or_arg(args, "mineru_cli_path", config.mineru.cli_path),
+            remote_url=remote_url,
+            mineru_base_url=mineru_base_url,
+            mineru_api_key=mineru_api_key,
+            mineru_cli_path=mineru_cli_path,
             network_check=args.network_check,
             timeout=args.probe_timeout,
         )
+        if args.redaction_report:
+            report, redaction_report = sanitize_report_payload(
+                report,
+                explicit_secrets=[config.doc_to_md.remote_api_key, config.mineru.api_key, args.mineru_api_key],
+                private_hosts=configured_private_hosts_from_urls([remote_url, mineru_base_url]),
+                home_paths=[mineru_cli_path],
+                config_paths=[args.config, os.environ.get("RAGFLOW_CONFIG")],
+            )
+            redaction_path = Path(args.redaction_report)
+            redaction_path.parent.mkdir(parents=True, exist_ok=True)
+            redaction_path.write_text(json.dumps(redaction_report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         if args.report_json:
             report_json = Path(args.report_json)
             report_json.parent.mkdir(parents=True, exist_ok=True)
@@ -669,6 +686,7 @@ def build_backend_parser() -> argparse.ArgumentParser:
     probe.add_argument("--probe-timeout", type=float, default=2.0, help="Maximum seconds for each network probe")
     probe.add_argument("--report-json", help="Optional backend probe JSON report path")
     probe.add_argument("--report-md", help="Optional backend probe Markdown report path")
+    probe.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     probe.add_argument("--fail-on-unavailable", action="store_true", help="Return non-zero when the selected backend is unavailable")
     probe.add_argument("--json", action="store_true", help="Emit JSON")
     probe.set_defaults(func=_run_backend_probe)

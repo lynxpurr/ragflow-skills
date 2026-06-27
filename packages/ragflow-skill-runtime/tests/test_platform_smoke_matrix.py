@@ -93,6 +93,10 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
             profile["artifacts"],
         )
         self.assertTrue(
+            any(path.endswith("backend_probe_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
             any(path.endswith("backend_warmup.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
