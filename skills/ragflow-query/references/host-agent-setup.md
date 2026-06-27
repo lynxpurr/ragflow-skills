@@ -28,6 +28,14 @@ Recommended real config paths:
 
 The config file may contain `${ENV_VAR}` placeholders. Put secret values in the host environment, secret store, or mounted secret path.
 
+## Sanitized Reports And Redaction Sidecars
+
+Write generated reports for a run under one private workspace, for example `/tmp/ragflow-skills-e2e/reports` or a user-approved project artifact directory. Keep sanitized `--report-json`, `--report-md`, and matching `--redaction-report` sidecars together so later reviewers can verify what was redacted without seeing raw endpoint, key, home-path, or config-path values.
+
+Share sanitized reports and redaction sidecars when useful. Do not paste unsanitized reports, local config paths, private service URLs, key fragments, or raw host logs into shared transcripts. Redaction sidecars should contain schema, counts, and findings only; if a sidecar contains raw secret material, treat it as private and regenerate the report through the skill command.
+
+Temporary report directories can be removed after the user has collected the sanitized artifacts they want to keep. Keep durable copies only in private project storage or a host-agent artifact store, not inside released skill folders.
+
 ## Minimal Config
 
 Create the host config from `templates/ragflow-config.example.yaml` if it does not exist. Keep placeholders for secrets:

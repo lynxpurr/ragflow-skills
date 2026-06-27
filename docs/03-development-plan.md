@@ -1026,24 +1026,25 @@ Tasks:
 - [ ] Add `--redaction-report` to relevant commands.
 - [x] Extend release hygiene to scan generated reports and examples.
 - [x] Add acceptance fixtures that intentionally include fake secrets and verify redaction.
-- [ ] Add documentation for host agents explaining where sanitized reports should be stored.
+- [x] Add documentation for host agents explaining where sanitized reports should be stored.
 
 Status note: `--redaction-report` currently covers `ragflow-query endpoint-report`,
+`ragflow-query evaluate-answer`, `ragflow-query diagnose-result`,
 `ragflow-kb-build model-providers probe`, and `ragflow-doc-to-md backend probe`. Broader
-report-command coverage and host-agent report storage guidance remain open. Release hygiene
-now scans generated reports/examples for raw sensitive literals and validates redaction
-sidecars; consumer acceptance includes a fake generated-report redaction fixture.
+report-command coverage remains open. Release hygiene now scans generated reports/examples
+for raw sensitive literals and validates redaction sidecars; consumer acceptance includes a
+fake generated-report redaction fixture. Public host-agent setup references document where
+sanitized reports and redaction sidecars should be stored and what must stay out of shared
+transcripts.
 
 Recommended next slices:
 
 1. Finish generated-report safety before broader runtime primitives: add focused
    `--redaction-report` coverage to report commands that may include endpoints, config
    paths, work paths, or host-supplied sidecar paths.
-2. Add host-agent documentation for where sanitized reports and redaction sidecars should
-   be stored, retained, or omitted from shared transcripts.
-3. Add the smallest shared retry/backoff and metrics helpers first, recording retry budgets
+2. Add the smallest shared retry/backoff and metrics helpers first, recording retry budgets
    and latency summaries in traces or reports where those helpers are used.
-4. Defer broader rate limiting, circuit breakers, cache invalidation, checkpoint/resume,
+3. Defer broader rate limiting, circuit breakers, cache invalidation, checkpoint/resume,
    and partial-failure schemas until at least one narrow report or probe command consumes
    the helper with deterministic tests.
 

@@ -153,6 +153,189 @@ class QueryCliTests(unittest.TestCase):
         self.assertNotIn("secret-key", combined)
         self.assertNotIn("fake-secret", combined)
 
+    def test_evaluate_answer_writes_redacted_report_sidecar(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            query_output = root / "query.json"
+            report_json = root / "answer_eval.json"
+            report_md = root / "answer_eval.md"
+            redaction_json = root / "answer_eval_redaction.json"
+            private_host = ".".join(["192", "168", "44", "55"])
+            fake_token = "fake-eval-token"
+            fake_key = "fake-eval-secret"
+            home_path = str(Path.home() / ".ragflow" / "config.local.yaml")
+            query_output.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "question": (
+                            f"Can known term use http://{private_host}:9380/v1?token={fake_token} "
+                            f"from {home_path}?"
+                        ),
+                        "chunks": [
+                            {
+                                "chunk_id": "chunk-1",
+                                "content": "known term is available in this validation chunk",
+                                "similarity": 0.91,
+                                "document_name": "doc.md",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            answer = f"The known term is supported [1]. Debug api_key={fake_key} path {query_output}"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "evaluate-answer",
+                        "--query-output",
+                        str(query_output),
+                        "--answer",
+                        answer,
+                        "--expected-term",
+                        "known term",
+                        "--require-citation",
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
+                        "--json",
+                    ]
+                )
+            output = stdout.getvalue()
+            payload = json.loads(output)
+            report_text = report_json.read_text(encoding="utf-8")
+            markdown = report_md.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
+
+        combined = "\n".join([output, report_text, markdown, redaction_text])
+        self.assertEqual(code, 0, output)
+        self.assertEqual(payload["schema"], "ragflow_answer_evaluation_report_v1")
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["config_path"], 1)
+        self.assertIn("<redacted:private-host>", combined)
+        self.assertIn("<redacted:secret>", combined)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
+        self.assertNotIn(str(query_output), combined)
+
+    def test_diagnose_result_writes_redacted_report_sidecar(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            query_output = root / "query.json"
+            trace_json = root / "trace.json"
+            audit_json = root / "citation_audit.json"
+            report_json = root / "diagnostic.json"
+            report_md = root / "diagnostic.md"
+            redaction_json = root / "diagnostic_redaction.json"
+            private_host = ".".join(["10", "44", "55", "66"])
+            fake_token = "fake-diagnostic-token"
+            fake_key = "fake-diagnostic-secret"
+            home_path = str(Path.home() / ".ragflow" / "diagnostic.local.yaml")
+            query_output.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "question": (
+                            f"Can known term use http://{private_host}:9380/api?token={fake_token} "
+                            f"from {home_path}?"
+                        ),
+                        "mode": "agentic",
+                        "dataset_ids": ["ds-diagnostic"],
+                        "chunks": [
+                            {
+                                "chunk_id": "chunk-1",
+                                "content": "known term appears in this diagnostic chunk",
+                                "similarity": 0.91,
+                                "document_name": "doc.md",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            trace_json.write_text(
+                json.dumps(
+                    {
+                        "warnings": [
+                            f"probe used Bearer {fake_key} at http://{private_host}:8080/path?access_token={fake_token}",
+                            f"trace path {trace_json}",
+                        ],
+                        "route": {"selected": {"reason": "default", "name": home_path, "dataset_id": "ds"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            audit_json.write_text(
+                json.dumps(
+                    {
+                        "metrics": {
+                            "invalid_citation_count": 0,
+                            "warnings": 1,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "diagnose-result",
+                        "--query-output",
+                        str(query_output),
+                        "--trace-json",
+                        str(trace_json),
+                        "--citation-audit",
+                        str(audit_json),
+                        "--expected-term",
+                        "known term",
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
+                        "--json",
+                    ]
+                )
+            output = stdout.getvalue()
+            payload = json.loads(output)
+            report_text = report_json.read_text(encoding="utf-8")
+            markdown = report_md.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
+
+        combined = "\n".join([output, report_text, markdown, redaction_text])
+        self.assertEqual(code, 0, output)
+        self.assertEqual(payload["schema"], "ragflow_query_diagnostic_report_v1")
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["bearer_token"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["config_path"], 1)
+        self.assertIn("<redacted:private-host>", combined)
+        self.assertIn("<redacted:bearer-token>", combined)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
+        self.assertNotIn(str(trace_json), combined)
+
     def test_kb_manifest_can_supply_dataset_id_before_network(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:

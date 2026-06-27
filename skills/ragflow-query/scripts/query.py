@@ -8,6 +8,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 import os
+import re
 import sys
 import time
 from typing import Any
@@ -120,6 +121,9 @@ from ragflow_skill_runtime import (  # noqa: E402
 )
 
 
+_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
+
+
 def _json_dump(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
@@ -177,6 +181,22 @@ def _write_text(path: str | None, text: str) -> None:
 def _write_json(path: str | None, data: Any) -> None:
     if path:
         _write_text(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+
+def _collect_urls(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return _URL_RE.findall(value)
+    if isinstance(value, dict):
+        urls: list[str] = []
+        for item in value.values():
+            urls.extend(_collect_urls(item))
+        return urls
+    if isinstance(value, (list, tuple)):
+        urls = []
+        for item in value:
+            urls.extend(_collect_urls(item))
+        return urls
+    return []
 
 
 def _read_json(path: str | Path) -> Any:
@@ -865,6 +885,59 @@ def _audit_citations(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _sanitize_answer_evaluation_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+    answer: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(report),
+        *_collect_urls(answer),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.answer_file,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _sanitize_query_diagnostic_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+    trace: dict[str, Any] | None,
+    citation_audit: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(trace or {}),
+        *_collect_urls(citation_audit or {}),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.trace_json,
+            args.citation_audit,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
 def _evaluate_answer(args: argparse.Namespace) -> int:
     try:
         query_payload = _read_json(args.query_output)
@@ -883,6 +956,9 @@ def _evaluate_answer(args: argparse.Namespace) -> int:
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_answer_evaluation_report(report, args, query_payload, answer or "")
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_answer_evaluation_markdown(report))
     if args.json or not args.report_json:
@@ -911,6 +987,15 @@ def _diagnose_result(args: argparse.Namespace) -> int:
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_diagnostic_report(
+            report,
+            args,
+            query_payload,
+            trace if isinstance(trace, dict) else None,
+            citation_audit if isinstance(citation_audit, dict) else None,
+        )
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_query_diagnostic_markdown(report))
     if args.json or not args.report_json:
@@ -1295,6 +1380,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--min-cited-evidence-score", type=float, help="Warn when cited evidence scores are below this threshold")
     evaluate.add_argument("--report-json", help="Optional JSON report output path")
     evaluate.add_argument("--report-md", help="Optional Markdown report output path")
+    evaluate.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     evaluate.add_argument("--json", action="store_true", help="Emit JSON report")
     evaluate.set_defaults(func=_evaluate_answer)
 
@@ -1307,6 +1393,7 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose.add_argument("--min-evidence-score", type=float, default=0.2)
     diagnose.add_argument("--report-json", help="Optional JSON report output path")
     diagnose.add_argument("--report-md", help="Optional Markdown report output path")
+    diagnose.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     diagnose.add_argument("--json", action="store_true", help="Emit JSON report")
     diagnose.set_defaults(func=_diagnose_result)
 

@@ -1133,6 +1133,8 @@ with contextlib.redirect_stdout(stdout):
         str(artifacts_dir / "query_answer_eval.json"),
         "--report-md",
         str(artifacts_dir / "query_answer_eval.md"),
+        "--redaction-report",
+        str(artifacts_dir / "query_answer_eval_redaction.json"),
         "--json",
     ])
 if answer_eval_code != 0:
@@ -1157,6 +1159,8 @@ with contextlib.redirect_stdout(stdout):
         str(artifacts_dir / "query_diagnostic.json"),
         "--report-md",
         str(artifacts_dir / "query_diagnostic.md"),
+        "--redaction-report",
+        str(artifacts_dir / "query_diagnostic_redaction.json"),
         "--json",
     ])
 if diagnostic_code != 0:
@@ -2997,8 +3001,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "citation_audit.md",
         artifacts_dir / "query_answer_eval.json",
         artifacts_dir / "query_answer_eval.md",
+        artifacts_dir / "query_answer_eval_redaction.json",
         artifacts_dir / "query_diagnostic.json",
         artifacts_dir / "query_diagnostic.md",
+        artifacts_dir / "query_diagnostic_redaction.json",
         artifacts_dir / "query_pollution.json",
         artifacts_dir / "query_pollution.md",
         artifacts_dir / "query_rerank_ab.json",

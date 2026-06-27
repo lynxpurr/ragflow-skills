@@ -995,19 +995,23 @@ probes, adapter request-shape probes, `ragflow-query endpoint-report`,
 `ragflow-query fallback-test`, and the shared report sanitizer are implemented. Broader
 `--redaction-report` coverage remains open, but sidecar coverage now includes
 `ragflow-doc-to-md backend probe`, `ragflow-kb-build model-providers probe`, and
-`ragflow-query endpoint-report`. Release hygiene now emits
-`ragflow_generated_report_safety_check_v1`, scanning generated reports and examples for
-raw sensitive literals and requiring valid redaction sidecars when redaction placeholders
-are present. Consumer acceptance includes a fake generated-report fixture with fake secret,
+`ragflow-query endpoint-report`, `ragflow-query evaluate-answer`, and
+`ragflow-query diagnose-result`. Release hygiene now emits
+`ragflow_generated_report_safety_check_v1`, scanning generated reports and examples for raw
+sensitive literals and requiring valid redaction sidecars when redaction placeholders are
+present. Consumer acceptance includes a fake generated-report fixture with fake secret,
 private endpoint, and config-path inputs to prove sanitized output plus sidecar behavior
-without live endpoints.
+without live endpoints. Public host-agent setup references now document private per-run
+storage for sanitized reports and redaction sidecars, and forbid sharing raw reports,
+private endpoints, config paths, key fragments, or host logs in transcripts.
 
 Post-Phase 35 sequencing should finish generated-report safety before broad runtime helper
-work. First extend `--redaction-report` coverage and release hygiene scans for generated
-reports and examples. Then add the smallest retry/backoff and metrics helpers with retry
-budgets and latency summaries in one or two consuming commands. Rate limiting, circuit
-breakers, cache invalidation, checkpoint/resume, and partial-failure schemas should follow
-only after the narrow helper path is covered by deterministic tests.
+work. First extend `--redaction-report` coverage to remaining report commands that can
+include endpoints, config paths, work paths, or host-supplied sidecar paths. Then add the
+smallest retry/backoff and metrics helpers with retry budgets and latency summaries in one
+or two consuming commands. Rate limiting, circuit breakers, cache invalidation,
+checkpoint/resume, and partial-failure schemas should follow only after the narrow helper
+path is covered by deterministic tests.
 
 All reports must redact endpoints according to release settings and must not include real
 API keys or host-specific paths.

@@ -100,9 +100,20 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("query rewrite help", check_names)
         self.assertIn("query rewrite report", check_names)
         self.assertIn("query endpoint-report", check_names)
+        self.assertIn("query answer evaluation", check_names)
+        self.assertIn("query answer evaluation redaction", check_names)
+        self.assertIn("query diagnostic redaction", check_names)
         self.assertIn("query fallback test report", check_names)
         self.assertIn("query missing config guard", check_names)
         self.assertIn("live build skipped", check_names)
+        self.assertTrue(
+            any(path.endswith("query_answer_eval_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_diagnostic_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
         self.assertTrue(payload["reports"]["json"].endswith("consumer-acceptance-report.json"))
 
     def test_command_manifest_only_redacts_live_acceptance_details(self) -> None:

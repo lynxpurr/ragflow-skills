@@ -3022,8 +3022,10 @@ raise SystemExit(code)
     citation_audit_md = work_root / "citation_audit.md"
     query_answer_eval_json = work_root / "query_answer_eval.json"
     query_answer_eval_md = work_root / "query_answer_eval.md"
+    query_answer_eval_redaction = work_root / "query_answer_eval_redaction.json"
     query_diagnostic_json = work_root / "query_diagnostic.json"
     query_diagnostic_md = work_root / "query_diagnostic.md"
+    query_diagnostic_redaction = work_root / "query_diagnostic_redaction.json"
     query_pollution_json = work_root / "query_pollution.json"
     query_pollution_md = work_root / "query_pollution.md"
     query_rerank_input = work_root / "query_rerank.json"
@@ -3175,6 +3177,8 @@ raise SystemExit(code)
             str(query_answer_eval_json),
             "--report-md",
             str(query_answer_eval_md),
+            "--redaction-report",
+            str(query_answer_eval_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -3190,6 +3194,9 @@ raise SystemExit(code)
         produced.append(query_answer_eval_json)
     if query_answer_eval_md.exists():
         produced.append(query_answer_eval_md)
+    _record_file_check(checks, "query answer evaluation redaction", query_answer_eval_redaction)
+    if query_answer_eval_redaction.exists():
+        produced.append(query_answer_eval_redaction)
 
     query_diagnostic = _run_command(
         [
@@ -3206,6 +3213,8 @@ raise SystemExit(code)
             str(query_diagnostic_json),
             "--report-md",
             str(query_diagnostic_md),
+            "--redaction-report",
+            str(query_diagnostic_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -3221,6 +3230,9 @@ raise SystemExit(code)
         produced.append(query_diagnostic_json)
     if query_diagnostic_md.exists():
         produced.append(query_diagnostic_md)
+    _record_file_check(checks, "query diagnostic redaction", query_diagnostic_redaction)
+    if query_diagnostic_redaction.exists():
+        produced.append(query_diagnostic_redaction)
 
     query_pollution = _run_command(
         [
