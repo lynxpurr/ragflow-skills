@@ -2426,12 +2426,37 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         fallback_test_result,
         required_stdout='"schema": "ragflow_query_fallback_test_report_v1"',
     )
+    assistant_profile_recommendation_result = _run_command(
+        [
+            sys.executable,
+            str(query_script),
+            "assistant-profile",
+            "recommend",
+            "--assistant-profile",
+            str(handoff_dir / "assistant_profile.json"),
+            "--retrieval-hints",
+            str(handoff_dir / "retrieval_hints.json"),
+            "--report-json",
+            str(artifacts_dir / "assistant_profile_recommendation.json"),
+            "--report-md",
+            str(artifacts_dir / "assistant_profile_recommendation.md"),
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query assistant-profile recommend",
+        assistant_profile_recommendation_result,
+        required_stdout='"schema": "ragflow_assistant_profile_recommendation_v1"',
+    )
 
     routing_config = artifacts_dir / "routing_config.json"
     route_queries = artifacts_dir / "route_queries.json"
     route_tie_queries = artifacts_dir / "route_tie_queries.json"
     route_centroids = artifacts_dir / "route_centroids.json"
     route_query_vector = artifacts_dir / "route_query_vector.json"
+    route_activation_fixture_plan = artifacts_dir / "route_activation_fixture_plan.json"
     routing_config.write_text(
         json.dumps(
             {
@@ -2519,6 +2544,29 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         encoding="utf-8",
     )
     route_query_vector.write_text(json.dumps({"query_vector": [1.0, 0.0]}), encoding="utf-8")
+    route_activation_fixture_plan.write_text(
+        json.dumps(
+            {
+                "schema": "kb_activation_plan_v1",
+                "kb_name": "kb:platform-technical",
+                "dataset_id": "ds-platform-technical",
+                "summary": {"blocked_check_count": 0, "review_check_count": 0},
+                "inputs": {
+                    "route_config": str(routing_config),
+                    "route_tests": str(route_queries),
+                    "centroid_index": str(route_centroids),
+                },
+                "route_entry_suggestion": {
+                    "name": "kb:platform-technical",
+                    "dataset_id": "ds-platform-technical",
+                    "hints": ["known term", "runtime"],
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     route_test_result = _run_command(
         [
             sys.executable,
@@ -2625,6 +2673,33 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         "query route-diagnose",
         route_diagnose_result,
         required_stdout='"ragflow_route_diagnose_report_v1"',
+    )
+    route_activation_check_result = _run_command(
+        [
+            sys.executable,
+            str(query_script),
+            "route-activation-check",
+            "--activation-plan",
+            str(route_activation_fixture_plan),
+            "--routing-config",
+            str(routing_config),
+            "--queries",
+            str(route_queries),
+            "--centroid-index",
+            str(route_centroids),
+            "--report-json",
+            str(artifacts_dir / "route_activation_check.json"),
+            "--report-md",
+            str(artifacts_dir / "route_activation_check.md"),
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query route-activation-check",
+        route_activation_check_result,
+        required_stdout='"schema": "ragflow_route_activation_check_v1"',
     )
     centroid_plan_result = _run_command(
         [
@@ -2775,6 +2850,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_endpoint_redaction.json",
         artifacts_dir / "query_fallback_test.json",
         artifacts_dir / "query_fallback_test.md",
+        artifacts_dir / "assistant_profile_recommendation.json",
+        artifacts_dir / "assistant_profile_recommendation.md",
         artifacts_dir / "query_direct.json",
         artifacts_dir / "query_host_assisted.json",
         artifacts_dir / "query_agentic_retrieval.json",
@@ -2814,6 +2891,9 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "route_test.md",
         artifacts_dir / "route_report.md",
         artifacts_dir / "route_diagnose.md",
+        artifacts_dir / "route_activation_fixture_plan.json",
+        artifacts_dir / "route_activation_check.json",
+        artifacts_dir / "route_activation_check.md",
         artifacts_dir / "route_tie_queries.json",
         artifacts_dir / "route_centroids.json",
         artifacts_dir / "route_query_vector.json",

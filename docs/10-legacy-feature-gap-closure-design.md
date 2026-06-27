@@ -193,8 +193,8 @@ schema production and the later phase owns consumption or live workflow integrat
 | 17. Skill Suite Review And Drift Control | release tooling | Phase 32 | `tools/release_hygiene_check.py --suite-review` | suite review findings | static fixture tests, shared-doc hash checks, broken-link tests |
 | 18. Runtime Capability, Model Provider, And Fallback Gates | all skills | Phase 31 | `backend probe/warmup`, `model-providers probe`, `endpoint-report`, `fallback-test` | backend capability report, model-provider report, fallback coverage report | fake endpoint tests, no-daemon tests, fallback coverage tests |
 | 19. Contract, Packaging, And Compatibility Gates | release tooling | Phase 33 | contract fixtures, installed archive smoke, command-manifest dry-run | command manifest, schema identity reports, compatibility findings | installed-artifact smoke, command-manifest redaction tests |
-| 20. KB Topology And Routing Activation Advisor | `ragflow-kb-build`, `ragflow-query` | Phase 34 | `topology advise`, `topology split-plan`, `activation-plan`, `route-activation-check` | `kb_topology_advice_v1`, `kb_split_plan_v1`, `kb_activation_plan_v1` | advisory-only tests, neutral KB fixtures |
-| 21. Handoff Retrieval Hints And Assistant Profiles | `ragflow-doc-to-md`, `ragflow-kb-build`, `ragflow-query` | Phase 24 and Phase 34 | rich sidecar generation, `assistant-profile recommend`, `assistant-test-plan` | `retrieval_hints.json`, `assistant_profile.json`, `assistant_test_plan.json` | sidecar schema tests, review-artifact tests, no assistant mutation tests |
+| 20. KB Topology And Routing Activation Advisor | `ragflow-kb-build`, `ragflow-query` | Phase 34 | `topology advise`, `topology split-plan`, `activation-plan`, `route-activation-check` | `kb_topology_advice_v1`, `kb_split_plan_v1`, `kb_activation_plan_v1`, `ragflow_route_activation_check_v1` | advisory-only tests, neutral KB fixtures |
+| 21. Handoff Retrieval Hints And Assistant Profiles | `ragflow-doc-to-md`, `ragflow-kb-build`, `ragflow-query` | Phase 24 and Phase 34 | rich sidecar generation, `assistant-profile recommend`, `assistant-test-plan` | `retrieval_hints.json`, `assistant_profile.json`, `assistant_test_plan.json`, `ragflow_assistant_profile_recommendation_v1` | sidecar schema tests, review-artifact tests, no assistant mutation tests |
 | 22. Parser Performance And KB Health Telemetry | `ragflow-kb-build` | Phase 35 | `parse-report`, `health-report` | parser performance report, KB health report | fake API/log tests, no DB/Redis repair tests |
 
 Spec coding rules:
@@ -1131,6 +1131,7 @@ Outputs:
 - `kb_topology_advice_v1`
 - `kb_split_plan_v1`
 - `kb_activation_plan_v1`
+- `ragflow_route_activation_check_v1`
 
 All recommendations are advisory. The public suite should not automatically merge, split,
 rename, or register KBs without explicit user-owned config edits.
@@ -1144,7 +1145,11 @@ rich-handoff `retrieval_hints.json`, user-owned routing config, chunk snapshots,
 indexes, and route-test files when relevant, then report create-vs-merge signals,
 split-review signals, sidecar KB grouping suggestions, activation readiness checks,
 anchor/boundary query pairs, and route-test starter questions without touching RAGFlow or
-route files. `route-activation-check` remains open.
+route files. `ragflow-query route-activation-check` now consumes `kb_activation_plan_v1`,
+the user-owned route config, route-test queries or a saved route-test report, and an
+optional centroid index, then emits `ragflow_route_activation_check_v1` with activation
+drift, missing route coverage, stale-plan inputs, and route-test readiness. It does not
+write route config, rebuild centroids, call live RAGFlow, or apply assistant settings.
 
 ## Feature Design 21: Handoff Retrieval Hints And Assistant Profiles
 
@@ -1179,6 +1184,17 @@ Capabilities:
 `ragflow-kb-build inspect-handoff` should summarize these sidecars. `ragflow-query` may
 consume an assistant profile for local test planning, but it should not mutate RAGFlow chat
 assistant settings automatically.
+
+Implementation status: rich-handoff sidecars for retrieval hints, assistant profiles, and
+assistant test plans are generated as review artifacts by `ragflow-doc-to-md package
+--rich` and surfaced by downstream acceptance/smoke checks. `ragflow-query
+assistant-profile recommend` now consumes `assistant_profile.json` plus optional
+`retrieval_hints.json` offline and emits `ragflow_assistant_profile_recommendation_v1`
+with advisory-only settings for `top_k`, similarity threshold, vector/BM25 weights,
+quote/citation behavior, and no-answer policy. It does not modify RAGFlow assistant
+settings. Phase 34 still needs a `ragflow-query assistant-test-plan` command surface that
+consumes the existing test-plan sidecar and emits reviewable assistant validation plans
+without live assistant mutation.
 
 ## Feature Design 22: Parser Performance And KB Health Telemetry
 

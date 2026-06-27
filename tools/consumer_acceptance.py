@@ -2435,12 +2435,42 @@ raise SystemExit(code)
     for path in (endpoint_report_json, endpoint_report_md, endpoint_redaction_json):
         if path.exists():
             produced.append(path)
+    assistant_profile_recommendation_json = work_root / "assistant_profile_recommendation.json"
+    assistant_profile_recommendation_md = work_root / "assistant_profile_recommendation.md"
+    assistant_profile_recommendation = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "assistant-profile",
+            "recommend",
+            "--assistant-profile",
+            str(handoff_dir / "assistant_profile.json"),
+            "--retrieval-hints",
+            str(handoff_dir / "retrieval_hints.json"),
+            "--report-json",
+            str(assistant_profile_recommendation_json),
+            "--report-md",
+            str(assistant_profile_recommendation_md),
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query assistant-profile recommend",
+        assistant_profile_recommendation,
+        required_output='"schema": "ragflow_assistant_profile_recommendation_v1"',
+    )
+    for path in (assistant_profile_recommendation_json, assistant_profile_recommendation_md):
+        if path.exists():
+            produced.append(path)
 
     routing_config = work_root / "routing_config.json"
     route_queries = work_root / "route_queries.json"
     route_tie_queries = work_root / "route_tie_queries.json"
     route_centroids = work_root / "route_centroids.json"
     route_query_vector = work_root / "route_query_vector.json"
+    route_activation_fixture_plan = work_root / "route_activation_fixture_plan.json"
     routing_config.write_text(
         json.dumps(
             {
@@ -2520,6 +2550,27 @@ raise SystemExit(code)
         encoding="utf-8",
     )
     route_query_vector.write_text(json.dumps({"query_vector": [1.0, 0.0]}), encoding="utf-8")
+    route_activation_fixture_plan.write_text(
+        json.dumps(
+            {
+                "schema": "kb_activation_plan_v1",
+                "kb_name": "kb:consumer-technical",
+                "dataset_id": "ds-consumer-technical",
+                "summary": {"blocked_check_count": 0, "review_check_count": 0},
+                "inputs": {
+                    "route_config": str(routing_config),
+                    "route_tests": str(route_queries),
+                    "centroid_index": str(route_centroids),
+                },
+                "route_entry_suggestion": {
+                    "name": "kb:consumer-technical",
+                    "dataset_id": "ds-consumer-technical",
+                    "hints": ["api", "runtime"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     list_kbs = _run_command(
         [python_executable, str(query_script), "list-kbs", "--routing-config", str(routing_config)],
         cwd=work_root,
@@ -2655,6 +2706,38 @@ raise SystemExit(code)
         required_output='"ragflow_route_diagnose_report_v1"',
     )
     for path in (route_diagnose_json, route_diagnose_md):
+        if path.exists():
+            produced.append(path)
+    route_activation_check_json = work_root / "route_activation_check.json"
+    route_activation_check_md = work_root / "route_activation_check.md"
+    route_activation_check = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "route-activation-check",
+            "--activation-plan",
+            str(route_activation_fixture_plan),
+            "--routing-config",
+            str(routing_config),
+            "--queries",
+            str(route_queries),
+            "--centroid-index",
+            str(route_centroids),
+            "--report-json",
+            str(route_activation_check_json),
+            "--report-md",
+            str(route_activation_check_md),
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query route-activation-check",
+        route_activation_check,
+        required_output='"schema": "ragflow_route_activation_check_v1"',
+    )
+    for path in (route_activation_fixture_plan, route_activation_check_json, route_activation_check_md):
         if path.exists():
             produced.append(path)
     centroid_plan_json = work_root / "centroid_plan.json"

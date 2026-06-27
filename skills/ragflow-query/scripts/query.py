@@ -29,6 +29,7 @@ bootstrap_core()
 
 from ragflow_skill_runtime import (  # noqa: E402
     AgenticPlanError,
+    AssistantReviewError,
     ConfigError,
     CentroidRoutingError,
     NormalizedChunk,
@@ -55,8 +56,12 @@ from ragflow_skill_runtime import (  # noqa: E402
     configured_private_hosts_from_urls,
     evidence_from_query_payload,
     load_pollution_terms,
+    load_assistant_profile,
     load_query_fallback_test_cases,
     load_query_session,
+    load_retrieval_hints,
+    load_route_activation_plan,
+    load_route_test_report,
     load_route_test_queries,
     load_config,
     load_centroid_index,
@@ -72,6 +77,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     query_rerank_ab_report,
     render_citation_audit_markdown,
     render_answer_evaluation_markdown,
+    render_assistant_profile_recommendation_markdown,
     render_agentic_plan_markdown,
     render_centroid_build_markdown,
     render_centroid_plan_markdown,
@@ -89,15 +95,18 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_query_rewrite_markdown,
     render_query_route_decision_markdown,
     render_query_trace_markdown,
+    render_route_activation_check_markdown,
     render_route_diagnose_markdown,
     render_route_report_markdown,
     render_route_test_markdown,
     run_fusion_tests,
     run_query_fallback_tests,
+    recommend_assistant_profile,
     resolve_dataset_ids,
     route_question,
     route_query_intent,
     enrich_query_with_session,
+    run_route_activation_check,
     run_route_diagnose,
     run_route_report,
     run_route_tests,
@@ -616,6 +625,54 @@ def _route_diagnose(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _route_activation_check(args: argparse.Namespace) -> int:
+    try:
+        routing = _load_routing(args)
+        activation_plan = load_route_activation_plan(args.activation_plan)
+        queries = load_route_test_queries(args.queries) if args.queries else None
+        route_test_report = load_route_test_report(args.route_test_report) if args.route_test_report else None
+        report = run_route_activation_check(
+            activation_plan,
+            routing,
+            queries=queries,
+            route_test_report=route_test_report,
+            centroid_index=_load_centroid_index(args),
+            inputs={
+                "activation_plan": args.activation_plan,
+                "route_config": args.routing_config,
+                "route_tests": args.queries,
+                "route_test_report": args.route_test_report,
+                "centroid_index": args.centroid_index,
+            },
+        )
+    except (RoutingError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=True)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_route_activation_check_markdown(report))
+    _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _assistant_profile_recommend(args: argparse.Namespace) -> int:
+    try:
+        assistant_profile = load_assistant_profile(args.assistant_profile)
+        retrieval_hints = load_retrieval_hints(args.retrieval_hints) if args.retrieval_hints else None
+        report = recommend_assistant_profile(
+            assistant_profile,
+            retrieval_hints=retrieval_hints,
+            inputs={
+                "assistant_profile": args.assistant_profile,
+                "retrieval_hints": args.retrieval_hints,
+            },
+        )
+    except (AssistantReviewError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=True)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_assistant_profile_recommendation_markdown(report))
+    _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _centroid_build(args: argparse.Namespace) -> int:
     try:
         if args.plan_only:
@@ -1083,6 +1140,34 @@ def build_parser() -> argparse.ArgumentParser:
     route_diagnose.add_argument("--report-json", help="Optional JSON report output path")
     route_diagnose.add_argument("--report-md", help="Optional Markdown report output path")
     route_diagnose.set_defaults(func=_route_diagnose)
+
+    route_activation_check = sub.add_parser(
+        "route-activation-check",
+        help="Check activation-plan route readiness without mutation",
+    )
+    _add_routing_option(route_activation_check)
+    _add_centroid_tie_breaker_options(route_activation_check, include_query_vector=False)
+    route_activation_check.add_argument("--activation-plan", required=True, help="kb_activation_plan_v1 JSON")
+    route_activation_check.add_argument("--queries", help="Optional route-test queries JSON")
+    route_activation_check.add_argument("--route-test-report", help="Optional saved route-test report JSON")
+    route_activation_check.add_argument("--report-json", help="Optional JSON report output path")
+    route_activation_check.add_argument("--report-md", help="Optional Markdown report output path")
+    route_activation_check.set_defaults(func=_route_activation_check)
+
+    assistant_profile = sub.add_parser(
+        "assistant-profile",
+        help="Review assistant profile sidecars offline",
+    )
+    assistant_profile_sub = assistant_profile.add_subparsers(dest="assistant_profile_command", required=True)
+    assistant_profile_recommend = assistant_profile_sub.add_parser(
+        "recommend",
+        help="Recommend reviewable assistant retrieval settings",
+    )
+    assistant_profile_recommend.add_argument("--assistant-profile", required=True, help="assistant_profile.json")
+    assistant_profile_recommend.add_argument("--retrieval-hints", help="Optional retrieval_hints.json")
+    assistant_profile_recommend.add_argument("--report-json", help="Optional JSON report output path")
+    assistant_profile_recommend.add_argument("--report-md", help="Optional Markdown report output path")
+    assistant_profile_recommend.set_defaults(func=_assistant_profile_recommend)
 
     rewrite = sub.add_parser(
         "rewrite",

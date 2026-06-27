@@ -6,6 +6,7 @@ import json
 import math
 import re
 from dataclasses import asdict, dataclass, field, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -19,6 +20,8 @@ class RoutingError(RuntimeError):
 
 ROUTE_REPORT_SCHEMA = "ragflow_route_report_v1"
 ROUTE_DIAGNOSE_SCHEMA = "ragflow_route_diagnose_report_v1"
+ROUTE_ACTIVATION_CHECK_SCHEMA = "ragflow_route_activation_check_v1"
+KB_ACTIVATION_PLAN_SCHEMA = "kb_activation_plan_v1"
 REQUIRED_ROUTE_PARAMS = ("top_k", "similarity_threshold")
 REQUIRED_ROUTE_TEST_CATEGORIES = (
     "exact",
@@ -1694,6 +1697,396 @@ def run_route_tests(
         "required_route_test_categories": _route_test_category_coverage(category_totals),
         "cases": cases,
     }
+
+
+def _read_route_json_mapping(path: str | Path, *, label: str) -> dict[str, Any]:
+    source = Path(path)
+    try:
+        data = json.loads(source.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RoutingError(f"{label} not found: {source}") from exc
+    except json.JSONDecodeError as exc:
+        raise RoutingError(f"{label} is not valid JSON: {source}") from exc
+    if not isinstance(data, Mapping):
+        raise RoutingError(f"{label} must be a JSON object")
+    return dict(data)
+
+
+def load_route_activation_plan(path: str | Path) -> dict[str, Any]:
+    """Load a non-mutating KB activation plan sidecar."""
+
+    data = _read_route_json_mapping(path, label="activation plan")
+    if data.get("schema") != KB_ACTIVATION_PLAN_SCHEMA:
+        raise RoutingError(f"activation plan schema must be {KB_ACTIVATION_PLAN_SCHEMA}")
+    return data
+
+
+def load_route_test_report(path: str | Path) -> dict[str, Any]:
+    """Load a saved route-test report sidecar."""
+
+    data = _read_route_json_mapping(path, label="route-test report")
+    if data.get("schema") != "ragflow_route_test_report_v1":
+        raise RoutingError("route-test report schema must be ragflow_route_test_report_v1")
+    cases = data.get("cases")
+    if not isinstance(cases, list):
+        raise RoutingError("route-test report cases must be a list")
+    return data
+
+
+def _activation_issue(
+    severity: str,
+    code: str,
+    message: str,
+    *,
+    path: str,
+    recommendation: str,
+) -> dict[str, str]:
+    return {
+        "severity": severity,
+        "code": code,
+        "message": message,
+        "path": path,
+        "recommendation": recommendation,
+    }
+
+
+def _route_activation_status(issues: list[dict[str, str]]) -> str:
+    if any(issue.get("severity") == "error" for issue in issues):
+        return "FAIL"
+    if any(issue.get("severity") == "warning" for issue in issues):
+        return "REVIEW"
+    return "PASS"
+
+
+def _activation_summary_count(summary: Mapping[str, Any], key: str) -> int:
+    value = summary.get(key, 0)
+    if value in (None, ""):
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise RoutingError(f"activation plan summary {key} must be an integer") from exc
+
+
+def _same_path(left: Any, right: Any) -> bool:
+    if not isinstance(left, str) or not left.strip() or not isinstance(right, str) or not right.strip():
+        return False
+    return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
+
+
+def _activation_refs(plan: Mapping[str, Any]) -> set[str]:
+    refs = set()
+    for key in ("kb_name", "dataset_id"):
+        value = plan.get(key)
+        if isinstance(value, str) and value.strip():
+            refs.add(value.strip())
+    suggestion = plan.get("route_entry_suggestion")
+    if isinstance(suggestion, Mapping):
+        for key in ("name", "dataset_id"):
+            value = suggestion.get(key)
+            if isinstance(value, str) and value.strip():
+                refs.add(value.strip())
+    return refs
+
+
+def _registered_activation_kb(config: RoutingConfig, plan: Mapping[str, Any]) -> RoutingKnowledgeBase | None:
+    refs = _activation_refs(plan)
+    return next((kb for kb in config.knowledge_bases if kb.name in refs or kb.dataset_id in refs), None)
+
+
+def _suggested_hints(plan: Mapping[str, Any]) -> set[str]:
+    suggestion = plan.get("route_entry_suggestion")
+    if not isinstance(suggestion, Mapping):
+        return set()
+    hints = suggestion.get("hints")
+    if not isinstance(hints, list):
+        return set()
+    return {hint for hint in hints if isinstance(hint, str) and hint.strip()}
+
+
+def _case_targets_activation(case: Mapping[str, Any], refs: set[str]) -> bool:
+    for key in ("expected", "expected_kb", "expected_dataset_id", "actual", "actual_dataset_id"):
+        value = case.get(key)
+        if isinstance(value, str) and value in refs:
+            return True
+    for key in ("acceptable_kbs", "acceptable_dataset_ids", "allowed_kbs", "allowed_dataset_ids"):
+        values = case.get(key)
+        if isinstance(values, list) and any(isinstance(item, str) and item in refs for item in values):
+            return True
+    return False
+
+
+def _route_test_cases_for_activation(
+    *,
+    config: RoutingConfig,
+    refs: set[str],
+    queries: list[dict[str, Any]] | None,
+    route_test_report: Mapping[str, Any] | None,
+    centroid_index: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any] | None, list[Mapping[str, Any]], str]:
+    if route_test_report:
+        cases = [case for case in route_test_report.get("cases", []) if isinstance(case, Mapping)]
+        return dict(route_test_report), [case for case in cases if _case_targets_activation(case, refs)], "route_test_report"
+    if queries:
+        report = run_route_tests(config, queries, centroid_index=centroid_index)
+        cases = [case for case in report.get("cases", []) if isinstance(case, Mapping)]
+        return report, [case for case in cases if _case_targets_activation(case, refs)], "queries"
+    return None, [], "missing"
+
+
+def _centroid_check_for_activation(
+    *,
+    registered_kb: RoutingKnowledgeBase | None,
+    centroid_index: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if centroid_index is None:
+        return {
+            "status": "not_supplied",
+            "optional": True,
+            "matched": False,
+            "ready": None,
+            "issues": [],
+        }
+    dataset_id = registered_kb.dataset_id if registered_kb else None
+    centroids = centroid_index.get("centroids", []) if isinstance(centroid_index, Mapping) else []
+    matched = [
+        item
+        for item in centroids
+        if isinstance(item, Mapping) and isinstance(dataset_id, str) and item.get("dataset_id") == dataset_id
+    ]
+    ready = [item for item in matched if str(item.get("status") or "ready") == "ready"]
+    issues: list[dict[str, str]] = []
+    if registered_kb and not matched:
+        issues.append(
+            _activation_issue(
+                "warning",
+                "centroid_missing_for_registered_kb",
+                "centroid index does not include the registered KB dataset",
+                path="centroid_index.centroids",
+                recommendation="Rebuild or update the centroid index if centroid tie-breaking is part of activation.",
+            )
+        )
+    elif matched and not ready:
+        issues.append(
+            _activation_issue(
+                "warning",
+                "centroid_not_ready",
+                "centroid exists for the registered KB but is not ready",
+                path="centroid_index.centroids[].status",
+                recommendation="Complete centroid build before relying on centroid tie-breaking.",
+            )
+        )
+    return {
+        "status": _route_activation_status(issues),
+        "optional": True,
+        "matched": bool(matched),
+        "ready": bool(ready),
+        "issues": issues,
+    }
+
+
+def run_route_activation_check(
+    activation_plan: Mapping[str, Any],
+    config: RoutingConfig,
+    *,
+    queries: list[dict[str, Any]] | None = None,
+    route_test_report: Mapping[str, Any] | None = None,
+    centroid_index: Mapping[str, Any] | None = None,
+    inputs: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Check route activation readiness and drift without mutating route config."""
+
+    issues: list[dict[str, str]] = []
+    if activation_plan.get("schema") != KB_ACTIVATION_PLAN_SCHEMA:
+        raise RoutingError(f"activation plan schema must be {KB_ACTIVATION_PLAN_SCHEMA}")
+    refs = _activation_refs(activation_plan)
+    if not refs:
+        issues.append(
+            _activation_issue(
+                "error",
+                "activation_plan_missing_kb_refs",
+                "activation plan does not include a KB name or dataset_id",
+                path="activation_plan",
+                recommendation="Regenerate kb_activation_plan_v1 with kb name and dataset id.",
+            )
+        )
+    plan_summary = activation_plan.get("summary", {}) if isinstance(activation_plan.get("summary"), Mapping) else {}
+    blocked_check_count = _activation_summary_count(plan_summary, "blocked_check_count")
+    review_check_count = _activation_summary_count(plan_summary, "review_check_count")
+    if blocked_check_count > 0:
+        issues.append(
+            _activation_issue(
+                "error",
+                "activation_plan_has_blockers",
+                "activation plan still has blocked prerequisite checks",
+                path="activation_plan.summary.blocked_check_count",
+                recommendation="Resolve activation-plan blockers before treating the route as active.",
+            )
+        )
+    elif review_check_count > 0:
+        issues.append(
+            _activation_issue(
+                "warning",
+                "activation_plan_needs_review",
+                "activation plan has checks that need review",
+                path="activation_plan.summary.review_check_count",
+                recommendation="Review activation-plan warnings before accepting route activation.",
+            )
+        )
+    input_values = dict(inputs or {})
+    plan_inputs = activation_plan.get("inputs", {}) if isinstance(activation_plan.get("inputs"), Mapping) else {}
+    for key in ("route_config", "route_tests", "centroid_index"):
+        if plan_inputs.get(key) and input_values.get(key) and not _same_path(plan_inputs.get(key), input_values.get(key)):
+            issues.append(
+                _activation_issue(
+                    "warning",
+                    f"stale_plan_{key}",
+                    f"activation plan was created with a different {key} path",
+                    path=f"activation_plan.inputs.{key}",
+                    recommendation="Regenerate activation-plan or confirm the path change was intentional.",
+                )
+            )
+    registered = _registered_activation_kb(config, activation_plan)
+    if not registered:
+        issues.append(
+            _activation_issue(
+                "error",
+                "registered_kb_missing",
+                "route config does not contain the activation-plan KB",
+                path="routing_config.knowledge_bases",
+                recommendation="Add the KB to user-owned route config before activation.",
+            )
+        )
+    else:
+        missing_hints = sorted(_suggested_hints(activation_plan) - set(registered.hints))
+        if missing_hints:
+            issues.append(
+                _activation_issue(
+                    "warning",
+                    "route_hint_drift",
+                    "registered route hints are missing hints suggested by activation-plan",
+                    path="routing_config.knowledge_bases[].hints",
+                    recommendation="Review whether activation-plan hints should be added to the route config.",
+                )
+            )
+    route_report, target_cases, route_test_source = _route_test_cases_for_activation(
+        config=config,
+        refs=refs,
+        queries=queries,
+        route_test_report=route_test_report,
+        centroid_index=centroid_index,
+    )
+    passed_target = sum(1 for case in target_cases if case.get("passed"))
+    failed_target = len(target_cases) - passed_target
+    if route_test_source == "missing":
+        issues.append(
+            _activation_issue(
+                "error",
+                "route_tests_missing",
+                "no route-test queries or saved route-test report were supplied",
+                path="route_tests",
+                recommendation="Run route-test or provide route-test queries before accepting activation.",
+            )
+        )
+    elif not target_cases:
+        issues.append(
+            _activation_issue(
+                "error",
+                "route_tests_do_not_cover_kb",
+                "route-test data does not include cases for the activation-plan KB",
+                path="route_tests.cases",
+                recommendation="Add positive route-test cases for this KB name or dataset_id.",
+            )
+        )
+    elif failed_target:
+        issues.append(
+            _activation_issue(
+                "error",
+                "route_tests_failed_for_kb",
+                "one or more activation-target route tests failed",
+                path="route_tests.cases",
+                recommendation="Fix hints, acceptable routes, or route-test expectations before activation.",
+            )
+        )
+    centroid_check = _centroid_check_for_activation(registered_kb=registered, centroid_index=centroid_index)
+    issues.extend(centroid_check["issues"])
+    status = _route_activation_status(issues)
+    return {
+        "ok": status == "PASS",
+        "schema": ROUTE_ACTIVATION_CHECK_SCHEMA,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "status": status,
+        "advisory_only": True,
+        "mutation": "none",
+        "kb_name": activation_plan.get("kb_name"),
+        "dataset_id": activation_plan.get("dataset_id"),
+        "inputs": input_values,
+        "summary": {
+            "issue_count": len(issues),
+            "errors": sum(1 for issue in issues if issue["severity"] == "error"),
+            "warnings": sum(1 for issue in issues if issue["severity"] == "warning"),
+            "route_test_source": route_test_source,
+            "target_route_test_count": len(target_cases),
+            "passed_target_route_test_count": passed_target,
+            "failed_target_route_test_count": failed_target,
+        },
+        "checks": {
+            "activation_plan": {
+                "recommendation": plan_summary.get("recommendation"),
+                "blocked_check_count": blocked_check_count,
+                "review_check_count": review_check_count,
+            },
+            "route_config_registration": {
+                "registered": registered is not None,
+                "registered_kb": registered.to_dict() if registered else None,
+            },
+            "route_test_readiness": {
+                "source": route_test_source,
+                "target_case_count": len(target_cases),
+                "passed_target_case_count": passed_target,
+                "failed_target_case_count": failed_target,
+            },
+            "centroid_alignment": centroid_check,
+        },
+        "route_test_report": route_report,
+        "target_route_test_cases": [dict(case) for case in target_cases],
+        "issues": issues,
+        "next_steps": [
+            "Resolve error issues before treating the route as activated.",
+            "Use warnings as review prompts; this command does not edit route config.",
+            "Keep this check report beside activation-plan and route-test artifacts.",
+        ],
+    }
+
+
+def render_route_activation_check_markdown(report: Mapping[str, Any]) -> str:
+    """Render a route activation check report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Route Activation Check",
+        "",
+        f"- Schema: `{report.get('schema')}`",
+        f"- Status: `{report.get('status')}`",
+        f"- KB: `{report.get('kb_name')}`",
+        f"- Dataset: `{report.get('dataset_id')}`",
+        f"- Target route tests: `{summary.get('target_route_test_count', 0)}`",
+        f"- Failed target route tests: `{summary.get('failed_target_route_test_count', 0)}`",
+        "",
+        "## Issues",
+        "",
+    ]
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    if not issues:
+        lines.append("- None")
+    else:
+        for issue in issues:
+            if isinstance(issue, Mapping):
+                lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    lines.extend(["", "## Next Steps", ""])
+    for step in report.get("next_steps", []) if isinstance(report.get("next_steps"), list) else []:
+        lines.append(f"- {step}")
+    return "\n".join(lines) + "\n"
 
 
 def render_route_test_markdown(report: Mapping[str, Any]) -> str:

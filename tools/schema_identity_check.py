@@ -316,6 +316,16 @@ EXPECTED_IDENTITIES = (
         coverage_patterns=("ragflow_fusion_test_report_v1", "FUSION_TEST_REPORT_SCHEMA"),
     ),
     SchemaIdentity(
+        key="assistant_profile_recommendation",
+        group="query",
+        identity="ragflow_assistant_profile_recommendation_v1",
+        source_patterns=("ragflow_assistant_profile_recommendation_v1",),
+        coverage_patterns=(
+            "ragflow_assistant_profile_recommendation_v1",
+            "ASSISTANT_PROFILE_RECOMMENDATION_SCHEMA",
+        ),
+    ),
+    SchemaIdentity(
         key="query_trace",
         group="trace",
         identity="ragflow_query_trace_v1",
@@ -363,6 +373,13 @@ EXPECTED_IDENTITIES = (
         identity="ragflow_route_diagnose_report_v1",
         source_patterns=("ragflow_route_diagnose_report_v1",),
         coverage_patterns=("ragflow_route_diagnose_report_v1", "ROUTE_DIAGNOSE_SCHEMA"),
+    ),
+    SchemaIdentity(
+        key="route_activation_check",
+        group="route",
+        identity="ragflow_route_activation_check_v1",
+        source_patterns=("ragflow_route_activation_check_v1",),
+        coverage_patterns=("ragflow_route_activation_check_v1", "ROUTE_ACTIVATION_CHECK_SCHEMA"),
     ),
     SchemaIdentity(
         key="route_centroid_index",

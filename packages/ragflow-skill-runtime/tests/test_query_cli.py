@@ -1263,6 +1263,9 @@ class QueryCliTests(unittest.TestCase):
             route_report_md = root / "route-report.md"
             route_diagnose_json = root / "route-diagnose.json"
             route_diagnose_md = root / "route-diagnose.md"
+            route_activation_plan = root / "kb_activation_plan.json"
+            route_activation_check_json = root / "route-activation-check.json"
+            route_activation_check_md = root / "route-activation-check.md"
             routing.write_text(
                 json.dumps(
                     {
@@ -1316,6 +1319,26 @@ class QueryCliTests(unittest.TestCase):
                                 "locale": "en",
                             }
                         ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            route_activation_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "kb_activation_plan_v1",
+                        "kb_name": "kb:technical",
+                        "dataset_id": "ds-technical",
+                        "summary": {"blocked_check_count": 0, "review_check_count": 0},
+                        "inputs": {
+                            "route_config": str(routing),
+                            "route_tests": str(routes),
+                        },
+                        "route_entry_suggestion": {
+                            "name": "kb:technical",
+                            "dataset_id": "ds-technical",
+                            "hints": ["api", "runtime"],
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -1387,6 +1410,29 @@ class QueryCliTests(unittest.TestCase):
             route_diagnose_markdown = route_diagnose_md.read_text(encoding="utf-8")
             route_diagnose_file_payload = json.loads(route_diagnose_json.read_text(encoding="utf-8"))
 
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                route_activation_check_code = module.main(
+                    [
+                        "route-activation-check",
+                        "--activation-plan",
+                        str(route_activation_plan),
+                        "--routing-config",
+                        str(routing),
+                        "--queries",
+                        str(routes),
+                        "--report-json",
+                        str(route_activation_check_json),
+                        "--report-md",
+                        str(route_activation_check_md),
+                    ]
+                )
+            route_activation_check_payload = json.loads(stdout.getvalue())
+            route_activation_check_file_payload = json.loads(
+                route_activation_check_json.read_text(encoding="utf-8")
+            )
+            route_activation_check_markdown = route_activation_check_md.read_text(encoding="utf-8")
+
         self.assertEqual(list_code, 0)
         self.assertEqual(list_payload["count"], 3)
         self.assertEqual(route_code, 0)
@@ -1413,6 +1459,90 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(route_diagnose_payload["issues"][0]["category"], "missing_hint")
         self.assertEqual(route_diagnose_file_payload["schema"], "ragflow_route_diagnose_report_v1")
         self.assertIn("RAGFlow Route Diagnosis", route_diagnose_markdown)
+        self.assertEqual(route_activation_check_code, 0)
+        self.assertEqual(route_activation_check_payload["schema"], "ragflow_route_activation_check_v1")
+        self.assertEqual(route_activation_check_payload["status"], "PASS")
+        self.assertEqual(route_activation_check_payload["summary"]["target_route_test_count"], 1)
+        self.assertEqual(route_activation_check_file_payload["schema"], "ragflow_route_activation_check_v1")
+        self.assertIn("RAGFlow Route Activation Check", route_activation_check_markdown)
+
+    def test_assistant_profile_recommend_command_writes_reports(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            assistant_profile = root / "assistant_profile.json"
+            retrieval_hints = root / "retrieval_hints.json"
+            report_json = root / "assistant_profile_recommendation.json"
+            report_md = root / "assistant_profile_recommendation.md"
+            assistant_profile.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_assistant_profile_v1",
+                        "profile_id": "neutral-assistant-review",
+                        "status": "review_required",
+                        "retrieval": {
+                            "top_k": 5,
+                            "similarity_threshold": 0.2,
+                            "vector_weight": 0.7,
+                            "bm25_weight": 0.0,
+                            "require_evidence": True,
+                            "quote_numeric_facts": True,
+                            "citation_format": "[n]",
+                        },
+                        "answer_policy": [
+                            "Answer only from retrieved evidence.",
+                            "Say the source does not contain the answer when evidence is missing.",
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            retrieval_hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "document_count": 1,
+                        "section_boundaries": [{"title": f"Section {index}"} for index in range(9)],
+                        "keyword_candidates": [{"term": "runtime"}, {"term": "assistant"}],
+                        "question_candidates": [{"question": "How should assistant review work?"}],
+                        "numeric_candidates": [{"value": "42"}],
+                        "table_artifacts": [{"path": "tables/example.csv"}],
+                        "image_artifacts": [],
+                        "quality_risks": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "assistant-profile",
+                        "recommend",
+                        "--assistant-profile",
+                        str(assistant_profile),
+                        "--retrieval-hints",
+                        str(retrieval_hints),
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            file_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            markdown = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["schema"], "ragflow_assistant_profile_recommendation_v1")
+        self.assertEqual(payload["status"], "PASS")
+        self.assertTrue(payload["advisory_only"])
+        self.assertEqual(payload["mutation"], "none")
+        self.assertEqual(payload["recommended_settings"]["top_k"], 8)
+        self.assertEqual(payload["recommended_settings"]["bm25_weight"], 0.3)
+        self.assertEqual(file_payload["schema"], "ragflow_assistant_profile_recommendation_v1")
+        self.assertIn("RAGFlow Assistant Profile Recommendation", markdown)
 
     def test_route_commands_can_use_centroid_tie_breaker(self) -> None:
         module = load_query_module()

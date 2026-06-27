@@ -1119,14 +1119,19 @@ Tasks:
 - [x] Add `ragflow-kb-build topology split-plan`.
 - [x] Add `ragflow-kb-build activation-plan`.
 - [x] Check content completeness, document count, chunk count, route config registration, hint coverage, optional centroid availability, and route-test readiness.
-- [ ] Add `ragflow-query route-activation-check`.
+- [x] Add `ragflow_route_activation_check_v1`.
+- [x] Add `ragflow-query route-activation-check`.
+- [x] Let `route-activation-check` consume `kb_activation_plan_v1`, user-owned route config, route-test output or queries, and optional centroid index to report activation drift without mutation.
 - [x] Consume rich-handoff `retrieval_hints.json` when present for keyword/question candidates and route-test starter suggestions.
-- [ ] Add `ragflow-query assistant-profile recommend`.
-- [ ] Recommend assistant retrieval settings such as similarity threshold, vector/BM25 weight, top-k, quote/citation settings, and no-answer policy.
+- [x] Add `ragflow-query assistant-profile recommend`.
+- [x] Recommend assistant retrieval settings such as similarity threshold, vector/BM25 weight, top-k, quote/citation settings, and no-answer policy.
 - [ ] Add `ragflow-query assistant-test-plan`.
 - [ ] Generate staged assistant tests for exact numeric facts, OCR/image facts, logical flow, paraphrase, summary, and negative/boundary questions.
 - [ ] Keep all topology, activation, routing, and assistant outputs as plans or sidecars unless the user explicitly edits their config.
-- [ ] Add offline tests with neutral KB names and synthetic route configs.
+- [x] Add offline tests with neutral KB names and synthetic route configs for topology, split, and activation planning.
+- [x] Add offline tests with neutral KB names and synthetic route configs for route activation checks.
+- [x] Add offline tests with neutral KB names and synthetic route configs for assistant profile recommendation artifacts.
+- [ ] Add offline tests with neutral KB names and synthetic route configs for assistant test-plan artifacts.
 
 Exit criteria:
 

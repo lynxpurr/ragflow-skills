@@ -8,13 +8,17 @@ from pathlib import Path
 from ragflow_skill_runtime.routing import (
     REQUIRED_ROUTE_TEST_CATEGORIES,
     RoutingConfig,
+    RoutingError,
     load_centroid_index,
+    load_route_activation_plan,
     load_route_test_queries,
     load_routing_config,
+    render_route_activation_check_markdown,
     render_route_diagnose_markdown,
     render_route_report_markdown,
     render_route_test_markdown,
     route_question,
+    run_route_activation_check,
     run_route_diagnose,
     run_route_report,
     run_route_tests,
@@ -170,6 +174,114 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(report["metrics"]["accuracy"], 1.0)
         self.assertEqual(centroid_index["schema"], "ragflow_route_centroid_index_v1")
         self.assertIn("Route Test", render_route_test_markdown(report))
+
+    def test_route_activation_check_passes_for_registered_kb_and_route_tests(self) -> None:
+        config = RoutingConfig.from_dict(
+            {
+                "version": "0.1",
+                "knowledge_bases": [
+                    {
+                        "name": "kb:activation",
+                        "dataset_id": "ds-activation",
+                        "hints": ["activation smoke", "route test"],
+                    }
+                ],
+            }
+        )
+        activation_plan = {
+            "schema": "kb_activation_plan_v1",
+            "kb_name": "kb:activation",
+            "dataset_id": "ds-activation",
+            "summary": {"blocked_check_count": 0, "review_check_count": 0},
+            "inputs": {"route_config": "routing.json", "route_tests": "routes.json"},
+            "route_entry_suggestion": {
+                "name": "kb:activation",
+                "dataset_id": "ds-activation",
+                "hints": ["activation smoke"],
+            },
+        }
+        queries = [
+            {
+                "id": "activation-1",
+                "question": "How does activation smoke routing work?",
+                "expected": "kb:activation",
+            }
+        ]
+
+        report = run_route_activation_check(
+            activation_plan,
+            config,
+            queries=queries,
+            inputs={"route_config": "routing.json", "route_tests": "routes.json"},
+        )
+        saved_route_test_report = run_route_tests(config, queries)
+        report_from_saved_route_test = run_route_activation_check(
+            activation_plan,
+            config,
+            route_test_report=saved_route_test_report,
+        )
+        markdown = render_route_activation_check_markdown(report)
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["schema"], "ragflow_route_activation_check_v1")
+        self.assertEqual(report["status"], "PASS")
+        self.assertTrue(report["advisory_only"])
+        self.assertEqual(report["mutation"], "none")
+        self.assertEqual(report["summary"]["target_route_test_count"], 1)
+        self.assertEqual(report["checks"]["route_config_registration"]["registered_kb"]["dataset_id"], "ds-activation")
+        self.assertIn("RAGFlow Route Activation Check", markdown)
+        self.assertTrue(report_from_saved_route_test["ok"])
+        self.assertEqual(report_from_saved_route_test["summary"]["route_test_source"], "route_test_report")
+
+    def test_route_activation_check_fails_without_target_route_tests(self) -> None:
+        config = self.sample_config()
+        activation_plan = {
+            "schema": "kb_activation_plan_v1",
+            "kb_name": "kb:technical",
+            "dataset_id": "ds-technical",
+            "summary": {"blocked_check_count": 0, "review_check_count": 0},
+            "route_entry_suggestion": {
+                "name": "kb:technical",
+                "dataset_id": "ds-technical",
+                "hints": ["api"],
+            },
+        }
+
+        report = run_route_activation_check(activation_plan, config)
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(report["issues"][0]["code"], "route_tests_missing")
+        self.assertEqual(report["checks"]["route_test_readiness"]["source"], "missing")
+
+    def test_route_activation_check_rejects_invalid_summary_counts(self) -> None:
+        activation_plan = {
+            "schema": "kb_activation_plan_v1",
+            "kb_name": "kb:technical",
+            "dataset_id": "ds-technical",
+            "summary": {"blocked_check_count": "not-a-number"},
+        }
+
+        with self.assertRaisesRegex(RoutingError, "blocked_check_count"):
+            run_route_activation_check(activation_plan, self.sample_config())
+
+    def test_load_route_activation_plan_requires_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plan_path = Path(tmp) / "activation_plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "kb_activation_plan_v1",
+                        "kb_name": "kb:activation",
+                        "dataset_id": "ds-activation",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            plan = load_route_activation_plan(plan_path)
+
+        self.assertEqual(plan["schema"], "kb_activation_plan_v1")
 
     def test_route_report_summarizes_coverage_and_conflicts(self) -> None:
         queries = [

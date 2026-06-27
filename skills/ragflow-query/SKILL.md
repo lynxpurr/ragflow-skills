@@ -30,6 +30,8 @@ python scripts/query.py route "Which API configuration should I use?" --routing-
 python scripts/query.py route-test --routing-config ./templates/routing-config.example.json --queries ./templates/route-test-queries.example.json --report-md ./run/route_test.md
 python scripts/query.py route-report --routing-config ./templates/routing-config.example.json --queries ./templates/route-test-queries.example.json --report-json ./run/route_report.json --report-md ./run/route_report.md
 python scripts/query.py route-diagnose --routing-config ./templates/routing-config.example.json --queries ./templates/route-test-queries.example.json --report-json ./run/route_diagnose.json --report-md ./run/route_diagnose.md
+python scripts/query.py route-activation-check --activation-plan ./run/kb_activation_plan.json --routing-config ./routing-config.json --queries ./templates/route-test-queries.example.json --report-json ./run/route_activation_check.json --report-md ./run/route_activation_check.md
+python scripts/query.py assistant-profile recommend --assistant-profile ./handoff/assistant_profile.json --retrieval-hints ./handoff/retrieval_hints.json --report-json ./run/assistant_profile_recommendation.json --report-md ./run/assistant_profile_recommendation.md
 python scripts/query.py centroid build --plan-only --kb-manifest ./kb_manifest.json --chunk-snapshot ./chunk_snapshot.json --index-output ./run/centroids.json --report-json ./run/centroid_plan.json --report-md ./run/centroid_plan.md --json
 python scripts/query.py centroid build --kb-manifest ./kb_manifest.json --chunk-snapshot ./chunk_snapshot.embeddings.json --index-output ./run/centroids.json --checkpoint ./run/centroid.checkpoint.json --batch-size 64 --embedding-model text-embedding-3-small --embedding-dimension 1536 --report-json ./run/centroid_build.json --report-md ./run/centroid_build.md --json
 python scripts/query.py --config /path/to/ragflow-config.local.yaml ask "Question" --mode auto --routing-config ./routing-config.json --json
@@ -51,7 +53,7 @@ Notes:
 
 - CLI mode is the v1 interface for Hermes, OpenClaw, Claude Code, opencode, and similar programming-agent tools.
 - `--mode auto` uses `--routing-config` or `RAGFLOW_ROUTING_CONFIG` when no explicit `--dataset-id`, `--kb`, or `--kb-manifest` is provided; otherwise it falls back to direct retrieval.
-- Routing config is user-owned and deterministic. Use `list-kbs`, `route`, `route-test`, `route-report`, and `route-diagnose` to inspect it before live retrieval.
+- Routing config is user-owned and deterministic. Use `list-kbs`, `route`, `route-test`, `route-report`, `route-diagnose`, and `route-activation-check` to inspect it before live retrieval.
 - Use `route-report` offline to review hint coverage, English hint coverage by KB/category, required route-test category gaps, ambiguous/low-confidence routes, short-hint word-boundary conflicts, substring conflicts, and per-KB `top_k` / `similarity_threshold` default coverage.
 - `route-report` and `route-diagnose` warn when legacy/descriptive `kb_routing_hints` fields are present but ignored by the public routing schema; put active route hints in per-KB `hints`.
 - Use `centroid build --plan-only` to review a user-owned centroid index plan from KB manifests or chunk snapshots. It does not call embedding APIs or write a centroid index.
@@ -59,6 +61,8 @@ Notes:
 - `route`, `route-test`, `route-report`, `route-diagnose`, and `ask --mode auto` can use `--centroid-index` as a tie-breaker for equal positive hint scores. Provide `--query-vector-json` for single-query commands or per-query `query_vector` fields in route-test fixtures; the script does not generate embeddings.
 - Route-test queries may set `expected_no_route: true` for negative/out-of-scope cases; this passes when no positive hint route is selected, even if a default KB fallback is present.
 - Use `route-diagnose` offline to classify route-test failures as missing hints, missing KB config, priority conflicts, regex-order issues, acceptable ambiguity, or low-confidence fallback.
+- Use `route-activation-check` offline with `kb_activation_plan_v1` to review route config registration, stale activation inputs, route-test coverage, and optional centroid alignment. It does not mutate route config or RAGFlow.
+- Use `assistant-profile recommend` offline with rich-handoff `assistant_profile.json` and optional `retrieval_hints.json` to review assistant retrieval settings. It does not mutate RAGFlow assistant settings.
 - `ask --fusion rrf` retrieves each selected dataset separately when multiple dataset IDs are present, then returns an offline fusion report and fused evidence order.
 - `--mode agentic --host-assisted` builds a deterministic `ragflow_agentic_plan_v1`, executes bounded sub-query retrieval, and returns evidence plus `ragflow_agentic_trace_v1` cost/latency data and `ragflow_host_synthesis_contract_v1` citation policy for host synthesis. It does not call an LLM or synthesize an answer.
 - `ask` returns deterministic evidence weights and can write `--trace-json` / `--trace-md` for host-agent debugging.
