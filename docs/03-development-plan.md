@@ -1053,8 +1053,8 @@ Tasks:
 - [x] Detect trigger/description overlap that could confuse host-agent skill selection.
 - [ ] Detect version/date drift between docs, release manifest, and skill metadata.
 - [ ] Detect repeated warnings that should be centralized in a single reference.
-- [ ] Detect accidental naming drift from old or experimental product names.
-- [ ] Validate compatibility references for deprecated aliases and schema names.
+- [x] Detect accidental naming drift from old or experimental product names.
+- [x] Validate compatibility references for deprecated aliases and schema names.
 - [x] Add fixture coverage for intentional drift, broken links, duplicate shared docs, and private references.
 - [x] Add a private `ragflow-skills-maintainer` Codex skill outside the public release tree to preserve development workflow, validation-chain, task-selection, and release-governance guidance.
 

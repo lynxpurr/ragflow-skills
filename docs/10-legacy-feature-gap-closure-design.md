@@ -924,6 +924,8 @@ Checks:
 - shared reference/template hash consistency;
 - public paths in examples are placeholders or environment-variable based;
 - broken relative links inside `SKILL.md` and `references/`;
+- accidental legacy or experimental product-name drift in the public release surface;
+- declared compatibility references for deprecated aliases and schema names;
 - duplicated warnings that should be centralized;
 - version/date drift between docs, manifests, and release artifacts.
 
@@ -933,11 +935,13 @@ scan outside the current repository in normal release mode.
 Implementation status: the first `--suite-review` gate is implemented as an offline
 release-hygiene mode. It validates public `SKILL.md` frontmatter, required shared
 references, shared-reference hash drift, broken relative links, stale/private references,
-and high-overlap skill descriptions with fixture coverage. Version/date drift, repeated
-warning centralization, and compatibility-reference checks remain open. A private
-`ragflow-skills-maintainer` Codex skill now records repository-specific development
-workflow, validation-chain, task-selection, and release-governance guidance outside the
-public release skill tree; maintainer-only skills must not be added under public `skills/`.
+and high-overlap skill descriptions with fixture coverage. Accidental public naming drift
+and declared compatibility references are now covered by the default rename-governance
+release gate from Feature Design 19. Version/date drift and repeated warning
+centralization remain open. A private `ragflow-skills-maintainer` Codex skill now records
+repository-specific development workflow, validation-chain, task-selection, and
+release-governance guidance outside the public release skill tree; maintainer-only skills
+must not be added under public `skills/`.
 
 ## Feature Design 18: Runtime Capability, Model Provider, And Fallback Gates
 
