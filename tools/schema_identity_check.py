@@ -326,6 +326,16 @@ EXPECTED_IDENTITIES = (
         ),
     ),
     SchemaIdentity(
+        key="assistant_test_plan_review",
+        group="query",
+        identity="ragflow_assistant_test_plan_review_v1",
+        source_patterns=("ragflow_assistant_test_plan_review_v1",),
+        coverage_patterns=(
+            "ragflow_assistant_test_plan_review_v1",
+            "ASSISTANT_TEST_PLAN_REVIEW_SCHEMA",
+        ),
+    ),
+    SchemaIdentity(
         key="query_trace",
         group="trace",
         identity="ragflow_query_trace_v1",

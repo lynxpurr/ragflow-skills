@@ -7,10 +7,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from .handoff import ASSISTANT_PROFILE_SCHEMA, RETRIEVAL_HINTS_SCHEMA
+from .handoff import ASSISTANT_PROFILE_SCHEMA, ASSISTANT_TEST_PLAN_SCHEMA, RETRIEVAL_HINTS_SCHEMA
 
 
 ASSISTANT_PROFILE_RECOMMENDATION_SCHEMA = "ragflow_assistant_profile_recommendation_v1"
+ASSISTANT_TEST_PLAN_REVIEW_SCHEMA = "ragflow_assistant_test_plan_review_v1"
+ASSISTANT_TEST_PLAN_CANONICAL_STAGES = (
+    "summary",
+    "exact_numeric_fact",
+    "ocr_image_fact",
+    "logical_flow",
+    "paraphrase",
+    "negative_boundary",
+)
 
 
 class AssistantReviewError(RuntimeError):
@@ -49,6 +58,15 @@ def load_retrieval_hints(path: str | Path) -> dict[str, Any]:
     payload = _read_json_mapping(path, label="retrieval hints")
     if payload.get("schema") != RETRIEVAL_HINTS_SCHEMA:
         raise AssistantReviewError(f"retrieval hints schema must be {RETRIEVAL_HINTS_SCHEMA}")
+    return payload
+
+
+def load_assistant_test_plan(path: str | Path) -> dict[str, Any]:
+    """Load a rich-handoff assistant test plan sidecar."""
+
+    payload = _read_json_mapping(path, label="assistant test plan")
+    if payload.get("schema") != ASSISTANT_TEST_PLAN_SCHEMA:
+        raise AssistantReviewError(f"assistant test plan schema must be {ASSISTANT_TEST_PLAN_SCHEMA}")
     return payload
 
 
@@ -147,10 +165,293 @@ def _hints_summary(retrieval_hints: Mapping[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _expected_test_stages_from_hints(retrieval_hints: Mapping[str, Any] | None) -> set[str]:
+    if retrieval_hints is None:
+        return set(ASSISTANT_TEST_PLAN_CANONICAL_STAGES)
+    hints = _hints_summary(retrieval_hints)
+    sections = retrieval_hints.get("section_boundaries", [])
+    sections = sections if isinstance(sections, list) else []
+    expected = {"summary", "negative_boundary"}
+    if hints["numeric_count"]:
+        expected.add("exact_numeric_fact")
+    if hints["image_artifact_count"] or any(
+        isinstance(section, Mapping) and int(section.get("image_count", 0) or 0) > 0
+        for section in sections
+    ):
+        expected.add("ocr_image_fact")
+    if hints["section_count"] >= 2:
+        expected.add("logical_flow")
+    if hints["question_count"] >= 2:
+        expected.add("paraphrase")
+    return expected
+
+
+def _stage_focus(stage: str) -> str:
+    return {
+        "summary": "confirm the assistant summarizes only retrieved evidence",
+        "exact_numeric_fact": "confirm numbers are quoted or cited exactly",
+        "ocr_image_fact": "confirm visual or OCR-backed facts are not guessed",
+        "logical_flow": "confirm related source sections are compared without outside assumptions",
+        "paraphrase": "confirm paraphrased questions still retrieve the same source evidence",
+        "negative_boundary": "confirm missing or unsafe facts trigger abstention",
+    }.get(stage, "review custom assistant behavior manually")
+
+
+def _review_case(case: Mapping[str, Any], *, index: int) -> dict[str, Any]:
+    stage = str(case.get("stage") or "")
+    question = str(case.get("question") or "")
+    expected_behavior = str(case.get("expected_behavior") or "")
+    case_id = str(case.get("id") or f"case-{index:03d}")
+    return {
+        "id": case_id,
+        "stage": stage,
+        "question": question,
+        "expected_behavior": expected_behavior,
+        "source_document": case.get("source_document"),
+        "source_heading": case.get("source_heading"),
+        "review_focus": _stage_focus(stage),
+        "ready_for_manual_run": bool(question and expected_behavior and stage in ASSISTANT_TEST_PLAN_CANONICAL_STAGES),
+    }
+
+
 def _answer_policy_mentions_missing_evidence(policy: Any) -> bool:
     lines = policy if isinstance(policy, list) else []
     text = " ".join(str(item).lower() for item in lines)
     return any(marker in text for marker in ("missing", "does not contain", "no answer", "evidence is missing"))
+
+
+def review_assistant_test_plan(
+    assistant_test_plan: Mapping[str, Any],
+    *,
+    assistant_profile: Mapping[str, Any] | None = None,
+    retrieval_hints: Mapping[str, Any] | None = None,
+    inputs: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Review a rich-handoff assistant test plan without running tests or mutating RAGFlow."""
+
+    if assistant_test_plan.get("schema") != ASSISTANT_TEST_PLAN_SCHEMA:
+        raise AssistantReviewError(f"assistant test plan schema must be {ASSISTANT_TEST_PLAN_SCHEMA}")
+    if assistant_profile is not None and assistant_profile.get("schema") != ASSISTANT_PROFILE_SCHEMA:
+        raise AssistantReviewError(f"assistant profile schema must be {ASSISTANT_PROFILE_SCHEMA}")
+    if retrieval_hints is not None and retrieval_hints.get("schema") != RETRIEVAL_HINTS_SCHEMA:
+        raise AssistantReviewError(f"retrieval hints schema must be {RETRIEVAL_HINTS_SCHEMA}")
+
+    issues: list[dict[str, str]] = []
+    raw_cases = assistant_test_plan.get("cases")
+    if not isinstance(raw_cases, list):
+        raw_cases = []
+        issues.append(
+            _issue(
+                "error",
+                "cases_missing",
+                "assistant test plan does not include a cases list",
+                path="assistant_test_plan.cases",
+                recommendation="Regenerate the rich handoff package before reviewing assistant tests.",
+            )
+        )
+
+    review_cases: list[dict[str, Any]] = []
+    stage_counts: dict[str, int] = {}
+    seen_ids: set[str] = set()
+    duplicate_ids: set[str] = set()
+    valid_case_count = 0
+    for index, raw_case in enumerate(raw_cases, start=1):
+        if not isinstance(raw_case, Mapping):
+            issues.append(
+                _issue(
+                    "error",
+                    "case_not_object",
+                    "assistant test case must be a JSON object",
+                    path=f"assistant_test_plan.cases[{index - 1}]",
+                    recommendation="Regenerate or edit the sidecar so every case is an object.",
+                )
+            )
+            continue
+        valid_case_count += 1
+        case = _review_case(raw_case, index=index)
+        case_id = str(raw_case.get("id") or "")
+        stage = str(raw_case.get("stage") or "")
+        question = str(raw_case.get("question") or "")
+        expected_behavior = str(raw_case.get("expected_behavior") or "")
+        if not case_id:
+            issues.append(
+                _issue(
+                    "warning",
+                    "case_id_missing",
+                    "assistant test case does not include an id",
+                    path=f"assistant_test_plan.cases[{index - 1}].id",
+                    recommendation="Assign stable case IDs so review results can be compared across runs.",
+                )
+            )
+        elif case_id in seen_ids:
+            duplicate_ids.add(case_id)
+        else:
+            seen_ids.add(case_id)
+        if not stage:
+            issues.append(
+                _issue(
+                    "warning",
+                    "case_stage_missing",
+                    "assistant test case does not include a stage",
+                    path=f"assistant_test_plan.cases[{index - 1}].stage",
+                    recommendation="Set the stage to one of the canonical assistant test stages.",
+                )
+            )
+        elif stage not in ASSISTANT_TEST_PLAN_CANONICAL_STAGES:
+            issues.append(
+                _issue(
+                    "warning",
+                    "case_stage_unknown",
+                    f"assistant test case uses unknown stage {stage!r}",
+                    path=f"assistant_test_plan.cases[{index - 1}].stage",
+                    recommendation="Use a canonical stage or document why the custom stage is needed.",
+                )
+            )
+        if not question:
+            issues.append(
+                _issue(
+                    "warning",
+                    "case_question_missing",
+                    "assistant test case does not include a question",
+                    path=f"assistant_test_plan.cases[{index - 1}].question",
+                    recommendation="Add the user-facing question before running assistant validation.",
+                )
+            )
+        if not expected_behavior:
+            issues.append(
+                _issue(
+                    "warning",
+                    "case_expected_behavior_missing",
+                    "assistant test case does not include expected behavior",
+                    path=f"assistant_test_plan.cases[{index - 1}].expected_behavior",
+                    recommendation="Describe expected citation, abstention, or evidence behavior for this case.",
+                )
+            )
+        if stage:
+            stage_counts[stage] = stage_counts.get(stage, 0) + 1
+        review_cases.append(case)
+
+    if duplicate_ids:
+        issues.append(
+            _issue(
+                "warning",
+                "case_id_duplicate",
+                "assistant test plan contains duplicate case IDs",
+                path="assistant_test_plan.cases",
+                recommendation=f"Make case IDs unique: {', '.join(sorted(duplicate_ids))}.",
+            )
+        )
+    if valid_case_count == 0:
+        issues.append(
+            _issue(
+                "error",
+                "no_reviewable_cases",
+                "assistant test plan has no reviewable cases",
+                path="assistant_test_plan.cases",
+                recommendation="Regenerate the rich handoff package or add staged assistant test cases.",
+            )
+        )
+
+    expected_stages = _expected_test_stages_from_hints(retrieval_hints)
+    present_stages = set(stage_counts)
+    missing_expected_stages = sorted(expected_stages - present_stages)
+    for stage in missing_expected_stages:
+        issues.append(
+            _issue(
+                "warning",
+                "expected_stage_missing",
+                f"assistant test plan is missing expected stage {stage!r}",
+                path="assistant_test_plan.cases.stage",
+                recommendation="Add a staged test case or confirm the source does not support this test type.",
+            )
+        )
+    if retrieval_hints is None:
+        issues.append(
+            _issue(
+                "warning",
+                "retrieval_hints_not_supplied",
+                "retrieval hints were not supplied for assistant test-plan review",
+                path="retrieval_hints",
+                recommendation="Provide retrieval_hints.json to make stage coverage checks source-aware.",
+            )
+        )
+
+    plan_profile = assistant_test_plan.get("assistant_profile")
+    profile_id = assistant_profile.get("profile_id") if isinstance(assistant_profile, Mapping) else None
+    if profile_id and plan_profile and profile_id != plan_profile:
+        issues.append(
+            _issue(
+                "warning",
+                "assistant_profile_mismatch",
+                "assistant test plan references a different assistant profile",
+                path="assistant_test_plan.assistant_profile",
+                recommendation="Review that the test plan and assistant profile came from the same rich handoff package.",
+            )
+        )
+
+    status = _status(issues)
+    stage_coverage = [
+        {
+            "stage": stage,
+            "count": stage_counts.get(stage, 0),
+            "present": stage in present_stages,
+            "expected_from_hints": stage in expected_stages,
+        }
+        for stage in ASSISTANT_TEST_PLAN_CANONICAL_STAGES
+    ]
+    return {
+        "ok": not any(issue.get("severity") == "error" for issue in issues),
+        "schema": ASSISTANT_TEST_PLAN_REVIEW_SCHEMA,
+        "created_at": _now(),
+        "status": status,
+        "advisory_only": True,
+        "mutation": "none",
+        "execution": {
+            "status": "not_run",
+            "llm_calls": 0,
+            "ragflow_calls": 0,
+            "reason": "offline review surface only",
+        },
+        "assistant_profile": plan_profile,
+        "inputs": dict(inputs or {}),
+        "source_test_plan": {
+            "schema": assistant_test_plan.get("schema"),
+            "status": assistant_test_plan.get("status"),
+            "assistant_profile": plan_profile,
+            "declared_test_count": assistant_test_plan.get("test_count"),
+        },
+        "retrieval_hints_summary": _hints_summary(retrieval_hints),
+        "summary": {
+            "case_count": valid_case_count,
+            "declared_test_count": assistant_test_plan.get("test_count"),
+            "stage_count": len(present_stages),
+            "expected_stage_count": len(expected_stages),
+            "missing_expected_stage_count": len(missing_expected_stages),
+            "duplicate_id_count": len(duplicate_ids),
+            "ready_case_count": sum(1 for case in review_cases if case.get("ready_for_manual_run")),
+        },
+        "canonical_stages": list(ASSISTANT_TEST_PLAN_CANONICAL_STAGES),
+        "expected_stages": [stage for stage in ASSISTANT_TEST_PLAN_CANONICAL_STAGES if stage in expected_stages],
+        "missing_expected_stages": missing_expected_stages,
+        "stage_coverage": stage_coverage,
+        "review_cases": review_cases,
+        "checks": {
+            "test_plan_schema": {"passed": True, "expected": ASSISTANT_TEST_PLAN_SCHEMA},
+            "assistant_profile_match": {
+                "provided": bool(profile_id),
+                "profile_id": profile_id,
+                "test_plan_profile_id": plan_profile,
+                "matched": not profile_id or not plan_profile or profile_id == plan_profile,
+            },
+            "offline_only": {"passed": True, "llm_calls": 0, "ragflow_calls": 0, "mutation": "none"},
+        },
+        "issues": issues,
+        "next_steps": [
+            "Review each case before running it against a live assistant.",
+            "Keep assistant validation execution in a user-owned harness with explicit credentials.",
+            "Compare future assistant-test-plan reports by stable case IDs and stages.",
+        ],
+    }
 
 
 def recommend_assistant_profile(
@@ -318,6 +619,59 @@ def render_assistant_profile_recommendation_markdown(report: Mapping[str, Any]) 
         "## Issues",
         "",
     ]
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    if not issues:
+        lines.append("- None")
+    else:
+        for issue in issues:
+            if isinstance(issue, Mapping):
+                lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    lines.extend(["", "## Next Steps", ""])
+    for step in report.get("next_steps", []) if isinstance(report.get("next_steps"), list) else []:
+        lines.append(f"- {step}")
+    return "\n".join(lines) + "\n"
+
+
+def render_assistant_test_plan_review_markdown(report: Mapping[str, Any]) -> str:
+    """Render an assistant test-plan review report."""
+
+    summary = report.get("summary", {})
+    summary = summary if isinstance(summary, Mapping) else {}
+    stage_coverage = report.get("stage_coverage", [])
+    stage_coverage = stage_coverage if isinstance(stage_coverage, list) else []
+    review_cases = report.get("review_cases", [])
+    review_cases = review_cases if isinstance(review_cases, list) else []
+    lines = [
+        "# RAGFlow Assistant Test Plan Review",
+        "",
+        f"- Schema: `{report.get('schema')}`",
+        f"- Status: `{report.get('status')}`",
+        f"- Assistant profile: `{report.get('assistant_profile')}`",
+        f"- Mutation: `{report.get('mutation')}`",
+        f"- Execution: `{(report.get('execution') or {}).get('status') if isinstance(report.get('execution'), Mapping) else None}`",
+        f"- Cases: `{summary.get('case_count', 0)}`",
+        f"- Ready cases: `{summary.get('ready_case_count', 0)}`",
+        f"- Missing expected stages: `{summary.get('missing_expected_stage_count', 0)}`",
+        "",
+        "## Stage Coverage",
+        "",
+    ]
+    for item in stage_coverage:
+        if not isinstance(item, Mapping):
+            continue
+        marker = "present" if item.get("present") else "missing"
+        expected = "expected" if item.get("expected_from_hints") else "optional"
+        lines.append(f"- `{item.get('stage')}`: {marker}, count `{item.get('count', 0)}`, {expected}")
+    lines.extend(["", "## Review Cases", ""])
+    if not review_cases:
+        lines.append("- None")
+    else:
+        for case in review_cases:
+            if isinstance(case, Mapping):
+                lines.append(
+                    f"- `{case.get('id')}` `{case.get('stage')}`: {case.get('question')}"
+                )
+    lines.extend(["", "## Issues", ""])
     issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
     if not issues:
         lines.append("- None")

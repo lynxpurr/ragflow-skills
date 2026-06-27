@@ -57,6 +57,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     evidence_from_query_payload,
     load_pollution_terms,
     load_assistant_profile,
+    load_assistant_test_plan,
     load_query_fallback_test_cases,
     load_query_session,
     load_retrieval_hints,
@@ -78,6 +79,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_citation_audit_markdown,
     render_answer_evaluation_markdown,
     render_assistant_profile_recommendation_markdown,
+    render_assistant_test_plan_review_markdown,
     render_agentic_plan_markdown,
     render_centroid_build_markdown,
     render_centroid_plan_markdown,
@@ -102,6 +104,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     run_fusion_tests,
     run_query_fallback_tests,
     recommend_assistant_profile,
+    review_assistant_test_plan,
     resolve_dataset_ids,
     route_question,
     route_query_intent,
@@ -673,6 +676,29 @@ def _assistant_profile_recommend(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _assistant_test_plan(args: argparse.Namespace) -> int:
+    try:
+        assistant_test_plan = load_assistant_test_plan(args.test_plan)
+        assistant_profile = load_assistant_profile(args.assistant_profile) if args.assistant_profile else None
+        retrieval_hints = load_retrieval_hints(args.retrieval_hints) if args.retrieval_hints else None
+        report = review_assistant_test_plan(
+            assistant_test_plan,
+            assistant_profile=assistant_profile,
+            retrieval_hints=retrieval_hints,
+            inputs={
+                "assistant_test_plan": args.test_plan,
+                "assistant_profile": args.assistant_profile,
+                "retrieval_hints": args.retrieval_hints,
+            },
+        )
+    except (AssistantReviewError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=True)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_assistant_test_plan_review_markdown(report))
+    _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _centroid_build(args: argparse.Namespace) -> int:
     try:
         if args.plan_only:
@@ -1168,6 +1194,17 @@ def build_parser() -> argparse.ArgumentParser:
     assistant_profile_recommend.add_argument("--report-json", help="Optional JSON report output path")
     assistant_profile_recommend.add_argument("--report-md", help="Optional Markdown report output path")
     assistant_profile_recommend.set_defaults(func=_assistant_profile_recommend)
+
+    assistant_test_plan = sub.add_parser(
+        "assistant-test-plan",
+        help="Review assistant test plan sidecars offline",
+    )
+    assistant_test_plan.add_argument("--test-plan", required=True, help="assistant_test_plan.json")
+    assistant_test_plan.add_argument("--assistant-profile", help="Optional assistant_profile.json")
+    assistant_test_plan.add_argument("--retrieval-hints", help="Optional retrieval_hints.json")
+    assistant_test_plan.add_argument("--report-json", help="Optional JSON report output path")
+    assistant_test_plan.add_argument("--report-md", help="Optional Markdown report output path")
+    assistant_test_plan.set_defaults(func=_assistant_test_plan)
 
     rewrite = sub.add_parser(
         "rewrite",

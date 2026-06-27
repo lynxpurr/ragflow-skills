@@ -2464,6 +2464,36 @@ raise SystemExit(code)
     for path in (assistant_profile_recommendation_json, assistant_profile_recommendation_md):
         if path.exists():
             produced.append(path)
+    assistant_test_plan_review_json = work_root / "assistant_test_plan_review.json"
+    assistant_test_plan_review_md = work_root / "assistant_test_plan_review.md"
+    assistant_test_plan_review = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "assistant-test-plan",
+            "--test-plan",
+            str(handoff_dir / "assistant_test_plan.json"),
+            "--assistant-profile",
+            str(handoff_dir / "assistant_profile.json"),
+            "--retrieval-hints",
+            str(handoff_dir / "retrieval_hints.json"),
+            "--report-json",
+            str(assistant_test_plan_review_json),
+            "--report-md",
+            str(assistant_test_plan_review_md),
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query assistant-test-plan",
+        assistant_test_plan_review,
+        required_output='"schema": "ragflow_assistant_test_plan_review_v1"',
+    )
+    for path in (assistant_test_plan_review_json, assistant_test_plan_review_md):
+        if path.exists():
+            produced.append(path)
 
     routing_config = work_root / "routing_config.json"
     route_queries = work_root / "route_queries.json"

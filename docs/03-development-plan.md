@@ -1125,13 +1125,13 @@ Tasks:
 - [x] Consume rich-handoff `retrieval_hints.json` when present for keyword/question candidates and route-test starter suggestions.
 - [x] Add `ragflow-query assistant-profile recommend`.
 - [x] Recommend assistant retrieval settings such as similarity threshold, vector/BM25 weight, top-k, quote/citation settings, and no-answer policy.
-- [ ] Add `ragflow-query assistant-test-plan`.
-- [ ] Generate staged assistant tests for exact numeric facts, OCR/image facts, logical flow, paraphrase, summary, and negative/boundary questions.
-- [ ] Keep all topology, activation, routing, and assistant outputs as plans or sidecars unless the user explicitly edits their config.
+- [x] Add `ragflow-query assistant-test-plan`.
+- [x] Generate staged assistant tests for exact numeric facts, OCR/image facts, logical flow, paraphrase, summary, and negative/boundary questions.
+- [x] Keep all topology, activation, routing, and assistant outputs as plans or sidecars unless the user explicitly edits their config.
 - [x] Add offline tests with neutral KB names and synthetic route configs for topology, split, and activation planning.
 - [x] Add offline tests with neutral KB names and synthetic route configs for route activation checks.
 - [x] Add offline tests with neutral KB names and synthetic route configs for assistant profile recommendation artifacts.
-- [ ] Add offline tests with neutral KB names and synthetic route configs for assistant test-plan artifacts.
+- [x] Add offline tests with neutral KB names and synthetic route configs for assistant test-plan artifacts.
 
 Exit criteria:
 

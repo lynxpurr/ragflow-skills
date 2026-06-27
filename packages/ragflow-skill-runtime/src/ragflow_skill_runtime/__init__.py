@@ -102,11 +102,15 @@ from .handoff import (
 )
 from .assistant_review import (
     ASSISTANT_PROFILE_RECOMMENDATION_SCHEMA,
+    ASSISTANT_TEST_PLAN_REVIEW_SCHEMA,
     AssistantReviewError,
     load_assistant_profile,
+    load_assistant_test_plan,
     load_retrieval_hints,
     recommend_assistant_profile,
     render_assistant_profile_recommendation_markdown,
+    render_assistant_test_plan_review_markdown,
+    review_assistant_test_plan,
 )
 from .diagnostics import (
     DIAGNOSTIC_REPORT_SCHEMA,
@@ -434,6 +438,7 @@ __all__ = [
     "PROFILE_SUGGESTIONS_SCHEMA",
     "RETRIEVAL_HINTS_SCHEMA",
     "ASSISTANT_PROFILE_RECOMMENDATION_SCHEMA",
+    "ASSISTANT_TEST_PLAN_REVIEW_SCHEMA",
     "DiagnosticIssue",
     "DocManifest",
     "DocToMdConfig",
@@ -660,6 +665,7 @@ __all__ = [
     "query_rerank_ab_report",
     "load_api_key",
     "load_assistant_profile",
+    "load_assistant_test_plan",
     "load_config",
     "load_benchmark_baseline",
     "load_benchmark_gate",
@@ -694,6 +700,7 @@ __all__ = [
     "render_suppression_report_markdown",
     "render_agentic_plan_markdown",
     "render_assistant_profile_recommendation_markdown",
+    "render_assistant_test_plan_review_markdown",
     "render_backend_probe_markdown",
     "render_citation_audit_markdown",
     "render_query_cross_language_ab_markdown",
@@ -725,6 +732,7 @@ __all__ = [
     "render_markdown_report",
     "render_model_provider_probe_markdown",
     "recommend_assistant_profile",
+    "review_assistant_test_plan",
     "recommend_profile",
     "render_profile_compare_markdown",
     "render_profile_lint_markdown",

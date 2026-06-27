@@ -1544,6 +1544,128 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(file_payload["schema"], "ragflow_assistant_profile_recommendation_v1")
         self.assertIn("RAGFlow Assistant Profile Recommendation", markdown)
 
+    def test_assistant_test_plan_command_writes_reports(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            assistant_profile = root / "assistant_profile.json"
+            retrieval_hints = root / "retrieval_hints.json"
+            test_plan = root / "assistant_test_plan.json"
+            report_json = root / "assistant_test_plan_review.json"
+            report_md = root / "assistant_test_plan_review.md"
+            assistant_profile.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_assistant_profile_v1",
+                        "profile_id": "neutral-assistant-review",
+                        "status": "review_required",
+                        "retrieval": {"require_evidence": True, "citation_format": "[n]"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            retrieval_hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "document_count": 1,
+                        "section_boundaries": [
+                            {"title": "Overview", "image_count": 0},
+                            {"title": "Evidence", "image_count": 1},
+                        ],
+                        "keyword_candidates": [{"term": "assistant"}],
+                        "question_candidates": [
+                            {"question": "What should be summarized?"},
+                            {"question": "How should the assistant paraphrase?"},
+                        ],
+                        "numeric_candidates": [{"value": "42"}],
+                        "table_artifacts": [],
+                        "image_artifacts": [{"path": "images/chart.png"}],
+                        "quality_risks": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            test_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_assistant_test_plan_v1",
+                        "assistant_profile": "neutral-assistant-review",
+                        "status": "review_required",
+                        "test_count": 6,
+                        "cases": [
+                            {
+                                "id": "summary-001",
+                                "stage": "summary",
+                                "question": "Summarize the evidence.",
+                                "expected_behavior": "answer from cited retrieved evidence",
+                            },
+                            {
+                                "id": "numeric-001",
+                                "stage": "exact_numeric_fact",
+                                "question": "What does the source say about 42?",
+                                "expected_behavior": "return the numeric fact with a citation",
+                            },
+                            {
+                                "id": "visual-001",
+                                "stage": "ocr_image_fact",
+                                "question": "What visual detail appears in Evidence?",
+                                "expected_behavior": "answer only when visual evidence is retrieved",
+                            },
+                            {
+                                "id": "flow-001",
+                                "stage": "logical_flow",
+                                "question": "How are Overview and Evidence related?",
+                                "expected_behavior": "compare retrieved source sections only",
+                            },
+                            {
+                                "id": "paraphrase-001",
+                                "stage": "paraphrase",
+                                "question": "Restate the source evidence in another way.",
+                                "expected_behavior": "retrieve the same source section",
+                            },
+                            {
+                                "id": "negative-001",
+                                "stage": "negative_boundary",
+                                "question": "What private API key is used?",
+                                "expected_behavior": "abstain because the source lacks secrets",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "assistant-test-plan",
+                        "--test-plan",
+                        str(test_plan),
+                        "--assistant-profile",
+                        str(assistant_profile),
+                        "--retrieval-hints",
+                        str(retrieval_hints),
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            file_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            markdown = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["schema"], "ragflow_assistant_test_plan_review_v1")
+        self.assertEqual(payload["status"], "PASS")
+        self.assertEqual(payload["mutation"], "none")
+        self.assertEqual(payload["execution"]["status"], "not_run")
+        self.assertEqual(payload["summary"]["missing_expected_stage_count"], 0)
+        self.assertEqual(file_payload["schema"], "ragflow_assistant_test_plan_review_v1")
+        self.assertIn("RAGFlow Assistant Test Plan Review", markdown)
+
     def test_route_commands_can_use_centroid_tie_breaker(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:

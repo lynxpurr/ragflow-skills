@@ -2450,6 +2450,31 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         assistant_profile_recommendation_result,
         required_stdout='"schema": "ragflow_assistant_profile_recommendation_v1"',
     )
+    assistant_test_plan_review_result = _run_command(
+        [
+            sys.executable,
+            str(query_script),
+            "assistant-test-plan",
+            "--test-plan",
+            str(handoff_dir / "assistant_test_plan.json"),
+            "--assistant-profile",
+            str(handoff_dir / "assistant_profile.json"),
+            "--retrieval-hints",
+            str(handoff_dir / "retrieval_hints.json"),
+            "--report-json",
+            str(artifacts_dir / "assistant_test_plan_review.json"),
+            "--report-md",
+            str(artifacts_dir / "assistant_test_plan_review.md"),
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query assistant-test-plan",
+        assistant_test_plan_review_result,
+        required_stdout='"schema": "ragflow_assistant_test_plan_review_v1"',
+    )
 
     routing_config = artifacts_dir / "routing_config.json"
     route_queries = artifacts_dir / "route_queries.json"
@@ -2852,6 +2877,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_fallback_test.md",
         artifacts_dir / "assistant_profile_recommendation.json",
         artifacts_dir / "assistant_profile_recommendation.md",
+        artifacts_dir / "assistant_test_plan_review.json",
+        artifacts_dir / "assistant_test_plan_review.md",
         artifacts_dir / "query_direct.json",
         artifacts_dir / "query_host_assisted.json",
         artifacts_dir / "query_agentic_retrieval.json",
