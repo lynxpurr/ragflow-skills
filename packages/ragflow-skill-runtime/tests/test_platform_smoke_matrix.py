@@ -141,6 +141,10 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
             profile["artifacts"],
         )
         self.assertTrue(
+            any(path.endswith("query_fusion_test_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
             any(path.endswith("query_fallback_test.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )

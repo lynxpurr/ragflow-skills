@@ -22,7 +22,7 @@ python scripts/query.py session enrich "What about it?" --session ./run/session.
 python scripts/query.py agentic-plan "Compare runtime configuration and metadata routing tradeoffs" --max-subqueries 3 --reflection-budget 1 --report-json ./run/agentic_plan.json --report-md ./run/agentic_plan.md --json
 python scripts/query.py --config /path/to/ragflow-config.local.yaml endpoint-report --endpoint embedding=http://vpn-endpoint.local:8080/v1 --report-json ./run/query_endpoint_report.json --report-md ./run/query_endpoint_report.md --redaction-report ./run/query_endpoint_redaction.json --json
 python scripts/query.py ask "Question" --dataset-id ds-a --rewrite simple --multi-query ./fixtures/multi-query.json --trace-json ./run/query_trace.json --json
-python scripts/query.py fusion-test --cases ./fixtures/fusion-test-cases.json --report-json ./run/fusion_test.json --report-md ./run/fusion_test.md --json
+python scripts/query.py fusion-test --cases ./fixtures/fusion-test-cases.json --report-json ./run/fusion_test.json --report-md ./run/fusion_test.md --redaction-report ./run/fusion_test_redaction.json --json
 python scripts/query.py fallback-test --report-json ./run/fallback_test.json --report-md ./run/fallback_test.md --json
 python scripts/query.py list-kbs --routing-config ./templates/routing-config.example.json
 python scripts/query.py route "Which API configuration should I use?" --routing-config ./templates/routing-config.example.json --json

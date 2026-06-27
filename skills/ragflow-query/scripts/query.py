@@ -1220,6 +1220,34 @@ def _fusion(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _sanitize_query_fusion_test_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    cases: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    query_output_paths: list[str] = []
+    for case in cases:
+        outputs = case.get("query_outputs") if isinstance(case, dict) else None
+        if isinstance(outputs, list):
+            query_output_paths.extend(str(output) for output in outputs if isinstance(output, str))
+    urls = [
+        *_collect_urls(cases),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.cases,
+            *query_output_paths,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
 def _fusion_test(args: argparse.Namespace) -> int:
     try:
         cases = load_fusion_test_cases(args.cases)
@@ -1231,6 +1259,9 @@ def _fusion_test(args: argparse.Namespace) -> int:
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_fusion_test_report(report, args, cases)
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_query_fusion_test_markdown(report))
     if args.json or not args.report_json:
@@ -1575,6 +1606,7 @@ def build_parser() -> argparse.ArgumentParser:
     fusion_test.add_argument("--max-per-source", type=int, help="Default max_per_source for cases that omit it")
     fusion_test.add_argument("--report-json", help="Optional JSON report output path")
     fusion_test.add_argument("--report-md", help="Optional Markdown report output path")
+    fusion_test.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     fusion_test.add_argument("--json", action="store_true", help="Emit JSON report")
     fusion_test.set_defaults(func=_fusion_test)
 

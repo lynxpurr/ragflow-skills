@@ -3043,6 +3043,7 @@ raise SystemExit(code)
     query_fusion_redaction = work_root / "query_fusion_redaction.json"
     query_fusion_test_json = work_root / "query_fusion_test.json"
     query_fusion_test_md = work_root / "query_fusion_test.md"
+    query_fusion_test_redaction = work_root / "query_fusion_test_redaction.json"
     query_fallback_test_json = work_root / "query_fallback_test.json"
     query_fallback_test_md = work_root / "query_fallback_test.md"
     query_rewrite_json = work_root / "query_rewrite.json"
@@ -3418,6 +3419,8 @@ raise SystemExit(code)
             str(query_fusion_test_json),
             "--report-md",
             str(query_fusion_test_md),
+            "--redaction-report",
+            str(query_fusion_test_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -3433,6 +3436,9 @@ raise SystemExit(code)
         produced.append(query_fusion_test_json)
     if query_fusion_test_md.exists():
         produced.append(query_fusion_test_md)
+    _record_file_check(checks, "query fusion test redaction", query_fusion_test_redaction)
+    if query_fusion_test_redaction.exists():
+        produced.append(query_fusion_test_redaction)
 
     query_fallback_test = _run_command(
         [
