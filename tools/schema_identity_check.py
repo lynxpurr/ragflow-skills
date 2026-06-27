@@ -440,6 +440,20 @@ EXPECTED_IDENTITIES = (
         source_patterns=("kb_activation_plan_v1",),
         coverage_patterns=("kb_activation_plan_v1", "KB_ACTIVATION_PLAN_SCHEMA"),
     ),
+    SchemaIdentity(
+        key="ragflow_parse_report",
+        group="kb_health",
+        identity="ragflow_parse_report_v1",
+        source_patterns=("ragflow_parse_report_v1",),
+        coverage_patterns=("ragflow_parse_report_v1", "PARSE_REPORT_SCHEMA"),
+    ),
+    SchemaIdentity(
+        key="ragflow_kb_health_report",
+        group="kb_health",
+        identity="ragflow_kb_health_report_v1",
+        source_patterns=("ragflow_kb_health_report_v1",),
+        coverage_patterns=("ragflow_kb_health_report_v1", "HEALTH_REPORT_SCHEMA"),
+    ),
 )
 
 

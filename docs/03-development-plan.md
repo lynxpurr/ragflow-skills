@@ -1008,7 +1008,7 @@ Tasks:
 - [x] Add `ragflow-kb-build model-providers probe`.
 - [x] Probe configured RAGFlow embedding/rerank provider registration and read-only provider response shape when credentials are present.
 - [x] Probe configured embedding/rerank adapter request shape when explicit adapter endpoints are present.
-- [ ] Warn when an embedding model change requires KB rebuild or re-parse.
+- [x] Warn when an embedding model change requires KB rebuild or re-parse.
 - [x] Add fake endpoint tests for empty-input embedding/rerank adapter behavior.
 - [x] Add `ragflow-query endpoint-report` for local/LAN/VPN/HTTPS endpoint classification and redacted reachability summaries.
 - [x] Add `ragflow-query fallback-test`.
@@ -1146,16 +1146,19 @@ without direct DB/Redis repair.
 
 Tasks:
 
-- [ ] Add `ragflow-kb-build parse-report`.
-- [ ] Summarize document parse states, parse errors, and chunk counts.
-- [ ] Report parse phase timings when RAGFlow exposes progress messages or the user supplies logs.
-- [ ] Warn about expensive parser settings such as `auto_questions`, excessive `auto_keywords`, visual layout recognition on large Markdown, image/table context size, and unsupported parser keys.
-- [ ] Compare KB detail counts with document-list counts to detect stale or lazy list fields.
-- [ ] Add `ragflow-kb-build health-report`.
-- [ ] Summarize embedding model distribution across selected KBs.
-- [ ] Summarize zero-document, zero-chunk, stale-parse, and route-activation risks.
-- [ ] Include parser performance recommendations as API/config-level suggestions only.
-- [ ] Add tests proving public commands do not execute DB, Redis, Docker, or system-service repair.
+- [x] Add `ragflow-kb-build parse-report`.
+- [x] Add `ragflow_parse_report_v1`.
+- [x] Let `parse-report` consume `kb_manifest.json`, optional user-supplied document status JSON, optional user-supplied parse logs, and optional parser profile/config sidecars.
+- [x] Summarize document parse states, parse errors, and chunk counts.
+- [x] Report parse phase timings when RAGFlow exposes progress messages or the user supplies logs.
+- [x] Warn about expensive parser settings such as `auto_questions`, excessive `auto_keywords`, visual layout recognition on large Markdown, image/table context size, and unsupported parser keys.
+- [x] Compare KB detail counts with document-list counts to detect stale or lazy list fields.
+- [x] Add offline tests proving `parse-report` does not execute DB, Redis, Docker, system-service repair, or RAGFlow mutation.
+- [x] Add `ragflow-kb-build health-report`.
+- [x] Summarize embedding model distribution across selected KBs.
+- [x] Summarize zero-document, zero-chunk, stale-parse, and route-activation risks.
+- [x] Include parser performance recommendations as API/config-level suggestions only.
+- [x] Add offline tests proving `health-report` does not execute DB, Redis, Docker, system-service repair, or RAGFlow mutation.
 
 Exit criteria:
 

@@ -1244,6 +1244,7 @@ def _run_no_network_checks(
             {
                 "version": "0.1",
                 "dataset": {"id": "ds-consumer-topology", "name": "kb:consumer-topology"},
+                "profile": {"id": "consumer-topology", "embedding_model": "bge-m3"},
                 "documents": [
                     {
                         "document_id": "doc-consumer-topology",
@@ -1342,6 +1343,97 @@ def _run_no_network_checks(
         activation_plan,
         activation_plan_md,
     ):
+        if path.exists():
+            produced.append(path)
+
+    parse_documents_json = work_root / "parse_documents.json"
+    parse_log = work_root / "parse.log"
+    parse_report = work_root / "parse_report.json"
+    parse_report_md = work_root / "parse_report.md"
+    parse_documents_json.write_text(
+        json.dumps(
+            {
+                "data": {
+                    "doc_count": 1,
+                    "chunk_count": 1,
+                    "docs": [
+                        {
+                            "id": "doc-consumer-topology",
+                            "name": "sample.md",
+                            "run": "1",
+                            "progress": 1,
+                            "chunk_count": 1,
+                        }
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    parse_log.write_text("parse phase completed in 1.1s\nchunk phase completed in 90ms\n", encoding="utf-8")
+    parse_report_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "parse-report",
+            "--kb-manifest",
+            str(activation_kb_manifest),
+            "--documents-json",
+            str(parse_documents_json),
+            "--parse-log",
+            str(parse_log),
+            "--profile",
+            str(profile),
+            "--report-json",
+            str(parse_report),
+            "--report-md",
+            str(parse_report_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build parse-report",
+        parse_report_result,
+        required_output='"schema": "ragflow_parse_report_v1"',
+    )
+    for path in (parse_documents_json, parse_log, parse_report, parse_report_md):
+        if path.exists():
+            produced.append(path)
+
+    health_report = work_root / "kb_health_report.json"
+    health_report_md = work_root / "kb_health_report.md"
+    health_report_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "health-report",
+            "--kb-manifest",
+            str(activation_kb_manifest),
+            "--parse-report",
+            str(parse_report),
+            "--activation-plan",
+            str(activation_plan),
+            "--expected-embedding-model",
+            "bge-m3",
+            "--report-json",
+            str(health_report),
+            "--report-md",
+            str(health_report_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build health-report",
+        health_report_result,
+        required_output='"schema": "ragflow_kb_health_report_v1"',
+    )
+    for path in (health_report, health_report_md):
         if path.exists():
             produced.append(path)
 

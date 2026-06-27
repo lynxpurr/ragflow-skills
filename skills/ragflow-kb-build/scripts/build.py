@@ -46,11 +46,15 @@ from ragflow_skill_runtime import (  # noqa: E402
     probe_model_providers,
     configured_private_hosts_from_urls,
     create_kb_activation_plan,
+    create_kb_health_report,
     create_kb_split_plan,
     create_kb_topology_advice,
+    create_parse_report,
     render_handoff_inspection_markdown,
+    render_kb_health_report_markdown,
     render_governance_markdown,
     render_model_provider_probe_markdown,
+    render_parse_report_markdown,
     gate_benchmark_report,
     import_benchmark_dataset,
     preflight_benchmark_dataset,
@@ -81,8 +85,10 @@ from ragflow_skill_runtime import (  # noqa: E402
 )
 from ragflow_skill_runtime.benchmark_governance import BenchmarkGovernanceError  # noqa: E402
 from ragflow_skill_runtime.config import ConfigError  # noqa: E402
+from ragflow_skill_runtime.health_report import HealthReportError  # noqa: E402
 from ragflow_skill_runtime.kb_build import extract_dataset_id, extract_uploaded_document_id  # noqa: E402
 from ragflow_skill_runtime.metadata_governance import MetadataGovernanceError  # noqa: E402
+from ragflow_skill_runtime.parse_report import ParseReportError  # noqa: E402
 from ragflow_skill_runtime.profiles import ProfileError  # noqa: E402
 from ragflow_skill_runtime.topology import TopologyError  # noqa: E402
 
@@ -707,6 +713,41 @@ def _run_activation_plan(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_parse_report(args: argparse.Namespace) -> int:
+    try:
+        report = create_parse_report(
+            kb_manifest_path=args.kb_manifest,
+            documents_json_path=args.documents_json,
+            parse_log_paths=args.parse_log,
+            profile_path=args.profile,
+            parser_config_path=args.parser_config,
+        )
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_parse_report_markdown(report))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (ParseReportError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
+def _run_health_report(args: argparse.Namespace) -> int:
+    try:
+        report = create_kb_health_report(
+            kb_manifest_paths=args.kb_manifest,
+            parse_report_paths=args.parse_report,
+            activation_plan_paths=args.activation_plan,
+            min_documents=args.min_documents,
+            min_chunks=args.min_chunks,
+            expected_embedding_models=args.expected_embedding_model,
+        )
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_kb_health_report_markdown(report))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (HealthReportError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _sanitize_model_provider_report(report: dict[str, Any], args: argparse.Namespace, config: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     urls = [config.base_url, args.embedding_adapter_url, args.rerank_adapter_url]
     sanitized, redaction_report = sanitize_report_payload(
@@ -1160,6 +1201,52 @@ def build_activation_plan_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_parse_report_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Create an offline parser performance and parse-state report")
+    parser.add_argument("--kb-manifest", required=True, help="Local kb_manifest.json for the built KB")
+    parser.add_argument("--documents-json", help="Optional user-supplied RAGFlow document list/status JSON")
+    parser.add_argument("--parse-log", action="append", default=[], help="Optional parser progress log; may be repeated")
+    parser.add_argument("--profile", help="Optional chunk profile JSON/YAML to review parser settings")
+    parser.add_argument("--parser-config", help="Optional parser_config JSON sidecar; overrides profile parser_config in this report")
+    parser.add_argument(
+        "--report-json",
+        "--output",
+        dest="report_json",
+        default="parse_report.json",
+        help="Output ragflow_parse_report_v1 JSON",
+    )
+    parser.add_argument("--report-md", help="Optional parse report Markdown path")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    parser.set_defaults(func=_run_parse_report)
+    return parser
+
+
+def build_health_report_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Create an offline aggregate KB health report")
+    parser.add_argument("--kb-manifest", action="append", required=True, help="Local kb_manifest.json; may be repeated")
+    parser.add_argument("--parse-report", action="append", default=[], help="Optional ragflow_parse_report_v1 JSON; may be repeated")
+    parser.add_argument("--activation-plan", action="append", default=[], help="Optional kb_activation_plan_v1 JSON; may be repeated")
+    parser.add_argument("--min-documents", type=int, default=1, help="Minimum documents before a KB is considered non-empty")
+    parser.add_argument("--min-chunks", type=int, default=1, help="Minimum declared chunks before a KB is considered non-empty")
+    parser.add_argument(
+        "--expected-embedding-model",
+        action="append",
+        default=[],
+        help="Expected embedding model for built KB manifests; repeatable",
+    )
+    parser.add_argument(
+        "--report-json",
+        "--output",
+        dest="report_json",
+        default="kb_health_report.json",
+        help="Output ragflow_kb_health_report_v1 JSON",
+    )
+    parser.add_argument("--report-md", help="Optional KB health Markdown path")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    parser.set_defaults(func=_run_health_report)
+    return parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build a RAGFlow KB from Markdown")
     parser.add_argument("--input", help="Markdown file or directory")
@@ -1218,6 +1305,12 @@ def main(argv: list[str] | None = None) -> int:
         if command == "activation-plan":
             activation_plan_args = build_activation_plan_parser().parse_args(command_args)
             return activation_plan_args.func(activation_plan_args)
+        if command == "parse-report":
+            parse_report_args = build_parse_report_parser().parse_args(command_args)
+            return parse_report_args.func(parse_report_args)
+        if command == "health-report":
+            health_report_args = build_health_report_parser().parse_args(command_args)
+            return health_report_args.func(health_report_args)
         if command == "optimize":
             if command_args and command_args[0] == "summarize":
                 optimize_summary_args = build_optimize_summarize_parser().parse_args(command_args[1:])

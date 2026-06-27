@@ -1617,6 +1617,211 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["checks"]["route_test_readiness"]["passed_target_query_count"], 1)
         self.assertIn("RAGFlow KB Activation Plan", report_md_text)
 
+    def test_parse_report_subcommand_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kb_manifest = root / "kb_manifest.json"
+            documents_json = root / "documents.json"
+            parse_log = root / "parse.log"
+            profile = root / "profile.json"
+            output = root / "parse_report.json"
+            report_md = root / "parse_report.md"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-parse-cli", "name": "kb:parse-cli"},
+                        "documents": [
+                            {
+                                "document_id": "doc-parse-cli",
+                                "source_path": "source.md",
+                                "markdown_path": "documents/source.md",
+                                "status": "done",
+                                "chunk_count": 1,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            documents_json.write_text(
+                json.dumps(
+                    {
+                        "data": {
+                            "doc_count": 1,
+                            "chunk_count": 1,
+                            "docs": [
+                                {
+                                    "id": "doc-parse-cli",
+                                    "name": "source.md",
+                                    "run": "1",
+                                    "progress": 1,
+                                    "chunk_count": 1,
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            parse_log.write_text("parse phase completed in 1.2s\nchunk phase completed in 80ms\n", encoding="utf-8")
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "parse-cli-profile",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                        "parser_config": {
+                            "chunk_token_num": 512,
+                            "auto_keywords": 0,
+                            "auto_questions": 0,
+                            "__language__": "English",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "parse-report",
+                    "--kb-manifest",
+                    str(kb_manifest),
+                    "--documents-json",
+                    str(documents_json),
+                    "--parse-log",
+                    str(parse_log),
+                    "--profile",
+                    str(profile),
+                    "--report-json",
+                    str(output),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+            report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("ragflow_parse_report_v1", result.stdout)
+        self.assertEqual(payload["schema"], "ragflow_parse_report_v1")
+        self.assertTrue(payload["advisory_only"])
+        self.assertEqual(payload["mutation"], "none")
+        self.assertEqual(payload["execution"]["ragflow_calls"], 0)
+        self.assertEqual(payload["summary"]["failed_document_count"], 0)
+        self.assertEqual(payload["parse_log_summary"]["slowest_phase"]["phase"], "parse")
+        self.assertIn("RAGFlow Parse Report", report_md_text)
+
+    def test_health_report_subcommand_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kb_manifest = root / "kb_manifest.json"
+            parse_report = root / "parse_report.json"
+            activation_plan = root / "activation_plan.json"
+            output = root / "kb_health_report.json"
+            report_md = root / "kb_health_report.md"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-health-cli", "name": "kb:health-cli"},
+                        "profile": {"id": "health-cli-profile", "embedding_model": "bge-m3"},
+                        "documents": [
+                            {
+                                "document_id": "doc-health-cli",
+                                "source_path": "source.md",
+                                "markdown_path": "documents/source.md",
+                                "status": "done",
+                                "chunk_count": 1,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            parse_report.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "schema": "ragflow_parse_report_v1",
+                        "status": "PASS",
+                        "dataset": {"id": "ds-health-cli", "name": "kb:health-cli"},
+                        "summary": {
+                            "failed_document_count": 0,
+                            "pending_document_count": 0,
+                            "zero_chunk_document_count": 0,
+                            "chunk_mismatch_count": 0,
+                        },
+                        "chunk_consistency": {"mismatch_count": 0, "status": "PASS"},
+                        "parser_settings": {"expensive_setting_count": 0},
+                        "parse_log_summary": {"error_count": 0},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            activation_plan.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "schema": "kb_activation_plan_v1",
+                        "kb_name": "kb:health-cli",
+                        "dataset_id": "ds-health-cli",
+                        "summary": {
+                            "blocked_check_count": 0,
+                            "review_check_count": 0,
+                            "recommendation": "activate",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "health-report",
+                    "--kb-manifest",
+                    str(kb_manifest),
+                    "--parse-report",
+                    str(parse_report),
+                    "--activation-plan",
+                    str(activation_plan),
+                    "--expected-embedding-model",
+                    "bge-m3",
+                    "--report-json",
+                    str(output),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+            report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("ragflow_kb_health_report_v1", result.stdout)
+        self.assertEqual(payload["schema"], "ragflow_kb_health_report_v1")
+        self.assertTrue(payload["advisory_only"])
+        self.assertEqual(payload["mutation"], "none")
+        self.assertEqual(payload["execution"]["ragflow_calls"], 0)
+        self.assertEqual(payload["summary"]["embedding_model_count"], 1)
+        self.assertEqual(payload["summary"]["embedding_model_rebuild_required_kb_count"], 0)
+        self.assertEqual(payload["inputs"]["expected_embedding_models"], ["bge-m3"])
+        self.assertEqual(payload["summary"]["route_activation"]["ready"], 1)
+        self.assertIn("RAGFlow KB Health Report", report_md_text)
+
     def test_optimize_plan_only_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

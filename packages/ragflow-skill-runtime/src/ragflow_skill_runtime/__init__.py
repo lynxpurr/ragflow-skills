@@ -255,6 +255,18 @@ from .topology import (
     render_split_plan_markdown,
     render_topology_advice_markdown,
 )
+from .parse_report import (
+    PARSE_REPORT_SCHEMA,
+    ParseReportError,
+    create_parse_report,
+    render_parse_report_markdown,
+)
+from .health_report import (
+    HEALTH_REPORT_SCHEMA,
+    HealthReportError,
+    create_kb_health_report,
+    render_kb_health_report_markdown,
+)
 from .model_providers import (
     DEFAULT_MODEL_PROVIDER_ENDPOINTS,
     MODEL_PROVIDER_PROBE_REPORT_SCHEMA,
@@ -455,10 +467,14 @@ __all__ = [
     "KB_ACTIVATION_PLAN_SCHEMA",
     "KB_SPLIT_PLAN_SCHEMA",
     "KB_TOPOLOGY_ADVICE_SCHEMA",
+    "HEALTH_REPORT_SCHEMA",
+    "PARSE_REPORT_SCHEMA",
     "ManifestError",
     "HandoffError",
+    "HealthReportError",
     "AssistantReviewError",
     "MetadataGovernanceError",
+    "ParseReportError",
     "MaterializedSegments",
     "MineruConfig",
     "PASS",
@@ -593,8 +609,10 @@ __all__ = [
     "create_optimization_cleanup_plan",
     "create_optimization_plan",
     "create_kb_activation_plan",
+    "create_kb_health_report",
     "create_kb_split_plan",
     "create_kb_topology_advice",
+    "create_parse_report",
     "create_rich_handoff_package",
     "diagnose_query_result",
     "diagnose_kb_manifest",
@@ -731,6 +749,8 @@ __all__ = [
     "render_query_trace_markdown",
     "render_markdown_report",
     "render_model_provider_probe_markdown",
+    "render_kb_health_report_markdown",
+    "render_parse_report_markdown",
     "recommend_assistant_profile",
     "review_assistant_test_plan",
     "recommend_profile",

@@ -1003,8 +1003,11 @@ records response-shape summaries, normalizes provider display names and embeddin
 model entries, and can warn when expected embedding or rerank model names are not visible.
 When explicit adapter URLs are supplied, the same report now probes embedding and rerank
 empty-input request shapes with redacted endpoint summaries and classifies bounded
-HTTP 200/400/422 behavior as handled empty input. Unit, consumer-acceptance, and platform
-smoke tests use fake endpoints for these adapter probes.
+HTTP 200/400/422 behavior as handled empty input. `ragflow-kb-build health-report
+--expected-embedding-model` now compares local KB manifests with the intended embedding
+model and emits advisory rebuild/re-parse warnings when a built KB records a different
+model. Unit, consumer-acceptance, and platform smoke tests use fake endpoints or neutral
+sidecars for these probes.
 
 ## Feature Design 19: Contract, Packaging, And Compatibility Gates
 
@@ -1226,6 +1229,18 @@ Capabilities:
 - summarize embedding model distribution across selected KBs;
 - summarize route activation status for selected KBs;
 - produce public remediation suggestions that prefer API-level or config-level actions.
+
+MVP `parse-report` is implemented as an offline `ragflow_parse_report_v1` review surface.
+It consumes `kb_manifest.json`, optional user-supplied document status JSON, optional parse
+logs, and optional profile/parser-config sidecars. It reports normalized document states,
+parse-log error/timing hints, chunk-count mismatches, stale/lazy detail-count signals, and
+expensive or unsupported parser settings. MVP `health-report` is implemented as an offline
+`ragflow_kb_health_report_v1` aggregate surface. It consumes one or more `kb_manifest.json`
+files plus optional `parse-report` and `activation-plan` sidecars, then summarizes embedding
+model distribution, zero-document/zero-chunk risks, stale or failed parse risks, route
+activation readiness, optional expected-embedding-model rebuild/re-parse warnings, and
+parser-performance recommendations. Both reports record zero RAGFlow, DB, Redis, Docker,
+and system-service calls.
 
 Direct DB/Redis repair remains out of scope for public commands. Reports may explain that a
 private operator should inspect task queues, but the public suite should not execute DB or

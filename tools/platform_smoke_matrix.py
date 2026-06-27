@@ -622,7 +622,7 @@ def _write_fake_kb_manifest(workspace: Path, artifacts_dir: Path) -> Path:
         "version": "0.1",
         "ragflow_base_url": "https://ragflow.example.test/api/v1",
         "dataset": {"id": "ds-platform-smoke", "name": "kb:platform-smoke"},
-        "profile": {"id": "platform-smoke"},
+        "profile": {"id": "platform-smoke", "embedding_model": "bge-m3"},
         "documents": [
             {
                 "document_id": "doc-platform-smoke",
@@ -1969,6 +1969,91 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         required_stdout='"schema": "kb_activation_plan_v1"',
     )
 
+    parse_documents_json = artifacts_dir / "parse_documents.json"
+    parse_log = artifacts_dir / "parse.log"
+    parse_report = artifacts_dir / "parse_report.json"
+    parse_report_md = artifacts_dir / "parse_report.md"
+    parse_documents_json.write_text(
+        json.dumps(
+            {
+                "data": {
+                    "doc_count": 1,
+                    "chunk_count": 1,
+                    "docs": [
+                        {
+                            "id": "doc-platform-smoke",
+                            "name": "platform-smoke.md",
+                            "run": "1",
+                            "progress": 1,
+                            "chunk_count": 1,
+                        }
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    parse_log.write_text("parse phase completed in 1.0s\nchunk phase completed in 75ms\n", encoding="utf-8")
+    parse_report_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "parse-report",
+            "--kb-manifest",
+            str(kb_manifest),
+            "--documents-json",
+            str(parse_documents_json),
+            "--parse-log",
+            str(parse_log),
+            "--profile",
+            str(PROFILE_PATH),
+            "--report-json",
+            str(parse_report),
+            "--report-md",
+            str(parse_report_md),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb parse-report",
+        parse_report_result,
+        required_stdout='"schema": "ragflow_parse_report_v1"',
+    )
+
+    health_report = artifacts_dir / "kb_health_report.json"
+    health_report_md = artifacts_dir / "kb_health_report.md"
+    health_report_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "health-report",
+            "--kb-manifest",
+            str(kb_manifest),
+            "--parse-report",
+            str(parse_report),
+            "--activation-plan",
+            str(activation_plan),
+            "--expected-embedding-model",
+            "bge-m3",
+            "--report-json",
+            str(health_report),
+            "--report-md",
+            str(health_report_md),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb health-report",
+        health_report_result,
+        required_stdout='"schema": "ragflow_kb_health_report_v1"',
+    )
+
     benchmark_dir = artifacts_dir / "benchmark"
     qrels_path = _write_qrels(artifacts_dir)
     qa_path = _write_grounded_qa(artifacts_dir)
@@ -2870,6 +2955,12 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         workspace / "backend_warmup.json",
         workspace / "backend_warmup.md",
         kb_manifest,
+        artifacts_dir / "parse_documents.json",
+        artifacts_dir / "parse.log",
+        artifacts_dir / "parse_report.json",
+        artifacts_dir / "parse_report.md",
+        artifacts_dir / "kb_health_report.json",
+        artifacts_dir / "kb_health_report.md",
         artifacts_dir / "query_endpoint_report.json",
         artifacts_dir / "query_endpoint_report.md",
         artifacts_dir / "query_endpoint_redaction.json",
