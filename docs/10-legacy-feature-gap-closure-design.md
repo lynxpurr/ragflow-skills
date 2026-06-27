@@ -190,7 +190,7 @@ schema production and the later phase owns consumption or live workflow integrat
 | 14. Grounded QA And Evidence Mapping | `ragflow-kb-build` | Phase 26 | `qa generate/validate/map-evidence`, `segment-metadata report` | grounded QA and evidence mapping artifacts | evidence-span validation tests, generated-QA gate tests |
 | 15. Retrieval Pollution And Suppression Diagnostics | `ragflow-query`, `ragflow-kb-build` | Phase 27 | `pollution-report`, `rerank-ab`, `suppression-report` | pollution and suppression reports | fake pollution fixtures, recommendation-only safety tests |
 | 16. Query Orchestration Safety And Conversation Context | `ragflow-query` | Phase 30 | `intent classify/route`, `session enrich/inspect` | `ragflow_query_intent_v1`, `ragflow_query_route_decision_v1`, `ragflow_query_session_v1` | deterministic intent/session tests, bounded-context tests |
-| 17. Skill Suite Review And Drift Control | release tooling | Phase 32 | `tools/release_hygiene_check.py --suite-review` | suite review findings | static fixture tests, shared-doc hash checks, broken-link tests |
+| 17. Skill Suite Review And Drift Control | release tooling | Phase 32 | `tools/release_hygiene_check.py --suite-review`, `tools/version_date_drift_check.py` | suite review findings, version/date drift report | static fixture tests, shared-doc hash checks, broken-link tests, version/date drift tests |
 | 18. Runtime Capability, Model Provider, And Fallback Gates | all skills | Phase 31 | `backend probe/warmup`, `model-providers probe`, `endpoint-report`, `fallback-test` | backend capability report, model-provider report, fallback coverage report | fake endpoint tests, no-daemon tests, fallback coverage tests |
 | 19. Contract, Packaging, And Compatibility Gates | release tooling | Phase 33 | contract fixtures, installed archive smoke, command-manifest dry-run | command manifest, schema identity reports, compatibility findings | installed-artifact smoke, command-manifest redaction tests |
 | 20. KB Topology And Routing Activation Advisor | `ragflow-kb-build`, `ragflow-query` | Phase 34 | `topology advise`, `topology split-plan`, `activation-plan`, `route-activation-check` | `kb_topology_advice_v1`, `kb_split_plan_v1`, `kb_activation_plan_v1`, `ragflow_route_activation_check_v1` | advisory-only tests, neutral KB fixtures |
@@ -937,11 +937,20 @@ release-hygiene mode. It validates public `SKILL.md` frontmatter, required share
 references, shared-reference hash drift, broken relative links, stale/private references,
 and high-overlap skill descriptions with fixture coverage. Accidental public naming drift
 and declared compatibility references are now covered by the default rename-governance
-release gate from Feature Design 19. Version/date drift and repeated warning
-centralization remain open. A private `ragflow-skills-maintainer` Codex skill now records
-repository-specific development workflow, validation-chain, task-selection, and
-release-governance guidance outside the public release skill tree; maintainer-only skills
-must not be added under public `skills/`.
+release gate from Feature Design 19. Version/date drift is now covered by
+`tools/version_date_drift_check.py`, which emits `ragflow_version_date_drift_check_v1`
+and runs by default from release hygiene. It compares runtime/package version declarations,
+release-manifest/build/export major-minor metadata, deterministic release manifest dates,
+documented stable release versions, and any declared public skill version/date metadata.
+Repeated warning centralization is now covered by the suite-review gate through
+`skill_suite_repeated_warning` findings and `repeated_warning_count` summary metadata.
+The check ignores intentionally duplicated shared references and reports copied warning
+guidance in public `SKILL.md` files that should instead link to
+`references/host-agent-setup.md`. The repeated config/key warning previously copied in
+each public `SKILL.md` has been centralized through that shared reference. A private
+`ragflow-skills-maintainer` Codex skill now records repository-specific development
+workflow, validation-chain, task-selection, and release-governance guidance outside the
+public release skill tree; maintainer-only skills must not be added under public `skills/`.
 
 ## Feature Design 18: Runtime Capability, Model Provider, And Fallback Gates
 
@@ -985,6 +994,13 @@ Implementation status: backend probes/warmup, image fallback review gates, model
 probes, adapter request-shape probes, `ragflow-query endpoint-report`,
 `ragflow-query fallback-test`, and the shared report sanitizer are implemented. Broader
 `--redaction-report` coverage remains open.
+
+Post-Phase 35 sequencing should finish generated-report safety before broad runtime helper
+work. First extend `--redaction-report` coverage and release hygiene scans for generated
+reports and examples. Then add the smallest retry/backoff and metrics helpers with retry
+budgets and latency summaries in one or two consuming commands. Rate limiting, circuit
+breakers, cache invalidation, checkpoint/resume, and partial-failure schemas should follow
+only after the narrow helper path is covered by deterministic tests.
 
 All reports must redact endpoints according to release settings and must not include real
 API keys or host-specific paths.
@@ -1084,7 +1100,8 @@ leak secrets, localhost endpoints, config paths, or work paths. Schema identity 
 implemented in `tools/schema_identity_check.py` and run by default from
 `tools/release_hygiene_check.py`. The gate emits `ragflow_schema_identity_check_v1` and
 requires source plus test/smoke evidence for versioned `doc_manifest`/`kb_manifest`
-identity and quality, benchmark, query, trace, diagnostic, and route report schemas.
+identity and quality, benchmark, query, trace, diagnostic, route, topology, KB health,
+and release-governance report schemas.
 Rename governance is implemented in `tools/rename_governance_check.py` and also runs by
 default from `tools/release_hygiene_check.py`. It emits
 `ragflow_rename_governance_check_v1`, validates the explicit public rename policy in

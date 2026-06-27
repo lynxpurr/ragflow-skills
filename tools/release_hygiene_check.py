@@ -16,6 +16,7 @@ from build_release import DIST_DIR, PUBLIC_SKILLS, ROOT, build_release
 from forward_test_prompt_check import run_forward_test_prompt_check
 from rename_governance_check import run_rename_governance_check
 from schema_identity_check import run_schema_identity_check
+from version_date_drift_check import run_version_date_drift_check
 
 
 TEXT_SUFFIXES = {
@@ -79,6 +80,15 @@ DESCRIPTION_STOPWORDS = {
 STALE_REFERENCE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("skill_suite_stale_reference", re.compile(r"\b(?:ragflux|ragflow-saas|kb ops)\b", re.IGNORECASE)),
     ("skill_suite_private_reference", re.compile(r"dedao|得到|薛兆丰|opc-bridge|shared-infra", re.IGNORECASE)),  # release-hygiene: allow
+)
+REPEATED_WARNING_PATTERN = re.compile(
+    r"\b(?:do not|don't|never|must not|without|does not|no real|real keys|real api keys|secret|"
+    r"api key|mutate|mutation|llm)\b",
+    re.IGNORECASE,
+)
+WARNING_REFERENCE_POINTERS = (
+    "references/host-agent-setup.md",
+    "references/user-onboarding-prompt.md",
 )
 
 FORBIDDEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -494,6 +504,77 @@ def detect_description_overlap(
     return findings
 
 
+def _normalize_warning_line(line: str) -> str:
+    line = re.sub(r"^\s*(?:[-*]|\d+\.)\s*", "", line.strip())
+    line = re.sub(r"`([^`]+)`", r"\1", line)
+    line = re.sub(r"\s+", " ", line)
+    return line.strip().lower()
+
+
+def _is_centralized_warning_pointer(line: str) -> bool:
+    lowered = line.lower()
+    return any(pointer in lowered for pointer in WARNING_REFERENCE_POINTERS)
+
+
+def _is_required_reference_file(path: Path, skill_root: Path) -> bool:
+    references_dir = skill_root / "references"
+    try:
+        relative = path.relative_to(references_dir)
+    except ValueError:
+        return False
+    return len(relative.parts) == 1 and relative.name in REQUIRED_REFERENCE_FILES
+
+
+def detect_repeated_warnings(
+    skills_root: Path,
+    *,
+    base: Path,
+    public_skills: tuple[str, ...],
+    min_skill_count: int = 2,
+) -> list[Finding]:
+    occurrences: dict[str, list[dict[str, Any]]] = {}
+    for skill_name in public_skills:
+        skill_root = skills_root / skill_name
+        for path in _suite_markdown_files(skill_root):
+            if not path.exists() or _is_required_reference_file(path, skill_root):
+                continue
+            for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                normalized = _normalize_warning_line(line)
+                if (
+                    not normalized
+                    or _is_centralized_warning_pointer(normalized)
+                    or not REPEATED_WARNING_PATTERN.search(normalized)
+                ):
+                    continue
+                occurrences.setdefault(normalized, []).append(
+                    {
+                        "skill": skill_name,
+                        "path": path,
+                        "line": line_no,
+                    }
+                )
+
+    findings: list[Finding] = []
+    for warning, warning_occurrences in sorted(occurrences.items()):
+        skill_names = sorted({str(item["skill"]) for item in warning_occurrences})
+        if len(skill_names) < min_skill_count:
+            continue
+        first = sorted(warning_occurrences, key=lambda item: (_relative(item["path"], base), item["line"]))[0]
+        findings.append(
+            Finding(
+                check="skill_suite_repeated_warning",
+                path=_relative(first["path"], base),
+                line=int(first["line"]),
+                message=(
+                    f"warning text is repeated across {len(skill_names)} skills "
+                    f"({', '.join(skill_names)}); centralize detailed guidance in "
+                    "references/host-agent-setup.md and link to it"
+                ),
+            )
+        )
+    return findings
+
+
 def run_suite_review(
     *,
     skills_root: Path = ROOT / "skills",
@@ -529,6 +610,7 @@ def run_suite_review(
         )
     )
     findings.extend(detect_description_overlap(skills_root, base=skills_root, public_skills=public_skills))
+    findings.extend(detect_repeated_warnings(skills_root, base=skills_root, public_skills=public_skills))
     return {
         "ok": not findings,
         "schema": SUITE_REVIEW_SCHEMA,
@@ -539,6 +621,7 @@ def run_suite_review(
             "skill_count": len(public_skills),
             "checked_file_count": len(checked_files),
             "finding_count": len(findings),
+            "repeated_warning_count": sum(1 for finding in findings if finding.check == "skill_suite_repeated_warning"),
         },
         "checked_files": sorted(checked_files),
         "findings": [finding.to_dict() for finding in findings],
@@ -593,6 +676,7 @@ def run_hygiene_check(
     schema_identity: bool = True,
     rename_governance: bool = True,
     forward_test_prompts: bool = True,
+    version_date_drift: bool = True,
 ) -> dict[str, Any]:
     if rebuild:
         build_release(dist_dir)
@@ -640,6 +724,10 @@ def run_hygiene_check(
         forward_test_prompt_payload = run_forward_test_prompt_check(root=ROOT)
         payload["forward_test_prompts"] = forward_test_prompt_payload
         payload["ok"] = bool(payload["ok"] and forward_test_prompt_payload["ok"])
+    if version_date_drift:
+        version_date_drift_payload = run_version_date_drift_check(root=ROOT)
+        payload["version_date_drift"] = version_date_drift_payload
+        payload["ok"] = bool(payload["ok"] and version_date_drift_payload["ok"])
     return payload
 
 
@@ -652,6 +740,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-schema-identity", action="store_true", help="Skip static schema identity checks")
     parser.add_argument("--skip-rename-governance", action="store_true", help="Skip static rename governance checks")
     parser.add_argument("--skip-forward-test-prompts", action="store_true", help="Skip host-agent forward-test prompt checks")
+    parser.add_argument("--skip-version-date-drift", action="store_true", help="Skip static version/date drift checks")
     args = parser.parse_args(argv)
 
     payload = run_hygiene_check(
@@ -662,6 +751,7 @@ def main(argv: list[str] | None = None) -> int:
         schema_identity=not args.skip_schema_identity,
         rename_governance=not args.skip_rename_governance,
         forward_test_prompts=not args.skip_forward_test_prompts,
+        version_date_drift=not args.skip_version_date_drift,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if payload["ok"] else 1

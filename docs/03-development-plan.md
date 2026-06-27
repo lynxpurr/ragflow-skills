@@ -1028,6 +1028,19 @@ Tasks:
 - [ ] Add acceptance fixtures that intentionally include fake secrets and verify redaction.
 - [ ] Add documentation for host agents explaining where sanitized reports should be stored.
 
+Recommended next slices:
+
+1. Finish generated-report safety before broader runtime primitives: add focused
+   `--redaction-report` coverage to report commands that may include endpoints, config
+   paths, work paths, or host-supplied sidecar paths.
+2. Extend release hygiene and acceptance fixtures with fake generated reports containing
+   fake secrets/private paths, proving sanitizer behavior without live endpoints.
+3. Add the smallest shared retry/backoff and metrics helpers first, recording retry budgets
+   and latency summaries in traces or reports where those helpers are used.
+4. Defer broader rate limiting, circuit breakers, cache invalidation, checkpoint/resume,
+   and partial-failure schemas until at least one narrow report or probe command consumes
+   the helper with deterministic tests.
+
 Exit criteria:
 
 - Runtime probes explain host readiness without installing services or supervising daemons.
@@ -1051,12 +1064,16 @@ Tasks:
 - [x] Detect shared reference/template drift across the three skills.
 - [x] Detect broken relative links in `SKILL.md` and `references/`.
 - [x] Detect trigger/description overlap that could confuse host-agent skill selection.
-- [ ] Detect version/date drift between docs, release manifest, and skill metadata.
-- [ ] Detect repeated warnings that should be centralized in a single reference.
+- [x] Detect version/date drift between docs, release manifest, and skill metadata.
+- [x] Detect repeated warnings that should be centralized in a single reference.
 - [x] Detect accidental naming drift from old or experimental product names.
 - [x] Validate compatibility references for deprecated aliases and schema names.
 - [x] Add fixture coverage for intentional drift, broken links, duplicate shared docs, and private references.
 - [x] Add a private `ragflow-skills-maintainer` Codex skill outside the public release tree to preserve development workflow, validation-chain, task-selection, and release-governance guidance.
+
+Status note: Phase 32 suite-review coverage is complete for the currently planned static
+drift checks. Future suite-review work should stay release-local, offline, and focused on
+new public-surface drift modes rather than private maintainer paths.
 
 Exit criteria:
 
@@ -1089,7 +1106,7 @@ Tasks:
 - [x] Add installed archive smoke for every exported skill tarball, separate from source-tree smoke.
 - [x] Add command-manifest dry-run support for live acceptance flows.
 - [x] Include local configuration checks, redacted command arrays, expected artifacts, mutation labels, and cleanup notes in command manifests.
-- [x] Add schema identity checks for `doc_manifest`, `kb_manifest`, quality, benchmark, query, trace, diagnostic, and route reports.
+- [x] Add schema identity checks for `doc_manifest`, `kb_manifest`, quality, benchmark, query, trace, diagnostic, route, topology, KB health, and release-governance reports.
 - [x] Add compatibility facade checks for deprecated command aliases or schema names when aliases exist.
 - [x] Add explicit rename policy documentation for CLI aliases, schema migration, docs updates, downstream gates, release notes, and rollback plan.
 - [x] Add release hygiene checks for accidental public rename drift.

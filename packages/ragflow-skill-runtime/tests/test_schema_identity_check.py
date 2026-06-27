@@ -22,8 +22,21 @@ class SchemaIdentityCheckTests(unittest.TestCase):
         self.assertEqual(report["schema"], SCHEMA)
         self.assertEqual(report["summary"]["failed_count"], 0)
         groups = set(report["groups"])
-        for group in ("manifest", "quality", "benchmark", "query", "trace", "diagnostic", "route", "topology"):
+        for group in (
+            "manifest",
+            "quality",
+            "benchmark",
+            "query",
+            "trace",
+            "diagnostic",
+            "route",
+            "topology",
+            "kb_health",
+            "release",
+        ):
             self.assertIn(group, groups)
+        keys = {check["key"] for check in report["checks"]}
+        self.assertIn("version_date_drift_check", keys)
 
     def test_schema_identity_check_reports_missing_source_or_coverage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

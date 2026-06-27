@@ -63,6 +63,8 @@ class ReleaseHygieneTests(unittest.TestCase):
         self.assertEqual(payload["rename_governance"]["schema"], "ragflow_rename_governance_check_v1")
         self.assertTrue(payload["forward_test_prompts"]["ok"])
         self.assertEqual(payload["forward_test_prompts"]["schema"], "ragflow_forward_test_prompt_check_v1")
+        self.assertTrue(payload["version_date_drift"]["ok"])
+        self.assertEqual(payload["version_date_drift"]["schema"], "ragflow_version_date_drift_check_v1")
 
     def test_forbidden_private_path_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -129,6 +131,35 @@ class ReleaseHygieneTests(unittest.TestCase):
         checks = {finding["check"] for finding in payload["findings"]}
         self.assertFalse(payload["ok"], payload)
         self.assertIn("skill_suite_description_overlap", checks)
+
+    def test_suite_review_reports_repeated_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skills_root = Path(tmp) / "skills"
+            repeated_warning = "Do not put real keys in the skill folder."
+            _write_skill_fixture(
+                skills_root,
+                "ragflow-doc-to-md",
+                description="Convert documents into Markdown handoff bundles.",
+                body=f"{repeated_warning}\n",
+            )
+            _write_skill_fixture(
+                skills_root,
+                "ragflow-kb-build",
+                description="Build knowledge bases from Markdown handoff bundles.",
+                body=f"{repeated_warning}\n",
+            )
+            _write_skill_fixture(
+                skills_root,
+                "ragflow-query",
+                description="Query configured RAGFlow knowledge bases.",
+            )
+
+            payload = run_suite_review(skills_root=skills_root, public_skills=PUBLIC_SKILLS)
+
+        checks = {finding["check"] for finding in payload["findings"]}
+        self.assertFalse(payload["ok"], payload)
+        self.assertIn("skill_suite_repeated_warning", checks)
+        self.assertEqual(payload["summary"]["repeated_warning_count"], 1)
 
 
 if __name__ == "__main__":

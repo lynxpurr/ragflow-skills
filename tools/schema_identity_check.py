@@ -43,6 +43,8 @@ class SchemaIdentity:
     coverage_patterns: tuple[str, ...]
     identity_field: str = "schema"
     description: str = ""
+    source_roots: tuple[Path, ...] = ()
+    coverage_roots: tuple[Path, ...] = ()
 
 
 DEFAULT_SOURCE_ROOTS = (
@@ -454,6 +456,15 @@ EXPECTED_IDENTITIES = (
         source_patterns=("ragflow_kb_health_report_v1",),
         coverage_patterns=("ragflow_kb_health_report_v1", "HEALTH_REPORT_SCHEMA"),
     ),
+    SchemaIdentity(
+        key="version_date_drift_check",
+        group="release",
+        identity="ragflow_version_date_drift_check_v1",
+        source_patterns=("ragflow_version_date_drift_check_v1",),
+        coverage_patterns=("ragflow_version_date_drift_check_v1", "run_version_date_drift_check"),
+        description="Release governance report for package, manifest, docs, and skill metadata version/date drift.",
+        source_roots=(Path("tools/version_date_drift_check.py"),),
+    ),
 )
 
 
@@ -527,6 +538,10 @@ def _find_pattern_evidence(
     }
 
 
+def _resolve_search_paths(root: Path, paths: Iterable[Path]) -> tuple[Path, ...]:
+    return tuple((root / path).resolve() if not path.is_absolute() else path.resolve() for path in paths)
+
+
 def _check_identity(
     identity: SchemaIdentity,
     *,
@@ -544,6 +559,8 @@ def _check_identity(
         "identity_field": identity.identity_field,
         "description": identity.description,
         "ok": ok,
+        "source_roots": [_relative(path, root) for path in source_paths],
+        "coverage_roots": [_relative(path, root) for path in coverage_paths],
         "source": source,
         "coverage": coverage,
         "error": "" if ok else "missing source or coverage evidence for schema identity",
@@ -560,14 +577,14 @@ def run_schema_identity_check(
     """Run the static schema identity gate and return a JSON-serializable report."""
 
     root = root.resolve()
-    source_paths = tuple((root / path).resolve() if not path.is_absolute() else path.resolve() for path in source_roots)
-    coverage_paths = tuple((root / path).resolve() if not path.is_absolute() else path.resolve() for path in coverage_roots)
+    source_paths = _resolve_search_paths(root, source_roots)
+    coverage_paths = _resolve_search_paths(root, coverage_roots)
     checks = [
         _check_identity(
             identity,
             root=root,
-            source_paths=source_paths,
-            coverage_paths=coverage_paths,
+            source_paths=_resolve_search_paths(root, identity.source_roots) if identity.source_roots else source_paths,
+            coverage_paths=_resolve_search_paths(root, identity.coverage_roots) if identity.coverage_roots else coverage_paths,
         )
         for identity in identities
     ]
