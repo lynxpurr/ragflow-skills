@@ -1207,6 +1207,8 @@ with contextlib.redirect_stdout(stdout):
         str(artifacts_dir / "query_pollution.json"),
         "--report-md",
         str(artifacts_dir / "query_pollution.md"),
+        "--redaction-report",
+        str(artifacts_dir / "query_pollution_redaction.json"),
         "--json",
     ])
 if pollution_code != 0:
@@ -1276,6 +1278,8 @@ with contextlib.redirect_stdout(stdout):
         str(artifacts_dir / "query_rerank_ab.json"),
         "--report-md",
         str(artifacts_dir / "query_rerank_ab.md"),
+        "--redaction-report",
+        str(artifacts_dir / "query_rerank_ab_redaction.json"),
         "--json",
     ])
 if rerank_code != 0:
@@ -3007,8 +3011,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_diagnostic_redaction.json",
         artifacts_dir / "query_pollution.json",
         artifacts_dir / "query_pollution.md",
+        artifacts_dir / "query_pollution_redaction.json",
         artifacts_dir / "query_rerank_ab.json",
         artifacts_dir / "query_rerank_ab.md",
+        artifacts_dir / "query_rerank_ab_redaction.json",
         artifacts_dir / "query_cross_language_ab.json",
         artifacts_dir / "query_cross_language_ab.md",
         artifacts_dir / "query_fusion.json",

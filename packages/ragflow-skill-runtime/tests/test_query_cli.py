@@ -1030,12 +1030,21 @@ class QueryCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             query_output = root / "query.json"
+            trace_json = root / "trace.json"
             report_json = root / "pollution.json"
             report_md = root / "pollution.md"
+            redaction_json = root / "pollution_redaction.json"
+            private_host = ".".join(["172", "20", "30", "40"])
+            fake_token = "fake-pollution-token"
+            fake_key = "fake-pollution-secret"
+            home_path = str(Path.home() / ".ragflow" / "pollution.local.yaml")
             query_output.write_text(
                 json.dumps(
                     {
-                        "question": "how to use runtime",
+                        "question": (
+                            f"how to use runtime via http://{private_host}:9380/api?token={fake_token} "
+                            f"from {home_path} saved at {query_output}"
+                        ),
                         "dataset_ids": ["ds-1"],
                         "chunks": [
                             {
@@ -1044,8 +1053,8 @@ class QueryCliTests(unittest.TestCase):
                                 "similarity": 0.9,
                             },
                             {
-                                "content": "translation term only match",
-                                "document_name": "polluted.md",
+                                "content": f"translation term only match api_key={fake_key}",
+                                "document_name": home_path,
                                 "similarity": 0.4,
                             },
                         ],
@@ -1053,6 +1062,7 @@ class QueryCliTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            trace_json.write_text(json.dumps({"expanded_terms": ["translation"]}), encoding="utf-8")
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 code = module.main(
@@ -1060,26 +1070,45 @@ class QueryCliTests(unittest.TestCase):
                         "pollution-report",
                         "--query-output",
                         str(query_output),
+                        "--trace-json",
+                        str(trace_json),
                         "--expanded-term",
                         "translation",
                         "--report-json",
                         str(report_json),
                         "--report-md",
                         str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
                         "--json",
                     ]
                 )
             payload = json.loads(stdout.getvalue())
+            report_text = report_json.read_text(encoding="utf-8")
             report_json_exists = report_json.exists()
             report_md_exists = report_md.exists()
             markdown = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
 
+        combined = "\n".join([stdout.getvalue(), report_text, markdown, redaction_text])
         self.assertEqual(code, 0)
         self.assertEqual(payload["schema"], "ragflow_query_pollution_report_v1")
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["config_path"], 1)
         self.assertTrue(report_json_exists)
         self.assertTrue(report_md_exists)
         self.assertIn("RAGFlow Query Pollution Report", markdown)
         self.assertIn("translation", markdown)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
+        self.assertNotIn(str(query_output), combined)
 
     def test_rerank_ab_can_write_json_and_markdown(self) -> None:
         module = load_query_module()
@@ -1089,10 +1118,18 @@ class QueryCliTests(unittest.TestCase):
             rerank_json = root / "rerank.json"
             report_json = root / "rerank_report.json"
             report_md = root / "rerank_report.md"
+            redaction_json = root / "rerank_report_redaction.json"
+            private_host = ".".join(["172", "21", "31", "41"])
+            fake_token = "fake-rerank-token"
+            fake_key = "fake-rerank-secret"
+            home_path = str(Path.home() / ".ragflow" / "rerank.local.yaml")
             query_output.write_text(
                 json.dumps(
                     {
-                        "question": "where is the best evidence",
+                        "question": (
+                            f"where is the best evidence at http://{private_host}:9380/api?token={fake_token} "
+                            f"from {home_path} saved at {query_output}"
+                        ),
                         "dataset_ids": ["ds-1"],
                         "chunks": [
                             {
@@ -1103,8 +1140,8 @@ class QueryCliTests(unittest.TestCase):
                             },
                             {
                                 "chunk_id": "chunk-2",
-                                "content": "best evidence has the target phrase",
-                                "document_name": "best.md",
+                                "content": f"best evidence has the target phrase api_key={fake_key}",
+                                "document_name": home_path,
                                 "similarity": 0.6,
                             },
                         ],
@@ -1135,21 +1172,37 @@ class QueryCliTests(unittest.TestCase):
                         str(report_json),
                         "--report-md",
                         str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
                         "--json",
                     ]
                 )
             payload = json.loads(stdout.getvalue())
+            report_text = report_json.read_text(encoding="utf-8")
             report_json_exists = report_json.exists()
             report_md_exists = report_md.exists()
             markdown = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
 
+        combined = "\n".join([stdout.getvalue(), report_text, markdown, redaction_text])
         self.assertEqual(code, 0)
         self.assertEqual(payload["schema"], "ragflow_query_rerank_ab_report_v1")
         self.assertEqual(payload["summary"]["candidate_expected_chunk_hit_count"], 1)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["config_path"], 1)
         self.assertTrue(report_json_exists)
         self.assertTrue(report_md_exists)
         self.assertIn("RAGFlow Query Rerank A/B Report", markdown)
-        self.assertIn("best.md", markdown)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
+        self.assertNotIn(str(query_output), combined)
 
     def test_cross_language_ab_can_write_json_and_markdown(self) -> None:
         module = load_query_module()

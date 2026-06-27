@@ -1003,6 +1003,32 @@ def _diagnose_result(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _sanitize_query_pollution_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+    trace: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(trace or {}),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.trace_json,
+            args.expanded_terms_json,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
 def _pollution_report(args: argparse.Namespace) -> int:
     try:
         query_payload = _read_json(args.query_output)
@@ -1025,11 +1051,44 @@ def _pollution_report(args: argparse.Namespace) -> int:
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_pollution_report(
+            report,
+            args,
+            query_payload,
+            trace if isinstance(trace, dict) else None,
+        )
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_query_pollution_markdown(report))
     if args.json or not args.report_json:
         _json_dump(report)
     return 0 if report["ok"] else 1
+
+
+def _sanitize_query_rerank_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+    rerank_payload: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(rerank_payload),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.rerank_json,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
 
 
 def _rerank_ab(args: argparse.Namespace) -> int:
@@ -1049,6 +1108,9 @@ def _rerank_ab(args: argparse.Namespace) -> int:
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_rerank_report(report, args, query_payload, rerank_payload)
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_query_rerank_ab_markdown(report))
     if args.json or not args.report_json:
@@ -1406,6 +1468,7 @@ def build_parser() -> argparse.ArgumentParser:
     pollution.add_argument("--max-examples", type=int, default=5)
     pollution.add_argument("--report-json", help="Optional JSON report output path")
     pollution.add_argument("--report-md", help="Optional Markdown report output path")
+    pollution.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     pollution.add_argument("--json", action="store_true", help="Emit JSON report")
     pollution.set_defaults(func=_pollution_report)
 
@@ -1419,6 +1482,7 @@ def build_parser() -> argparse.ArgumentParser:
     rerank.add_argument("--max-examples", type=int, default=10)
     rerank.add_argument("--report-json", help="Optional JSON report output path")
     rerank.add_argument("--report-md", help="Optional Markdown report output path")
+    rerank.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     rerank.add_argument("--json", action="store_true", help="Emit JSON report")
     rerank.set_defaults(func=_rerank_ab)
 

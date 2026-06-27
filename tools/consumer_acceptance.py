@@ -3028,9 +3028,11 @@ raise SystemExit(code)
     query_diagnostic_redaction = work_root / "query_diagnostic_redaction.json"
     query_pollution_json = work_root / "query_pollution.json"
     query_pollution_md = work_root / "query_pollution.md"
+    query_pollution_redaction = work_root / "query_pollution_redaction.json"
     query_rerank_input = work_root / "query_rerank.json"
     query_rerank_json = work_root / "query_rerank_ab.json"
     query_rerank_md = work_root / "query_rerank_ab.md"
+    query_rerank_redaction = work_root / "query_rerank_ab_redaction.json"
     query_cross_language_json = work_root / "query_cross_language_ab.json"
     query_cross_language_md = work_root / "query_cross_language_ab.md"
     query_fusion_source = work_root / "query_fusion_source.json"
@@ -3247,6 +3249,8 @@ raise SystemExit(code)
             str(query_pollution_json),
             "--report-md",
             str(query_pollution_md),
+            "--redaction-report",
+            str(query_pollution_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -3262,6 +3266,9 @@ raise SystemExit(code)
         produced.append(query_pollution_json)
     if query_pollution_md.exists():
         produced.append(query_pollution_md)
+    _record_file_check(checks, "query pollution redaction", query_pollution_redaction)
+    if query_pollution_redaction.exists():
+        produced.append(query_pollution_redaction)
 
     query_rerank = _run_command(
         [
@@ -3282,6 +3289,8 @@ raise SystemExit(code)
             str(query_rerank_json),
             "--report-md",
             str(query_rerank_md),
+            "--redaction-report",
+            str(query_rerank_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -3297,6 +3306,9 @@ raise SystemExit(code)
         produced.append(query_rerank_json)
     if query_rerank_md.exists():
         produced.append(query_rerank_md)
+    _record_file_check(checks, "query rerank ab redaction", query_rerank_redaction)
+    if query_rerank_redaction.exists():
+        produced.append(query_rerank_redaction)
 
     query_cross_language = _run_command(
         [

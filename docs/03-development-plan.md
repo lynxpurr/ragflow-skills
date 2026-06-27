@@ -1030,6 +1030,7 @@ Tasks:
 
 Status note: `--redaction-report` currently covers `ragflow-query endpoint-report`,
 `ragflow-query evaluate-answer`, `ragflow-query diagnose-result`,
+`ragflow-query pollution-report`, `ragflow-query rerank-ab`,
 `ragflow-kb-build model-providers probe`, and `ragflow-doc-to-md backend probe`. Broader
 report-command coverage remains open. Release hygiene now scans generated reports/examples
 for raw sensitive literals and validates redaction sidecars; consumer acceptance includes a

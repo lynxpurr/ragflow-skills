@@ -103,6 +103,8 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("query answer evaluation", check_names)
         self.assertIn("query answer evaluation redaction", check_names)
         self.assertIn("query diagnostic redaction", check_names)
+        self.assertIn("query pollution redaction", check_names)
+        self.assertIn("query rerank ab redaction", check_names)
         self.assertIn("query fallback test report", check_names)
         self.assertIn("query missing config guard", check_names)
         self.assertIn("live build skipped", check_names)
@@ -112,6 +114,14 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("query_diagnostic_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_pollution_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_rerank_ab_redaction.json") for path in payload["produced_artifacts"]),
             payload["produced_artifacts"],
         )
         self.assertTrue(payload["reports"]["json"].endswith("consumer-acceptance-report.json"))

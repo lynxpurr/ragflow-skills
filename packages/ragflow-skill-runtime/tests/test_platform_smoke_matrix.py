@@ -125,6 +125,14 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
             profile["artifacts"],
         )
         self.assertTrue(
+            any(path.endswith("query_pollution_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_rerank_ab_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
             any(path.endswith("query_fallback_test.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
