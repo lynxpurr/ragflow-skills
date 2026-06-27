@@ -232,11 +232,14 @@ from .optimization import (
     summarize_optimization_results,
 )
 from .topology import (
+    KB_ACTIVATION_PLAN_SCHEMA,
     KB_SPLIT_PLAN_SCHEMA,
     KB_TOPOLOGY_ADVICE_SCHEMA,
     TopologyError,
+    create_kb_activation_plan,
     create_kb_split_plan,
     create_kb_topology_advice,
+    render_activation_plan_markdown,
     render_split_plan_markdown,
     render_topology_advice_markdown,
 )
@@ -430,6 +433,7 @@ __all__ = [
     "KbDataset",
     "KbDocumentEntry",
     "KbManifest",
+    "KB_ACTIVATION_PLAN_SCHEMA",
     "KB_SPLIT_PLAN_SCHEMA",
     "KB_TOPOLOGY_ADVICE_SCHEMA",
     "ManifestError",
@@ -567,6 +571,7 @@ __all__ = [
     "convert_source_to_markdown",
     "create_optimization_cleanup_plan",
     "create_optimization_plan",
+    "create_kb_activation_plan",
     "create_kb_split_plan",
     "create_kb_topology_advice",
     "create_rich_handoff_package",
@@ -675,6 +680,7 @@ __all__ = [
     "render_best_profile_markdown",
     "render_optimization_cleanup_plan_markdown",
     "render_optimization_plan_markdown",
+    "render_activation_plan_markdown",
     "render_split_plan_markdown",
     "render_topology_advice_markdown",
     "render_query_diagnostic_markdown",

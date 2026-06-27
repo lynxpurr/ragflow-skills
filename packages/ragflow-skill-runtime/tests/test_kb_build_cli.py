@@ -1479,6 +1479,144 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertGreaterEqual(len(payload["boundary_queries"]), 1)
         self.assertIn("RAGFlow KB Split Plan", report_md_text)
 
+    def test_activation_plan_subcommand_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kb_manifest = root / "kb_manifest.json"
+            doc_manifest = root / "doc_manifest.json"
+            chunk_snapshot = root / "chunk_snapshot.json"
+            route_config = root / "routing.json"
+            retrieval_hints = root / "retrieval_hints.json"
+            route_tests = root / "route_tests.json"
+            output = root / "kb_activation_plan.json"
+            report_md = root / "kb_activation_plan.md"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-activation-cli", "name": "kb:activation-cli"},
+                        "documents": [
+                            {
+                                "document_id": "doc-activation-cli",
+                                "source_path": "source.md",
+                                "markdown_path": "documents/source.md",
+                                "status": "done",
+                                "chunk_count": 1,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            doc_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "documents": [
+                            {
+                                "source_path": "source.md",
+                                "markdown_path": "documents/source.md",
+                            }
+                        ],
+                        "quality_gate": {"status": "PASS"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            chunk_snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "chunks": [
+                            {
+                                "dataset_id": "ds-activation-cli",
+                                "document_id": "doc-activation-cli",
+                                "chunk_id": "chunk-1",
+                                "content": "Activation CLI smoke evidence.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            route_config.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "knowledge_bases": [
+                            {
+                                "name": "kb:activation-cli",
+                                "dataset_id": "ds-activation-cli",
+                                "hints": ["activation cli", "smoke"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            retrieval_hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "keyword_candidates": [{"term": "activation cli"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            route_tests.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {
+                                "id": "activation-cli-1",
+                                "question": "How does activation CLI smoke work?",
+                                "expected_kb": "kb:activation-cli",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "activation-plan",
+                    "--kb-manifest",
+                    str(kb_manifest),
+                    "--doc-manifest",
+                    str(doc_manifest),
+                    "--route-config",
+                    str(route_config),
+                    "--retrieval-hints",
+                    str(retrieval_hints),
+                    "--chunk-snapshot",
+                    str(chunk_snapshot),
+                    "--route-tests",
+                    str(route_tests),
+                    "--output",
+                    str(output),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+            report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("kb_activation_plan_v1", result.stdout)
+        self.assertEqual(payload["schema"], "kb_activation_plan_v1")
+        self.assertTrue(payload["advisory_only"])
+        self.assertEqual(payload["mutation"], "none")
+        self.assertEqual(payload["checks"]["route_test_readiness"]["passed_target_query_count"], 1)
+        self.assertIn("RAGFlow KB Activation Plan", report_md_text)
+
     def test_optimize_plan_only_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

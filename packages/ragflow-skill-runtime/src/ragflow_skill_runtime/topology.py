@@ -12,12 +12,22 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .kb_build import BuildDocument
+from .manifests import KbManifest, ManifestError, load_doc_manifest, load_kb_manifest
 from .metadata_governance import MetadataGovernanceError, load_metadata
-from .routing import RoutingConfig, RoutingError, load_routing_config
+from .routing import (
+    RoutingConfig,
+    RoutingError,
+    load_centroid_index,
+    load_route_test_queries,
+    load_routing_config,
+    run_route_tests,
+)
+from .validation import ValidationError, load_chunk_snapshot
 
 
 KB_TOPOLOGY_ADVICE_SCHEMA = "kb_topology_advice_v1"
 KB_SPLIT_PLAN_SCHEMA = "kb_split_plan_v1"
+KB_ACTIVATION_PLAN_SCHEMA = "kb_activation_plan_v1"
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}|[\u4e00-\u9fff]{2,12}")
 SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -599,6 +609,554 @@ def _split_plan_recommendation(groups: list[dict[str, Any]], split: Mapping[str,
     }
 
 
+def _activation_issue(
+    severity: str,
+    code: str,
+    message: str,
+    *,
+    path: str,
+    recommendation: str,
+) -> dict[str, str]:
+    return {
+        "severity": severity,
+        "code": code,
+        "message": message,
+        "path": path,
+        "recommendation": recommendation,
+    }
+
+
+def _activation_status(issues: list[dict[str, str]]) -> str:
+    if any(issue.get("severity") == "error" for issue in issues):
+        return "blocked"
+    if any(issue.get("severity") == "warning" for issue in issues):
+        return "review"
+    return "ready"
+
+
+def _load_activation_kb_manifest(path: str | Path) -> KbManifest:
+    try:
+        return load_kb_manifest(path)
+    except ManifestError as exc:
+        raise TopologyError(str(exc)) from exc
+
+
+def _load_activation_doc_manifest(path: str | Path | None) -> Any | None:
+    if not path:
+        return None
+    try:
+        return load_doc_manifest(path)
+    except ManifestError as exc:
+        raise TopologyError(str(exc)) from exc
+
+
+def _load_activation_chunk_snapshot(path: str | Path | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    try:
+        return load_chunk_snapshot(path)
+    except ValidationError as exc:
+        raise TopologyError(str(exc)) from exc
+
+
+def _load_activation_centroid_index(path: str | Path | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    try:
+        return load_centroid_index(path)
+    except RoutingError as exc:
+        raise TopologyError(str(exc)) from exc
+
+
+def _load_activation_route_tests(path: str | Path | None) -> list[dict[str, Any]]:
+    if not path:
+        return []
+    try:
+        return load_route_test_queries(path)
+    except RoutingError as exc:
+        raise TopologyError(str(exc)) from exc
+
+
+def _content_completeness_check(
+    kb_manifest: KbManifest,
+    *,
+    doc_manifest: Any | None,
+    min_documents: int,
+) -> dict[str, Any]:
+    issues: list[dict[str, str]] = []
+    documents = kb_manifest.documents
+    missing_ids = [index for index, document in enumerate(documents) if not document.document_id]
+    failed_statuses = {"fail", "failed", "error", "cancelled", "canceled"}
+    failed_documents = [
+        document.document_id
+        for document in documents
+        if isinstance(document.status, str) and document.status.strip().lower() in failed_statuses
+    ]
+    if len(documents) < min_documents:
+        issues.append(
+            _activation_issue(
+                "error",
+                "document_count_below_minimum",
+                "KB manifest has fewer documents than the activation minimum",
+                path="kb_manifest.documents",
+                recommendation="Build or append enough parsed documents before route activation.",
+            )
+        )
+    if missing_ids:
+        issues.append(
+            _activation_issue(
+                "error",
+                "missing_document_ids",
+                "one or more KB manifest documents are missing document_id",
+                path="kb_manifest.documents",
+                recommendation="Use a completed kb_manifest from build.py before planning activation.",
+            )
+        )
+    if failed_documents:
+        issues.append(
+            _activation_issue(
+                "error",
+                "failed_document_status",
+                "one or more KB manifest documents report failed status",
+                path="kb_manifest.documents.status",
+                recommendation="Repair or rebuild failed documents before route activation.",
+            )
+        )
+    quality_gate = getattr(doc_manifest, "quality_gate", {}) if doc_manifest else {}
+    quality_status = quality_gate.get("status") if isinstance(quality_gate, Mapping) else None
+    if quality_status == "BLOCKED":
+        issues.append(
+            _activation_issue(
+                "error",
+                "blocked_doc_manifest_quality_gate",
+                "doc_manifest quality gate is BLOCKED",
+                path="doc_manifest.quality_gate.status",
+                recommendation="Resolve handoff quality blockers before route activation.",
+            )
+        )
+    if doc_manifest and len(getattr(doc_manifest, "documents", [])) != len(documents):
+        issues.append(
+            _activation_issue(
+                "warning",
+                "doc_manifest_count_mismatch",
+                "doc_manifest document count differs from kb_manifest document count",
+                path="doc_manifest.documents",
+                recommendation="Confirm the activation plan references the same handoff used for KB build.",
+            )
+        )
+    return {
+        "status": _activation_status(issues),
+        "document_count": len(documents),
+        "min_documents": min_documents,
+        "quality_gate_status": quality_status,
+        "failed_document_ids": failed_documents,
+        "issues": issues,
+    }
+
+
+def _chunk_dataset_id(chunk: Mapping[str, Any]) -> str:
+    for key in ("dataset_id", "kb_id", "datasetId"):
+        value = chunk.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _chunk_document_id(chunk: Mapping[str, Any]) -> str:
+    for key in ("document_id", "doc_id", "documentId"):
+        value = chunk.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _chunks_for_kb(snapshot: Mapping[str, Any] | None, kb_manifest: KbManifest) -> list[Mapping[str, Any]]:
+    if not snapshot:
+        return []
+    chunks = [item for item in snapshot.get("chunks", []) if isinstance(item, Mapping)]
+    dataset_id = kb_manifest.dataset.id
+    document_ids = {document.document_id for document in kb_manifest.documents if document.document_id}
+    matched = [
+        chunk
+        for chunk in chunks
+        if _chunk_dataset_id(chunk) == dataset_id or (_chunk_document_id(chunk) and _chunk_document_id(chunk) in document_ids)
+    ]
+    if matched:
+        return matched
+    if chunks and not any(_chunk_dataset_id(chunk) or _chunk_document_id(chunk) for chunk in chunks):
+        return chunks
+    return []
+
+
+def _chunk_readiness_check(
+    kb_manifest: KbManifest,
+    *,
+    chunk_snapshot: Mapping[str, Any] | None,
+    min_chunks: int,
+) -> dict[str, Any]:
+    issues: list[dict[str, str]] = []
+    declared_chunks = sum(document.chunk_count or 0 for document in kb_manifest.documents)
+    unknown_chunk_documents = [document.document_id for document in kb_manifest.documents if document.chunk_count is None]
+    zero_chunk_documents = [
+        document.document_id for document in kb_manifest.documents if document.chunk_count is not None and document.chunk_count <= 0
+    ]
+    matched_chunks = _chunks_for_kb(chunk_snapshot, kb_manifest)
+    matched_chunk_count = len(matched_chunks)
+    if chunk_snapshot:
+        effective_chunks = matched_chunk_count
+        if matched_chunk_count < min_chunks:
+            issues.append(
+                _activation_issue(
+                    "error",
+                    "chunk_snapshot_has_too_few_chunks",
+                    "chunk snapshot does not contain enough chunks for this KB",
+                    path="chunk_snapshot.chunks",
+                    recommendation="Create a fresh snapshot-chunks sidecar for this dataset before activation.",
+                )
+            )
+    else:
+        effective_chunks = declared_chunks
+        if declared_chunks < min_chunks:
+            issues.append(
+                _activation_issue(
+                    "warning",
+                    "declared_chunk_count_below_minimum",
+                    "kb_manifest declares too few chunks and no chunk snapshot was supplied",
+                    path="kb_manifest.documents[].chunk_count",
+                    recommendation="Run snapshot-chunks or wait for parsing to confirm chunks before activation.",
+                )
+            )
+    if zero_chunk_documents:
+        issues.append(
+            _activation_issue(
+                "warning",
+                "zero_chunk_documents",
+                "one or more KB manifest documents declare zero chunks",
+                path="kb_manifest.documents[].chunk_count",
+                recommendation="Confirm parsing completed and rerun activation-plan with a chunk snapshot.",
+            )
+        )
+    return {
+        "status": _activation_status(issues),
+        "declared_chunk_count": declared_chunks,
+        "matched_snapshot_chunk_count": matched_chunk_count,
+        "effective_chunk_count": effective_chunks,
+        "min_chunks": min_chunks,
+        "unknown_chunk_document_ids": unknown_chunk_documents,
+        "zero_chunk_document_ids": zero_chunk_documents,
+        "snapshot_available": bool(chunk_snapshot),
+        "issues": issues,
+    }
+
+
+def _registered_kb(config: RoutingConfig | None, kb_manifest: KbManifest) -> Any | None:
+    if not config:
+        return None
+    refs = {kb_manifest.dataset.id, kb_manifest.dataset.name}
+    return next((kb for kb in config.knowledge_bases if kb.name in refs or kb.dataset_id in refs), None)
+
+
+def _route_registration_check(
+    kb_manifest: KbManifest,
+    *,
+    route_config: RoutingConfig | None,
+    route_config_path: str | Path | None,
+) -> dict[str, Any]:
+    issues: list[dict[str, str]] = []
+    registered = _registered_kb(route_config, kb_manifest)
+    if not route_config_path:
+        issues.append(
+            _activation_issue(
+                "error",
+                "route_config_missing",
+                "no user-owned route config was supplied",
+                path="route_config",
+                recommendation="Review the route_entry_suggestion and add it to a user-owned route config explicitly.",
+            )
+        )
+    elif not registered:
+        issues.append(
+            _activation_issue(
+                "error",
+                "kb_not_registered",
+                "KB dataset is not registered in the supplied route config",
+                path="route_config.knowledge_bases",
+                recommendation="Add this KB by name or dataset_id before running route-test.",
+            )
+        )
+    elif not registered.hints:
+        issues.append(
+            _activation_issue(
+                "warning",
+                "registered_kb_has_no_hints",
+                "registered KB has no route hints",
+                path="route_config.knowledge_bases[].hints",
+                recommendation="Add public user-owned route hints before activation.",
+            )
+        )
+    return {
+        "status": _activation_status(issues),
+        "route_config": str(route_config_path) if route_config_path else None,
+        "registered": registered is not None,
+        "registered_kb": registered.to_dict() if registered else None,
+        "issues": issues,
+    }
+
+
+def _route_entry_suggestion(kb_manifest: KbManifest, retrieval_hints: Mapping[str, Any]) -> dict[str, Any]:
+    terms = sorted(_hint_terms(retrieval_hints))
+    if not terms:
+        terms = sorted(_tokenize(kb_manifest.dataset.name))
+    return {
+        "name": kb_manifest.dataset.name,
+        "dataset_id": kb_manifest.dataset.id,
+        "hints": terms[:8],
+        "params": {
+            "top_k": 5,
+            "similarity_threshold": 0.2,
+        },
+        "advisory_only": True,
+    }
+
+
+def _hint_coverage_check(
+    *,
+    registered_kb: Any | None,
+    retrieval_hints: Mapping[str, Any],
+) -> dict[str, Any]:
+    issues: list[dict[str, str]] = []
+    route_hints = list(registered_kb.hints) if registered_kb else []
+    hint_terms = _hint_terms(retrieval_hints)
+    route_terms = _tokenize(" ".join(route_hints))
+    overlap = sorted(hint_terms & route_terms)
+    coverage = round(len(overlap) / len(hint_terms), 4) if hint_terms else None
+    keyword_count = len(retrieval_hints.get("keyword_candidates", [])) if isinstance(retrieval_hints.get("keyword_candidates"), list) else 0
+    question_count = len(retrieval_hints.get("question_candidates", [])) if isinstance(retrieval_hints.get("question_candidates"), list) else 0
+    if not route_hints:
+        issues.append(
+            _activation_issue(
+                "error",
+                "route_hints_missing",
+                "no route hints are available for the KB",
+                path="route_config.knowledge_bases[].hints",
+                recommendation="Add route hints before activation and rerun route-test.",
+            )
+        )
+    elif hint_terms and not overlap:
+        issues.append(
+            _activation_issue(
+                "warning",
+                "retrieval_hint_overlap_missing",
+                "route hints do not overlap rich-handoff keyword or section terms",
+                path="retrieval_hints.keyword_candidates",
+                recommendation="Review whether route hints cover the handoff retrieval vocabulary.",
+            )
+        )
+    return {
+        "status": _activation_status(issues),
+        "route_hint_count": len(route_hints),
+        "retrieval_keyword_count": keyword_count,
+        "retrieval_question_count": question_count,
+        "coverage": coverage,
+        "overlap_terms": overlap[:12],
+        "issues": issues,
+    }
+
+
+def _centroid_availability_check(
+    kb_manifest: KbManifest,
+    *,
+    centroid_index: Mapping[str, Any] | None,
+    centroid_index_path: str | Path | None,
+) -> dict[str, Any]:
+    if not centroid_index_path:
+        return {
+            "status": "not_configured",
+            "optional": True,
+            "centroid_index": None,
+            "matched": False,
+            "ready": None,
+            "issues": [
+                _activation_issue(
+                    "info",
+                    "centroid_index_not_supplied",
+                    "no centroid index was supplied; route activation can still use explicit hints",
+                    path="centroid_index",
+                    recommendation="Add a centroid index only when tie-breaking or semantic fallback is needed.",
+                )
+            ],
+        }
+    centroids = centroid_index.get("centroids", []) if isinstance(centroid_index, Mapping) else []
+    matched = [
+        item
+        for item in centroids
+        if isinstance(item, Mapping) and item.get("dataset_id") == kb_manifest.dataset.id
+    ]
+    ready = [item for item in matched if str(item.get("status") or "ready") == "ready"]
+    issues: list[dict[str, str]] = []
+    if not matched:
+        issues.append(
+            _activation_issue(
+                "warning",
+                "centroid_missing_for_dataset",
+                "centroid index does not contain this dataset",
+                path="centroid_index.centroids",
+                recommendation="Rebuild the centroid index after adding this KB if centroid tie-breaking is desired.",
+            )
+        )
+    elif not ready:
+        issues.append(
+            _activation_issue(
+                "warning",
+                "centroid_not_ready",
+                "centroid exists for this dataset but is not ready",
+                path="centroid_index.centroids[].status",
+                recommendation="Complete the centroid build before relying on centroid tie-breaking.",
+            )
+        )
+    return {
+        "status": _activation_status(issues),
+        "optional": True,
+        "centroid_index": str(centroid_index_path),
+        "matched": bool(matched),
+        "ready": bool(ready),
+        "matched_centroids": [dict(item) for item in matched[:3]],
+        "issues": issues,
+    }
+
+
+def _query_targets_kb(query: Mapping[str, Any], kb_manifest: KbManifest) -> bool:
+    refs = {kb_manifest.dataset.name, kb_manifest.dataset.id}
+    expected = query.get("expected")
+    if isinstance(expected, str) and expected in refs:
+        return True
+    for key in ("acceptable_kbs", "acceptable_dataset_ids", "allowed_kbs", "allowed_dataset_ids"):
+        values = query.get(key)
+        if isinstance(values, list) and any(isinstance(item, str) and item in refs for item in values):
+            return True
+    return False
+
+
+def _route_test_readiness_check(
+    kb_manifest: KbManifest,
+    *,
+    route_config: RoutingConfig | None,
+    route_tests: list[dict[str, Any]],
+    route_tests_path: str | Path | None,
+    centroid_index: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    issues: list[dict[str, str]] = []
+    if not route_tests_path:
+        issues.append(
+            _activation_issue(
+                "error",
+                "route_tests_missing",
+                "no route-test query file was supplied",
+                path="route_tests",
+                recommendation="Create route-test queries for this KB before activation.",
+            )
+        )
+        return {
+            "status": _activation_status(issues),
+            "route_tests": None,
+            "query_count": 0,
+            "target_query_count": 0,
+            "passed_target_query_count": 0,
+            "failed_target_query_count": 0,
+            "route_test_report": None,
+            "issues": issues,
+        }
+    target_queries = [query for query in route_tests if _query_targets_kb(query, kb_manifest)]
+    if not target_queries:
+        issues.append(
+            _activation_issue(
+                "error",
+                "route_tests_do_not_target_kb",
+                "route-test file does not include queries expecting this KB",
+                path="route_tests.queries",
+                recommendation="Add positive route-test cases for this KB name or dataset_id.",
+            )
+        )
+    route_report = None
+    passed_target = 0
+    failed_target = 0
+    if route_config:
+        try:
+            route_report = run_route_tests(route_config, route_tests, centroid_index=centroid_index)
+        except RoutingError as exc:
+            raise TopologyError(str(exc)) from exc
+        cases = route_report.get("cases", []) if isinstance(route_report, Mapping) else []
+        for case in cases:
+            if isinstance(case, Mapping) and case.get("id") in {query["id"] for query in target_queries}:
+                if case.get("passed"):
+                    passed_target += 1
+                else:
+                    failed_target += 1
+        if target_queries and failed_target:
+            issues.append(
+                _activation_issue(
+                    "error",
+                    "target_route_tests_failed",
+                    "one or more route-test cases for this KB failed",
+                    path="route_tests.queries",
+                    recommendation="Adjust route hints or expected KBs before activation.",
+                )
+            )
+    else:
+        issues.append(
+            _activation_issue(
+                "error",
+                "route_tests_need_route_config",
+                "route tests cannot be run without a route config",
+                path="route_config",
+                recommendation="Supply user-owned route config and rerun activation-plan.",
+            )
+        )
+    return {
+        "status": _activation_status(issues),
+        "route_tests": str(route_tests_path),
+        "query_count": len(route_tests),
+        "target_query_count": len(target_queries),
+        "passed_target_query_count": passed_target,
+        "failed_target_query_count": failed_target,
+        "route_test_report": route_report,
+        "issues": issues,
+    }
+
+
+def _activation_recommendation(checks: Mapping[str, Any]) -> dict[str, Any]:
+    blocking = [
+        name
+        for name, check in checks.items()
+        if isinstance(check, Mapping) and not check.get("optional") and check.get("status") == "blocked"
+    ]
+    review = [
+        name
+        for name, check in checks.items()
+        if isinstance(check, Mapping) and not check.get("optional") and check.get("status") == "review"
+    ]
+    if blocking:
+        return {
+            "action": "complete_activation_prerequisites",
+            "confidence": "high",
+            "reasons": [f"blocked checks: {', '.join(blocking)}"],
+            "advisory_only": True,
+        }
+    if review:
+        return {
+            "action": "review_before_activation",
+            "confidence": "medium",
+            "reasons": [f"checks need review: {', '.join(review)}"],
+            "advisory_only": True,
+        }
+    return {
+        "action": "ready_for_activation_review",
+        "confidence": "high",
+        "reasons": ["all required offline activation checks are ready"],
+        "advisory_only": True,
+    }
+
+
 def _anchor_query_pairs(
     *,
     kb_name: str,
@@ -821,6 +1379,110 @@ def create_kb_split_plan(
     }
 
 
+def create_kb_activation_plan(
+    *,
+    kb_manifest_path: str | Path,
+    doc_manifest_path: str | Path | None = None,
+    route_config_path: str | Path | None = None,
+    retrieval_hints_path: str | Path | None = None,
+    chunk_snapshot_path: str | Path | None = None,
+    centroid_index_path: str | Path | None = None,
+    route_tests_path: str | Path | None = None,
+    min_documents: int = 1,
+    min_chunks: int = 1,
+) -> dict[str, Any]:
+    """Create a non-mutating route activation plan from local sidecars."""
+
+    if min_documents < 1:
+        raise TopologyError("--min-documents must be at least 1")
+    if min_chunks < 1:
+        raise TopologyError("--min-chunks must be at least 1")
+    kb_manifest = _load_activation_kb_manifest(kb_manifest_path)
+    doc_manifest = _load_activation_doc_manifest(doc_manifest_path)
+    retrieval_hints = _load_retrieval_hints(retrieval_hints_path)
+    chunk_snapshot = _load_activation_chunk_snapshot(chunk_snapshot_path)
+    route_config = _route_config(route_config_path)
+    centroid_index = _load_activation_centroid_index(centroid_index_path)
+    route_tests = _load_activation_route_tests(route_tests_path)
+    registered = _registered_kb(route_config, kb_manifest)
+    checks = {
+        "content_completeness": _content_completeness_check(
+            kb_manifest,
+            doc_manifest=doc_manifest,
+            min_documents=min_documents,
+        ),
+        "chunk_readiness": _chunk_readiness_check(
+            kb_manifest,
+            chunk_snapshot=chunk_snapshot,
+            min_chunks=min_chunks,
+        ),
+        "route_config_registration": _route_registration_check(
+            kb_manifest,
+            route_config=route_config,
+            route_config_path=route_config_path,
+        ),
+        "hint_coverage": _hint_coverage_check(
+            registered_kb=registered,
+            retrieval_hints=retrieval_hints,
+        ),
+        "centroid_availability": _centroid_availability_check(
+            kb_manifest,
+            centroid_index=centroid_index,
+            centroid_index_path=centroid_index_path,
+        ),
+        "route_test_readiness": _route_test_readiness_check(
+            kb_manifest,
+            route_config=route_config,
+            route_tests=route_tests,
+            route_tests_path=route_tests_path,
+            centroid_index=centroid_index,
+        ),
+    }
+    recommendation = _activation_recommendation(checks)
+    required_checks = [name for name, check in checks.items() if isinstance(check, Mapping) and not check.get("optional")]
+    blocked = [name for name in required_checks if checks[name].get("status") == "blocked"]
+    review = [name for name in required_checks if checks[name].get("status") == "review"]
+    return {
+        "ok": True,
+        "schema": KB_ACTIVATION_PLAN_SCHEMA,
+        "created_at": _now(),
+        "kb_name": kb_manifest.dataset.name,
+        "dataset_id": kb_manifest.dataset.id,
+        "advisory_only": True,
+        "mutation": "none",
+        "inputs": {
+            "kb_manifest": str(kb_manifest_path),
+            "doc_manifest": str(doc_manifest_path) if doc_manifest_path else None,
+            "route_config": str(route_config_path) if route_config_path else None,
+            "retrieval_hints": str(retrieval_hints_path) if retrieval_hints_path else None,
+            "chunk_snapshot": str(chunk_snapshot_path) if chunk_snapshot_path else None,
+            "centroid_index": str(centroid_index_path) if centroid_index_path else None,
+            "route_tests": str(route_tests_path) if route_tests_path else None,
+            "min_documents": min_documents,
+            "min_chunks": min_chunks,
+        },
+        "summary": {
+            "document_count": len(kb_manifest.documents),
+            "declared_chunk_count": checks["chunk_readiness"]["declared_chunk_count"],
+            "effective_chunk_count": checks["chunk_readiness"]["effective_chunk_count"],
+            "required_check_count": len(required_checks),
+            "blocked_check_count": len(blocked),
+            "review_check_count": len(review),
+            "recommendation": recommendation["action"],
+            "confidence": recommendation["confidence"],
+        },
+        "recommendation": recommendation,
+        "checks": checks,
+        "route_entry_suggestion": _route_entry_suggestion(kb_manifest, retrieval_hints),
+        "next_steps": [
+            "Review this activation plan before editing any user-owned routing config.",
+            "Add or update route config entries explicitly outside this command when ready.",
+            "Run route-test after route config changes and keep the report beside this sidecar.",
+            "Keep this plan as a sidecar; it does not mutate RAGFlow or routing files.",
+        ],
+    }
+
+
 def render_topology_advice_markdown(report: Mapping[str, Any]) -> str:
     """Render topology advice as a compact review note."""
 
@@ -855,6 +1517,51 @@ def render_topology_advice_markdown(report: Mapping[str, Any]) -> str:
                 lines.append(f"- `{item.get('id')}` {item.get('candidate_query')}")
     else:
         lines.append("- No anchor queries generated.")
+    lines.extend(["", "## Next Steps", ""])
+    for step in report.get("next_steps", []) if isinstance(report.get("next_steps"), list) else []:
+        lines.append(f"- {step}")
+    return "\n".join(lines) + "\n"
+
+
+def render_activation_plan_markdown(report: Mapping[str, Any]) -> str:
+    """Render an activation plan as a compact review note."""
+
+    recommendation = report.get("recommendation", {}) if isinstance(report.get("recommendation"), Mapping) else {}
+    checks = report.get("checks", {}) if isinstance(report.get("checks"), Mapping) else {}
+    lines = [
+        "# RAGFlow KB Activation Plan",
+        "",
+        f"- Schema: `{report.get('schema')}`",
+        f"- KB: `{report.get('kb_name')}`",
+        f"- Dataset: `{report.get('dataset_id')}`",
+        f"- Recommendation: `{recommendation.get('action')}` ({recommendation.get('confidence')})",
+        f"- Advisory only: `{report.get('advisory_only')}`",
+        "",
+        "## Checks",
+        "",
+    ]
+    for name in (
+        "content_completeness",
+        "chunk_readiness",
+        "route_config_registration",
+        "hint_coverage",
+        "centroid_availability",
+        "route_test_readiness",
+    ):
+        check = checks.get(name) if isinstance(checks.get(name), Mapping) else {}
+        lines.append(f"- `{name}`: `{check.get('status', 'unknown')}`")
+    suggestion = report.get("route_entry_suggestion", {})
+    if isinstance(suggestion, Mapping):
+        lines.extend(
+            [
+                "",
+                "## Route Entry Suggestion",
+                "",
+                f"- name: `{suggestion.get('name')}`",
+                f"- dataset_id: `{suggestion.get('dataset_id')}`",
+                f"- hints: `{', '.join(suggestion.get('hints', [])) if isinstance(suggestion.get('hints'), list) else ''}`",
+            ]
+        )
     lines.extend(["", "## Next Steps", ""])
     for step in report.get("next_steps", []) if isinstance(report.get("next_steps"), list) else []:
         lines.append(f"- {step}")

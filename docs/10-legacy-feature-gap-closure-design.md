@@ -1135,15 +1135,16 @@ Outputs:
 All recommendations are advisory. The public suite should not automatically merge, split,
 rename, or register KBs without explicit user-owned config edits.
 
-Implementation status: initial topology advice and split planning are implemented in
-`ragflow_skill_runtime.topology` and exposed as `ragflow-kb-build topology advise` and
-`ragflow-kb-build topology split-plan`. They emit `kb_topology_advice_v1` and
-`kb_split_plan_v1`, read local Markdown/doc manifests plus optional public metadata,
-rich-handoff `retrieval_hints.json`, and user-owned routing config when relevant, then
-report create-vs-merge signals, split-review signals, sidecar KB grouping suggestions,
+Implementation status: initial topology advice, split planning, and activation planning
+are implemented in `ragflow_skill_runtime.topology` and exposed as `ragflow-kb-build
+topology advise`, `ragflow-kb-build topology split-plan`, and `ragflow-kb-build
+activation-plan`. They emit `kb_topology_advice_v1`, `kb_split_plan_v1`, and
+`kb_activation_plan_v1`, read local Markdown/doc manifests plus optional public metadata,
+rich-handoff `retrieval_hints.json`, user-owned routing config, chunk snapshots, centroid
+indexes, and route-test files when relevant, then report create-vs-merge signals,
+split-review signals, sidecar KB grouping suggestions, activation readiness checks,
 anchor/boundary query pairs, and route-test starter questions without touching RAGFlow or
-route files. `kb_activation_plan_v1`, `activation-plan`, and `route-activation-check`
-remain open.
+route files. `route-activation-check` remains open.
 
 ## Feature Design 21: Handoff Retrieval Hints And Assistant Profiles
 

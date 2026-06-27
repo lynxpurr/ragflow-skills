@@ -45,6 +45,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     merge_metadata_payloads,
     probe_model_providers,
     configured_private_hosts_from_urls,
+    create_kb_activation_plan,
     create_kb_split_plan,
     create_kb_topology_advice,
     render_handoff_inspection_markdown,
@@ -59,6 +60,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_suppression_report_markdown,
     sample_benchmark_dataset,
     segment_metadata_report_file,
+    render_activation_plan_markdown,
     render_split_plan_markdown,
     render_topology_advice_markdown,
     render_optimization_plan_markdown,
@@ -684,6 +686,27 @@ def _run_topology_split_plan(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_activation_plan(args: argparse.Namespace) -> int:
+    try:
+        report = create_kb_activation_plan(
+            kb_manifest_path=args.kb_manifest,
+            doc_manifest_path=args.doc_manifest,
+            route_config_path=args.route_config,
+            retrieval_hints_path=args.retrieval_hints,
+            chunk_snapshot_path=args.chunk_snapshot,
+            centroid_index_path=args.centroid_index,
+            route_tests_path=args.route_tests,
+            min_documents=args.min_documents,
+            min_chunks=args.min_chunks,
+        )
+        _write_json_file(args.output, report)
+        _write_text_file(args.report_md, render_activation_plan_markdown(report))
+        _dump_json(report)
+        return 0
+    except (TopologyError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _sanitize_model_provider_report(report: dict[str, Any], args: argparse.Namespace, config: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     urls = [config.base_url, args.embedding_adapter_url, args.rerank_adapter_url]
     sanitized, redaction_report = sanitize_report_payload(
@@ -1119,6 +1142,24 @@ def build_topology_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_activation_plan_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Create a non-mutating KB route activation plan")
+    parser.add_argument("--kb-manifest", required=True, help="Local kb_manifest.json for the built KB")
+    parser.add_argument("--doc-manifest", help="Optional source doc_manifest.json for content quality checks")
+    parser.add_argument("--route-config", help="Optional user-owned routing config")
+    parser.add_argument("--retrieval-hints", help="Optional rich handoff retrieval_hints.json")
+    parser.add_argument("--chunk-snapshot", help="Optional ragflow_chunk_snapshot_v1 JSON")
+    parser.add_argument("--centroid-index", help="Optional ragflow_route_centroid_index_v1 JSON")
+    parser.add_argument("--route-tests", help="Optional route-test queries JSON")
+    parser.add_argument("--min-documents", type=int, default=1, help="Minimum documents before activation")
+    parser.add_argument("--min-chunks", type=int, default=1, help="Minimum chunks before activation")
+    parser.add_argument("--output", default="kb_activation_plan.json", help="Output kb_activation_plan_v1 JSON")
+    parser.add_argument("--report-md", help="Optional activation plan Markdown path")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    parser.set_defaults(func=_run_activation_plan)
+    return parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build a RAGFlow KB from Markdown")
     parser.add_argument("--input", help="Markdown file or directory")
@@ -1174,6 +1215,9 @@ def main(argv: list[str] | None = None) -> int:
         if command == "topology":
             topology_args = build_topology_parser().parse_args(command_args)
             return topology_args.func(topology_args)
+        if command == "activation-plan":
+            activation_plan_args = build_activation_plan_parser().parse_args(command_args)
+            return activation_plan_args.func(activation_plan_args)
         if command == "optimize":
             if command_args and command_args[0] == "summarize":
                 optimize_summary_args = build_optimize_summarize_parser().parse_args(command_args[1:])

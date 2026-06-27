@@ -1233,6 +1233,118 @@ def _run_no_network_checks(
         if path.exists():
             produced.append(path)
 
+    activation_kb_manifest = work_root / "activation_kb_manifest.json"
+    activation_chunk_snapshot = work_root / "activation_chunk_snapshot.json"
+    activation_route_config = work_root / "activation_routing.json"
+    activation_route_tests = work_root / "activation_route_tests.json"
+    activation_plan = work_root / "kb_activation_plan.json"
+    activation_plan_md = work_root / "kb_activation_plan.md"
+    activation_kb_manifest.write_text(
+        json.dumps(
+            {
+                "version": "0.1",
+                "dataset": {"id": "ds-consumer-topology", "name": "kb:consumer-topology"},
+                "documents": [
+                    {
+                        "document_id": "doc-consumer-topology",
+                        "source_path": "input-docs/sample.md",
+                        "markdown_path": str(handoff_dir / "documents" / "sample.md"),
+                        "status": "done",
+                        "chunk_count": 1,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    activation_chunk_snapshot.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_chunk_snapshot_v1",
+                "chunks": [
+                    {
+                        "dataset_id": "ds-consumer-topology",
+                        "document_id": "doc-consumer-topology",
+                        "chunk_id": "chunk-consumer-topology-1",
+                        "content": "Consumer topology activation sample.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    activation_route_config.write_text(
+        json.dumps(
+            {
+                "version": "0.1",
+                "knowledge_bases": [
+                    {
+                        "name": "kb:consumer-topology",
+                        "dataset_id": "ds-consumer-topology",
+                        "hints": ["consumer", "topology", "activation"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    activation_route_tests.write_text(
+        json.dumps(
+            {
+                "queries": [
+                    {
+                        "id": "activate-1",
+                        "question": "How does consumer topology activation work?",
+                        "expected_kb": "kb:consumer-topology",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    activation_plan_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "activation-plan",
+            "--kb-manifest",
+            str(activation_kb_manifest),
+            "--doc-manifest",
+            str(doc_manifest),
+            "--route-config",
+            str(activation_route_config),
+            "--retrieval-hints",
+            str(handoff_dir / "retrieval_hints.json"),
+            "--chunk-snapshot",
+            str(activation_chunk_snapshot),
+            "--route-tests",
+            str(activation_route_tests),
+            "--output",
+            str(activation_plan),
+            "--report-md",
+            str(activation_plan_md),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build activation-plan",
+        activation_plan_result,
+        required_output='"schema": "kb_activation_plan_v1"',
+    )
+    for path in (
+        activation_kb_manifest,
+        activation_chunk_snapshot,
+        activation_route_config,
+        activation_route_tests,
+        activation_plan,
+        activation_plan_md,
+    ):
+        if path.exists():
+            produced.append(path)
+
     tagset_template = work_root / "tagset.template.json"
     tagset_csv = work_root / "tagset.csv"
     tagset_report_md = work_root / "tagset_report.md"

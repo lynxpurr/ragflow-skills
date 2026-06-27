@@ -1886,6 +1886,88 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
 
     kb_manifest = _write_fake_kb_manifest(workspace, artifacts_dir)
     queries_path = _write_query_set(artifacts_dir)
+    activation_chunk_snapshot = artifacts_dir / "activation_chunk_snapshot.json"
+    activation_route_config = artifacts_dir / "activation_routing.json"
+    activation_route_tests = artifacts_dir / "activation_route_tests.json"
+    activation_plan = artifacts_dir / "kb_activation_plan.json"
+    activation_plan_md = artifacts_dir / "kb_activation_plan.md"
+    activation_chunk_snapshot.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_chunk_snapshot_v1",
+                "chunks": [
+                    {
+                        "dataset_id": "ds-platform-smoke",
+                        "document_id": "doc-platform-smoke",
+                        "chunk_id": "chunk-platform-smoke-1",
+                        "content": "Platform smoke activation sample.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    activation_route_config.write_text(
+        json.dumps(
+            {
+                "version": "0.1",
+                "knowledge_bases": [
+                    {
+                        "name": "kb:platform-smoke",
+                        "dataset_id": "ds-platform-smoke",
+                        "hints": ["platform", "smoke", "activation"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    activation_route_tests.write_text(
+        json.dumps(
+            {
+                "queries": [
+                    {
+                        "id": "activate-1",
+                        "question": "How does platform smoke activation work?",
+                        "expected_kb": "kb:platform-smoke",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    activation_plan_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "activation-plan",
+            "--kb-manifest",
+            str(kb_manifest),
+            "--doc-manifest",
+            str(doc_manifest),
+            "--route-config",
+            str(activation_route_config),
+            "--retrieval-hints",
+            str(handoff_dir / "retrieval_hints.json"),
+            "--chunk-snapshot",
+            str(activation_chunk_snapshot),
+            "--route-tests",
+            str(activation_route_tests),
+            "--output",
+            str(activation_plan),
+            "--report-md",
+            str(activation_plan_md),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb activation-plan",
+        activation_plan_result,
+        required_stdout='"schema": "kb_activation_plan_v1"',
+    )
 
     benchmark_dir = artifacts_dir / "benchmark"
     qrels_path = _write_qrels(artifacts_dir)

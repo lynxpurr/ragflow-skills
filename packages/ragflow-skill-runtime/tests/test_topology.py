@@ -14,10 +14,13 @@ if str(RUNTIME_SRC) not in sys.path:
 
 from ragflow_skill_runtime.kb_build import BuildDocument  # noqa: E402
 from ragflow_skill_runtime.topology import (  # noqa: E402
+    KB_ACTIVATION_PLAN_SCHEMA,
     KB_SPLIT_PLAN_SCHEMA,
     KB_TOPOLOGY_ADVICE_SCHEMA,
+    create_kb_activation_plan,
     create_kb_split_plan,
     create_kb_topology_advice,
+    render_activation_plan_markdown,
     render_split_plan_markdown,
     render_topology_advice_markdown,
 )
@@ -197,6 +200,129 @@ class TopologyAdviceTests(unittest.TestCase):
         self.assertIn("kb:ops-finance", suggested)
         self.assertIn("kb:ops-hr", suggested)
         self.assertIn("RAGFlow KB Split Plan", markdown)
+
+    def test_activation_plan_reports_route_readiness_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kb_manifest = root / "kb_manifest.json"
+            doc_manifest = root / "doc_manifest.json"
+            snapshot = root / "chunk_snapshot.json"
+            routing = root / "routing.json"
+            hints = root / "retrieval_hints.json"
+            route_tests = root / "route_tests.json"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-activation", "name": "kb:activation"},
+                        "documents": [
+                            {
+                                "document_id": "doc-activation",
+                                "source_path": "source.md",
+                                "markdown_path": "documents/source.md",
+                                "status": "done",
+                                "chunk_count": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            doc_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "documents": [
+                            {
+                                "source_path": "source.md",
+                                "markdown_path": "documents/source.md",
+                            }
+                        ],
+                        "quality_gate": {"status": "PASS"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "chunks": [
+                            {
+                                "dataset_id": "ds-activation",
+                                "document_id": "doc-activation",
+                                "chunk_id": "chunk-1",
+                                "content": "Activation smoke routing evidence.",
+                            },
+                            {
+                                "dataset_id": "ds-activation",
+                                "document_id": "doc-activation",
+                                "chunk_id": "chunk-2",
+                                "content": "Route-test activation coverage evidence.",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            routing.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "knowledge_bases": [
+                            {
+                                "name": "kb:activation",
+                                "dataset_id": "ds-activation",
+                                "hints": ["activation smoke", "route test"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "keyword_candidates": [{"term": "activation smoke"}],
+                        "question_candidates": [{"question": "How does activation smoke routing work?"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            route_tests.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {
+                                "id": "activation-1",
+                                "question": "How does activation smoke routing work?",
+                                "expected_kb": "kb:activation",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = create_kb_activation_plan(
+                kb_manifest_path=kb_manifest,
+                doc_manifest_path=doc_manifest,
+                route_config_path=routing,
+                retrieval_hints_path=hints,
+                chunk_snapshot_path=snapshot,
+                route_tests_path=route_tests,
+            )
+            markdown = render_activation_plan_markdown(report)
+
+        self.assertEqual(report["schema"], KB_ACTIVATION_PLAN_SCHEMA)
+        self.assertTrue(report["advisory_only"])
+        self.assertEqual(report["mutation"], "none")
+        self.assertEqual(report["recommendation"]["action"], "ready_for_activation_review")
+        self.assertEqual(report["checks"]["route_config_registration"]["status"], "ready")
+        self.assertEqual(report["checks"]["route_test_readiness"]["passed_target_query_count"], 1)
+        self.assertEqual(report["route_entry_suggestion"]["dataset_id"], "ds-activation")
+        self.assertIn("RAGFlow KB Activation Plan", markdown)
 
 
 if __name__ == "__main__":

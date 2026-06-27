@@ -406,6 +406,13 @@ EXPECTED_IDENTITIES = (
         source_patterns=("kb_split_plan_v1",),
         coverage_patterns=("kb_split_plan_v1", "KB_SPLIT_PLAN_SCHEMA"),
     ),
+    SchemaIdentity(
+        key="kb_activation_plan",
+        group="topology",
+        identity="kb_activation_plan_v1",
+        source_patterns=("kb_activation_plan_v1",),
+        coverage_patterns=("kb_activation_plan_v1", "KB_ACTIVATION_PLAN_SCHEMA"),
+    ),
 )
 
 
