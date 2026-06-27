@@ -1212,15 +1212,24 @@ class QueryCliTests(unittest.TestCase):
             candidate = root / "candidate.json"
             report_json = root / "cross_language_ab.json"
             report_md = root / "cross_language_ab.md"
+            redaction_json = root / "cross_language_ab_redaction.json"
+            private_host = ".".join(["172", "22", "32", "42"])
+            fake_token = "fake-cross-language-token"
+            fake_key = "fake-cross-language-secret"
+            home_path = str(Path.home() / ".ragflow" / "cross-language.local.yaml")
+            question = (
+                f"runtime config via http://{private_host}:9380/api?token={fake_token} "
+                f"from {home_path} saved at {baseline}"
+            )
             baseline.write_text(
                 json.dumps(
                     {
-                        "question": "runtime config",
+                        "question": question,
                         "chunks": [
                             {
                                 "chunk_id": "shared",
-                                "content": "Runtime config evidence.",
-                                "document_name": "runtime.md",
+                                "content": f"Runtime config evidence api_key={fake_key}",
+                                "document_name": home_path,
                                 "similarity": 0.9,
                             }
                         ],
@@ -1232,11 +1241,11 @@ class QueryCliTests(unittest.TestCase):
             candidate.write_text(
                 json.dumps(
                     {
-                        "question": "runtime config",
+                        "question": question,
                         "chunks": [
                             {
                                 "chunk_id": "translated",
-                                "content": "Translated runtime config evidence.",
+                                "content": f"Translated runtime config evidence saved at {candidate}",
                                 "document_name": "translated.md",
                                 "similarity": 0.7,
                             }
@@ -1265,18 +1274,36 @@ class QueryCliTests(unittest.TestCase):
                         str(report_json),
                         "--report-md",
                         str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
                         "--json",
                     ]
                 )
             payload = json.loads(stdout.getvalue())
+            report_text = report_json.read_text(encoding="utf-8")
             report_json_exists = report_json.exists()
             markdown = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
 
+        combined = "\n".join([stdout.getvalue(), report_text, markdown, redaction_text])
         self.assertEqual(code, 0)
         self.assertEqual(payload["schema"], "ragflow_cross_language_ab_report_v1")
         self.assertEqual(payload["summary"]["top1_stability_rate"], 0.0)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["config_path"], 1)
         self.assertTrue(report_json_exists)
         self.assertIn("RAGFlow Cross-Language A/B Report", markdown)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
+        self.assertNotIn(str(baseline), combined)
+        self.assertNotIn(str(candidate), combined)
 
     def test_fusion_can_write_json_and_markdown(self) -> None:
         module = load_query_module()
@@ -1286,10 +1313,18 @@ class QueryCliTests(unittest.TestCase):
             query_b = root / "query-b.json"
             report_json = root / "fusion.json"
             report_md = root / "fusion.md"
+            redaction_json = root / "fusion_redaction.json"
+            private_host = ".".join(["172", "23", "33", "43"])
+            fake_token = "fake-fusion-token"
+            fake_key = "fake-fusion-secret"
+            home_path = str(Path.home() / ".ragflow" / "fusion.local.yaml")
             query_a.write_text(
                 json.dumps(
                     {
-                        "question": "shared answer",
+                        "question": (
+                            f"shared answer via http://{private_host}:9380/api?token={fake_token} "
+                            f"from {home_path} saved at {query_a}"
+                        ),
                         "dataset_ids": ["ds-a"],
                         "chunks": [
                             {
@@ -1311,8 +1346,8 @@ class QueryCliTests(unittest.TestCase):
                         "chunks": [
                             {
                                 "chunk_id": "b-only",
-                                "content": "B only evidence.",
-                                "document_name": "b.md",
+                                "content": f"B only evidence api_key={fake_key} saved at {query_b}",
+                                "document_name": home_path,
                                 "similarity": 0.8,
                             },
                             {
@@ -1341,21 +1376,39 @@ class QueryCliTests(unittest.TestCase):
                         str(report_json),
                         "--report-md",
                         str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
                         "--json",
                     ]
                 )
             payload = json.loads(stdout.getvalue())
+            report_text = report_json.read_text(encoding="utf-8")
             report_json_exists = report_json.exists()
             report_md_exists = report_md.exists()
             markdown = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
 
+        combined = "\n".join([stdout.getvalue(), report_text, markdown, redaction_text])
         self.assertEqual(code, 0)
         self.assertEqual(payload["schema"], "ragflow_fusion_report_v1")
         self.assertEqual(payload["summary"]["source_count"], 2)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["config_path"], 1)
         self.assertTrue(report_json_exists)
         self.assertTrue(report_md_exists)
         self.assertIn("RAGFlow Fusion Report", markdown)
         self.assertIn("shared.md", markdown)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
+        self.assertNotIn(str(query_a), combined)
+        self.assertNotIn(str(query_b), combined)
 
     def test_fusion_test_can_write_json_and_markdown(self) -> None:
         module = load_query_module()

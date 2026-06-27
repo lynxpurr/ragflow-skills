@@ -1333,6 +1333,8 @@ with contextlib.redirect_stdout(stdout):
         str(artifacts_dir / "query_cross_language_ab.json"),
         "--report-md",
         str(artifacts_dir / "query_cross_language_ab.md"),
+        "--redaction-report",
+        str(artifacts_dir / "query_cross_language_ab_redaction.json"),
         "--json",
     ])
 if cross_language_code != 0:
@@ -1383,6 +1385,8 @@ with contextlib.redirect_stdout(stdout):
         str(artifacts_dir / "query_fusion.json"),
         "--report-md",
         str(artifacts_dir / "query_fusion.md"),
+        "--redaction-report",
+        str(artifacts_dir / "query_fusion_redaction.json"),
         "--json",
     ])
 if fusion_code != 0:
@@ -3017,8 +3021,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_rerank_ab_redaction.json",
         artifacts_dir / "query_cross_language_ab.json",
         artifacts_dir / "query_cross_language_ab.md",
+        artifacts_dir / "query_cross_language_ab_redaction.json",
         artifacts_dir / "query_fusion.json",
         artifacts_dir / "query_fusion.md",
+        artifacts_dir / "query_fusion_redaction.json",
         artifacts_dir / "query_fusion_test.json",
         artifacts_dir / "query_fusion_test.md",
         artifacts_dir / "route_test.md",

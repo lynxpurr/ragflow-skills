@@ -3035,10 +3035,12 @@ raise SystemExit(code)
     query_rerank_redaction = work_root / "query_rerank_ab_redaction.json"
     query_cross_language_json = work_root / "query_cross_language_ab.json"
     query_cross_language_md = work_root / "query_cross_language_ab.md"
+    query_cross_language_redaction = work_root / "query_cross_language_ab_redaction.json"
     query_fusion_source = work_root / "query_fusion_source.json"
     query_fusion_cases = work_root / "query_fusion_cases.json"
     query_fusion_json = work_root / "query_fusion.json"
     query_fusion_md = work_root / "query_fusion.md"
+    query_fusion_redaction = work_root / "query_fusion_redaction.json"
     query_fusion_test_json = work_root / "query_fusion_test.json"
     query_fusion_test_md = work_root / "query_fusion_test.md"
     query_fallback_test_json = work_root / "query_fallback_test.json"
@@ -3327,6 +3329,8 @@ raise SystemExit(code)
             str(query_cross_language_json),
             "--report-md",
             str(query_cross_language_md),
+            "--redaction-report",
+            str(query_cross_language_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -3342,6 +3346,9 @@ raise SystemExit(code)
         produced.append(query_cross_language_json)
     if query_cross_language_md.exists():
         produced.append(query_cross_language_md)
+    _record_file_check(checks, "query cross-language ab redaction", query_cross_language_redaction)
+    if query_cross_language_redaction.exists():
+        produced.append(query_cross_language_redaction)
 
     query_fusion = _run_command(
         [
@@ -3358,6 +3365,8 @@ raise SystemExit(code)
             str(query_fusion_json),
             "--report-md",
             str(query_fusion_md),
+            "--redaction-report",
+            str(query_fusion_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -3373,6 +3382,9 @@ raise SystemExit(code)
         produced.append(query_fusion_json)
     if query_fusion_md.exists():
         produced.append(query_fusion_md)
+    _record_file_check(checks, "query fusion redaction", query_fusion_redaction)
+    if query_fusion_redaction.exists():
+        produced.append(query_fusion_redaction)
 
     query_fusion_cases.write_text(
         json.dumps(

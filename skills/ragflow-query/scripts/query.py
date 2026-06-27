@@ -1118,6 +1118,31 @@ def _rerank_ab(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _sanitize_query_cross_language_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    baseline_payloads: list[dict[str, Any]],
+    candidate_payloads: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(baseline_payloads),
+        *_collect_urls(candidate_payloads),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            *args.baseline_output,
+            *args.candidate_output,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
 def _cross_language_ab(args: argparse.Namespace) -> int:
     try:
         baseline_payloads = _read_query_outputs(args.baseline_output, label="baseline")
@@ -1132,11 +1157,41 @@ def _cross_language_ab(args: argparse.Namespace) -> int:
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_cross_language_report(
+            report,
+            args,
+            baseline_payloads,
+            candidate_payloads,
+        )
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_query_cross_language_ab_markdown(report))
     if args.json or not args.report_json:
         _json_dump(report)
     return 0 if report["ok"] else 1
+
+
+def _sanitize_query_fusion_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    payloads: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(payloads),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            *args.query_output,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
 
 
 def _fusion(args: argparse.Namespace) -> int:
@@ -1155,6 +1210,9 @@ def _fusion(args: argparse.Namespace) -> int:
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_fusion_report(report, args, payloads)
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_query_fusion_markdown(report))
     if args.json or not args.report_json:
@@ -1495,6 +1553,7 @@ def build_parser() -> argparse.ArgumentParser:
     cross_language.add_argument("--max-examples", type=int, default=10)
     cross_language.add_argument("--report-json", help="Optional JSON report output path")
     cross_language.add_argument("--report-md", help="Optional Markdown report output path")
+    cross_language.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     cross_language.add_argument("--json", action="store_true", help="Emit JSON report")
     cross_language.set_defaults(func=_cross_language_ab)
 
@@ -1505,6 +1564,7 @@ def build_parser() -> argparse.ArgumentParser:
     fusion.add_argument("--max-per-source", type=int)
     fusion.add_argument("--report-json", help="Optional JSON report output path")
     fusion.add_argument("--report-md", help="Optional Markdown report output path")
+    fusion.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     fusion.add_argument("--json", action="store_true", help="Emit JSON report")
     fusion.set_defaults(func=_fusion)
 

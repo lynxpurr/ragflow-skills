@@ -997,7 +997,8 @@ probes, adapter request-shape probes, `ragflow-query endpoint-report`,
 `ragflow-doc-to-md backend probe`, `ragflow-kb-build model-providers probe`, and
 `ragflow-query endpoint-report`, `ragflow-query evaluate-answer`, and
 `ragflow-query diagnose-result`, `ragflow-query pollution-report`, and
-`ragflow-query rerank-ab`. Release hygiene now emits
+`ragflow-query rerank-ab`, `ragflow-query cross-language-ab`, and `ragflow-query fusion`.
+Release hygiene now emits
 `ragflow_generated_report_safety_check_v1`, scanning generated reports and examples for raw
 sensitive literals and requiring valid redaction sidecars when redaction placeholders are
 present. Consumer acceptance includes a fake generated-report fixture with fake secret,

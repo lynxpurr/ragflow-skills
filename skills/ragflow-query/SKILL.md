@@ -42,8 +42,8 @@ python scripts/query.py evaluate-answer --query-output ./run/query.json --answer
 python scripts/query.py diagnose-result --query-output ./run/query.json --trace-json ./run/query_trace.json --citation-audit ./run/citation_audit.json --report-json ./run/query_diagnostic.json --report-md ./run/query_diagnostic.md --redaction-report ./run/query_diagnostic_redaction.json
 python scripts/query.py pollution-report --query-output ./run/query.json --expanded-term translated-term --report-json ./run/query_pollution.json --report-md ./run/query_pollution.md --redaction-report ./run/query_pollution_redaction.json
 python scripts/query.py rerank-ab --query-output ./run/query.json --rerank-json ./run/external_rerank.json --expected-term "known term" --report-json ./run/query_rerank_ab.json --report-md ./run/query_rerank_ab.md --redaction-report ./run/query_rerank_ab_redaction.json
-python scripts/query.py cross-language-ab --baseline-output ./run/query_original.json --candidate-output ./run/query_translated.json --baseline-label original --candidate-label translated --report-json ./run/query_cross_language_ab.json --report-md ./run/query_cross_language_ab.md --json
-python scripts/query.py fusion --query-output ./run/kb_a_query.json --query-output ./run/kb_b_query.json --report-json ./run/fusion.json --report-md ./run/fusion.md
+python scripts/query.py cross-language-ab --baseline-output ./run/query_original.json --candidate-output ./run/query_translated.json --baseline-label original --candidate-label translated --report-json ./run/query_cross_language_ab.json --report-md ./run/query_cross_language_ab.md --redaction-report ./run/query_cross_language_ab_redaction.json --json
+python scripts/query.py fusion --query-output ./run/kb_a_query.json --query-output ./run/kb_b_query.json --report-json ./run/fusion.json --report-md ./run/fusion.md --redaction-report ./run/fusion_redaction.json
 ```
 
 When a host agent should prepare config, run smoke checks, or perform end-to-end validation for the user, read `references/host-agent-setup.md` first. When an end user needs a copy-paste prompt to give their own host agent, use `references/user-onboarding-prompt.md`.
