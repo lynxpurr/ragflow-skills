@@ -1361,6 +1361,124 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertGreaterEqual(len(payload["anchor_query_pairs"]), 1)
         self.assertIn("RAGFlow KB Topology Advice", report_md_text)
 
+    def test_topology_split_plan_subcommand_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            handoff = root / "handoff"
+            docs = handoff / "documents"
+            docs.mkdir(parents=True)
+            payroll = docs / "payroll.md"
+            finance = docs / "finance.md"
+            payroll.write_text(
+                "# Payroll Policy\n\n" + "Payroll benefits onboarding policy. " * 45,
+                encoding="utf-8",
+            )
+            finance.write_text(
+                "# Finance Policy\n\n" + "Invoice tax revenue finance policy. " * 45,
+                encoding="utf-8",
+            )
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [
+                            {
+                                "source_path": "source/payroll.pdf",
+                                "markdown_path": "documents/payroll.md",
+                                "title": "Payroll Policy",
+                            },
+                            {
+                                "source_path": "source/finance.pdf",
+                                "markdown_path": "documents/finance.md",
+                                "title": "Finance Policy",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            metadata = root / "metadata.json"
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_metadata_v1",
+                        "documents": [
+                            {
+                                "path": str(payroll),
+                                "metadata": {"domain": "hr", "topic": "Payroll Policy"},
+                            },
+                            {
+                                "path": str(finance),
+                                "metadata": {"domain": "finance", "topic": "Finance Policy"},
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            retrieval_hints = handoff / "retrieval_hints.json"
+            retrieval_hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "question_candidates": [
+                            {
+                                "question": "What is the payroll policy?",
+                                "type": "section_summary",
+                                "source_document": str(payroll),
+                            },
+                            {
+                                "question": "What is the finance policy?",
+                                "type": "section_summary",
+                                "source_document": str(finance),
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output = root / "kb_split_plan.json"
+            report_md = root / "kb_split_plan.md"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "topology",
+                    "split-plan",
+                    "--doc-manifest",
+                    str(manifest),
+                    "--kb-name",
+                    "kb:ops",
+                    "--metadata",
+                    str(metadata),
+                    "--retrieval-hints",
+                    str(retrieval_hints),
+                    "--output",
+                    str(output),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+            report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("kb_split_plan_v1", result.stdout)
+        self.assertEqual(payload["schema"], "kb_split_plan_v1")
+        self.assertTrue(payload["advisory_only"])
+        self.assertEqual(payload["mutation"], "none")
+        self.assertEqual(payload["summary"]["split_group_count"], 2)
+        self.assertGreaterEqual(len(payload["boundary_queries"]), 1)
+        self.assertIn("RAGFlow KB Split Plan", report_md_text)
+
     def test_optimize_plan_only_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -14,8 +14,11 @@ if str(RUNTIME_SRC) not in sys.path:
 
 from ragflow_skill_runtime.kb_build import BuildDocument  # noqa: E402
 from ragflow_skill_runtime.topology import (  # noqa: E402
+    KB_SPLIT_PLAN_SCHEMA,
     KB_TOPOLOGY_ADVICE_SCHEMA,
+    create_kb_split_plan,
     create_kb_topology_advice,
+    render_split_plan_markdown,
     render_topology_advice_markdown,
 )
 
@@ -122,6 +125,78 @@ class TopologyAdviceTests(unittest.TestCase):
         self.assertEqual(report["signals"]["terminology_independence"]["status"], "unknown")
         self.assertEqual(report["signals"]["minimum_useful_corpus_size"]["status"], "thin")
         self.assertEqual(report["recommendation"]["action"], "stage_until_larger")
+
+    def test_split_plan_groups_documents_and_boundary_queries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs = root / "docs"
+            docs.mkdir()
+            payroll = docs / "payroll.md"
+            tax = docs / "tax.md"
+            payroll.write_text(
+                "# Payroll Policy\n\n"
+                + "Payroll benefits onboarding retention employee policy. " * 45,
+                encoding="utf-8",
+            )
+            tax.write_text(
+                "# Tax Policy\n\n"
+                + "Tax invoice revenue filing finance policy. " * 45,
+                encoding="utf-8",
+            )
+            metadata = root / "metadata.json"
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_metadata_v1",
+                        "documents": [
+                            {"path": str(payroll), "metadata": {"domain": "hr", "topic": "Payroll Policy"}},
+                            {"path": str(tax), "metadata": {"domain": "finance", "topic": "Tax Policy"}},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            hints = root / "retrieval_hints.json"
+            hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "question_candidates": [
+                            {
+                                "question": "How does payroll retention work?",
+                                "type": "exact_fact",
+                                "source_document": str(payroll),
+                            },
+                            {
+                                "question": "How are tax invoices filed?",
+                                "type": "exact_fact",
+                                "source_document": str(tax),
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = create_kb_split_plan(
+                kb_name="kb:ops",
+                documents=[BuildDocument(payroll), BuildDocument(tax)],
+                metadata_path=metadata,
+                retrieval_hints_path=hints,
+            )
+            markdown = render_split_plan_markdown(report)
+
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["schema"], KB_SPLIT_PLAN_SCHEMA)
+        self.assertTrue(report["advisory_only"])
+        self.assertEqual(report["mutation"], "none")
+        self.assertEqual(report["summary"]["split_group_count"], 2)
+        self.assertEqual(report["recommendation"]["action"], "split_before_upload")
+        self.assertGreaterEqual(len(report["boundary_queries"]), 1)
+        suggested = {group["suggested_kb_name"] for group in report["split_groups"]}
+        self.assertIn("kb:ops-finance", suggested)
+        self.assertIn("kb:ops-hr", suggested)
+        self.assertIn("RAGFlow KB Split Plan", markdown)
 
 
 if __name__ == "__main__":

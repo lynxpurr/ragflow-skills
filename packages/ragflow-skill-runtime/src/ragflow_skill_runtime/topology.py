@@ -17,8 +17,10 @@ from .routing import RoutingConfig, RoutingError, load_routing_config
 
 
 KB_TOPOLOGY_ADVICE_SCHEMA = "kb_topology_advice_v1"
+KB_SPLIT_PLAN_SCHEMA = "kb_split_plan_v1"
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}|[\u4e00-\u9fff]{2,12}")
+SLUG_RE = re.compile(r"[^a-z0-9]+")
 STOPWORDS = {
     "about",
     "after",
@@ -424,6 +426,179 @@ def _split_signals(documents: list[TopologyDocument]) -> dict[str, Any]:
     }
 
 
+def _slug(value: str) -> str:
+    normalized = SLUG_RE.sub("-", value.lower()).strip("-")
+    return normalized or "unknown"
+
+
+def _top_terms(documents: list[TopologyDocument], *, limit: int = 12) -> list[str]:
+    counter: Counter[str] = Counter()
+    for document in documents:
+        counter.update(document.terms)
+    return [term for term, _count in counter.most_common(limit)]
+
+
+def _suggested_split_kb_name(kb_name: str, group_name: str) -> str:
+    suffix = _slug(group_name)
+    if kb_name.endswith(f":{suffix}") or kb_name.endswith(f"-{suffix}"):
+        return kb_name
+    separator = "-" if ":" in kb_name else ":"
+    return f"{kb_name}{separator}{suffix}"
+
+
+def _questions_for_group(
+    questions: list[dict[str, Any]],
+    *,
+    documents: list[TopologyDocument],
+    top_terms: list[str],
+    limit: int = 4,
+) -> list[dict[str, Any]]:
+    paths = {doc.path for doc in documents}
+    names = {Path(doc.path).name for doc in documents}
+    terms = set(top_terms)
+    selected: list[dict[str, Any]] = []
+    for item in questions:
+        question = item.get("question")
+        if not isinstance(question, str) or not question.strip():
+            continue
+        source = str(item.get("source_document") or "")
+        source_match = bool(source and any(path.endswith(source) for path in paths | names))
+        term_match = bool(_tokenize(question) & terms)
+        if source_match or term_match:
+            selected.append(
+                {
+                    "question": question.strip(),
+                    "type": item.get("type") or "starter",
+                    "source_document": item.get("source_document"),
+                    "assigned_by": "source_document" if source_match else "term_overlap",
+                }
+            )
+        if len(selected) >= limit:
+            break
+    if not selected:
+        for term in top_terms[: min(2, limit)]:
+            selected.append(
+                {
+                    "question": f"What are the key facts about {term}?",
+                    "type": "keyword_anchor",
+                    "source_document": None,
+                    "assigned_by": "fallback_term",
+                }
+            )
+    return selected[:limit]
+
+
+def _split_groups(
+    *,
+    kb_name: str,
+    documents: list[TopologyDocument],
+    questions: list[dict[str, Any]],
+    min_group_documents: int,
+    min_group_estimated_chunks: int,
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[TopologyDocument]] = defaultdict(list)
+    for document in documents:
+        grouped[document.domain or "unknown"].append(document)
+    groups: list[dict[str, Any]] = []
+    for index, group_name in enumerate(sorted(grouped), start=1):
+        group_docs = sorted(grouped[group_name], key=lambda doc: doc.path)
+        estimated_chunks = sum(doc.estimated_chunks for doc in group_docs)
+        total_chars = sum(doc.chars for doc in group_docs)
+        top_terms = _top_terms(group_docs)
+        action = (
+            "standalone_kb_candidate"
+            if len(group_docs) >= min_group_documents or estimated_chunks >= min_group_estimated_chunks
+            else "merge_or_stage_review"
+        )
+        warnings: list[dict[str, Any]] = []
+        if action != "standalone_kb_candidate":
+            warnings.append(
+                {
+                    "code": "thin_split_candidate",
+                    "message": "this split group is small and should be reviewed before creating a separate KB",
+                }
+            )
+        groups.append(
+            {
+                "id": f"split-{index:03d}-{_slug(group_name)}",
+                "group_name": group_name,
+                "suggested_kb_name": _suggested_split_kb_name(kb_name, group_name),
+                "action": action,
+                "document_count": len(group_docs),
+                "estimated_chunk_count": estimated_chunks,
+                "total_chars": total_chars,
+                "document_paths": [doc.path for doc in group_docs],
+                "route_hint_candidates": top_terms[:8],
+                "starter_questions": _questions_for_group(
+                    questions,
+                    documents=group_docs,
+                    top_terms=top_terms,
+                ),
+                "warnings": warnings,
+            }
+        )
+    return groups
+
+
+def _boundary_queries(groups: list[dict[str, Any]], *, limit: int = 8) -> list[dict[str, Any]]:
+    queries: list[dict[str, Any]] = []
+    if len(groups) < 2:
+        return queries
+    for left_index, left in enumerate(groups):
+        for right in groups[left_index + 1 :]:
+            left_terms = left.get("route_hint_candidates") if isinstance(left.get("route_hint_candidates"), list) else []
+            right_terms = right.get("route_hint_candidates") if isinstance(right.get("route_hint_candidates"), list) else []
+            left_term = str(left_terms[0]) if left_terms else str(left.get("group_name") or "this group")
+            right_term = str(right_terms[0]) if right_terms else str(right.get("group_name") or "that group")
+            queries.append(
+                {
+                    "id": f"boundary-{len(queries) + 1:03d}",
+                    "primary_group_id": left.get("id"),
+                    "contrast_group_id": right.get("id"),
+                    "query": (
+                        f"Should a question about {left_term} route to {left.get('suggested_kb_name')} "
+                        f"rather than {right.get('suggested_kb_name')}?"
+                    ),
+                    "contrast_query": (
+                        f"Should a question about {right_term} route to {right.get('suggested_kb_name')} "
+                        f"rather than {left.get('suggested_kb_name')}?"
+                    ),
+                    "purpose": "validate split boundaries before editing route configuration",
+                }
+            )
+            if len(queries) >= limit:
+                return queries
+    return queries
+
+
+def _split_plan_recommendation(groups: list[dict[str, Any]], split: Mapping[str, Any]) -> dict[str, Any]:
+    if len(groups) <= 1:
+        return {
+            "action": "keep_together",
+            "confidence": "high",
+            "reasons": ["only one domain group was detected"],
+            "advisory_only": True,
+        }
+    standalone_count = sum(1 for group in groups if group.get("action") == "standalone_kb_candidate")
+    reasons: list[str] = []
+    if split.get("split_review_recommended"):
+        action = "split_before_upload"
+        confidence = "high" if standalone_count == len(groups) else "medium"
+        reasons.append("split signals indicate mixed domains, ambiguity, or a dominant document")
+    else:
+        action = "review_split"
+        confidence = "medium"
+        reasons.append("multiple domain groups were detected but split signals are not decisive")
+    if standalone_count < len(groups):
+        reasons.append("one or more groups are thin and need merge/stage review")
+    return {
+        "action": action,
+        "confidence": confidence,
+        "reasons": reasons,
+        "advisory_only": True,
+    }
+
+
 def _anchor_query_pairs(
     *,
     kb_name: str,
@@ -578,6 +753,74 @@ def create_kb_topology_advice(
     }
 
 
+def create_kb_split_plan(
+    *,
+    kb_name: str,
+    documents: Iterable[BuildDocument | str | Path],
+    metadata_path: str | Path | None = None,
+    retrieval_hints_path: str | Path | None = None,
+    min_group_documents: int = 1,
+    min_group_estimated_chunks: int = 1,
+) -> dict[str, Any]:
+    """Create a non-mutating split plan from local handoff artifacts."""
+
+    if min_group_documents < 1:
+        raise TopologyError("--min-group-documents must be at least 1")
+    if min_group_estimated_chunks < 1:
+        raise TopologyError("--min-group-estimated-chunks must be at least 1")
+    paths = [Path(item.path if isinstance(item, BuildDocument) else item) for item in documents]
+    if not paths:
+        raise TopologyError("split plan requires at least one Markdown document")
+    metadata = _metadata_index(metadata_path)
+    doc_summaries = [_read_document(path, metadata) for path in paths]
+    retrieval_hints = _load_retrieval_hints(retrieval_hints_path)
+    questions = _question_candidates(retrieval_hints, limit=12)
+    split = _split_signals(doc_summaries)
+    groups = _split_groups(
+        kb_name=kb_name,
+        documents=doc_summaries,
+        questions=questions,
+        min_group_documents=min_group_documents,
+        min_group_estimated_chunks=min_group_estimated_chunks,
+    )
+    recommendation = _split_plan_recommendation(groups, split)
+    boundaries = _boundary_queries(groups)
+    return {
+        "ok": True,
+        "schema": KB_SPLIT_PLAN_SCHEMA,
+        "created_at": _now(),
+        "kb_name": kb_name,
+        "advisory_only": True,
+        "mutation": "none",
+        "inputs": {
+            "metadata": str(metadata_path) if metadata_path else None,
+            "retrieval_hints": str(retrieval_hints_path) if retrieval_hints_path else None,
+            "min_group_documents": min_group_documents,
+            "min_group_estimated_chunks": min_group_estimated_chunks,
+        },
+        "summary": {
+            "document_count": len(doc_summaries),
+            "estimated_chunk_count": sum(doc.estimated_chunks for doc in doc_summaries),
+            "split_group_count": len(groups),
+            "recommendation": recommendation["action"],
+            "confidence": recommendation["confidence"],
+        },
+        "recommendation": recommendation,
+        "signals": {
+            "split": split,
+        },
+        "split_groups": groups,
+        "boundary_queries": boundaries,
+        "documents": [doc.to_dict() for doc in doc_summaries],
+        "next_steps": [
+            "Review split groups before creating separate KBs or changing route configuration.",
+            "Use suggested KB names and route hints as planning notes only.",
+            "Run route-test with boundary queries after any explicit user-owned route edit.",
+            "Keep this plan as a sidecar; it does not mutate RAGFlow or routing files.",
+        ],
+    }
+
+
 def render_topology_advice_markdown(report: Mapping[str, Any]) -> str:
     """Render topology advice as a compact review note."""
 
@@ -612,6 +855,48 @@ def render_topology_advice_markdown(report: Mapping[str, Any]) -> str:
                 lines.append(f"- `{item.get('id')}` {item.get('candidate_query')}")
     else:
         lines.append("- No anchor queries generated.")
+    lines.extend(["", "## Next Steps", ""])
+    for step in report.get("next_steps", []) if isinstance(report.get("next_steps"), list) else []:
+        lines.append(f"- {step}")
+    return "\n".join(lines) + "\n"
+
+
+def render_split_plan_markdown(report: Mapping[str, Any]) -> str:
+    """Render a split plan as a compact review note."""
+
+    recommendation = report.get("recommendation", {}) if isinstance(report.get("recommendation"), Mapping) else {}
+    lines = [
+        "# RAGFlow KB Split Plan",
+        "",
+        f"- Schema: `{report.get('schema')}`",
+        f"- Source KB: `{report.get('kb_name')}`",
+        f"- Recommendation: `{recommendation.get('action')}` ({recommendation.get('confidence')})",
+        f"- Advisory only: `{report.get('advisory_only')}`",
+        "",
+        "## Split Groups",
+        "",
+    ]
+    groups = report.get("split_groups", [])
+    if isinstance(groups, list) and groups:
+        for group in groups:
+            if not isinstance(group, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"`{group.get('id')}` -> `{group.get('suggested_kb_name')}`; "
+                f"docs `{group.get('document_count')}`, chunks `{group.get('estimated_chunk_count')}`, "
+                f"action `{group.get('action')}`"
+            )
+    else:
+        lines.append("- No split groups generated.")
+    lines.extend(["", "## Boundary Queries", ""])
+    boundaries = report.get("boundary_queries", [])
+    if isinstance(boundaries, list) and boundaries:
+        for item in boundaries[:8]:
+            if isinstance(item, Mapping):
+                lines.append(f"- `{item.get('id')}` {item.get('query')}")
+    else:
+        lines.append("- No boundary queries generated.")
     lines.extend(["", "## Next Steps", ""])
     for step in report.get("next_steps", []) if isinstance(report.get("next_steps"), list) else []:
         lines.append(f"- {step}")

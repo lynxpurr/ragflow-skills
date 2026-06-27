@@ -45,6 +45,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     merge_metadata_payloads,
     probe_model_providers,
     configured_private_hosts_from_urls,
+    create_kb_split_plan,
     create_kb_topology_advice,
     render_handoff_inspection_markdown,
     render_governance_markdown,
@@ -58,6 +59,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_suppression_report_markdown,
     sample_benchmark_dataset,
     segment_metadata_report_file,
+    render_split_plan_markdown,
     render_topology_advice_markdown,
     render_optimization_plan_markdown,
     snapshot_chunks,
@@ -657,6 +659,31 @@ def _run_topology_advise(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_topology_split_plan(args: argparse.Namespace) -> int:
+    try:
+        doc_manifest = load_doc_manifest(args.doc_manifest) if args.doc_manifest else None
+        _guard_quality_gate(doc_manifest, allow_blocked=args.allow_blocked)
+        docs = discover_markdown_documents(
+            input_path=args.input,
+            doc_manifest=doc_manifest,
+            manifest_base_path=args.doc_manifest,
+        )
+        report = create_kb_split_plan(
+            kb_name=args.kb_name,
+            documents=docs,
+            metadata_path=args.metadata,
+            retrieval_hints_path=args.retrieval_hints,
+            min_group_documents=args.min_group_documents,
+            min_group_estimated_chunks=args.min_group_estimated_chunks,
+        )
+        _write_json_file(args.output, report)
+        _write_text_file(args.report_md, render_split_plan_markdown(report))
+        _dump_json(report)
+        return 0
+    except (BuildError, TopologyError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _sanitize_model_provider_report(report: dict[str, Any], args: argparse.Namespace, config: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     urls = [config.base_url, args.embedding_adapter_url, args.rerank_adapter_url]
     sanitized, redaction_report = sanitize_report_payload(
@@ -1069,6 +1096,25 @@ def build_topology_parser() -> argparse.ArgumentParser:
     advise.add_argument("--report-md", help="Optional topology advice Markdown path")
     advise.add_argument("--json", action="store_true", help="Emit JSON errors")
     advise.set_defaults(func=_run_topology_advise)
+
+    split_plan = subparsers.add_parser("split-plan", help="Plan advisory KB splits by local corpus signals")
+    split_plan.add_argument("--input", help="Markdown file or directory")
+    split_plan.add_argument("--doc-manifest", help="Path to doc_manifest.json")
+    split_plan.add_argument("--kb-name", required=True, help="Source or candidate RAGFlow dataset name")
+    split_plan.add_argument("--metadata", help="Optional ragflow_metadata_v1 file")
+    split_plan.add_argument("--retrieval-hints", help="Optional rich handoff retrieval_hints.json")
+    split_plan.add_argument("--min-group-documents", type=int, default=1, help="Minimum documents for a standalone split group")
+    split_plan.add_argument(
+        "--min-group-estimated-chunks",
+        type=int,
+        default=1,
+        help="Minimum estimated chunks for a standalone split group",
+    )
+    split_plan.add_argument("--allow-blocked", action="store_true", help="Allow planning with a BLOCKED doc_manifest quality gate")
+    split_plan.add_argument("--output", default="kb_split_plan.json", help="Output kb_split_plan_v1 JSON")
+    split_plan.add_argument("--report-md", help="Optional split plan Markdown path")
+    split_plan.add_argument("--json", action="store_true", help="Emit JSON errors")
+    split_plan.set_defaults(func=_run_topology_split_plan)
 
     return parser
 

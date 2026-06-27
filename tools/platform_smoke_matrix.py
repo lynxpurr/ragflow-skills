@@ -1813,6 +1813,37 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         topology_advice_result,
         required_stdout='"schema": "kb_topology_advice_v1"',
     )
+    split_plan = artifacts_dir / "kb_split_plan.json"
+    split_plan_md = artifacts_dir / "kb_split_plan.md"
+    split_plan_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "topology",
+            "split-plan",
+            "--doc-manifest",
+            str(doc_manifest),
+            "--kb-name",
+            "kb:platform-topology",
+            "--metadata",
+            str(metadata_template),
+            "--retrieval-hints",
+            str(handoff_dir / "retrieval_hints.json"),
+            "--output",
+            str(split_plan),
+            "--report-md",
+            str(split_plan_md),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb topology split-plan",
+        split_plan_result,
+        required_stdout='"schema": "kb_split_plan_v1"',
+    )
     tagset_template = artifacts_dir / "tagset.template.json"
     tagset_template_result = _run_command(
         [

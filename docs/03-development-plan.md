@@ -1111,12 +1111,12 @@ assistant tests without mutating user-owned routing config automatically.
 Tasks:
 
 - [x] Add `kb_topology_advice_v1`.
-- [ ] Add `kb_split_plan_v1`.
+- [x] Add `kb_split_plan_v1`.
 - [ ] Add `kb_activation_plan_v1`.
 - [x] Add `ragflow-kb-build topology advise`.
 - [x] Add create-vs-merge signals: terminology independence, minimum useful corpus size, future-growth hint, semantic overlap, and anchor query pairs.
 - [x] Add split signals: cross-domain chunk count, ambiguous-term score, dominant-document share, and domain-purity warnings.
-- [ ] Add `ragflow-kb-build topology split-plan`.
+- [x] Add `ragflow-kb-build topology split-plan`.
 - [ ] Add `ragflow-kb-build activation-plan`.
 - [ ] Check content completeness, document count, chunk count, route config registration, hint coverage, optional centroid availability, and route-test readiness.
 - [ ] Add `ragflow-query route-activation-check`.
