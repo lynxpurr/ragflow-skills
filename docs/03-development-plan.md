@@ -1067,8 +1067,8 @@ Status note: `--redaction-report` currently covers `ragflow-query endpoint-repor
 `ragflow-doc-to-md`, `ragflow-doc-to-md inspect`,
 `ragflow-doc-to-md backend probe`, `ragflow-doc-to-md backend warmup`,
 `ragflow-doc-to-md postprocess`, `ragflow-doc-to-md segment-plan`, and
-`ragflow-doc-to-md split`. Broader `ragflow-kb-build` report-command coverage remains
-open. Release hygiene now scans generated reports/examples
+`ragflow-doc-to-md split`. The Phase 36 inventory now records no remaining public
+`needs_redaction` report surfaces. Release hygiene now scans generated reports/examples
 for raw sensitive literals and validates redaction sidecars; consumer acceptance includes a
 fake generated-report redaction fixture. Public host-agent setup references document where
 sanitized reports and redaction sidecars should be stored and what must stay out of shared
@@ -1076,15 +1076,10 @@ transcripts.
 
 Recommended next slices:
 
-1. Use the Phase 36 report-surface inventory to finish generated-report safety before
-   broader runtime primitives.
-2. Add focused `--redaction-report` coverage to the highest-risk remaining report commands
-   that may include endpoints, config paths, work paths, user-supplied report paths, parse
-   logs, or host-provided sidecar paths. When redaction is enabled, Markdown reports must be
-   rendered from sanitized payloads as well as JSON.
-3. Add the smallest shared retry/backoff and metrics helpers first, recording retry budgets
+1. Use a narrow Phase 36 helper pilot before broader runtime primitives.
+2. Add the smallest shared retry/backoff and metrics helpers first, recording retry budgets
    and latency summaries in traces or reports where those helpers are used.
-4. Defer broader rate limiting, circuit breakers, cache invalidation, checkpoint/resume,
+3. Defer broader rate limiting, circuit breakers, cache invalidation, checkpoint/resume,
    and partial-failure schemas until at least one narrow report or probe command consumes
    the helper with deterministic tests.
 
@@ -1362,6 +1357,23 @@ snapshot/QA/enrichment, and append/cleanup redaction sidecars as artifacts.
 The next recommended Phase 36 task is the narrow runtime helper pilot: add one minimal
 retry/backoff or metrics helper to a read-only probe/report command with deterministic
 tests and release-gate coverage.
+
+Near-term task list:
+
+- [ ] Add a small shared runtime metrics helper for counters and deterministic latency
+  summaries, including p50/p95/p99 behavior with unit tests.
+- [ ] Pilot the metrics helper in `ragflow-query endpoint-report` because it is read-only,
+  defaults to no network work, and already has JSON, Markdown, and redaction surfaces.
+- [ ] Add deterministic `endpoint-report` CLI tests for the emitted runtime metrics using
+  no-network and fake HTTP-server cases.
+- [ ] Decide whether the same pilot should add opt-in retry/backoff in this slice or in the
+  next slice; preserve current behavior with a default single attempt.
+- [ ] If retry/backoff is included, record retry budget, attempt count, retry count, and
+  final status in the emitted report without adding live RAGFlow mutation.
+- [ ] Keep consumer acceptance and platform smoke changes scoped to schema or CLI-surface
+  changes from the helper pilot.
+- [ ] Run a final generated-Markdown audit before marking the sanitized Markdown umbrella
+  task complete.
 
 Exit criteria:
 
