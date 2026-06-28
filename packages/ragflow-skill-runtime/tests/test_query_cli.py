@@ -1581,6 +1581,11 @@ class QueryCliTests(unittest.TestCase):
             route_activation_plan = root / "kb_activation_plan.json"
             route_activation_check_json = root / "route-activation-check.json"
             route_activation_check_md = root / "route-activation-check.md"
+            route_activation_redaction_json = root / "route-activation-check-redaction.json"
+            private_host = ".".join(["172", "23", "33", "45"])
+            fake_token = "fake-route-activation-token"
+            fake_key = "fake-route-activation-secret"
+            home_path = str(Path.home() / ".ragflow" / "route-activation.local.yaml")
             routing.write_text(
                 json.dumps(
                     {
@@ -1594,7 +1599,12 @@ class QueryCliTests(unittest.TestCase):
                             {
                                 "name": "kb:technical",
                                 "dataset_id": "ds-technical",
-                                "hints": ["api", "runtime"],
+                                "hints": [
+                                    "api",
+                                    "runtime",
+                                    f"http://{private_host}:9380/route?token={fake_token}",
+                                    home_path,
+                                ],
                                 "kb_routing_hints": ["ignored legacy hint"],
                                 "params": {"top_k": 5, "similarity_threshold": 0.1},
                             },
@@ -1628,7 +1638,7 @@ class QueryCliTests(unittest.TestCase):
                         "queries": [
                             {
                                 "id": "q1",
-                                "question": "How does the API runtime work?",
+                                "question": f"How does the API runtime work? api_key={fake_key}",
                                 "expected_kb": "kb:technical",
                                 "category": "exact",
                                 "locale": "en",
@@ -1740,14 +1750,27 @@ class QueryCliTests(unittest.TestCase):
                         str(route_activation_check_json),
                         "--report-md",
                         str(route_activation_check_md),
+                        "--redaction-report",
+                        str(route_activation_redaction_json),
                     ]
                 )
             route_activation_check_payload = json.loads(stdout.getvalue())
+            route_activation_check_text = route_activation_check_json.read_text(encoding="utf-8")
             route_activation_check_file_payload = json.loads(
-                route_activation_check_json.read_text(encoding="utf-8")
+                route_activation_check_text
             )
             route_activation_check_markdown = route_activation_check_md.read_text(encoding="utf-8")
+            route_activation_redaction_text = route_activation_redaction_json.read_text(encoding="utf-8")
+            route_activation_redaction_payload = json.loads(route_activation_redaction_text)
 
+        activation_combined = "\n".join(
+            [
+                json.dumps(route_activation_check_payload, ensure_ascii=False),
+                route_activation_check_text,
+                route_activation_check_markdown,
+                route_activation_redaction_text,
+            ]
+        )
         self.assertEqual(list_code, 0)
         self.assertEqual(list_payload["count"], 3)
         self.assertEqual(route_code, 0)
@@ -1779,7 +1802,20 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(route_activation_check_payload["status"], "PASS")
         self.assertEqual(route_activation_check_payload["summary"]["target_route_test_count"], 1)
         self.assertEqual(route_activation_check_file_payload["schema"], "ragflow_route_activation_check_v1")
+        self.assertEqual(route_activation_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(route_activation_redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(route_activation_redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(route_activation_redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(route_activation_redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertGreaterEqual(route_activation_redaction_payload["rule_counts"]["config_path"], 1)
         self.assertIn("RAGFlow Route Activation Check", route_activation_check_markdown)
+        self.assertNotIn(private_host, activation_combined)
+        self.assertNotIn(fake_token, activation_combined)
+        self.assertNotIn(fake_key, activation_combined)
+        self.assertNotIn(home_path, activation_combined)
+        self.assertNotIn(str(route_activation_plan), activation_combined)
+        self.assertNotIn(str(routing), activation_combined)
+        self.assertNotIn(str(routes), activation_combined)
 
     def test_assistant_profile_recommend_command_writes_reports(self) -> None:
         module = load_query_module()

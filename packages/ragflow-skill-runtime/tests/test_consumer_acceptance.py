@@ -108,6 +108,7 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("query cross-language ab redaction", check_names)
         self.assertIn("query fusion redaction", check_names)
         self.assertIn("query fusion test redaction", check_names)
+        self.assertIn("query route-activation-check redaction", check_names)
         self.assertIn("query fallback test report", check_names)
         self.assertIn("query missing config guard", check_names)
         self.assertIn("live build skipped", check_names)
@@ -137,6 +138,10 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("query_fusion_test_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("route_activation_check_redaction.json") for path in payload["produced_artifacts"]),
             payload["produced_artifacts"],
         )
         self.assertTrue(payload["reports"]["json"].endswith("consumer-acceptance-report.json"))

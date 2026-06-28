@@ -648,6 +648,39 @@ def _route_diagnose(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _sanitize_route_activation_check_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    routing: Any,
+    activation_plan: dict[str, Any],
+    queries: Any,
+    route_test_report: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    routing_payload = routing.to_dict() if hasattr(routing, "to_dict") else {}
+    urls = [
+        *_collect_urls(routing_payload),
+        *_collect_urls(activation_plan),
+        *_collect_urls(queries or {}),
+        *_collect_urls(route_test_report or {}),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.activation_plan,
+            args.routing_config,
+            args.queries,
+            args.route_test_report,
+            args.centroid_index,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
 def _route_activation_check(args: argparse.Namespace) -> int:
     try:
         routing = _load_routing(args)
@@ -670,6 +703,16 @@ def _route_activation_check(args: argparse.Namespace) -> int:
         )
     except (RoutingError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=True)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_route_activation_check_report(
+            report,
+            args,
+            routing,
+            activation_plan,
+            queries,
+            route_test_report,
+        )
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_route_activation_check_markdown(report))
     _json_dump(report)
@@ -1414,6 +1457,7 @@ def build_parser() -> argparse.ArgumentParser:
     route_activation_check.add_argument("--route-test-report", help="Optional saved route-test report JSON")
     route_activation_check.add_argument("--report-json", help="Optional JSON report output path")
     route_activation_check.add_argument("--report-md", help="Optional Markdown report output path")
+    route_activation_check.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     route_activation_check.set_defaults(func=_route_activation_check)
 
     assistant_profile = sub.add_parser(

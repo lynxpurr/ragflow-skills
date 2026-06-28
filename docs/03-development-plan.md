@@ -1025,6 +1025,7 @@ Tasks:
 - [x] Add a shared report sanitizer for API keys, bearer tokens, configured private hosts, home paths, and local config paths.
 - [ ] Add `--redaction-report` to relevant commands.
 - [x] Add `--redaction-report` to `ragflow-query fusion-test` saved-output fixture reports.
+- [x] Add `--redaction-report` to `ragflow-query route-activation-check` activation and route sidecar reports.
 - [x] Extend release hygiene to scan generated reports and examples.
 - [x] Add acceptance fixtures that intentionally include fake secrets and verify redaction.
 - [x] Add documentation for host agents explaining where sanitized reports should be stored.
@@ -1033,6 +1034,7 @@ Status note: `--redaction-report` currently covers `ragflow-query endpoint-repor
 `ragflow-query evaluate-answer`, `ragflow-query diagnose-result`,
 `ragflow-query pollution-report`, `ragflow-query rerank-ab`,
 `ragflow-query cross-language-ab`, `ragflow-query fusion`, `ragflow-query fusion-test`,
+`ragflow-query route-activation-check`,
 `ragflow-kb-build model-providers probe`, and `ragflow-doc-to-md backend probe`. Broader
 report-command coverage remains open. Release hygiene now scans generated reports/examples
 for raw sensitive literals and validates redaction sidecars; consumer acceptance includes a

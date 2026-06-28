@@ -2878,6 +2878,7 @@ raise SystemExit(code)
             produced.append(path)
     route_activation_check_json = work_root / "route_activation_check.json"
     route_activation_check_md = work_root / "route_activation_check.md"
+    route_activation_check_redaction = work_root / "route_activation_check_redaction.json"
     route_activation_check = _run_command(
         [
             python_executable,
@@ -2895,6 +2896,8 @@ raise SystemExit(code)
             str(route_activation_check_json),
             "--report-md",
             str(route_activation_check_md),
+            "--redaction-report",
+            str(route_activation_check_redaction),
         ],
         cwd=work_root,
         env=env,
@@ -2905,7 +2908,13 @@ raise SystemExit(code)
         route_activation_check,
         required_output='"schema": "ragflow_route_activation_check_v1"',
     )
-    for path in (route_activation_fixture_plan, route_activation_check_json, route_activation_check_md):
+    _record_file_check(checks, "query route-activation-check redaction", route_activation_check_redaction)
+    for path in (
+        route_activation_fixture_plan,
+        route_activation_check_json,
+        route_activation_check_md,
+        route_activation_check_redaction,
+    ):
         if path.exists():
             produced.append(path)
     centroid_plan_json = work_root / "centroid_plan.json"
