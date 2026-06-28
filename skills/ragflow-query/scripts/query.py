@@ -719,6 +719,31 @@ def _route_activation_check(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _sanitize_assistant_profile_recommendation_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    assistant_profile: dict[str, Any],
+    retrieval_hints: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(assistant_profile),
+        *_collect_urls(retrieval_hints or {}),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.assistant_profile,
+            args.retrieval_hints,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
 def _assistant_profile_recommend(args: argparse.Namespace) -> int:
     try:
         assistant_profile = load_assistant_profile(args.assistant_profile)
@@ -733,10 +758,46 @@ def _assistant_profile_recommend(args: argparse.Namespace) -> int:
         )
     except (AssistantReviewError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=True)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_assistant_profile_recommendation_report(
+            report,
+            args,
+            assistant_profile,
+            retrieval_hints,
+        )
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_assistant_profile_recommendation_markdown(report))
     _json_dump(report)
     return 0 if report["ok"] else 1
+
+
+def _sanitize_assistant_test_plan_review_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    assistant_test_plan: dict[str, Any],
+    assistant_profile: dict[str, Any] | None,
+    retrieval_hints: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(assistant_test_plan),
+        *_collect_urls(assistant_profile or {}),
+        *_collect_urls(retrieval_hints or {}),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.test_plan,
+            args.assistant_profile,
+            args.retrieval_hints,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
 
 
 def _assistant_test_plan(args: argparse.Namespace) -> int:
@@ -756,6 +817,15 @@ def _assistant_test_plan(args: argparse.Namespace) -> int:
         )
     except (AssistantReviewError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=True)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_assistant_test_plan_review_report(
+            report,
+            args,
+            assistant_test_plan,
+            assistant_profile,
+            retrieval_hints,
+        )
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_assistant_test_plan_review_markdown(report))
     _json_dump(report)
@@ -1473,6 +1543,7 @@ def build_parser() -> argparse.ArgumentParser:
     assistant_profile_recommend.add_argument("--retrieval-hints", help="Optional retrieval_hints.json")
     assistant_profile_recommend.add_argument("--report-json", help="Optional JSON report output path")
     assistant_profile_recommend.add_argument("--report-md", help="Optional Markdown report output path")
+    assistant_profile_recommend.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     assistant_profile_recommend.set_defaults(func=_assistant_profile_recommend)
 
     assistant_test_plan = sub.add_parser(
@@ -1484,6 +1555,7 @@ def build_parser() -> argparse.ArgumentParser:
     assistant_test_plan.add_argument("--retrieval-hints", help="Optional retrieval_hints.json")
     assistant_test_plan.add_argument("--report-json", help="Optional JSON report output path")
     assistant_test_plan.add_argument("--report-md", help="Optional Markdown report output path")
+    assistant_test_plan.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     assistant_test_plan.set_defaults(func=_assistant_test_plan)
 
     rewrite = sub.add_parser(

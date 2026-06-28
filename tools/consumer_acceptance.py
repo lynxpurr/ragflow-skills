@@ -2575,6 +2575,7 @@ raise SystemExit(code)
             produced.append(path)
     assistant_profile_recommendation_json = work_root / "assistant_profile_recommendation.json"
     assistant_profile_recommendation_md = work_root / "assistant_profile_recommendation.md"
+    assistant_profile_recommendation_redaction = work_root / "assistant_profile_recommendation_redaction.json"
     assistant_profile_recommendation = _run_command(
         [
             python_executable,
@@ -2589,6 +2590,8 @@ raise SystemExit(code)
             str(assistant_profile_recommendation_json),
             "--report-md",
             str(assistant_profile_recommendation_md),
+            "--redaction-report",
+            str(assistant_profile_recommendation_redaction),
         ],
         cwd=work_root,
         env=env,
@@ -2599,11 +2602,17 @@ raise SystemExit(code)
         assistant_profile_recommendation,
         required_output='"schema": "ragflow_assistant_profile_recommendation_v1"',
     )
-    for path in (assistant_profile_recommendation_json, assistant_profile_recommendation_md):
+    _record_file_check(checks, "query assistant-profile redaction", assistant_profile_recommendation_redaction)
+    for path in (
+        assistant_profile_recommendation_json,
+        assistant_profile_recommendation_md,
+        assistant_profile_recommendation_redaction,
+    ):
         if path.exists():
             produced.append(path)
     assistant_test_plan_review_json = work_root / "assistant_test_plan_review.json"
     assistant_test_plan_review_md = work_root / "assistant_test_plan_review.md"
+    assistant_test_plan_review_redaction = work_root / "assistant_test_plan_review_redaction.json"
     assistant_test_plan_review = _run_command(
         [
             python_executable,
@@ -2619,6 +2628,8 @@ raise SystemExit(code)
             str(assistant_test_plan_review_json),
             "--report-md",
             str(assistant_test_plan_review_md),
+            "--redaction-report",
+            str(assistant_test_plan_review_redaction),
         ],
         cwd=work_root,
         env=env,
@@ -2629,7 +2640,12 @@ raise SystemExit(code)
         assistant_test_plan_review,
         required_output='"schema": "ragflow_assistant_test_plan_review_v1"',
     )
-    for path in (assistant_test_plan_review_json, assistant_test_plan_review_md):
+    _record_file_check(checks, "query assistant-test-plan redaction", assistant_test_plan_review_redaction)
+    for path in (
+        assistant_test_plan_review_json,
+        assistant_test_plan_review_md,
+        assistant_test_plan_review_redaction,
+    ):
         if path.exists():
             produced.append(path)
 

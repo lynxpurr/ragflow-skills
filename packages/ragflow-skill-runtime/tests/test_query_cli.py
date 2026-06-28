@@ -1825,12 +1825,20 @@ class QueryCliTests(unittest.TestCase):
             retrieval_hints = root / "retrieval_hints.json"
             report_json = root / "assistant_profile_recommendation.json"
             report_md = root / "assistant_profile_recommendation.md"
+            redaction_json = root / "assistant_profile_recommendation_redaction.json"
+            private_host = ".".join(("192", "168", "21", "55"))
+            fake_token = "fake-assistant-profile-token"
+            fake_key = "fake-assistant-profile-key"
+            home_path = str(Path.home() / ".ragflow" / "assistant-profile.local.json")
             assistant_profile.write_text(
                 json.dumps(
                     {
                         "schema": "ragflow_assistant_profile_v1",
-                        "profile_id": "neutral-assistant-review",
-                        "status": "review_required",
+                        "profile_id": (
+                            f"neutral-assistant-review http://{private_host}:9380/profile?token={fake_token} "
+                            f"api_key={fake_key}"
+                        ),
+                        "status": f"review_required {home_path}",
                         "retrieval": {
                             "top_k": 5,
                             "similarity_threshold": 0.2,
@@ -1879,12 +1887,25 @@ class QueryCliTests(unittest.TestCase):
                         str(report_json),
                         "--report-md",
                         str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
                     ]
                 )
             payload = json.loads(stdout.getvalue())
-            file_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            report_text = report_json.read_text(encoding="utf-8")
+            file_payload = json.loads(report_text)
             markdown = report_md.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
 
+        combined = "\n".join(
+            [
+                json.dumps(payload, ensure_ascii=False),
+                report_text,
+                markdown,
+                redaction_text,
+            ]
+        )
         self.assertEqual(code, 0)
         self.assertEqual(payload["schema"], "ragflow_assistant_profile_recommendation_v1")
         self.assertEqual(payload["status"], "PASS")
@@ -1893,7 +1914,19 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(payload["recommended_settings"]["top_k"], 8)
         self.assertEqual(payload["recommended_settings"]["bm25_weight"], 0.3)
         self.assertEqual(file_payload["schema"], "ragflow_assistant_profile_recommendation_v1")
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["config_path"], 1)
         self.assertIn("RAGFlow Assistant Profile Recommendation", markdown)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
+        self.assertNotIn(str(assistant_profile), combined)
+        self.assertNotIn(str(retrieval_hints), combined)
 
     def test_assistant_test_plan_command_writes_reports(self) -> None:
         module = load_query_module()
@@ -1904,6 +1937,11 @@ class QueryCliTests(unittest.TestCase):
             test_plan = root / "assistant_test_plan.json"
             report_json = root / "assistant_test_plan_review.json"
             report_md = root / "assistant_test_plan_review.md"
+            redaction_json = root / "assistant_test_plan_review_redaction.json"
+            private_host = ".".join(("10", "44", "55", "66"))
+            fake_token = "fake-assistant-test-plan-token"
+            fake_key = "fake-assistant-test-plan-key"
+            home_path = str(Path.home() / ".ragflow" / "assistant-test-plan.local.json")
             assistant_profile.write_text(
                 json.dumps(
                     {
@@ -1948,8 +1986,9 @@ class QueryCliTests(unittest.TestCase):
                             {
                                 "id": "summary-001",
                                 "stage": "summary",
-                                "question": "Summarize the evidence.",
-                                "expected_behavior": "answer from cited retrieved evidence",
+                                "question": f"Summarize the evidence from http://{private_host}:9380/kb?token={fake_token}.",
+                                "expected_behavior": f"answer from cited retrieved evidence; api_key={fake_key}",
+                                "source_document": home_path,
                             },
                             {
                                 "id": "numeric-001",
@@ -2002,12 +2041,25 @@ class QueryCliTests(unittest.TestCase):
                         str(report_json),
                         "--report-md",
                         str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
                     ]
                 )
             payload = json.loads(stdout.getvalue())
-            file_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            report_text = report_json.read_text(encoding="utf-8")
+            file_payload = json.loads(report_text)
             markdown = report_md.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
 
+        combined = "\n".join(
+            [
+                json.dumps(payload, ensure_ascii=False),
+                report_text,
+                markdown,
+                redaction_text,
+            ]
+        )
         self.assertEqual(code, 0)
         self.assertEqual(payload["schema"], "ragflow_assistant_test_plan_review_v1")
         self.assertEqual(payload["status"], "PASS")
@@ -2015,7 +2067,20 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(payload["execution"]["status"], "not_run")
         self.assertEqual(payload["summary"]["missing_expected_stage_count"], 0)
         self.assertEqual(file_payload["schema"], "ragflow_assistant_test_plan_review_v1")
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["config_path"], 1)
         self.assertIn("RAGFlow Assistant Test Plan Review", markdown)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
+        self.assertNotIn(str(test_plan), combined)
+        self.assertNotIn(str(assistant_profile), combined)
+        self.assertNotIn(str(retrieval_hints), combined)
 
     def test_route_commands_can_use_centroid_tie_breaker(self) -> None:
         module = load_query_module()

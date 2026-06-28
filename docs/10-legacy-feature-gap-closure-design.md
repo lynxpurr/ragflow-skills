@@ -998,7 +998,8 @@ probes, adapter request-shape probes, `ragflow-query endpoint-report`,
 `ragflow-query endpoint-report`, `ragflow-query evaluate-answer`, and
 `ragflow-query diagnose-result`, `ragflow-query pollution-report`, and
 `ragflow-query rerank-ab`, `ragflow-query cross-language-ab`, `ragflow-query fusion`, and
-`ragflow-query fusion-test`, and `ragflow-query route-activation-check`.
+`ragflow-query fusion-test`, `ragflow-query route-activation-check`,
+`ragflow-query assistant-profile recommend`, and `ragflow-query assistant-test-plan`.
 Release hygiene now emits
 `ragflow_generated_report_safety_check_v1`, scanning generated reports and examples for raw
 sensitive literals and requiring valid redaction sidecars when redaction placeholders are

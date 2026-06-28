@@ -100,6 +100,8 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("query rewrite help", check_names)
         self.assertIn("query rewrite report", check_names)
         self.assertIn("query endpoint-report", check_names)
+        self.assertIn("query assistant-profile redaction", check_names)
+        self.assertIn("query assistant-test-plan redaction", check_names)
         self.assertIn("query answer evaluation", check_names)
         self.assertIn("query answer evaluation redaction", check_names)
         self.assertIn("query diagnostic redaction", check_names)
@@ -114,6 +116,14 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("live build skipped", check_names)
         self.assertTrue(
             any(path.endswith("query_answer_eval_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("assistant_profile_recommendation_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("assistant_test_plan_review_redaction.json") for path in payload["produced_artifacts"]),
             payload["produced_artifacts"],
         )
         self.assertTrue(
