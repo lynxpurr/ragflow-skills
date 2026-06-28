@@ -100,6 +100,7 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("profile api payload filters internal metadata", check_names)
         self.assertIn("kb-build dry-run", check_names)
         self.assertIn("kb-build model-providers probe", check_names)
+        self.assertIn("kb-build inspect-handoff redaction", check_names)
         self.assertIn("kb-build metadata lint redaction", check_names)
         self.assertIn("kb-build metadata merge redaction", check_names)
         self.assertIn("kb-build tagset lint redaction", check_names)
@@ -112,10 +113,21 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("kb-build optimize plan-only redaction", check_names)
         self.assertIn("kb-build optimize cleanup-plan redaction", check_names)
         self.assertIn("kb-build optimize summarize redaction", check_names)
+        self.assertIn("kb-build benchmark import redaction", check_names)
+        self.assertIn("kb-build benchmark preflight redaction", check_names)
+        self.assertIn("kb-build benchmark sample redaction", check_names)
+        self.assertIn("kb-build benchmark summarize redaction", check_names)
+        self.assertIn("kb-build benchmark gate redaction", check_names)
+        self.assertIn("kb-build benchmark trend redaction", check_names)
+        self.assertIn("kb-build benchmark delta redaction", check_names)
+        self.assertIn("kb-build benchmark suggest redaction", check_names)
+        self.assertIn("kb-build validate redaction", check_names)
         self.assertIn("kb-build append help", check_names)
         self.assertIn("kb-build cleanup help", check_names)
         self.assertIn("kb-build diagnose help", check_names)
+        self.assertIn("kb-build diagnose redaction", check_names)
         self.assertIn("kb-build probe help", check_names)
+        self.assertIn("kb-build probe redaction", check_names)
         self.assertIn("query host-assisted help", check_names)
         self.assertIn("query rewrite help", check_names)
         self.assertIn("query rewrite report", check_names)
@@ -197,6 +209,90 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("best_profile_report_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("profile_lint_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("profile_recommendation_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("profile_experiment_matrix_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("handoff_inspection_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("benchmark_validation_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("diagnostic_report_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("probe_report_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("benchmark_chunk_snapshot_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("qa_generate_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("qa_validate_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("qa_evidence_map_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("segment_metadata_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("suppression_report_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("benchmark_import_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("benchmark_preflight_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("benchmark_sample_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("benchmark_summary_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("benchmark_gate_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("benchmark_trend_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("benchmark_delta_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("benchmark_suggest_redaction.json") for path in payload["produced_artifacts"]),
             payload["produced_artifacts"],
         )
         self.assertTrue(

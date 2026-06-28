@@ -333,6 +333,36 @@ def _model_provider_server():
         server.server_close()
 
 
+class _DiagnosticProbeHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path.startswith("/api/v1/datasets"):
+            body = json.dumps({"data": {"datasets": [{"id": "short", "name": "kb:consumer-diagnostic"}]}}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, _format: str, *args: object) -> None:
+        return
+
+
+@contextlib.contextmanager
+def _diagnostic_probe_server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _DiagnosticProbeHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def _write_reports(payload: dict[str, Any], reports_dir: Path) -> dict[str, str]:
     reports_dir.mkdir(parents=True, exist_ok=True)
     report_json = reports_dir / "consumer-acceptance-report.json"
@@ -2031,7 +2061,9 @@ def _run_no_network_checks(
         if path.exists():
             produced.append(path)
 
+    inspect_handoff_json = work_root / "handoff_inspection.json"
     inspect_handoff_report = work_root / "handoff_inspection.md"
+    inspect_handoff_redaction = work_root / "handoff_inspection_redaction.json"
     inspect_handoff_result = _run_command(
         [
             python_executable,
@@ -2039,18 +2071,33 @@ def _run_no_network_checks(
             "inspect-handoff",
             "--handoff",
             str(handoff_dir),
+            "--report-json",
+            str(inspect_handoff_json),
             "--report-md",
             str(inspect_handoff_report),
+            "--redaction-report",
+            str(inspect_handoff_redaction),
             "--json",
         ],
         cwd=work_root,
         env=env,
     )
     _record_command_check(checks, "kb-build inspect rich handoff", inspect_handoff_result, required_output='"schema": "ragflow_handoff_inspection_v1"')
-    if inspect_handoff_report.exists():
-        produced.append(inspect_handoff_report)
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build inspect-handoff redaction",
+        inspect_handoff_redaction,
+        result=inspect_handoff_result,
+        checked_paths=(inspect_handoff_json, inspect_handoff_report),
+    )
+    for path in (inspect_handoff_json, inspect_handoff_report, inspect_handoff_redaction):
+        if path.exists():
+            produced.append(path)
 
     profile_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "profile.py")
+    profile_lint_json = work_root / "profile_lint.json"
+    profile_lint_md = work_root / "profile_lint.md"
+    profile_lint_redaction = work_root / "profile_lint_redaction.json"
     profile_lint_result = _run_command(
         [
             python_executable,
@@ -2058,8 +2105,12 @@ def _run_no_network_checks(
             "lint",
             "--profile",
             str(profile),
+            "--report-json",
+            str(profile_lint_json),
             "--report-md",
-            str(work_root / "profile_lint.md"),
+            str(profile_lint_md),
+            "--redaction-report",
+            str(profile_lint_redaction),
         ],
         cwd=work_root,
         env=env,
@@ -2070,11 +2121,20 @@ def _run_no_network_checks(
         profile_lint_result,
         required_output='"schema": "ragflow_profile_lint_report_v1"',
     )
-    profile_lint_md = work_root / "profile_lint.md"
-    if profile_lint_md.exists():
-        produced.append(profile_lint_md)
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build profile lint redaction",
+        profile_lint_redaction,
+        result=profile_lint_result,
+        checked_paths=(profile_lint_json, profile_lint_md),
+    )
+    for path in (profile_lint_json, profile_lint_md, profile_lint_redaction):
+        if path.exists():
+            produced.append(path)
 
     recommended_profile = work_root / "recommended_profile.json"
+    profile_recommend_json = work_root / "profile_recommendation.json"
+    profile_recommend_redaction = work_root / "profile_recommendation_redaction.json"
     profile_recommend_result = _run_command(
         [
             python_executable,
@@ -2086,6 +2146,10 @@ def _run_no_network_checks(
             "manual",
             "--output",
             str(recommended_profile),
+            "--report-json",
+            str(profile_recommend_json),
+            "--redaction-report",
+            str(profile_recommend_redaction),
         ],
         cwd=work_root,
         env=env,
@@ -2096,11 +2160,21 @@ def _run_no_network_checks(
         profile_recommend_result,
         required_output='"schema": "ragflow_profile_recommendation_v1"',
     )
-    if recommended_profile.exists():
-        produced.append(recommended_profile)
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build profile recommend redaction",
+        profile_recommend_redaction,
+        result=profile_recommend_result,
+        checked_paths=(profile_recommend_json,),
+    )
+    for path in (recommended_profile, profile_recommend_json, profile_recommend_redaction):
+        if path.exists():
+            produced.append(path)
 
     profile_experiment_candidate_set = work_root / "candidate_profile_set.json"
+    profile_experiment_json = work_root / "profile_experiment_matrix.json"
     profile_experiment_md = work_root / "profile_experiment_matrix.md"
+    profile_experiment_redaction = work_root / "profile_experiment_matrix_redaction.json"
     profile_experiment_result = _run_command(
         [
             python_executable,
@@ -2116,8 +2190,12 @@ def _run_no_network_checks(
             "retrieval.top_k=3,5",
             "--candidate-set",
             str(profile_experiment_candidate_set),
+            "--report-json",
+            str(profile_experiment_json),
             "--report-md",
             str(profile_experiment_md),
+            "--redaction-report",
+            str(profile_experiment_redaction),
         ],
         cwd=work_root,
         env=env,
@@ -2128,10 +2206,21 @@ def _run_no_network_checks(
         profile_experiment_result,
         required_output='"schema": "ragflow_enrichment_experiment_report_v1"',
     )
-    if profile_experiment_candidate_set.exists():
-        produced.append(profile_experiment_candidate_set)
-    if profile_experiment_md.exists():
-        produced.append(profile_experiment_md)
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build profile experiment redaction",
+        profile_experiment_redaction,
+        result=profile_experiment_result,
+        checked_paths=(profile_experiment_json, profile_experiment_md),
+    )
+    for path in (
+        profile_experiment_candidate_set,
+        profile_experiment_json,
+        profile_experiment_md,
+        profile_experiment_redaction,
+    ):
+        if path.exists():
+            produced.append(path)
 
     validate_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "validate.py")
     benchmark_manifest = work_root / "benchmark_kb_manifest.json"
@@ -2143,12 +2232,15 @@ def _run_no_network_checks(
     benchmark_chunk_input = work_root / "benchmark_chunks.json"
     benchmark_chunk_snapshot = work_root / "benchmark_chunk_snapshot.json"
     benchmark_chunk_snapshot_md = work_root / "benchmark_chunk_snapshot.md"
+    benchmark_chunk_snapshot_redaction = work_root / "benchmark_chunk_snapshot_redaction.json"
     benchmark_report_json = work_root / "benchmark_report.json"
     benchmark_report_md = work_root / "benchmark_report.md"
+    benchmark_validation_redaction = work_root / "benchmark_validation_redaction.json"
     baseline_benchmark_report_json = work_root / "baseline_benchmark_report.json"
     suppression_input_json = work_root / "suppression_input.json"
     suppression_report_json = work_root / "suppression_report.json"
     suppression_report_md = work_root / "suppression_report.md"
+    suppression_report_redaction = work_root / "suppression_report_redaction.json"
     benchmark_manifest.write_text(
         json.dumps(
             {
@@ -2309,6 +2401,8 @@ def _run_no_network_checks(
             str(benchmark_chunk_snapshot),
             "--report-md",
             str(benchmark_chunk_snapshot_md),
+            "--redaction-report",
+            str(benchmark_chunk_snapshot_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2319,6 +2413,13 @@ def _run_no_network_checks(
         "kb-build snapshot-chunks",
         benchmark_snapshot_result,
         required_output='"schema": "ragflow_chunk_snapshot_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build snapshot-chunks redaction",
+        benchmark_chunk_snapshot_redaction,
+        result=benchmark_snapshot_result,
+        checked_paths=(benchmark_chunk_snapshot_md,),
     )
     benchmark_runner = work_root / "run_benchmark_validate.py"
     benchmark_runner.write_text(
@@ -2361,6 +2462,7 @@ code = module.main([
     "--metadata", {str(metadata_merged)!r},
     "--report-json", {str(benchmark_report_json)!r},
     "--report-md", {str(benchmark_report_md)!r},
+    "--redaction-report", {str(benchmark_validation_redaction)!r},
 ])
 raise SystemExit(code)
 """,
@@ -2373,7 +2475,14 @@ raise SystemExit(code)
         benchmark_result,
         required_output='"benchmark"',
     )
-    for path in (benchmark_report_json, benchmark_report_md):
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build validate redaction",
+        benchmark_validation_redaction,
+        result=benchmark_result,
+        checked_paths=(benchmark_report_json, benchmark_report_md),
+    )
+    for path in (benchmark_report_json, benchmark_report_md, benchmark_validation_redaction):
         if path.exists():
             produced.append(path)
 
@@ -2390,6 +2499,8 @@ raise SystemExit(code)
             str(suppression_report_json),
             "--report-md",
             str(suppression_report_md),
+            "--redaction-report",
+            str(suppression_report_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2401,7 +2512,14 @@ raise SystemExit(code)
         suppression_result,
         required_output='"schema": "ragflow_suppression_report_v1"',
     )
-    for path in (suppression_report_json, suppression_report_md):
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build suppression-report redaction",
+        suppression_report_redaction,
+        result=suppression_result,
+        checked_paths=(suppression_report_json, suppression_report_md),
+    )
+    for path in (suppression_report_json, suppression_report_md, suppression_report_redaction):
         if path.exists():
             produced.append(path)
 
@@ -2415,12 +2533,24 @@ raise SystemExit(code)
     benchmark_trend_md = work_root / "benchmark_trend.md"
     benchmark_delta_md = work_root / "benchmark_delta.md"
     benchmark_suggest_md = work_root / "benchmark_suggest.md"
+    benchmark_import_redaction = work_root / "benchmark_import_redaction.json"
+    benchmark_preflight_redaction = work_root / "benchmark_preflight_redaction.json"
+    benchmark_sample_redaction = work_root / "benchmark_sample_redaction.json"
+    benchmark_summary_redaction = work_root / "benchmark_summary_redaction.json"
+    benchmark_gate_redaction = work_root / "benchmark_gate_redaction.json"
+    benchmark_trend_redaction = work_root / "benchmark_trend_redaction.json"
+    benchmark_delta_redaction = work_root / "benchmark_delta_redaction.json"
+    benchmark_suggest_redaction = work_root / "benchmark_suggest_redaction.json"
     qa_generated = work_root / "qa.generated.json"
     qa_generate_md = work_root / "qa_generate.md"
     qa_validate_md = work_root / "qa_validate.md"
     qa_evidence_map = work_root / "qa_evidence_map.json"
     qa_evidence_map_md = work_root / "qa_evidence_map.md"
     segment_metadata_md = work_root / "segment_metadata.md"
+    qa_generate_redaction = work_root / "qa_generate_redaction.json"
+    qa_validate_redaction = work_root / "qa_validate_redaction.json"
+    qa_evidence_map_redaction = work_root / "qa_evidence_map_redaction.json"
+    segment_metadata_redaction = work_root / "segment_metadata_redaction.json"
     optimization_plan = work_root / "optimization_plan.json"
     optimization_plan_md = work_root / "optimization_plan.md"
     optimization_plan_redaction = work_root / "optimization_plan_redaction.json"
@@ -2446,6 +2576,8 @@ raise SystemExit(code)
             str(benchmark_dir),
             "--report-md",
             str(benchmark_import_md),
+            "--redaction-report",
+            str(benchmark_import_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2456,6 +2588,13 @@ raise SystemExit(code)
         "kb-build benchmark import",
         benchmark_import_result,
         required_output='"schema": "ragflow_benchmark_import_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build benchmark import redaction",
+        benchmark_import_redaction,
+        result=benchmark_import_result,
+        checked_paths=(benchmark_import_md,),
     )
     qa_generate_result = _run_command(
         [
@@ -2473,6 +2612,8 @@ raise SystemExit(code)
             "20",
             "--report-md",
             str(qa_generate_md),
+            "--redaction-report",
+            str(qa_generate_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2483,6 +2624,13 @@ raise SystemExit(code)
         "kb-build qa generate",
         qa_generate_result,
         required_output='"schema": "ragflow_grounded_qa_generate_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build qa generate redaction",
+        qa_generate_redaction,
+        result=qa_generate_result,
+        checked_paths=(qa_generate_md,),
     )
     qa_validate_result = _run_command(
         [
@@ -2496,6 +2644,8 @@ raise SystemExit(code)
             str(input_dir),
             "--report-md",
             str(qa_validate_md),
+            "--redaction-report",
+            str(qa_validate_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2506,6 +2656,13 @@ raise SystemExit(code)
         "kb-build qa validate",
         qa_validate_result,
         required_output='"schema": "ragflow_grounded_qa_validate_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build qa validate redaction",
+        qa_validate_redaction,
+        result=qa_validate_result,
+        checked_paths=(qa_validate_md,),
     )
     qa_map_result = _run_command(
         [
@@ -2521,6 +2678,8 @@ raise SystemExit(code)
             str(qa_evidence_map),
             "--report-md",
             str(qa_evidence_map_md),
+            "--redaction-report",
+            str(qa_evidence_map_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2531,6 +2690,13 @@ raise SystemExit(code)
         "kb-build qa map-evidence",
         qa_map_result,
         required_output='"schema": "ragflow_grounded_qa_evidence_map_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build qa map-evidence redaction",
+        qa_evidence_map_redaction,
+        result=qa_map_result,
+        checked_paths=(qa_evidence_map_md,),
     )
     segment_metadata_result = _run_command(
         [
@@ -2546,6 +2712,8 @@ raise SystemExit(code)
             str(segment_metadata_plan),
             "--report-md",
             str(segment_metadata_md),
+            "--redaction-report",
+            str(segment_metadata_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2556,6 +2724,13 @@ raise SystemExit(code)
         "kb-build segment-metadata report",
         segment_metadata_result,
         required_output='"schema": "ragflow_segment_metadata_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build segment-metadata redaction",
+        segment_metadata_redaction,
+        result=segment_metadata_result,
+        checked_paths=(segment_metadata_md,),
     )
     optimize_plan_result = _run_command(
         [
@@ -2689,6 +2864,8 @@ raise SystemExit(code)
             str(benchmark_gate),
             "--report-md",
             str(benchmark_preflight_md),
+            "--redaction-report",
+            str(benchmark_preflight_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2699,6 +2876,13 @@ raise SystemExit(code)
         "kb-build benchmark preflight",
         benchmark_preflight_result,
         required_output='"schema": "ragflow_benchmark_preflight_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build benchmark preflight redaction",
+        benchmark_preflight_redaction,
+        result=benchmark_preflight_result,
+        checked_paths=(benchmark_preflight_md,),
     )
     benchmark_sample_result = _run_command(
         [
@@ -2716,6 +2900,8 @@ raise SystemExit(code)
             "7",
             "--report-md",
             str(benchmark_sample_md),
+            "--redaction-report",
+            str(benchmark_sample_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2727,6 +2913,13 @@ raise SystemExit(code)
         benchmark_sample_result,
         required_output='"schema": "ragflow_benchmark_sample_report_v1"',
     )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build benchmark sample redaction",
+        benchmark_sample_redaction,
+        result=benchmark_sample_result,
+        checked_paths=(benchmark_sample_md,),
+    )
     benchmark_summary_result = _run_command(
         [
             python_executable,
@@ -2737,6 +2930,8 @@ raise SystemExit(code)
             str(benchmark_report_json),
             "--report-md",
             str(benchmark_summary_md),
+            "--redaction-report",
+            str(benchmark_summary_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2747,6 +2942,13 @@ raise SystemExit(code)
         "kb-build benchmark summarize",
         benchmark_summary_result,
         required_output='"schema": "ragflow_benchmark_summary_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build benchmark summarize redaction",
+        benchmark_summary_redaction,
+        result=benchmark_summary_result,
+        checked_paths=(benchmark_summary_md,),
     )
     benchmark_gate_result = _run_command(
         [
@@ -2760,6 +2962,8 @@ raise SystemExit(code)
             str(benchmark_gate),
             "--report-md",
             str(benchmark_gate_md),
+            "--redaction-report",
+            str(benchmark_gate_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2770,6 +2974,13 @@ raise SystemExit(code)
         "kb-build benchmark gate",
         benchmark_gate_result,
         required_output='"schema": "ragflow_benchmark_gate_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build benchmark gate redaction",
+        benchmark_gate_redaction,
+        result=benchmark_gate_result,
+        checked_paths=(benchmark_gate_md,),
     )
     benchmark_trend_result = _run_command(
         [
@@ -2785,6 +2996,8 @@ raise SystemExit(code)
             str(benchmark_gate),
             "--report-md",
             str(benchmark_trend_md),
+            "--redaction-report",
+            str(benchmark_trend_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2795,6 +3008,13 @@ raise SystemExit(code)
         "kb-build benchmark trend",
         benchmark_trend_result,
         required_output='"schema": "ragflow_benchmark_trend_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build benchmark trend redaction",
+        benchmark_trend_redaction,
+        result=benchmark_trend_result,
+        checked_paths=(benchmark_trend_md,),
     )
     benchmark_delta_result = _run_command(
         [
@@ -2808,6 +3028,8 @@ raise SystemExit(code)
             str(baseline_benchmark_report_json),
             "--report-md",
             str(benchmark_delta_md),
+            "--redaction-report",
+            str(benchmark_delta_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2818,6 +3040,13 @@ raise SystemExit(code)
         "kb-build benchmark delta",
         benchmark_delta_result,
         required_output='"schema": "ragflow_benchmark_delta_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build benchmark delta redaction",
+        benchmark_delta_redaction,
+        result=benchmark_delta_result,
+        checked_paths=(benchmark_delta_md,),
     )
     benchmark_suggest_result = _run_command(
         [
@@ -2837,6 +3066,8 @@ raise SystemExit(code)
             "0.25",
             "--report-md",
             str(benchmark_suggest_md),
+            "--redaction-report",
+            str(benchmark_suggest_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2847,6 +3078,13 @@ raise SystemExit(code)
         "kb-build benchmark suggest",
         benchmark_suggest_result,
         required_output='"schema": "ragflow_benchmark_retrieval_suggestion_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build benchmark suggest redaction",
+        benchmark_suggest_redaction,
+        result=benchmark_suggest_result,
+        checked_paths=(benchmark_suggest_md,),
     )
     for path in (
         benchmark_dir / "manifest.json",
@@ -2859,13 +3097,19 @@ raise SystemExit(code)
         benchmark_sample_dir / "qa.json",
         benchmark_chunk_snapshot,
         benchmark_chunk_snapshot_md,
+        benchmark_chunk_snapshot_redaction,
         benchmark_import_md,
+        benchmark_import_redaction,
         qa_generated,
         qa_generate_md,
+        qa_generate_redaction,
         qa_validate_md,
+        qa_validate_redaction,
         qa_evidence_map,
         qa_evidence_map_md,
+        qa_evidence_map_redaction,
         segment_metadata_md,
+        segment_metadata_redaction,
         optimization_plan,
         optimization_plan_md,
         optimization_plan_redaction,
@@ -2876,12 +3120,19 @@ raise SystemExit(code)
         best_profile_report_md,
         best_profile_report_redaction,
         benchmark_preflight_md,
+        benchmark_preflight_redaction,
         benchmark_sample_md,
+        benchmark_sample_redaction,
         benchmark_summary_md,
+        benchmark_summary_redaction,
         benchmark_gate_md,
+        benchmark_gate_redaction,
         benchmark_trend_md,
+        benchmark_trend_redaction,
         benchmark_delta_md,
+        benchmark_delta_redaction,
         benchmark_suggest_md,
+        benchmark_suggest_redaction,
     ):
         if path.exists():
             produced.append(path)
@@ -2912,6 +3163,56 @@ raise SystemExit(code)
         diagnose_help,
         required_output="Diagnose a RAGFlow KB manifest",
     )
+    diagnostic_secret = "consumer-diagnostic-secret"
+    diagnostic_host = "diagnostic.internal.local"
+    diagnostic_manifest = work_root / "diagnostic_kb_manifest.json"
+    diagnostic_manifest.write_text(
+        json.dumps(
+            {
+                "version": "0.1",
+                "dataset": {"id": "short", "name": f"kb:http://{diagnostic_host}:9380?token={diagnostic_secret}"},
+                "documents": [{"document_id": "doc-1", "status": "running", "chunk_count": 0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    diagnose_json = work_root / "diagnostic_report.json"
+    diagnose_md = work_root / "diagnostic_report.md"
+    diagnose_redaction = work_root / "diagnostic_report_redaction.json"
+    diagnose_result = _run_command(
+        [
+            python_executable,
+            str(diagnose_script),
+            "--kb-manifest",
+            str(diagnostic_manifest),
+            "--report-json",
+            str(diagnose_json),
+            "--report-md",
+            str(diagnose_md),
+            "--redaction-report",
+            str(diagnose_redaction),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build diagnose redaction report",
+        diagnose_result,
+        required_output='"schema": "ragflow_kb_diagnostic_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build diagnose redaction",
+        diagnose_redaction,
+        result=diagnose_result,
+        checked_paths=(diagnose_json, diagnose_md),
+        forbidden_literals=(diagnostic_secret, diagnostic_host),
+    )
+    for path in (diagnose_json, diagnose_md, diagnose_redaction):
+        if path.exists():
+            produced.append(path)
 
     probe_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "probe.py")
     probe_help = _run_command([python_executable, str(probe_script), "--help"], cwd=work_root, env=env)
@@ -2921,6 +3222,46 @@ raise SystemExit(code)
         probe_help,
         required_output="Probe RAGFlow API compatibility",
     )
+    probe_json = work_root / "probe_report.json"
+    probe_md = work_root / "probe_report.md"
+    probe_redaction = work_root / "probe_report_redaction.json"
+    with _diagnostic_probe_server() as probe_base_url:
+        probe_result = _run_command(
+            [
+                python_executable,
+                str(probe_script),
+                "--base-url",
+                probe_base_url,
+                "--api-key",
+                diagnostic_secret,
+                "--report-json",
+                str(probe_json),
+                "--report-md",
+                str(probe_md),
+                "--redaction-report",
+                str(probe_redaction),
+                "--json",
+            ],
+            cwd=work_root,
+            env=env,
+        )
+    _record_command_check(
+        checks,
+        "kb-build probe redaction report",
+        probe_result,
+        required_output='"schema": "ragflow_kb_diagnostic_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build probe redaction",
+        probe_redaction,
+        result=probe_result,
+        checked_paths=(probe_json, probe_md),
+        forbidden_literals=("127.0.0.1", diagnostic_secret),
+    )
+    for path in (probe_json, probe_md, probe_redaction):
+        if path.exists():
+            produced.append(path)
 
     query_script = _skill_path(extract_dir, "ragflow-query", "scripts", "query.py")
     query_help = _run_command([python_executable, str(query_script), "--help"], cwd=work_root, env=env)

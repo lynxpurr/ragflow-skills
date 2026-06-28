@@ -201,7 +201,12 @@ def _collect_path_like_literals(value: Any) -> list[str]:
             or text.startswith(("~", "."))
             or text.endswith((".json", ".jsonl", ".md", ".yaml", ".yml", ".py", ".toml", ".txt"))
         ):
-            return [text]
+            paths = [text]
+            if "://" not in text:
+                path = Path(text)
+                if str(path.parent) not in {"", ".", "/"}:
+                    paths.append(str(path.parent))
+            return paths
         return []
     if isinstance(value, dict):
         paths: list[str] = []
@@ -214,6 +219,21 @@ def _collect_path_like_literals(value: Any) -> list[str]:
             paths.extend(_collect_path_like_literals(item))
         return paths
     return []
+
+
+def _expand_config_paths(paths: list[str | None]) -> list[str | None]:
+    expanded: list[str | None] = []
+    for raw_path in paths:
+        if not raw_path:
+            continue
+        text = str(raw_path)
+        expanded.append(text)
+        if "://" in text:
+            continue
+        parent = Path(text).parent
+        if str(parent) not in {"", ".", "/"}:
+            expanded.append(str(parent))
+    return expanded
 
 
 def _collect_redaction_context_from_json_paths(paths: list[str | None]) -> tuple[list[str], list[str], list[str]]:
@@ -244,11 +264,15 @@ def _sanitize_governance_report(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     urls = [*_collect_urls(report)]
     config_paths = [
-        *input_paths,
-        *(output_paths or []),
-        getattr(args, "report_json", None),
-        getattr(args, "report_md", None),
-        getattr(args, "redaction_report", None),
+        *_expand_config_paths(input_paths),
+        *_expand_config_paths(output_paths or []),
+        *_expand_config_paths(
+            [
+                getattr(args, "report_json", None),
+                getattr(args, "report_md", None),
+                getattr(args, "redaction_report", None),
+            ]
+        ),
     ]
     sanitized, redaction_report = sanitize_report_payload(
         report,
@@ -355,6 +379,14 @@ def _run_inspect_handoff(args: argparse.Namespace) -> int:
             handoff_root=args.handoff,
             doc_manifest_name=args.manifest_name,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[args.handoff, args.manifest_name, *_collect_path_like_literals(report)],
+                output_paths=[args.report_json, args.report_md, args.redaction_report],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         if args.report_json:
             report_json = Path(args.report_json)
             report_json.parent.mkdir(parents=True, exist_ok=True)
@@ -475,6 +507,23 @@ def _run_tagset_generate_template(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _sanitize_benchmark_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    *,
+    input_paths: list[str | None],
+    context_json_paths: list[str | None] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    context_secrets, context_hosts, context_paths = _collect_redaction_context_from_json_paths(context_json_paths or [])
+    return _sanitize_governance_report(
+        report,
+        args,
+        input_paths=[*input_paths, *context_paths, *_collect_path_like_literals(report)],
+        extra_secret_literals=context_secrets,
+        extra_private_hosts=context_hosts,
+    )
+
+
 def _run_benchmark_import(args: argparse.Namespace) -> int:
     try:
         report = import_benchmark_dataset(
@@ -485,6 +534,14 @@ def _run_benchmark_import(args: argparse.Namespace) -> int:
             name=args.name,
             description=args.description or "",
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.queries, args.qrels, args.qa, args.output],
+                context_json_paths=[args.queries, args.qrels, args.qa],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow Benchmark Import Report"))
         _dump_json(report)
@@ -502,6 +559,14 @@ def _run_snapshot_chunks(args: argparse.Namespace) -> int:
             description=args.description or "",
             include_content=args.include_content,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.input, args.output],
+                context_json_paths=[args.input],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow Chunk Snapshot Report"))
         _dump_json(report)
@@ -520,6 +585,14 @@ def _run_benchmark_preflight(args: argparse.Namespace) -> int:
             chunk_snapshot_path=args.chunk_snapshot,
             gate_config_path=args.gate_config,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.manifest, args.queries, args.qrels, args.qa, args.chunk_snapshot, args.gate_config],
+                context_json_paths=[args.manifest, args.queries, args.qrels, args.qa, args.chunk_snapshot, args.gate_config],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow Benchmark Preflight Report"))
         _dump_json(report)
@@ -543,6 +616,14 @@ def _run_benchmark_sample(args: argparse.Namespace) -> int:
             name=args.name,
             description=args.description or "",
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.manifest, args.queries, args.qrels, args.qa, args.output],
+                context_json_paths=[args.manifest, args.queries, args.qrels, args.qa],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow Benchmark Sample Report"))
         _dump_json(report)
@@ -554,6 +635,14 @@ def _run_benchmark_sample(args: argparse.Namespace) -> int:
 def _run_benchmark_summarize(args: argparse.Namespace) -> int:
     try:
         report = summarize_benchmark_report(args.report)
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.report],
+                context_json_paths=[args.report],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow Benchmark Summary Report"))
         _dump_json(report)
@@ -569,6 +658,14 @@ def _run_benchmark_gate(args: argparse.Namespace) -> int:
             gate_config_path=args.gate_config,
             baseline_report_path=args.baseline_report,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.report, args.gate_config, args.baseline_report],
+                context_json_paths=[args.report, args.gate_config, args.baseline_report],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow Benchmark Gate Report"))
         _dump_json(report)
@@ -584,6 +681,14 @@ def _run_benchmark_trend(args: argparse.Namespace) -> int:
             baseline_report_path=args.baseline_report,
             gate_config_path=args.gate_config,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.report, args.baseline_report, args.gate_config],
+                context_json_paths=[args.report, args.baseline_report, args.gate_config],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow Benchmark Trend Report"))
         _dump_json(report)
@@ -598,6 +703,14 @@ def _run_benchmark_delta(args: argparse.Namespace) -> int:
             current_report_path=args.report,
             baseline_report_path=args.baseline_report,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.report, args.baseline_report],
+                context_json_paths=[args.report, args.baseline_report],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow Benchmark Delta Report"))
         _dump_json(report)
@@ -615,6 +728,14 @@ def _run_benchmark_suggest(args: argparse.Namespace) -> int:
             current_top_k=args.current_top_k,
             current_similarity_threshold=args.current_similarity_threshold,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.report, args.baseline_report, args.gate_config],
+                context_json_paths=[args.report, args.baseline_report, args.gate_config],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow Benchmark Retrieval Suggestions"))
         _dump_json(report)
@@ -630,6 +751,14 @@ def _run_suppression_report(args: argparse.Namespace) -> int:
             tagset_path=args.tagset,
             max_candidates=args.max_candidates,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.report, args.tagset],
+                context_json_paths=[args.report, args.tagset],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_suppression_report_markdown(report))
         _dump_json(report)
@@ -646,6 +775,14 @@ def _run_qa_validate(args: argparse.Namespace) -> int:
             source_dir=args.source_dir,
             require_answer=not args.allow_missing_answer,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.qa, args.sources, args.source_dir],
+                context_json_paths=[args.qa, args.sources],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow Grounded QA Validate Report"))
         _dump_json(report)
@@ -666,6 +803,14 @@ def _run_qa_generate(args: argparse.Namespace) -> int:
             min_span_chars=args.min_span_chars,
             max_span_chars=args.max_span_chars,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.sources, args.source_dir, args.output],
+                context_json_paths=[args.sources],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow Grounded QA Generate Report"))
         _dump_json(report)
@@ -681,6 +826,14 @@ def _run_qa_map_evidence(args: argparse.Namespace) -> int:
             chunk_snapshot_path=args.chunk_snapshot,
             output_path=args.output,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.qa, args.chunk_snapshot, args.output],
+                context_json_paths=[args.qa, args.chunk_snapshot],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow QA Evidence Map Report"))
         _dump_json(report)
@@ -696,6 +849,14 @@ def _run_segment_metadata_report(args: argparse.Namespace) -> int:
             metadata_path=args.metadata,
             segmentation_plan_path=args.segmentation_plan,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.chunk_snapshot, args.metadata, args.segmentation_plan],
+                context_json_paths=[args.chunk_snapshot, args.metadata, args.segmentation_plan],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_governance_markdown(report, title="RAGFlow Segment Metadata Report"))
         _dump_json(report)
@@ -1058,6 +1219,7 @@ def build_inspect_handoff_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest-name", default="doc_manifest.json", help="Doc manifest name under the handoff directory")
     parser.add_argument("--report-json", help="Optional JSON inspection report path")
     parser.add_argument("--report-md", help="Optional Markdown inspection report path")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     return parser
 
@@ -1178,6 +1340,7 @@ def build_snapshot_chunks_parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-content", action="store_true", help="Include full chunk content in the snapshot")
     parser.add_argument("--report-json", help="Optional snapshot report JSON path")
     parser.add_argument("--report-md", help="Optional snapshot report Markdown path")
+    parser.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     parser.set_defaults(func=_run_snapshot_chunks)
     return parser
@@ -1196,6 +1359,7 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     import_cmd.add_argument("--description", help="Optional benchmark description")
     import_cmd.add_argument("--report-json", help="Optional import report JSON path")
     import_cmd.add_argument("--report-md", help="Optional import report Markdown path")
+    import_cmd.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     import_cmd.add_argument("--json", action="store_true", help="Emit JSON errors")
     import_cmd.set_defaults(func=_run_benchmark_import)
 
@@ -1208,6 +1372,7 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     preflight.add_argument("--gate-config", help="Optional benchmark gate threshold JSON")
     preflight.add_argument("--report-json", help="Optional preflight report JSON path")
     preflight.add_argument("--report-md", help="Optional preflight report Markdown path")
+    preflight.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     preflight.add_argument("--json", action="store_true", help="Emit JSON errors")
     preflight.set_defaults(func=_run_benchmark_preflight)
 
@@ -1225,6 +1390,7 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     sample.add_argument("--description", help="Optional benchmark sample description")
     sample.add_argument("--report-json", help="Optional sample report JSON path")
     sample.add_argument("--report-md", help="Optional sample report Markdown path")
+    sample.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     sample.add_argument("--json", action="store_true", help="Emit JSON errors")
     sample.set_defaults(func=_run_benchmark_sample)
 
@@ -1232,6 +1398,7 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--report", required=True, help="Benchmark validation report JSON")
     summarize.add_argument("--report-json", help="Optional summary report JSON path")
     summarize.add_argument("--report-md", help="Optional summary report Markdown path")
+    summarize.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     summarize.add_argument("--json", action="store_true", help="Emit JSON errors")
     summarize.set_defaults(func=_run_benchmark_summarize)
 
@@ -1241,6 +1408,7 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     gate.add_argument("--baseline-report", help="Optional prior benchmark validation report JSON")
     gate.add_argument("--report-json", help="Optional gate report JSON path")
     gate.add_argument("--report-md", help="Optional gate report Markdown path")
+    gate.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     gate.add_argument("--json", action="store_true", help="Emit JSON errors")
     gate.set_defaults(func=_run_benchmark_gate)
 
@@ -1250,6 +1418,7 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     trend.add_argument("--gate-config", help="Optional benchmark gate threshold JSON")
     trend.add_argument("--report-json", help="Optional trend report JSON path")
     trend.add_argument("--report-md", help="Optional trend report Markdown path")
+    trend.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     trend.add_argument("--json", action="store_true", help="Emit JSON errors")
     trend.set_defaults(func=_run_benchmark_trend)
 
@@ -1258,6 +1427,7 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     delta.add_argument("--baseline-report", required=True, help="Prior benchmark validation report JSON")
     delta.add_argument("--report-json", help="Optional delta report JSON path")
     delta.add_argument("--report-md", help="Optional delta report Markdown path")
+    delta.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     delta.add_argument("--json", action="store_true", help="Emit JSON errors")
     delta.set_defaults(func=_run_benchmark_delta)
 
@@ -1269,6 +1439,7 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     suggest.add_argument("--current-similarity-threshold", type=float, help="Current retrieval similarity threshold")
     suggest.add_argument("--report-json", help="Optional suggestion report JSON path")
     suggest.add_argument("--report-md", help="Optional suggestion report Markdown path")
+    suggest.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     suggest.add_argument("--json", action="store_true", help="Emit JSON errors")
     suggest.set_defaults(func=_run_benchmark_suggest)
 
@@ -1282,6 +1453,7 @@ def build_suppression_report_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-candidates", type=int, default=20, help="Maximum candidates to include in the report")
     parser.add_argument("--report-json", help="Optional suppression report JSON path")
     parser.add_argument("--report-md", help="Optional suppression report Markdown path")
+    parser.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     parser.set_defaults(func=_run_suppression_report)
     return parser
@@ -1302,6 +1474,7 @@ def build_qa_parser() -> argparse.ArgumentParser:
     generate.add_argument("--max-span-chars", type=int, default=240, help="Maximum evidence span length")
     generate.add_argument("--report-json", help="Optional generate report JSON path")
     generate.add_argument("--report-md", help="Optional generate report Markdown path")
+    generate.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     generate.add_argument("--json", action="store_true", help="Emit JSON errors")
     generate.set_defaults(func=_run_qa_generate)
 
@@ -1312,6 +1485,7 @@ def build_qa_parser() -> argparse.ArgumentParser:
     validate.add_argument("--allow-missing-answer", action="store_true", help="Allow QA items without answers")
     validate.add_argument("--report-json", help="Optional validate report JSON path")
     validate.add_argument("--report-md", help="Optional validate report Markdown path")
+    validate.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     validate.add_argument("--json", action="store_true", help="Emit JSON errors")
     validate.set_defaults(func=_run_qa_validate)
 
@@ -1321,6 +1495,7 @@ def build_qa_parser() -> argparse.ArgumentParser:
     map_evidence.add_argument("--output", required=True, help="Output ragflow_grounded_qa_evidence_map_v1 JSON")
     map_evidence.add_argument("--report-json", help="Optional map-evidence report JSON path")
     map_evidence.add_argument("--report-md", help="Optional map-evidence report Markdown path")
+    map_evidence.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     map_evidence.add_argument("--json", action="store_true", help="Emit JSON errors")
     map_evidence.set_defaults(func=_run_qa_map_evidence)
 
@@ -1337,6 +1512,7 @@ def build_segment_metadata_parser() -> argparse.ArgumentParser:
     report.add_argument("--segmentation-plan", help="Optional doc_segmentation_plan_v1 JSON")
     report.add_argument("--report-json", help="Optional segment metadata report JSON path")
     report.add_argument("--report-md", help="Optional segment metadata report Markdown path")
+    report.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     report.add_argument("--json", action="store_true", help="Emit JSON errors")
     report.set_defaults(func=_run_segment_metadata_report)
 

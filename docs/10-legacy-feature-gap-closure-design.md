@@ -1328,7 +1328,7 @@ Inventory implemented. `tools/report_surface_inventory.py` emits
 `ragflow_report_surface_inventory_v1`, imports the public CLI parsers offline, and fails
 the inventory when a public command lacks an explicit `covered`, `not_applicable`, or
 `needs_redaction` classification. The current verified inventory names 78 public commands:
-43 `covered`, 26 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
+67 `covered`, 2 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
 classification findings.
 
 `ragflow-kb-build parse-report` and `ragflow-kb-build health-report` now support
@@ -1354,9 +1354,9 @@ Top-level `ragflow-doc-to-md` conversion now supports `--redaction-report` for
 JSON stdout. Reports are sanitized as a combined quality/runtime bundle, and focused CLI
 tests cover derived Markdown filenames created from assignment-style fake-secret input
 names plus runtime process paths. Consumer acceptance and platform smoke both retain the
-top-level conversion redaction sidecar as an artifact. Remaining Phase 36 work should use
-the inventory to prioritize `ragflow-kb-build` benchmark, diagnose/probe,
-segment-metadata, profile, append/cleanup, inspect, and validation report/plan families.
+top-level conversion redaction sidecar as an artifact. Remaining Phase 36 redaction work
+should use the inventory to review `ragflow-kb-build append` and `cleanup` raw user-owned
+artifact boundaries before adding sidecars to shareable report or plan surfaces.
 
 `ragflow-kb-build metadata lint`, `ragflow-kb-build metadata merge`,
 `ragflow-kb-build tagset lint`, and `ragflow-kb-build tagset report` now support
@@ -1382,6 +1382,55 @@ also reads input optimization plans and explicit validation reports to redact pl
 candidate artifact paths, disposable KB names, private hosts, and fake secrets that no
 longer appear as raw URLs in the generated summary or cleanup reports. Focused CLI tests,
 consumer acceptance, and platform smoke retain the new optimization redaction sidecars.
+
+`ragflow-kb-build benchmark import`, `ragflow-kb-build benchmark sample`,
+`ragflow-kb-build benchmark preflight`, `ragflow-kb-build benchmark summarize`,
+`ragflow-kb-build benchmark gate`, `ragflow-kb-build benchmark trend`,
+`ragflow-kb-build benchmark delta`, and `ragflow-kb-build benchmark suggest` now support
+`--redaction-report` for benchmark lifecycle report surfaces. JSON stdout, optional JSON
+reports, and Markdown reports are written from sanitized payloads when redaction is
+enabled. The normalized benchmark dataset outputs (`manifest.json`, `queries.json`,
+`qrels.json`, and `qa.json`) stay raw user-owned artifacts for downstream benchmark
+workflows. Focused CLI tests cover fake private hosts, fake secrets, and host paths across
+all eight benchmark subcommands, while consumer acceptance and platform smoke retain the
+new benchmark redaction sidecars.
+
+`ragflow-kb-build validate`, `ragflow-kb-build diagnose`, `ragflow-kb-build probe`,
+`ragflow-kb-build inspect-kb`, and `ragflow-kb-build inspect-handoff` now support
+`--redaction-report` for validation and diagnostic report surfaces. JSON stdout, JSON
+reports, and Markdown reports are written from sanitized payloads when redaction is
+enabled; `inspect-kb` is stdout-only but still emits the redaction sidecar for its
+inspection payload. A small script-local redaction helper shares context collection for
+the standalone KB scripts without changing public schemas. Focused CLI tests cover fake
+private hosts, fake secrets, temp paths, fake probe endpoints, and sanitized Markdown,
+while consumer acceptance and platform smoke retain representative sidecars.
+
+`ragflow-kb-build profile lint`, `ragflow-kb-build profile explain`,
+`ragflow-kb-build profile recommend`, `ragflow-kb-build profile compare`, and
+`ragflow-kb-build profile experiment` now support `--redaction-report` for offline profile
+report surfaces. JSON stdout, report JSON, and Markdown reports are written from sanitized
+payloads when redaction is enabled. Raw `recommend --output` profile files and
+`experiment --candidate-set` profile sets remain user-owned artifacts because downstream
+build and optimization workflows consume them directly. Focused CLI tests cover fake
+private hosts, fake secrets, host paths, validation-report paths, sanitized Markdown, and
+the raw artifact boundary; consumer acceptance and platform smoke retain representative
+profile redaction sidecars.
+
+`ragflow-kb-build snapshot-chunks`, `ragflow-kb-build qa generate`,
+`ragflow-kb-build qa validate`, `ragflow-kb-build qa map-evidence`,
+`ragflow-kb-build segment-metadata report`, and `ragflow-kb-build suppression-report` now
+support `--redaction-report` for offline snapshot, grounded-QA, enrichment, and
+suppression report surfaces. JSON stdout, optional JSON reports, and Markdown reports are
+written from sanitized payloads when redaction is enabled. Raw chunk snapshot, generated
+QA, and evidence-map outputs remain user-owned artifacts because downstream benchmark
+and evidence-mapping workflows consume them directly. Focused CLI tests cover fake private
+hosts, fake secrets, host paths, sanitized Markdown, and the raw artifact boundary;
+consumer acceptance and platform smoke retain the new sidecars as release artifacts.
+
+Next implementation order should keep closing generated-report safety before starting the
+runtime helper pilot. Review `append`/`cleanup` plan surfaces next, decide which outputs
+remain raw user-owned artifacts, then add sidecars to any shareable generated reports
+before starting the narrow runtime helper pilot.
 
 ## Implementation Notes And Pitfalls
 

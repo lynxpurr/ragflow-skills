@@ -1242,6 +1242,19 @@ Tasks:
 - [ ] Add `--redaction-report` coverage to the highest-risk remaining `ragflow-kb-build`
   report families that read host-supplied manifests, reports, parser configs, parse logs,
   or work paths.
+- [x] Add `--redaction-report` coverage to `ragflow-kb-build benchmark import`,
+  `benchmark sample`, `benchmark preflight`, `benchmark summarize`, `benchmark gate`,
+  `benchmark trend`, `benchmark delta`, and `benchmark suggest`.
+- [x] Add `--redaction-report` coverage to `ragflow-kb-build validate`, `diagnose`,
+  `probe`, `inspect-kb`, and `inspect-handoff` report surfaces.
+- [x] Add `--redaction-report` coverage to `ragflow-kb-build profile lint`,
+  `profile explain`, `profile recommend`, `profile compare`, and `profile experiment`
+  report surfaces.
+- [x] Add `--redaction-report` coverage to `ragflow-kb-build snapshot-chunks`,
+  `qa generate`, `qa validate`, `qa map-evidence`, `segment-metadata report`, and
+  `suppression-report` report surfaces.
+- [ ] Add `--redaction-report` coverage to `ragflow-kb-build append` and `cleanup`
+  plan surfaces after confirming which generated artifacts remain raw user-owned outputs.
 - [x] Add `--redaction-report` coverage to `ragflow-kb-build parse-report` and
   `ragflow-kb-build health-report`, including sanitized Markdown rendering.
 - [x] Add `--redaction-report` coverage to `ragflow-kb-build metadata lint`,
@@ -1278,10 +1291,10 @@ Tasks:
 Status note: `tools/report_surface_inventory.py` now emits
 `ragflow_report_surface_inventory_v1`, dynamically enumerates public argparse command
 leaves, and overlays an explicit Phase 36 classification. The verified inventory currently
-names 78 public commands: 43 `covered`, 26 `needs_redaction`, and 9 `not_applicable`, with
+names 78 public commands: 67 `covered`, 2 `needs_redaction`, and 9 `not_applicable`, with
 no uncatalogued or stale classification findings. Remaining redaction work is concentrated
-in `ragflow-kb-build` benchmark, diagnose/probe, segment-metadata, profile,
-append/cleanup, inspect, and validation report/plan surfaces; `ragflow-doc-to-md`
+in `ragflow-kb-build` append/cleanup report/plan surfaces after their raw user-owned
+artifact boundaries are reviewed; `ragflow-doc-to-md`
 and `ragflow-query` report commands are currently classified as covered or not applicable.
 `ragflow-kb-build parse-report` and
 `ragflow-kb-build health-report` now sanitize JSON and Markdown from the same sanitized
@@ -1310,9 +1323,41 @@ fake local path tokens, private hosts, and query-style fake secrets.
 plan/result surfaces. JSON stdout, JSON artifacts, and Markdown reports are rendered from
 the sanitized payload when redaction is enabled, including plan-derived candidate artifact
 paths and validation report paths.
+`ragflow-kb-build benchmark import`, `ragflow-kb-build benchmark sample`,
+`ragflow-kb-build benchmark preflight`, `ragflow-kb-build benchmark summarize`,
+`ragflow-kb-build benchmark gate`, `ragflow-kb-build benchmark trend`,
+`ragflow-kb-build benchmark delta`, and `ragflow-kb-build benchmark suggest` now emit
+redaction sidecars for shareable benchmark lifecycle reports. JSON stdout, optional JSON
+report paths, and Markdown reports are rendered from sanitized payloads when redaction is
+enabled. Raw normalized benchmark dataset outputs (`manifest.json`, `queries.json`,
+`qrels.json`, and `qa.json`) remain user-owned artifacts for downstream benchmark
+workflows.
+`ragflow-kb-build validate`, `ragflow-kb-build diagnose`, `ragflow-kb-build probe`,
+`ragflow-kb-build inspect-kb`, and `ragflow-kb-build inspect-handoff` now emit redaction
+sidecars for validation and diagnostic report surfaces. JSON stdout, JSON report files,
+and Markdown reports are rendered from sanitized payloads when redaction is enabled, and
+stdout-only `inspect-kb` still writes a sidecar for its generated inspection payload.
+`ragflow-kb-build profile lint`, `ragflow-kb-build profile explain`,
+`ragflow-kb-build profile recommend`, `ragflow-kb-build profile compare`, and
+`ragflow-kb-build profile experiment` now emit redaction sidecars for offline profile
+report surfaces. Shareable JSON stdout, report JSON, and Markdown reports are rendered
+from sanitized payloads when redaction is enabled; raw `recommend --output` profiles and
+`experiment --candidate-set` profile sets remain user-owned artifacts for downstream
+experiments.
+`ragflow-kb-build snapshot-chunks`, `ragflow-kb-build qa generate`,
+`ragflow-kb-build qa validate`, `ragflow-kb-build qa map-evidence`,
+`ragflow-kb-build segment-metadata report`, and `ragflow-kb-build suppression-report`
+now emit redaction sidecars for offline snapshot, grounded-QA, enrichment, and suppression
+report surfaces. JSON stdout, optional JSON reports, and Markdown reports are rendered
+from sanitized payloads when redaction is enabled; raw chunk snapshot, generated QA, and
+evidence-map output artifacts remain user-owned inputs for downstream benchmark workflows.
 Consumer acceptance now verifies newly redacted non-query fake-sensitive fixtures, and
 platform smoke retains doc-to-md conversion, backend warmup, and KB metadata/tagset plus
-topology/activation and optimization redaction sidecars as artifacts.
+topology/activation, optimization, benchmark lifecycle, validation/diagnostic, profile,
+and snapshot/QA/enrichment redaction sidecars as artifacts.
+The next recommended redaction tranche is `ragflow-kb-build append` and `cleanup`: first
+review which outputs are raw user-owned artifacts, then add sidecars only to shareable
+report/plan surfaces. After that, start the narrow runtime helper pilot.
 
 Exit criteria:
 

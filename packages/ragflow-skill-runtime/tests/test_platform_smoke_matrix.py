@@ -67,6 +67,7 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("doc-to-md backend probe", check_names)
         self.assertIn("doc-to-md backend warmup", check_names)
         self.assertIn("kb model-providers probe", check_names)
+        self.assertIn("kb inspect-handoff redaction", check_names)
         self.assertIn("kb metadata lint redaction", check_names)
         self.assertIn("kb tagset report redaction", check_names)
         self.assertIn("kb topology advise redaction", check_names)
@@ -75,6 +76,22 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("kb optimize plan-only redaction", check_names)
         self.assertIn("kb optimize cleanup-plan redaction", check_names)
         self.assertIn("kb optimize summarize redaction", check_names)
+        self.assertIn("kb profile lint redaction", check_names)
+        self.assertIn("kb profile experiment redaction", check_names)
+        self.assertIn("kb benchmark import redaction", check_names)
+        self.assertIn("kb benchmark preflight redaction", check_names)
+        self.assertIn("kb benchmark sample redaction", check_names)
+        self.assertIn("kb benchmark delta redaction", check_names)
+        self.assertIn("kb benchmark suggest redaction", check_names)
+        self.assertIn("kb validation redaction", check_names)
+        self.assertIn("kb qa generate redaction", check_names)
+        self.assertIn("kb qa generate redaction sidecar", check_names)
+        self.assertIn("kb qa validate redaction", check_names)
+        self.assertIn("kb qa validate redaction sidecar", check_names)
+        self.assertIn("kb snapshot-chunks redaction", check_names)
+        self.assertIn("kb qa map-evidence redaction", check_names)
+        self.assertIn("kb segment-metadata redaction", check_names)
+        self.assertIn("kb suppression-report redaction", check_names)
         self.assertIn("query endpoint-report", check_names)
         self.assertIn("query fallback-test", check_names)
         self.assertTrue(
@@ -130,6 +147,10 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
             profile["artifacts"],
         )
         self.assertTrue(
+            any(path.endswith("handoff_inspection_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
             any(path.endswith("metadata_lint_redaction.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
@@ -159,6 +180,62 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("best_profile_report_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("profile_lint_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("profile_experiment_matrix_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("validation_report_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("benchmark_import_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("benchmark_preflight_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("benchmark_sample_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("benchmark_delta_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("benchmark_suggestions_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("chunk_snapshot_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("qa_generate_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("qa_validate_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("qa_evidence_map_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("segment_metadata_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("suppression_report_redaction.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
         self.assertTrue(

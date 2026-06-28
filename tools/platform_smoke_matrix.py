@@ -1524,6 +1524,7 @@ def _write_validate_runner(
     runtime_args = _runtime_args(profile)
     report_json = artifacts_dir / "validation_report.json"
     report_md = artifacts_dir / "validation_report.md"
+    redaction_report = artifacts_dir / "validation_report_redaction.json"
     runner_path.write_text(
         f"""\
 from __future__ import annotations
@@ -1540,6 +1541,7 @@ queries_path = Path({str(queries_path)!r})
 metadata_path = Path({str(metadata_path)!r})
 report_json = Path({str(report_json)!r})
 report_md = Path({str(report_md)!r})
+redaction_report = Path({str(redaction_report)!r})
 runtime_args = {runtime_args!r}
 
 spec = importlib.util.spec_from_file_location("platform_validate_cli", script)
@@ -1579,6 +1581,8 @@ argv = runtime_args + [
     str(report_json),
     "--report-md",
     str(report_md),
+    "--redaction-report",
+    str(redaction_report),
 ]
 stdout = StringIO()
 with contextlib.redirect_stdout(stdout):
@@ -1586,9 +1590,25 @@ with contextlib.redirect_stdout(stdout):
 if code != 0:
     raise SystemExit(code)
 payload = json.loads(stdout.getvalue())
-if not payload.get("ok") or not payload.get("metadata_summary", {{}}).get("ok") or not report_json.exists() or not report_md.exists():
+if (
+    not payload.get("ok")
+    or not payload.get("metadata_summary", {{}}).get("ok")
+    or not report_json.exists()
+    or not report_md.exists()
+    or not redaction_report.exists()
+):
     raise SystemExit(4)
-print(json.dumps({{"ok": True, "report_json": str(report_json), "report_md": str(report_md)}}, ensure_ascii=False))
+print(
+    json.dumps(
+        {{
+            "ok": True,
+            "report_json": str(report_json),
+            "report_md": str(report_md),
+            "redaction_report": str(redaction_report),
+        }},
+        ensure_ascii=False,
+    )
+)
 """,
         encoding="utf-8",
     )
@@ -1801,6 +1821,9 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         checks=checks,
         env=env,
     )
+    handoff_inspection_json = artifacts_dir / "handoff_inspection.json"
+    handoff_inspection_md = artifacts_dir / "handoff_inspection.md"
+    handoff_inspection_redaction = artifacts_dir / "handoff_inspection_redaction.json"
     inspect_handoff_result = _run_command(
         [
             sys.executable,
@@ -1808,6 +1831,12 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "inspect-handoff",
             "--handoff",
             str(handoff_dir),
+            "--report-json",
+            str(handoff_inspection_json),
+            "--report-md",
+            str(handoff_inspection_md),
+            "--redaction-report",
+            str(handoff_inspection_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -1819,6 +1848,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         inspect_handoff_result,
         required_stdout='"schema": "ragflow_handoff_inspection_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb inspect-handoff redaction", handoff_inspection_redaction)
     metadata_template = artifacts_dir / "metadata.template.json"
     metadata_lint_result = _run_command(
         [
@@ -2169,6 +2199,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     benchmark_dir = artifacts_dir / "benchmark"
     qrels_path = _write_qrels(artifacts_dir)
     qa_path = _write_grounded_qa(artifacts_dir)
+    benchmark_import_redaction = artifacts_dir / "benchmark_import_redaction.json"
     benchmark_import_result = _run_command(
         [
             sys.executable,
@@ -2183,6 +2214,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(qa_path),
             "--output",
             str(benchmark_dir),
+            "--redaction-report",
+            str(benchmark_import_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -2194,6 +2227,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         benchmark_import_result,
         required_stdout='"schema": "ragflow_benchmark_import_report_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb benchmark import redaction", benchmark_import_redaction)
     qa_generated = artifacts_dir / "qa.generated.json"
     qa_generate_result = _run_command(
         [
@@ -2220,6 +2254,35 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         qa_generate_result,
         required_stdout='"schema": "ragflow_grounded_qa_generate_report_v1"',
     )
+    qa_generate_redaction = artifacts_dir / "qa_generate_redaction.json"
+    qa_generate_redaction_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "qa",
+            "generate",
+            "--source-dir",
+            str(input_dir),
+            "--output",
+            str(artifacts_dir / "qa.generated.redaction.raw.json"),
+            "--count",
+            "1",
+            "--min-span-chars",
+            "20",
+            "--redaction-report",
+            str(qa_generate_redaction),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb qa generate redaction",
+        qa_generate_redaction_result,
+        required_stdout='"schema": "ragflow_grounded_qa_generate_report_v1"',
+    )
+    _record_redaction_sidecar_check(checks, "kb qa generate redaction sidecar", qa_generate_redaction)
     qa_validate_result = _run_command(
         [
             sys.executable,
@@ -2241,7 +2304,33 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         qa_validate_result,
         required_stdout='"schema": "ragflow_grounded_qa_validate_report_v1"',
     )
+    qa_validate_redaction = artifacts_dir / "qa_validate_redaction.json"
+    qa_validate_redaction_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "qa",
+            "validate",
+            "--qa",
+            str(benchmark_dir / "qa.json"),
+            "--source-dir",
+            str(input_dir),
+            "--redaction-report",
+            str(qa_validate_redaction),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb qa validate redaction",
+        qa_validate_redaction_result,
+        required_stdout='"schema": "ragflow_grounded_qa_validate_report_v1"',
+    )
+    _record_redaction_sidecar_check(checks, "kb qa validate redaction sidecar", qa_validate_redaction)
     chunk_snapshot = artifacts_dir / "chunk_snapshot.json"
+    chunk_snapshot_redaction = artifacts_dir / "chunk_snapshot_redaction.json"
     chunk_snapshot_result = _run_command(
         [
             sys.executable,
@@ -2251,6 +2340,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(input_dir),
             "--output",
             str(chunk_snapshot),
+            "--redaction-report",
+            str(chunk_snapshot_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -2262,7 +2353,9 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         chunk_snapshot_result,
         required_stdout='"schema": "ragflow_chunk_snapshot_report_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb snapshot-chunks redaction", chunk_snapshot_redaction)
     qa_evidence_map = artifacts_dir / "qa_evidence_map.json"
+    qa_evidence_map_redaction = artifacts_dir / "qa_evidence_map_redaction.json"
     qa_map_result = _run_command(
         [
             sys.executable,
@@ -2275,6 +2368,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(chunk_snapshot),
             "--output",
             str(qa_evidence_map),
+            "--redaction-report",
+            str(qa_evidence_map_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -2286,7 +2381,9 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         qa_map_result,
         required_stdout='"schema": "ragflow_grounded_qa_evidence_map_report_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb qa map-evidence redaction", qa_evidence_map_redaction)
     segment_metadata_report = artifacts_dir / "segment_metadata_report.json"
+    segment_metadata_redaction = artifacts_dir / "segment_metadata_redaction.json"
     segment_metadata_result = _run_command(
         [
             sys.executable,
@@ -2297,6 +2394,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(chunk_snapshot),
             "--report-json",
             str(segment_metadata_report),
+            "--redaction-report",
+            str(segment_metadata_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -2308,8 +2407,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         segment_metadata_result,
         required_stdout='"schema": "ragflow_segment_metadata_report_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb segment-metadata redaction", segment_metadata_redaction)
     suppression_input = _write_suppression_input(artifacts_dir / "suppression_input.json")
     suppression_report = artifacts_dir / "suppression_report.json"
+    suppression_redaction = artifacts_dir / "suppression_report_redaction.json"
     suppression_result = _run_command(
         [
             sys.executable,
@@ -2321,6 +2422,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(tagset_template),
             "--report-json",
             str(suppression_report),
+            "--redaction-report",
+            str(suppression_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -2332,6 +2435,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         suppression_result,
         required_stdout='"schema": "ragflow_suppression_report_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb suppression-report redaction", suppression_redaction)
+    benchmark_preflight_redaction = artifacts_dir / "benchmark_preflight_redaction.json"
     benchmark_preflight_result = _run_command(
         [
             sys.executable,
@@ -2342,6 +2447,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(benchmark_dir / "manifest.json"),
             "--chunk-snapshot",
             str(chunk_snapshot),
+            "--redaction-report",
+            str(benchmark_preflight_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -2353,6 +2460,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         benchmark_preflight_result,
         required_stdout='"schema": "ragflow_benchmark_preflight_report_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb benchmark preflight redaction", benchmark_preflight_redaction)
     optimization_plan = artifacts_dir / "optimization_plan.json"
     optimization_plan_redaction = artifacts_dir / "optimization_plan_redaction.json"
     optimize_plan_result = _run_command(
@@ -2423,6 +2531,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     )
     _record_redaction_sidecar_check(checks, "kb optimize cleanup-plan redaction", optimization_cleanup_plan_redaction)
     benchmark_sample_dir = artifacts_dir / "benchmark-sample"
+    benchmark_sample_redaction = artifacts_dir / "benchmark_sample_redaction.json"
     benchmark_sample_result = _run_command(
         [
             sys.executable,
@@ -2437,6 +2546,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "1",
             "--seed",
             "7",
+            "--redaction-report",
+            str(benchmark_sample_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -2448,8 +2559,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         benchmark_sample_result,
         required_stdout='"schema": "ragflow_benchmark_sample_report_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb benchmark sample redaction", benchmark_sample_redaction)
     current_benchmark_report = _write_benchmark_report(artifacts_dir / "benchmark_current.json", mrr=1.0)
     baseline_benchmark_report = _write_benchmark_report(artifacts_dir / "benchmark_baseline.json", mrr=0.8)
+    benchmark_delta_redaction = artifacts_dir / "benchmark_delta_redaction.json"
     benchmark_delta_result = _run_command(
         [
             sys.executable,
@@ -2460,6 +2573,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(current_benchmark_report),
             "--baseline-report",
             str(baseline_benchmark_report),
+            "--redaction-report",
+            str(benchmark_delta_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -2471,8 +2586,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         benchmark_delta_result,
         required_stdout='"schema": "ragflow_benchmark_delta_report_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb benchmark delta redaction", benchmark_delta_redaction)
     benchmark_suggest_json = artifacts_dir / "benchmark_suggestions.json"
     benchmark_suggest_md = artifacts_dir / "benchmark_suggestions.md"
+    benchmark_suggest_redaction = artifacts_dir / "benchmark_suggestions_redaction.json"
     benchmark_suggest_result = _run_command(
         [
             sys.executable,
@@ -2491,6 +2608,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(benchmark_suggest_json),
             "--report-md",
             str(benchmark_suggest_md),
+            "--redaction-report",
+            str(benchmark_suggest_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -2502,6 +2621,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         benchmark_suggest_result,
         required_stdout='"schema": "ragflow_benchmark_retrieval_suggestion_report_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb benchmark suggest redaction", benchmark_suggest_redaction)
     profile_experiment_results = artifacts_dir / "profile_experiment_results.json"
     best_profile_report = artifacts_dir / "best_profile_report.md"
     best_profile_report_redaction = artifacts_dir / "best_profile_report_redaction.json"
@@ -2537,6 +2657,9 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     _record_redaction_sidecar_check(checks, "kb optimize summarize redaction", best_profile_report_redaction)
 
     profile_script = script_root / "ragflow-kb-build" / "scripts" / "profile.py"
+    profile_lint_json = artifacts_dir / "profile_lint.json"
+    profile_lint_md = artifacts_dir / "profile_lint.md"
+    profile_lint_redaction = artifacts_dir / "profile_lint_redaction.json"
     profile_lint_result = _run_command(
         [
             sys.executable,
@@ -2544,8 +2667,12 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "lint",
             "--profile",
             str(PROFILE_PATH),
+            "--report-json",
+            str(profile_lint_json),
             "--report-md",
-            str(artifacts_dir / "profile_lint.md"),
+            str(profile_lint_md),
+            "--redaction-report",
+            str(profile_lint_redaction),
         ],
         cwd=workspace,
         env=env,
@@ -2556,6 +2683,11 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         profile_lint_result,
         required_stdout='"schema": "ragflow_profile_lint_report_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb profile lint redaction", profile_lint_redaction)
+    profile_experiment_candidate_set = artifacts_dir / "candidate_profile_set.json"
+    profile_experiment_json = artifacts_dir / "profile_experiment_matrix.json"
+    profile_experiment_md = artifacts_dir / "profile_experiment_matrix.md"
+    profile_experiment_redaction = artifacts_dir / "profile_experiment_matrix_redaction.json"
     profile_experiment_result = _run_command(
         [
             sys.executable,
@@ -2570,9 +2702,13 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "--set",
             "retrieval.top_k=3,5",
             "--candidate-set",
-            str(artifacts_dir / "candidate_profile_set.json"),
+            str(profile_experiment_candidate_set),
+            "--report-json",
+            str(profile_experiment_json),
             "--report-md",
-            str(artifacts_dir / "profile_experiment_matrix.md"),
+            str(profile_experiment_md),
+            "--redaction-report",
+            str(profile_experiment_redaction),
         ],
         cwd=workspace,
         env=env,
@@ -2583,6 +2719,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         profile_experiment_result,
         required_stdout='"schema": "ragflow_enrichment_experiment_report_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb profile experiment redaction", profile_experiment_redaction)
 
     query_script = script_root / "ragflow-query" / "scripts" / "query.py"
     fake_lan_endpoint = "https://" + ".".join(("192", "168", "10", "20")) + ":9380"
@@ -3089,6 +3226,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         cwd=workspace,
         env=env,
     )
+    _record_redaction_sidecar_check(checks, "kb validation redaction", artifacts_dir / "validation_report_redaction.json")
 
     artifact_files = [
         doc_manifest,
@@ -3106,6 +3244,9 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         workspace / "backend_warmup.md",
         workspace / "backend_warmup_redaction.json",
         workspace / "postprocess_redaction.json",
+        artifacts_dir / "handoff_inspection.json",
+        artifacts_dir / "handoff_inspection.md",
+        artifacts_dir / "handoff_inspection_redaction.json",
         kb_manifest,
         artifacts_dir / "parse_documents.json",
         artifacts_dir / "parse.log",
@@ -3202,9 +3343,13 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "centroid_build_redaction.json",
         artifacts_dir / "centroid.checkpoint.json",
         artifacts_dir / "centroids.built.json",
+        artifacts_dir / "profile_lint.json",
         artifacts_dir / "profile_lint.md",
+        artifacts_dir / "profile_lint_redaction.json",
         artifacts_dir / "candidate_profile_set.json",
+        artifacts_dir / "profile_experiment_matrix.json",
         artifacts_dir / "profile_experiment_matrix.md",
+        artifacts_dir / "profile_experiment_matrix_redaction.json",
         artifacts_dir / "model_provider_probe.json",
         artifacts_dir / "model_provider_probe.md",
         artifacts_dir / "model_provider_redaction.json",
@@ -3227,10 +3372,20 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "benchmark" / "queries.json",
         artifacts_dir / "benchmark" / "qrels.json",
         artifacts_dir / "benchmark" / "qa.json",
+        artifacts_dir / "benchmark_import_redaction.json",
+        artifacts_dir / "benchmark_preflight_redaction.json",
+        artifacts_dir / "benchmark_sample_redaction.json",
+        artifacts_dir / "chunk_snapshot_redaction.json",
         artifacts_dir / "qa.generated.json",
+        artifacts_dir / "qa.generated.redaction.raw.json",
+        artifacts_dir / "qa_generate_redaction.json",
+        artifacts_dir / "qa_validate_redaction.json",
         artifacts_dir / "qa_evidence_map.json",
+        artifacts_dir / "qa_evidence_map_redaction.json",
         artifacts_dir / "segment_metadata_report.json",
+        artifacts_dir / "segment_metadata_redaction.json",
         artifacts_dir / "suppression_report.json",
+        artifacts_dir / "suppression_report_redaction.json",
         artifacts_dir / "optimization_plan.json",
         artifacts_dir / "optimization_plan_redaction.json",
         artifacts_dir / "optimization_cleanup_plan.json",
@@ -3241,10 +3396,13 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "best_profile_report_redaction.json",
         artifacts_dir / "benchmark_current.json",
         artifacts_dir / "benchmark_baseline.json",
+        artifacts_dir / "benchmark_delta_redaction.json",
         artifacts_dir / "benchmark_suggestions.json",
         artifacts_dir / "benchmark_suggestions.md",
+        artifacts_dir / "benchmark_suggestions_redaction.json",
         artifacts_dir / "validation_report.json",
         artifacts_dir / "validation_report.md",
+        artifacts_dir / "validation_report_redaction.json",
     ]
     artifact_files.extend((workspace / "image-fallback-handoff" / "documents" / "images").glob("diagram-*.png"))
     ok = all(check["ok"] for check in checks)

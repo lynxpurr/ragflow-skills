@@ -120,6 +120,61 @@ def model_provider_server():
         server.server_close()
 
 
+class DiagnosticProbeHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path.startswith("/api/v1/datasets"):
+            body = json.dumps({"data": {"datasets": [{"id": "short", "name": "kb:diagnostic"}]}}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def do_POST(self) -> None:  # noqa: N802
+        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        if self.path == "/api/v1/retrieval":
+            body = json.dumps(
+                {
+                    "data": {
+                        "chunks": [
+                            {
+                                "content_with_weight": "Known includes known term",
+                                "docnm_kwd": "source-token=diagnostic-secret.md",
+                                "similarity": 0.91,
+                            }
+                        ]
+                    }
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+        else:
+            body = b"{}"
+            self.send_response(404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):  # noqa: A002
+        return
+
+
+@contextlib.contextmanager
+def diagnostic_probe_server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), DiagnosticProbeHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 class KbBuildCliTests(unittest.TestCase):
     def test_build_dry_run_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1127,6 +1182,336 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("ragflow_benchmark_retrieval_suggestion_report_v1", suggest_result.stdout)
         self.assertIn("RAGFlow Benchmark Retrieval Suggestions", suggest_md_text)
 
+    def test_benchmark_report_surfaces_emit_redaction_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_host = "benchmark.internal.local"
+            fake_secret = "benchmark-secret"
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            gate = root / "gate.json"
+            report = root / "benchmark_report.json"
+            baseline_report = root / "baseline_report.json"
+            benchmark_dir = root / "benchmark"
+            sample_dir = root / "benchmark_sample"
+            outputs = {
+                "import": (root / "benchmark_import.json", root / "benchmark_import.md", root / "benchmark_import_redaction.json"),
+                "preflight": (root / "benchmark_preflight.json", root / "benchmark_preflight.md", root / "benchmark_preflight_redaction.json"),
+                "sample": (root / "benchmark_sample.json", root / "benchmark_sample.md", root / "benchmark_sample_redaction.json"),
+                "summarize": (root / "benchmark_summary.json", root / "benchmark_summary.md", root / "benchmark_summary_redaction.json"),
+                "gate": (root / "benchmark_gate.json", root / "benchmark_gate.md", root / "benchmark_gate_redaction.json"),
+                "trend": (root / "benchmark_trend.json", root / "benchmark_trend.md", root / "benchmark_trend_redaction.json"),
+                "delta": (root / "benchmark_delta.json", root / "benchmark_delta.md", root / "benchmark_delta_redaction.json"),
+                "suggest": (root / "benchmark_suggest.json", root / "benchmark_suggest.md", root / "benchmark_suggest_redaction.json"),
+            }
+            queries.write_text(
+                json.dumps({"queries": [{"id": "q1", "question": "What is supported?", "metadata": {"type": "fact"}}]}),
+                encoding="utf-8",
+            )
+            qrels.write_text(json.dumps({"q1": {"source.md": 1}}), encoding="utf-8")
+            gate.write_text(json.dumps({"thresholds": {"min_hit_rate": 1.0, "max_empty_result_rate": 0.0}}), encoding="utf-8")
+            report.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "dataset": {
+                            "id": "ds-benchmark",
+                            "name": f"kb:http://{fake_host}:9380?token={fake_secret}",
+                        },
+                        "benchmark": {
+                            "metrics": {
+                                "query_count": 1,
+                                "hit_rate": 1.0,
+                                "mrr": 1.0,
+                                "precision_at_k": 0.5,
+                                "recall_at_k": 1.0,
+                                "ndcg_at_k": 1.0,
+                                "map_at_k": 1.0,
+                                "empty_result_rate": 0.0,
+                                "supporting_document_coverage": 1.0,
+                            },
+                            "query_type_breakdown": {"fact": {"query_count": 1, "hit_rate": 1.0}},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            baseline_report.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "dataset": {
+                            "id": "ds-benchmark-baseline",
+                            "name": f"kb:http://{fake_host}:9380?token={fake_secret}",
+                        },
+                        "benchmark": {
+                            "metrics": {
+                                "query_count": 1,
+                                "hit_rate": 1.0,
+                                "mrr": 0.8,
+                                "precision_at_k": 0.4,
+                                "recall_at_k": 1.0,
+                                "ndcg_at_k": 0.9,
+                                "map_at_k": 0.8,
+                                "empty_result_rate": 0.0,
+                                "supporting_document_coverage": 1.0,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            import_json, import_md, import_redaction = outputs["import"]
+            import_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "import",
+                    "--queries",
+                    str(queries),
+                    "--qrels",
+                    str(qrels),
+                    "--output",
+                    str(benchmark_dir),
+                    "--name",
+                    f"benchmark:http://{fake_host}:9380?token={fake_secret}",
+                    "--report-json",
+                    str(import_json),
+                    "--report-md",
+                    str(import_md),
+                    "--redaction-report",
+                    str(import_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            preflight_json, preflight_md, preflight_redaction = outputs["preflight"]
+            preflight_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "preflight",
+                    "--manifest",
+                    str(benchmark_dir / "manifest.json"),
+                    "--gate-config",
+                    str(gate),
+                    "--report-json",
+                    str(preflight_json),
+                    "--report-md",
+                    str(preflight_md),
+                    "--redaction-report",
+                    str(preflight_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            sample_json, sample_md, sample_redaction = outputs["sample"]
+            sample_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "sample",
+                    "--manifest",
+                    str(benchmark_dir / "manifest.json"),
+                    "--output",
+                    str(sample_dir),
+                    "--size",
+                    "1",
+                    "--seed",
+                    "11",
+                    "--name",
+                    f"sample:http://{fake_host}:9380?token={fake_secret}",
+                    "--report-json",
+                    str(sample_json),
+                    "--report-md",
+                    str(sample_md),
+                    "--redaction-report",
+                    str(sample_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            summarize_json, summarize_md, summarize_redaction = outputs["summarize"]
+            summarize_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "summarize",
+                    "--report",
+                    str(report),
+                    "--report-json",
+                    str(summarize_json),
+                    "--report-md",
+                    str(summarize_md),
+                    "--redaction-report",
+                    str(summarize_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            gate_json, gate_md, gate_redaction = outputs["gate"]
+            gate_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "gate",
+                    "--report",
+                    str(report),
+                    "--gate-config",
+                    str(gate),
+                    "--baseline-report",
+                    str(baseline_report),
+                    "--report-json",
+                    str(gate_json),
+                    "--report-md",
+                    str(gate_md),
+                    "--redaction-report",
+                    str(gate_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            trend_json, trend_md, trend_redaction = outputs["trend"]
+            trend_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "trend",
+                    "--report",
+                    str(report),
+                    "--baseline-report",
+                    str(baseline_report),
+                    "--gate-config",
+                    str(gate),
+                    "--report-json",
+                    str(trend_json),
+                    "--report-md",
+                    str(trend_md),
+                    "--redaction-report",
+                    str(trend_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            delta_json, delta_md, delta_redaction = outputs["delta"]
+            delta_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "delta",
+                    "--report",
+                    str(report),
+                    "--baseline-report",
+                    str(baseline_report),
+                    "--report-json",
+                    str(delta_json),
+                    "--report-md",
+                    str(delta_md),
+                    "--redaction-report",
+                    str(delta_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            suggest_json, suggest_md, suggest_redaction = outputs["suggest"]
+            suggest_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "suggest",
+                    "--report",
+                    str(report),
+                    "--baseline-report",
+                    str(baseline_report),
+                    "--gate-config",
+                    str(gate),
+                    "--current-top-k",
+                    "3",
+                    "--current-similarity-threshold",
+                    "0.25",
+                    "--report-json",
+                    str(suggest_json),
+                    "--report-md",
+                    str(suggest_md),
+                    "--redaction-report",
+                    str(suggest_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            results = [
+                import_result,
+                preflight_result,
+                sample_result,
+                summarize_result,
+                gate_result,
+                trend_result,
+                delta_result,
+                suggest_result,
+            ]
+            sidecars = [json.loads(paths[2].read_text(encoding="utf-8")) for paths in outputs.values()]
+            combined_parts = []
+            for result in results:
+                combined_parts.append(result.stdout)
+            for report_json, report_md, redaction in outputs.values():
+                combined_parts.append(report_json.read_text(encoding="utf-8"))
+                combined_parts.append(report_md.read_text(encoding="utf-8"))
+                combined_parts.append(redaction.read_text(encoding="utf-8"))
+            combined = "\n".join(combined_parts)
+            raw_manifest = (benchmark_dir / "manifest.json").read_text(encoding="utf-8")
+
+        for result in results:
+            self.assertEqual(result.returncode, 0, result.stdout)
+        for sidecar in sidecars:
+            self.assertEqual(sidecar["schema"], "ragflow_report_redaction_report_v1")
+            self.assertGreaterEqual(sidecar["summary"]["redaction_count"], 1)
+        self.assertIn("ragflow_benchmark_import_report_v1", import_result.stdout)
+        self.assertIn("ragflow_benchmark_sample_report_v1", sample_result.stdout)
+        self.assertIn("ragflow_benchmark_retrieval_suggestion_report_v1", suggest_result.stdout)
+        self.assertNotIn(fake_host, combined)
+        self.assertNotIn(fake_secret, combined)
+        self.assertNotIn(str(root), combined)
+        self.assertNotIn(str(report), combined)
+        self.assertNotIn(str(baseline_report), combined)
+        self.assertNotIn(str(gate), combined)
+        self.assertIn("<redacted:private-host>", combined)
+        self.assertIn("<redacted:secret>", combined)
+        self.assertIn("<redacted:config-path>", combined)
+        self.assertIn(fake_secret, raw_manifest)
+
     def test_suppression_report_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1436,6 +1821,263 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("ragflow_segment_metadata_report_v1", result.stdout)
         self.assertIn("RAGFlow Segment Metadata Report", report_md_text)
+
+    def test_snapshot_qa_segment_and_suppression_surfaces_emit_redaction_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_host = "snapshot.internal.local"
+            fake_secret = "snapshot-secret"
+            source_dir = root / "sources"
+            source_dir.mkdir()
+            source_text = (
+                f"Evidence from http://{fake_host}:9380/docs/source.md?token={fake_secret} "
+                "states that offline grounded QA evidence mapping stays deterministic."
+            )
+            (source_dir / "source-token=snapshot-secret.md").write_text(source_text + "\n", encoding="utf-8")
+            chunk_input = root / "chunks-token=snapshot-secret.json"
+            chunk_input.write_text(
+                json.dumps(
+                    {
+                        "chunks": [
+                            {
+                                "content": source_text,
+                                "document_name": f"http://{fake_host}:9380/docs/source.md?token={fake_secret}",
+                                "document_id": str(root / "docs" / "source.md"),
+                                "chunk_id": f"chunk-token={fake_secret}",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            metadata = root / "metadata.json"
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_metadata_v1",
+                        "documents": [
+                            {
+                                "path": f"http://{fake_host}:9380/docs/source.md?token={fake_secret}",
+                                "metadata": {"topic": "Offline Evidence Mapping"},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            segmentation_plan = root / "segmentation_plan.json"
+            segmentation_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "doc_segmentation_plan_v1",
+                        "segments": [
+                            {
+                                "index": 1,
+                                "suggested_markdown_path": f"http://{fake_host}:9380/docs/source.md?token={fake_secret}",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            suppression_input = root / "suppression_input.json"
+            suppression_input.write_text(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "level": "benchmark",
+                        "dataset": {"id": "ds-1", "name": f"kb:http://{fake_host}:9380?token={fake_secret}"},
+                        "cases": [
+                            {
+                                "id": "q1",
+                                "question": f"What mentions api_key={fake_secret}?",
+                                "passed": False,
+                                "document_hits": ["expected.md"],
+                                "metadata": {"type": "fact", "allowed_tags": ["policy"]},
+                                "top_chunks": [
+                                    {
+                                        "content": "Bridge term appears in a finance source.",
+                                        "document_name": f"http://{fake_host}:9380/finance.md?token={fake_secret}",
+                                        "document_id": "doc-finance",
+                                        "chunk_id": "wrong-1",
+                                        "raw": {
+                                            "content_with_weight": "Bridge term appears in a finance source.",
+                                            "docnm_kwd": f"http://{fake_host}:9380/finance.md?token={fake_secret}",
+                                            "doc_id": "doc-finance",
+                                            "id": "wrong-1",
+                                            "tags": ["policy", "finance"],
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                        "benchmark": {
+                            "metrics": {"wrong_document_rate": 1.0, "tag_pollution_rate": 1.0},
+                            "per_query": [{"id": "q1", "wrong_document_count": 1, "unexpected_tag_count": 1}],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            outputs = {
+                "snapshot": (root / "snapshot_report.json", root / "snapshot_report.md", root / "snapshot_redaction.json"),
+                "qa_generate": (root / "qa_generate.json", root / "qa_generate.md", root / "qa_generate_redaction.json"),
+                "qa_validate": (root / "qa_validate.json", root / "qa_validate.md", root / "qa_validate_redaction.json"),
+                "qa_map": (root / "qa_map.json", root / "qa_map.md", root / "qa_map_redaction.json"),
+                "segment": (root / "segment_metadata.json", root / "segment_metadata.md", root / "segment_metadata_redaction.json"),
+                "suppression": (root / "suppression_report.json", root / "suppression_report.md", root / "suppression_redaction.json"),
+            }
+            chunk_snapshot = root / "chunk_snapshot.json"
+            generated_qa = root / "qa.generated.json"
+            evidence_map = root / "qa_evidence_map.json"
+            commands = [
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "snapshot-chunks",
+                    "--input",
+                    str(chunk_input),
+                    "--output",
+                    str(chunk_snapshot),
+                    "--report-json",
+                    str(outputs["snapshot"][0]),
+                    "--report-md",
+                    str(outputs["snapshot"][1]),
+                    "--redaction-report",
+                    str(outputs["snapshot"][2]),
+                    "--json",
+                ],
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "qa",
+                    "generate",
+                    "--source-dir",
+                    str(source_dir),
+                    "--output",
+                    str(generated_qa),
+                    "--count",
+                    "1",
+                    "--min-span-chars",
+                    "20",
+                    "--report-json",
+                    str(outputs["qa_generate"][0]),
+                    "--report-md",
+                    str(outputs["qa_generate"][1]),
+                    "--redaction-report",
+                    str(outputs["qa_generate"][2]),
+                    "--json",
+                ],
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "qa",
+                    "validate",
+                    "--qa",
+                    str(generated_qa),
+                    "--source-dir",
+                    str(source_dir),
+                    "--report-json",
+                    str(outputs["qa_validate"][0]),
+                    "--report-md",
+                    str(outputs["qa_validate"][1]),
+                    "--redaction-report",
+                    str(outputs["qa_validate"][2]),
+                    "--json",
+                ],
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "qa",
+                    "map-evidence",
+                    "--qa",
+                    str(generated_qa),
+                    "--chunk-snapshot",
+                    str(chunk_snapshot),
+                    "--output",
+                    str(evidence_map),
+                    "--report-json",
+                    str(outputs["qa_map"][0]),
+                    "--report-md",
+                    str(outputs["qa_map"][1]),
+                    "--redaction-report",
+                    str(outputs["qa_map"][2]),
+                    "--json",
+                ],
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "segment-metadata",
+                    "report",
+                    "--chunk-snapshot",
+                    str(chunk_snapshot),
+                    "--metadata",
+                    str(metadata),
+                    "--segmentation-plan",
+                    str(segmentation_plan),
+                    "--report-json",
+                    str(outputs["segment"][0]),
+                    "--report-md",
+                    str(outputs["segment"][1]),
+                    "--redaction-report",
+                    str(outputs["segment"][2]),
+                    "--json",
+                ],
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "suppression-report",
+                    "--report",
+                    str(suppression_input),
+                    "--report-json",
+                    str(outputs["suppression"][0]),
+                    "--report-md",
+                    str(outputs["suppression"][1]),
+                    "--redaction-report",
+                    str(outputs["suppression"][2]),
+                    "--json",
+                ],
+            ]
+            results = [
+                subprocess.run(command, text=True, capture_output=True, check=False, env=_env())
+                for command in commands
+            ]
+            sidecars = [json.loads(paths[2].read_text(encoding="utf-8")) for paths in outputs.values()]
+            combined_parts = [result.stdout for result in results]
+            for report_json, report_md, redaction in outputs.values():
+                combined_parts.append(report_json.read_text(encoding="utf-8"))
+                combined_parts.append(report_md.read_text(encoding="utf-8"))
+                combined_parts.append(redaction.read_text(encoding="utf-8"))
+            combined = "\n".join(combined_parts)
+            raw_snapshot = chunk_snapshot.read_text(encoding="utf-8")
+            raw_qa = generated_qa.read_text(encoding="utf-8")
+            raw_evidence_map = evidence_map.read_text(encoding="utf-8")
+
+        for result in results:
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for sidecar in sidecars:
+            self.assertEqual(sidecar["schema"], "ragflow_report_redaction_report_v1")
+            self.assertGreaterEqual(sidecar["summary"]["redaction_count"], 1)
+        self.assertIn("ragflow_chunk_snapshot_report_v1", results[0].stdout)
+        self.assertIn("ragflow_grounded_qa_generate_report_v1", results[1].stdout)
+        self.assertIn("ragflow_grounded_qa_validate_report_v1", results[2].stdout)
+        self.assertIn("ragflow_grounded_qa_evidence_map_report_v1", results[3].stdout)
+        self.assertIn("ragflow_segment_metadata_report_v1", results[4].stdout)
+        self.assertIn("ragflow_suppression_report_v1", results[5].stdout)
+        self.assertNotIn(fake_host, combined)
+        self.assertNotIn(fake_secret, combined)
+        self.assertNotIn(str(root), combined)
+        self.assertNotIn(str(chunk_input), combined)
+        self.assertNotIn(str(suppression_input), combined)
+        self.assertIn("<redacted:private-host>", combined)
+        self.assertIn("<redacted:secret>", combined)
+        self.assertIn("<redacted:config-path>", combined)
+        self.assertIn(fake_host, raw_snapshot)
+        self.assertIn(fake_secret, raw_snapshot)
+        self.assertIn(fake_host, raw_qa)
+        self.assertIn(fake_secret, raw_qa)
+        self.assertIn(fake_host, raw_evidence_map)
+        self.assertIn(fake_secret, raw_evidence_map)
 
     def test_topology_advise_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2937,6 +3579,238 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("dataset_id_short", {issue["issue_type"] for issue in payload["issues"]})
         self.assertIn("RAGFlow Diagnostic Report", report_text)
 
+    def test_validation_diagnostic_surfaces_emit_redaction_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, diagnostic_probe_server() as base_url:
+            root = Path(tmp)
+            fake_host = "diagnostic.internal.local"
+            fake_secret = "diagnostic-secret"
+            manifest = root / "kb_manifest.json"
+            source = root / f"source-token={fake_secret}.md"
+            markdown = root / "documents" / f"source-token={fake_secret}.md"
+            source.parent.mkdir(parents=True, exist_ok=True)
+            markdown.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text("# Source\n", encoding="utf-8")
+            markdown.write_text("# Source\n", encoding="utf-8")
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {
+                            "id": "short",
+                            "name": f"kb:http://{fake_host}:9380?token={fake_secret}",
+                        },
+                        "documents": [
+                            {
+                                "document_id": "doc-1",
+                                "source_path": str(source),
+                                "markdown_path": str(markdown),
+                                "status": "running",
+                                "chunk_count": 0,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            queries = root / "queries.json"
+            queries.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {
+                                "id": "q1",
+                                "question": f"Known token={fake_secret} http://{fake_host}/retrieval",
+                                "expected_terms": ["known term"],
+                                "expected_documents": [f"source-token={fake_secret}.md"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            handoff = root / "handoff"
+            docs_dir = handoff / "documents"
+            docs_dir.mkdir(parents=True)
+            (docs_dir / "sample.md").write_text("# Sample\n", encoding="utf-8")
+            manifest_name = f"doc_manifest-token={fake_secret}.json"
+            (handoff / manifest_name).write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": str(root),
+                        "quality_report": f"quality-token={fake_secret}.json",
+                        "documents": [{"source_path": str(source), "markdown_path": "documents/sample.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (handoff / f"quality-token={fake_secret}.json").write_text(
+                json.dumps({"schema": "doc_quality_report_v1", "gate": {"status": "PASS"}}),
+                encoding="utf-8",
+            )
+
+            outputs = {
+                "inspect_handoff": (
+                    root / "handoff_inspection.json",
+                    root / "handoff_inspection.md",
+                    root / "handoff_inspection_redaction.json",
+                ),
+                "diagnose": (
+                    root / "diagnostic.json",
+                    root / "diagnostic.md",
+                    root / "diagnostic_redaction.json",
+                ),
+                "inspect_kb": (
+                    None,
+                    None,
+                    root / "inspect_kb_redaction.json",
+                ),
+                "probe": (
+                    root / "probe.json",
+                    root / "probe.md",
+                    root / "probe_redaction.json",
+                ),
+                "validate": (
+                    root / "validation.json",
+                    root / "validation.md",
+                    root / "validation_redaction.json",
+                ),
+            }
+            inspect_handoff_json, inspect_handoff_md, inspect_handoff_redaction = outputs["inspect_handoff"]
+            inspect_handoff_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "inspect-handoff",
+                    "--handoff",
+                    str(handoff),
+                    "--manifest-name",
+                    manifest_name,
+                    "--report-json",
+                    str(inspect_handoff_json),
+                    "--report-md",
+                    str(inspect_handoff_md),
+                    "--redaction-report",
+                    str(inspect_handoff_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            diagnose_json, diagnose_md, diagnose_redaction = outputs["diagnose"]
+            diagnose_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(DIAGNOSE_SCRIPT),
+                    "--kb-manifest",
+                    str(manifest),
+                    "--report-json",
+                    str(diagnose_json),
+                    "--report-md",
+                    str(diagnose_md),
+                    "--redaction-report",
+                    str(diagnose_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            inspect_redaction = outputs["inspect_kb"][2]
+            inspect_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(INSPECT_SCRIPT),
+                    "--kb-manifest",
+                    str(manifest),
+                    "--redaction-report",
+                    str(inspect_redaction),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            probe_json, probe_md, probe_redaction = outputs["probe"]
+            probe_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROBE_SCRIPT),
+                    "--base-url",
+                    base_url,
+                    "--api-key",
+                    fake_secret,
+                    "--report-json",
+                    str(probe_json),
+                    "--report-md",
+                    str(probe_md),
+                    "--redaction-report",
+                    str(probe_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            validate_json, validate_md, validate_redaction = outputs["validate"]
+            validate_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(VALIDATE_SCRIPT),
+                    "--kb-manifest",
+                    str(manifest),
+                    "--level",
+                    "regression",
+                    "--queries",
+                    str(queries),
+                    "--base-url",
+                    base_url,
+                    "--api-key",
+                    fake_secret,
+                    "--report-json",
+                    str(validate_json),
+                    "--report-md",
+                    str(validate_md),
+                    "--redaction-report",
+                    str(validate_redaction),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            results = [inspect_handoff_result, diagnose_result, inspect_result, probe_result, validate_result]
+            sidecars = [json.loads(paths[2].read_text(encoding="utf-8")) for paths in outputs.values()]
+            combined_parts = [result.stdout for result in results]
+            for report_json, report_md, redaction in outputs.values():
+                if report_json:
+                    combined_parts.append(report_json.read_text(encoding="utf-8"))
+                if report_md:
+                    combined_parts.append(report_md.read_text(encoding="utf-8"))
+                combined_parts.append(redaction.read_text(encoding="utf-8"))
+            combined = "\n".join(combined_parts)
+
+        for result in results:
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for sidecar in sidecars:
+            self.assertEqual(sidecar["schema"], "ragflow_report_redaction_report_v1")
+            self.assertGreaterEqual(sidecar["summary"]["redaction_count"], 1)
+        self.assertIn("ragflow_handoff_inspection_v1", inspect_handoff_result.stdout)
+        self.assertIn("ragflow_kb_diagnostic_report_v1", diagnose_result.stdout)
+        self.assertIn("ragflow_kb_diagnostic_report_v1", probe_result.stdout)
+        self.assertIn("RAGFlow Validation Report", combined)
+        self.assertNotIn(fake_host, combined)
+        self.assertNotIn(fake_secret, combined)
+        self.assertNotIn("127.0.0.1", combined)
+        self.assertNotIn(str(root), combined)
+        self.assertIn("<redacted:private-host>", combined)
+        self.assertIn("<redacted:secret>", combined)
+        self.assertIn("<redacted:config-path>", combined)
+
     def test_append_dry_run_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3307,6 +4181,195 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(candidate_payload["schema"], "ragflow_candidate_profile_set_v1")
         self.assertIn("llm_backed_enrichment_enabled", {issue["code"] for issue in payload["issues"]})
         self.assertIn("RAGFlow Enrichment Experiment Matrix", report_text)
+
+    def test_profile_surfaces_emit_redaction_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_host = "profile.internal.local"
+            fake_secret = "profile-secret"
+            profile_path = root / "profile-api_key=profile-secret.json"
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "profile-redaction",
+                        "chunk_method": "naive",
+                        "chunk_size": 768,
+                        "chunk_overlap": 96,
+                        "embedding_model": f"http://{fake_host}:9380/embed?token={fake_secret}",
+                        "parser_config": {
+                            "chunk_token_num": 768,
+                            "auto_keywords": 0,
+                            "auto_questions": 0,
+                            "__language__": "English",
+                            "local_path": str(root / "private" / "profile-token=profile-secret.json"),
+                            "secret_note": f"api_key={fake_secret}",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            first_report = root / "first-validation.json"
+            second_report = root / "second-validation.json"
+            first_report.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "level": "benchmark",
+                        "dataset": {"id": "ds-1", "name": f"kb:http://{fake_host}:9380?token={fake_secret}"},
+                        "metrics": {"pass_rate": 0.6, "query_latency_ms": 220.0},
+                        "benchmark": {"metrics": {"hit_rate": 0.4, "mrr": 0.3, "ndcg_at_k": 0.3}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            second_report.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "level": "benchmark",
+                        "dataset": {"id": "ds-2", "name": f"kb:{root}:api_key={fake_secret}"},
+                        "metrics": {"pass_rate": 1.0, "query_latency_ms": 110.0},
+                        "benchmark": {"metrics": {"hit_rate": 0.9, "mrr": 0.8, "ndcg_at_k": 0.8}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            matrix = root / "matrix.json"
+            matrix.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_enrichment_experiment_matrix_v1",
+                        "name": f"profile-matrix-token={fake_secret}",
+                        "dimensions": {
+                            "auto_questions": [0, 1],
+                            "retrieval.endpoint": [f"http://{fake_host}:9380/v1?token={fake_secret}"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            outputs = {
+                "lint": (root / "lint.json", root / "lint.md", root / "lint_redaction.json"),
+                "explain": (root / "explain.json", None, root / "explain_redaction.json"),
+                "recommend": (root / "recommend.json", None, root / "recommend_redaction.json"),
+                "compare": (root / "compare.json", root / "compare.md", root / "compare_redaction.json"),
+                "experiment": (root / "experiment.json", root / "experiment.md", root / "experiment_redaction.json"),
+            }
+            recommended_profile = root / "recommended_profile.json"
+            candidate_set = root / "candidate_profile_set.json"
+            commands = [
+                [
+                    sys.executable,
+                    str(PROFILE_SCRIPT),
+                    "lint",
+                    "--profile",
+                    str(profile_path),
+                    "--report-json",
+                    str(outputs["lint"][0]),
+                    "--report-md",
+                    str(outputs["lint"][1]),
+                    "--redaction-report",
+                    str(outputs["lint"][2]),
+                ],
+                [
+                    sys.executable,
+                    str(PROFILE_SCRIPT),
+                    "explain",
+                    "--profile",
+                    str(profile_path),
+                    "--report-json",
+                    str(outputs["explain"][0]),
+                    "--redaction-report",
+                    str(outputs["explain"][2]),
+                ],
+                [
+                    sys.executable,
+                    str(PROFILE_SCRIPT),
+                    "recommend",
+                    "--language",
+                    "en",
+                    "--doc-type",
+                    "manual",
+                    "--profile-id",
+                    f"recommended-http://{fake_host}:9380?token={fake_secret}",
+                    "--output",
+                    str(recommended_profile),
+                    "--report-json",
+                    str(outputs["recommend"][0]),
+                    "--redaction-report",
+                    str(outputs["recommend"][2]),
+                ],
+                [
+                    sys.executable,
+                    str(PROFILE_SCRIPT),
+                    "compare",
+                    "--report",
+                    str(first_report),
+                    "--report",
+                    str(second_report),
+                    "--report-json",
+                    str(outputs["compare"][0]),
+                    "--report-md",
+                    str(outputs["compare"][1]),
+                    "--redaction-report",
+                    str(outputs["compare"][2]),
+                ],
+                [
+                    sys.executable,
+                    str(PROFILE_SCRIPT),
+                    "experiment",
+                    "--base-profile",
+                    str(profile_path),
+                    "--matrix",
+                    str(matrix),
+                    "--candidate-set",
+                    str(candidate_set),
+                    "--report-json",
+                    str(outputs["experiment"][0]),
+                    "--report-md",
+                    str(outputs["experiment"][1]),
+                    "--redaction-report",
+                    str(outputs["experiment"][2]),
+                ],
+            ]
+            results = [
+                subprocess.run(command, text=True, capture_output=True, check=False, env=_env())
+                for command in commands
+            ]
+            sidecars = [json.loads(paths[2].read_text(encoding="utf-8")) for paths in outputs.values()]
+            combined_parts = [result.stdout for result in results]
+            for report_json, report_md, redaction in outputs.values():
+                combined_parts.append(report_json.read_text(encoding="utf-8"))
+                if report_md:
+                    combined_parts.append(report_md.read_text(encoding="utf-8"))
+                combined_parts.append(redaction.read_text(encoding="utf-8"))
+            combined = "\n".join(combined_parts)
+            raw_recommendation = recommended_profile.read_text(encoding="utf-8")
+            raw_candidate_set = candidate_set.read_text(encoding="utf-8")
+
+        for result in results:
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for sidecar in sidecars:
+            self.assertEqual(sidecar["schema"], "ragflow_report_redaction_report_v1")
+            self.assertGreaterEqual(sidecar["summary"]["redaction_count"], 1)
+        self.assertIn("ragflow_profile_lint_report_v1", results[0].stdout)
+        self.assertIn("ragflow_profile_explanation_v1", results[1].stdout)
+        self.assertIn("ragflow_profile_recommendation_v1", results[2].stdout)
+        self.assertIn("ragflow_profile_compare_report_v1", results[3].stdout)
+        self.assertIn("ragflow_enrichment_experiment_report_v1", results[4].stdout)
+        self.assertNotIn(fake_host, combined)
+        self.assertNotIn(fake_secret, combined)
+        self.assertNotIn(str(root), combined)
+        self.assertNotIn(str(profile_path), combined)
+        self.assertNotIn(str(first_report), combined)
+        self.assertNotIn(str(second_report), combined)
+        self.assertIn("<redacted:private-host>", combined)
+        self.assertIn("<redacted:secret>", combined)
+        self.assertIn("<redacted:config-path>", combined)
+        self.assertIn(fake_host, raw_recommendation)
+        self.assertIn(fake_secret, raw_recommendation)
+        self.assertIn(fake_host, raw_candidate_set)
+        self.assertIn(fake_secret, raw_candidate_set)
 
     def test_validate_regression_requires_queries_without_network(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

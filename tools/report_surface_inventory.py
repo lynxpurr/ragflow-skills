@@ -121,21 +121,6 @@ DOC_COVERED_COMMANDS = (
 DOC_NOT_APPLICABLE_COMMANDS = ("ragflow-doc-to-md package",)
 KB_COVERED_COMMANDS = (
     "ragflow-kb-build activation-plan",
-    "ragflow-kb-build health-report",
-    "ragflow-kb-build metadata lint",
-    "ragflow-kb-build metadata merge",
-    "ragflow-kb-build model-providers probe",
-    "ragflow-kb-build optimize",
-    "ragflow-kb-build optimize cleanup-plan",
-    "ragflow-kb-build optimize summarize",
-    "ragflow-kb-build parse-report",
-    "ragflow-kb-build tagset lint",
-    "ragflow-kb-build tagset report",
-    "ragflow-kb-build topology advise",
-    "ragflow-kb-build topology split-plan",
-)
-KB_NEEDS_REDACTION_COMMANDS = (
-    "ragflow-kb-build append",
     "ragflow-kb-build benchmark delta",
     "ragflow-kb-build benchmark gate",
     "ragflow-kb-build benchmark import",
@@ -144,10 +129,17 @@ KB_NEEDS_REDACTION_COMMANDS = (
     "ragflow-kb-build benchmark suggest",
     "ragflow-kb-build benchmark summarize",
     "ragflow-kb-build benchmark trend",
-    "ragflow-kb-build cleanup",
     "ragflow-kb-build diagnose",
+    "ragflow-kb-build health-report",
     "ragflow-kb-build inspect-handoff",
     "ragflow-kb-build inspect-kb",
+    "ragflow-kb-build metadata lint",
+    "ragflow-kb-build metadata merge",
+    "ragflow-kb-build model-providers probe",
+    "ragflow-kb-build optimize",
+    "ragflow-kb-build optimize cleanup-plan",
+    "ragflow-kb-build optimize summarize",
+    "ragflow-kb-build parse-report",
     "ragflow-kb-build probe",
     "ragflow-kb-build profile compare",
     "ragflow-kb-build profile experiment",
@@ -160,7 +152,15 @@ KB_NEEDS_REDACTION_COMMANDS = (
     "ragflow-kb-build segment-metadata report",
     "ragflow-kb-build snapshot-chunks",
     "ragflow-kb-build suppression-report",
+    "ragflow-kb-build tagset lint",
+    "ragflow-kb-build tagset report",
+    "ragflow-kb-build topology advise",
+    "ragflow-kb-build topology split-plan",
     "ragflow-kb-build validate",
+)
+KB_NEEDS_REDACTION_COMMANDS = (
+    "ragflow-kb-build append",
+    "ragflow-kb-build cleanup",
 )
 KB_NOT_APPLICABLE_COMMANDS = (
     "ragflow-kb-build",
