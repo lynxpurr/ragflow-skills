@@ -7,6 +7,7 @@ from pathlib import Path
 import argparse
 import json
 import os
+import re
 import sys
 from typing import Any
 
@@ -93,6 +94,12 @@ from ragflow_skill_runtime.profiles import ProfileError  # noqa: E402
 from ragflow_skill_runtime.topology import TopologyError  # noqa: E402
 
 
+_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
+_ASSIGNMENT_SECRET_VALUE_RE = re.compile(
+    r"(?i)\b(?:api[_-]?key|token|secret|password|authorization)\s*[:=]\s*([^\s,;\"']+)"
+)
+
+
 def _dump_json(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
@@ -140,6 +147,116 @@ def _write_text_file(path: str | None, text: str) -> None:
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding="utf-8")
+
+
+def _collect_urls(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return _URL_RE.findall(value)
+    if isinstance(value, dict):
+        urls: list[str] = []
+        for item in value.values():
+            urls.extend(_collect_urls(item))
+        return urls
+    if isinstance(value, (list, tuple)):
+        urls = []
+        for item in value:
+            urls.extend(_collect_urls(item))
+        return urls
+    return []
+
+
+def _collect_secret_literals(value: Any) -> list[str]:
+    if isinstance(value, str):
+        values: list[str] = []
+        for match in _ASSIGNMENT_SECRET_VALUE_RE.finditer(value):
+            secret = match.group(1).strip()
+            if len(secret) < 4:
+                continue
+            values.append(secret)
+            stem = Path(secret).stem
+            if len(stem) >= 4 and stem != secret:
+                values.append(stem)
+        return values
+    if isinstance(value, dict):
+        secrets: list[str] = []
+        for item in value.values():
+            secrets.extend(_collect_secret_literals(item))
+        return secrets
+    if isinstance(value, (list, tuple)):
+        secrets = []
+        for item in value:
+            secrets.extend(_collect_secret_literals(item))
+        return secrets
+    return []
+
+
+def _collect_path_like_literals(value: Any) -> list[str]:
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        if (
+            "/" in text
+            or "\\" in text
+            or text.startswith(("~", "."))
+            or text.endswith((".json", ".jsonl", ".md", ".yaml", ".yml", ".py", ".toml", ".txt"))
+        ):
+            return [text]
+        return []
+    if isinstance(value, dict):
+        paths: list[str] = []
+        for item in value.values():
+            paths.extend(_collect_path_like_literals(item))
+        return paths
+    if isinstance(value, (list, tuple)):
+        paths = []
+        for item in value:
+            paths.extend(_collect_path_like_literals(item))
+        return paths
+    return []
+
+
+def _collect_redaction_context_from_json_paths(paths: list[str | None]) -> tuple[list[str], list[str], list[str]]:
+    secrets: list[str] = []
+    hosts: list[str] = []
+    path_literals: list[str] = []
+    for raw_path in paths:
+        if not raw_path:
+            continue
+        try:
+            payload = json.loads(Path(raw_path).read_text(encoding="utf-8"))
+        except (OSError, TypeError, json.JSONDecodeError):
+            continue
+        secrets.extend(_collect_secret_literals(payload))
+        hosts.extend(configured_private_hosts_from_urls(_collect_urls(payload)))
+        path_literals.extend(_collect_path_like_literals(payload))
+    return secrets, hosts, path_literals
+
+
+def _sanitize_governance_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    *,
+    input_paths: list[str | None],
+    output_paths: list[str | None] | None = None,
+    extra_secret_literals: list[str] | None = None,
+    extra_private_hosts: list[str] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [*_collect_urls(report)]
+    config_paths = [
+        *input_paths,
+        *(output_paths or []),
+        getattr(args, "report_json", None),
+        getattr(args, "report_md", None),
+        getattr(args, "redaction_report", None),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        explicit_secrets=[*_collect_secret_literals(report), *(extra_secret_literals or [])],
+        private_hosts=[*configured_private_hosts_from_urls(urls), *(extra_private_hosts or [])],
+        config_paths=config_paths,
+    )
+    return sanitized, redaction_report
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -255,6 +372,9 @@ def _run_inspect_handoff(args: argparse.Namespace) -> int:
 def _run_metadata_lint(args: argparse.Namespace) -> int:
     try:
         report = lint_metadata_file(args.metadata)
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(report, args, input_paths=[args.metadata])
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_governance_markdown(report, title="RAGFlow Metadata Lint Report"))
         _dump_json(report)
@@ -272,6 +392,14 @@ def _run_metadata_merge(args: argparse.Namespace) -> int:
             derive_from_path=not args.no_derive_from_path,
         )
         _write_json_file(args.output, report["metadata"])
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[args.doc_manifest, args.handoff_metadata, args.metadata],
+                output_paths=[args.output],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_governance_markdown(report, title="RAGFlow Metadata Merge Report"))
         _dump_json(report)
@@ -293,6 +421,9 @@ def _run_metadata_generate_template(args: argparse.Namespace) -> int:
 def _run_tagset_lint(args: argparse.Namespace) -> int:
     try:
         report = lint_tagset_file(args.tagset)
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(report, args, input_paths=[args.tagset])
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_governance_markdown(report, title="RAGFlow Tagset Lint Report"))
         _dump_json(report)
@@ -319,6 +450,13 @@ def _run_tagset_export(args: argparse.Namespace) -> int:
 def _run_tagset_report(args: argparse.Namespace) -> int:
     try:
         report = tagset_report_file(args.tagset, metadata_path=args.metadata)
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[args.tagset, args.metadata],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_governance_markdown(report, title="RAGFlow Tagset Report"))
         _dump_json(report)
@@ -602,6 +740,31 @@ def _run_optimize(args: argparse.Namespace) -> int:
             top_k=args.top_k,
             metric_cutoff=args.metric_cutoff,
         )
+        if args.redaction_report:
+            plan, redaction_report = _sanitize_governance_report(
+                plan,
+                args,
+                input_paths=[
+                    args.input,
+                    args.doc_manifest,
+                    *args.profile,
+                    *args.profile_dir,
+                    *args.profile_set,
+                    args.benchmark_manifest,
+                    args.queries,
+                    args.qrels,
+                    args.qa,
+                    args.metadata,
+                    args.tagset,
+                    args.chunk_snapshot,
+                    args.gate_config,
+                    args.baseline_report,
+                    args.artifact_dir,
+                    *_collect_path_like_literals(plan),
+                ],
+                output_paths=[args.output],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.output, plan)
         _write_text_file(args.report_md, render_optimization_plan_markdown(plan))
         _dump_json(plan)
@@ -612,10 +775,21 @@ def _run_optimize(args: argparse.Namespace) -> int:
 
 def _run_optimize_summarize(args: argparse.Namespace) -> int:
     try:
+        context_secrets, context_hosts, context_paths = _collect_redaction_context_from_json_paths([args.plan, *args.report])
         results = summarize_optimization_results(
             plan_path=args.plan,
             report_paths=args.report,
         )
+        if args.redaction_report:
+            results, redaction_report = _sanitize_governance_report(
+                results,
+                args,
+                input_paths=[args.plan, *args.report, *context_paths, *_collect_path_like_literals(results)],
+                output_paths=[args.output],
+                extra_secret_literals=context_secrets,
+                extra_private_hosts=context_hosts,
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.output, results)
         _write_text_file(args.report_md, render_best_profile_markdown(results))
         _dump_json(results)
@@ -626,12 +800,23 @@ def _run_optimize_summarize(args: argparse.Namespace) -> int:
 
 def _run_optimize_cleanup_plan(args: argparse.Namespace) -> int:
     try:
+        context_secrets, context_hosts, context_paths = _collect_redaction_context_from_json_paths([args.plan])
         plan = create_optimization_cleanup_plan(
             plan_path=args.plan,
             cleanup_script=args.cleanup_script,
             config_path=args.config,
             require_manifests=args.require_manifests,
         )
+        if args.redaction_report:
+            plan, redaction_report = _sanitize_governance_report(
+                plan,
+                args,
+                input_paths=[args.plan, args.cleanup_script, args.config, *context_paths, *_collect_path_like_literals(plan)],
+                output_paths=[args.output],
+                extra_secret_literals=context_secrets,
+                extra_private_hosts=context_hosts,
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.output, plan)
         _write_text_file(args.report_md, render_optimization_cleanup_plan_markdown(plan))
         _dump_json(plan)
@@ -659,6 +844,14 @@ def _run_topology_advise(args: argparse.Namespace) -> int:
             min_documents=args.min_documents,
             min_total_chars=args.min_total_chars,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[args.input, args.doc_manifest, args.metadata, args.retrieval_hints, args.route_config],
+                output_paths=[args.output],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.output, report)
         _write_text_file(args.report_md, render_topology_advice_markdown(report))
         _dump_json(report)
@@ -684,6 +877,14 @@ def _run_topology_split_plan(args: argparse.Namespace) -> int:
             min_group_documents=args.min_group_documents,
             min_group_estimated_chunks=args.min_group_estimated_chunks,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[args.input, args.doc_manifest, args.metadata, args.retrieval_hints],
+                output_paths=[args.output],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.output, report)
         _write_text_file(args.report_md, render_split_plan_markdown(report))
         _dump_json(report)
@@ -705,12 +906,47 @@ def _run_activation_plan(args: argparse.Namespace) -> int:
             min_documents=args.min_documents,
             min_chunks=args.min_chunks,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[
+                    args.kb_manifest,
+                    args.doc_manifest,
+                    args.route_config,
+                    args.retrieval_hints,
+                    args.chunk_snapshot,
+                    args.centroid_index,
+                    args.route_tests,
+                ],
+                output_paths=[args.output],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.output, report)
         _write_text_file(args.report_md, render_activation_plan_markdown(report))
         _dump_json(report)
         return 0
     except (TopologyError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=args.json)
+
+
+def _sanitize_parse_report(report: dict[str, Any], args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [*_collect_urls(report)]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.kb_manifest,
+            args.documents_json,
+            *args.parse_log,
+            args.profile,
+            args.parser_config,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
 
 
 def _run_parse_report(args: argparse.Namespace) -> int:
@@ -722,12 +958,32 @@ def _run_parse_report(args: argparse.Namespace) -> int:
             profile_path=args.profile,
             parser_config_path=args.parser_config,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_parse_report(report, args)
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_parse_report_markdown(report))
         _dump_json(report)
         return 0 if report["ok"] else 1
     except (ParseReportError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=args.json)
+
+
+def _sanitize_health_report(report: dict[str, Any], args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [*_collect_urls(report)]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            *args.kb_manifest,
+            *args.parse_report,
+            *args.activation_plan,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
 
 
 def _run_health_report(args: argparse.Namespace) -> int:
@@ -740,6 +996,9 @@ def _run_health_report(args: argparse.Namespace) -> int:
             min_chunks=args.min_chunks,
             expected_embedding_models=args.expected_embedding_model,
         )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_health_report(report, args)
+            _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_kb_health_report_markdown(report))
         _dump_json(report)
@@ -849,6 +1108,7 @@ def build_metadata_parser() -> argparse.ArgumentParser:
     lint.add_argument("--metadata", required=True, help="Metadata JSON/YAML file")
     lint.add_argument("--report-json", help="Optional JSON lint report path")
     lint.add_argument("--report-md", help="Optional Markdown lint report path")
+    lint.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     lint.add_argument("--json", action="store_true", help="Emit JSON errors")
     lint.set_defaults(func=_run_metadata_lint)
 
@@ -859,6 +1119,7 @@ def build_metadata_parser() -> argparse.ArgumentParser:
     merge.add_argument("--output", required=True, help="Output merged ragflow_metadata_v1 JSON")
     merge.add_argument("--report-json", help="Optional JSON merge report path")
     merge.add_argument("--report-md", help="Optional Markdown merge report path")
+    merge.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     merge.add_argument("--no-derive-from-path", action="store_true", help="Do not fill missing fields from document paths")
     merge.add_argument("--json", action="store_true", help="Emit JSON errors")
     merge.set_defaults(func=_run_metadata_merge)
@@ -880,6 +1141,7 @@ def build_tagset_parser() -> argparse.ArgumentParser:
     lint.add_argument("--tagset", required=True, help="Tagset JSON/YAML file")
     lint.add_argument("--report-json", help="Optional JSON lint report path")
     lint.add_argument("--report-md", help="Optional Markdown lint report path")
+    lint.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     lint.add_argument("--json", action="store_true", help="Emit JSON errors")
     lint.set_defaults(func=_run_tagset_lint)
 
@@ -895,6 +1157,7 @@ def build_tagset_parser() -> argparse.ArgumentParser:
     report.add_argument("--metadata", help="Optional metadata file for document coverage checks")
     report.add_argument("--report-json", help="Optional JSON report path")
     report.add_argument("--report-md", help="Optional Markdown report path")
+    report.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     report.add_argument("--json", action="store_true", help="Emit JSON errors")
     report.set_defaults(func=_run_tagset_report)
 
@@ -1107,6 +1370,7 @@ def build_optimize_parser() -> argparse.ArgumentParser:
     parser.add_argument("--metric-cutoff", type=int, help="Optional planned benchmark metric cutoff")
     parser.add_argument("--output", default="optimization_plan.json", help="Output ragflow_optimization_plan_v1 JSON")
     parser.add_argument("--report-md", help="Optional optimization plan Markdown path")
+    parser.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     parser.set_defaults(func=_run_optimize)
     return parser
@@ -1118,6 +1382,7 @@ def build_optimize_summarize_parser() -> argparse.ArgumentParser:
     parser.add_argument("--report", action="append", default=[], help="Validation report JSON; defaults to paths in the plan")
     parser.add_argument("--output", default="profile_experiment_results.json", help="Output ragflow_profile_experiment_results_v1 JSON")
     parser.add_argument("--report-md", default="best_profile_report.md", help="Output best profile Markdown report")
+    parser.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     parser.set_defaults(func=_run_optimize_summarize)
     return parser
@@ -1131,6 +1396,7 @@ def build_optimize_cleanup_plan_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cleanup-script", default="scripts/cleanup.py", help="Cleanup script path recorded in generated commands")
     parser.add_argument("--config", help="Optional runtime config path recorded in generated execute commands")
     parser.add_argument("--require-manifests", action="store_true", help="Fail when candidate kb_manifest files are not available yet")
+    parser.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     parser.set_defaults(func=_run_optimize_cleanup_plan)
     return parser
@@ -1158,6 +1424,7 @@ def build_topology_parser() -> argparse.ArgumentParser:
     advise.add_argument("--allow-blocked", action="store_true", help="Allow advice with a BLOCKED doc_manifest quality gate")
     advise.add_argument("--output", default="kb_topology_advice.json", help="Output kb_topology_advice_v1 JSON")
     advise.add_argument("--report-md", help="Optional topology advice Markdown path")
+    advise.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     advise.add_argument("--json", action="store_true", help="Emit JSON errors")
     advise.set_defaults(func=_run_topology_advise)
 
@@ -1177,6 +1444,7 @@ def build_topology_parser() -> argparse.ArgumentParser:
     split_plan.add_argument("--allow-blocked", action="store_true", help="Allow planning with a BLOCKED doc_manifest quality gate")
     split_plan.add_argument("--output", default="kb_split_plan.json", help="Output kb_split_plan_v1 JSON")
     split_plan.add_argument("--report-md", help="Optional split plan Markdown path")
+    split_plan.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     split_plan.add_argument("--json", action="store_true", help="Emit JSON errors")
     split_plan.set_defaults(func=_run_topology_split_plan)
 
@@ -1196,6 +1464,7 @@ def build_activation_plan_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-chunks", type=int, default=1, help="Minimum chunks before activation")
     parser.add_argument("--output", default="kb_activation_plan.json", help="Output kb_activation_plan_v1 JSON")
     parser.add_argument("--report-md", help="Optional activation plan Markdown path")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     parser.set_defaults(func=_run_activation_plan)
     return parser
@@ -1216,6 +1485,7 @@ def build_parse_report_parser() -> argparse.ArgumentParser:
         help="Output ragflow_parse_report_v1 JSON",
     )
     parser.add_argument("--report-md", help="Optional parse report Markdown path")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     parser.set_defaults(func=_run_parse_report)
     return parser
@@ -1242,6 +1512,7 @@ def build_health_report_parser() -> argparse.ArgumentParser:
         help="Output ragflow_kb_health_report_v1 JSON",
     )
     parser.add_argument("--report-md", help="Optional KB health Markdown path")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     parser.set_defaults(func=_run_health_report)
     return parser

@@ -77,6 +77,8 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("generated report redaction fixture", check_names)
         self.assertIn("doc-to-md passthrough", check_names)
         self.assertIn("quality_report produced", check_names)
+        self.assertIn("doc-to-md convert redaction", check_names)
+        self.assertIn("doc-to-md convert redaction sidecar", check_names)
         self.assertIn("doc-to-md image fallback", check_names)
         self.assertIn("image fallback preserves source image with review gate", check_names)
         self.assertIn("doc-to-md mineru-cli auto", check_names)
@@ -84,14 +86,32 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("mineru-cli local image asset copied", check_names)
         self.assertIn("mineru-cli quality gate passes with local image", check_names)
         self.assertIn("mineru-cli runtime report summarizes process attempt", check_names)
+        self.assertIn("doc-to-md convert runtime redaction", check_names)
         self.assertIn("doc-to-md backend probe", check_names)
         self.assertIn("doc-to-md backend warmup", check_names)
+        self.assertIn("doc-to-md backend warmup redaction", check_names)
         self.assertIn("doc-to-md inspect quality", check_names)
+        self.assertIn("doc-to-md inspect redaction", check_names)
         self.assertIn("doc-to-md segment plan", check_names)
+        self.assertIn("doc-to-md segment plan redaction", check_names)
         self.assertIn("doc-to-md split", check_names)
+        self.assertIn("doc-to-md split redaction", check_names)
+        self.assertIn("doc-to-md postprocess redaction", check_names)
         self.assertIn("profile api payload filters internal metadata", check_names)
         self.assertIn("kb-build dry-run", check_names)
         self.assertIn("kb-build model-providers probe", check_names)
+        self.assertIn("kb-build metadata lint redaction", check_names)
+        self.assertIn("kb-build metadata merge redaction", check_names)
+        self.assertIn("kb-build tagset lint redaction", check_names)
+        self.assertIn("kb-build tagset report redaction", check_names)
+        self.assertIn("kb-build topology advise redaction", check_names)
+        self.assertIn("kb-build topology split-plan redaction", check_names)
+        self.assertIn("kb-build activation-plan redaction", check_names)
+        self.assertIn("kb-build parse-report redaction", check_names)
+        self.assertIn("kb-build health-report redaction", check_names)
+        self.assertIn("kb-build optimize plan-only redaction", check_names)
+        self.assertIn("kb-build optimize cleanup-plan redaction", check_names)
+        self.assertIn("kb-build optimize summarize redaction", check_names)
         self.assertIn("kb-build append help", check_names)
         self.assertIn("kb-build cleanup help", check_names)
         self.assertIn("kb-build diagnose help", check_names)
@@ -129,6 +149,82 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("live build skipped", check_names)
         self.assertTrue(
             any(path.endswith("query_answer_eval_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("parse_report_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("kb_health_report_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("metadata_lint_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("metadata_merge_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("tagset_lint_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("tagset_report_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("kb_topology_advice_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("kb_split_plan_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("kb_activation_plan_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("optimization_plan_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("optimization_cleanup_plan_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("best_profile_report_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("backend_warmup_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("convert_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("convert_runtime_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("quality_report.inspect_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("postprocess_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("segmentation_plan_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("split_plan_redaction.json") for path in payload["produced_artifacts"]),
             payload["produced_artifacts"],
         )
         self.assertTrue(

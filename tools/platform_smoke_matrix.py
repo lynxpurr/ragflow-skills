@@ -170,6 +170,32 @@ def _record_command_check(
     return ok
 
 
+def _record_redaction_sidecar_check(checks: list[dict[str, Any]], name: str, path: Path) -> bool:
+    error = ""
+    ok = path.exists()
+    if not ok:
+        error = f"missing {path}"
+    else:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            ok = False
+            error = f"invalid redaction sidecar: {exc}"
+        else:
+            ok = payload.get("schema") == "ragflow_report_redaction_report_v1"
+            if not ok:
+                error = "unexpected redaction sidecar schema"
+    checks.append(
+        {
+            "name": name,
+            "ok": ok,
+            "returncode": 0 if ok else 1,
+            "error": error,
+        }
+    )
+    return ok
+
+
 def _write_input_doc(workspace: Path) -> Path:
     input_dir = workspace / "input"
     input_dir.mkdir(parents=True, exist_ok=True)
@@ -380,6 +406,8 @@ def _run_mineru_env_check(
             cwd=workspace,
             env=env,
         )
+        backend_warmup_fixture = workspace / "warmup.local-token=warmup-secret.pdf"
+        backend_warmup_fixture.write_bytes(b"%PDF fake warmup")
         backend_warmup_result = _run_command(
             [
                 sys.executable,
@@ -389,13 +417,19 @@ def _run_mineru_env_check(
                 "--backend",
                 "mineru-cli",
                 "--fixture",
-                str(mineru_input / "mineru.pdf"),
+                str(backend_warmup_fixture),
                 "--mineru-cli-path",
                 str(fake_mineru_cli),
+                "--mineru-base-url",
+                "http://warmup.local:8080/api/v1?token=warmup-secret",
+                "--remote-api-key",
+                "warmup-secret",
                 "--report-json",
                 str(workspace / "backend_warmup.json"),
                 "--report-md",
                 str(workspace / "backend_warmup.md"),
+                "--redaction-report",
+                str(workspace / "backend_warmup_redaction.json"),
                 "--json",
                 "--fail-on-failed",
             ],
@@ -1587,6 +1621,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
 
     convert_script = script_root / "ragflow-doc-to-md" / "scripts" / "convert.py"
     handoff_dir = workspace / "handoff"
+    convert_redaction = workspace / "convert_redaction.json"
     convert_result = _run_command(
         [
             sys.executable,
@@ -1597,12 +1632,22 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(handoff_dir),
             "--mode",
             "passthrough",
+            "--redaction-report",
+            str(convert_redaction),
             "--json",
         ],
         cwd=workspace,
         env=env,
     )
     _record_command_check(checks, "doc-to-md passthrough", convert_result, required_stdout='"ok": true')
+    checks.append(
+        {
+            "name": "doc-to-md convert redaction",
+            "ok": convert_redaction.exists(),
+            "returncode": 0 if convert_redaction.exists() else 1,
+            "error": "" if convert_redaction.exists() else f"missing {convert_redaction}",
+        }
+    )
     doc_manifest = handoff_dir / "doc_manifest.json"
     image_input = workspace / "image-fallback-input"
     image_input.mkdir(parents=True, exist_ok=True)
@@ -1679,8 +1724,9 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
                 "returncode": 0 if rich_path.exists() else 1,
                 "error": "" if rich_path.exists() else f"missing {rich_path}",
             }
-        )
+    )
     postprocess_dir = workspace / "postprocessed-handoff"
+    postprocess_redaction = workspace / "postprocess_redaction.json"
     postprocess_result = _run_command(
         [
             sys.executable,
@@ -1692,6 +1738,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "safe",
             "--output",
             str(postprocess_dir),
+            "--redaction-report",
+            str(postprocess_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -1793,6 +1841,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         metadata_lint_result,
         required_stdout='"schema": "ragflow_metadata_v1"',
     )
+    metadata_lint_json = artifacts_dir / "metadata_lint.json"
+    metadata_lint_redaction = artifacts_dir / "metadata_lint_redaction.json"
     metadata_lint_report = _run_command(
         [
             sys.executable,
@@ -1801,6 +1851,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "lint",
             "--metadata",
             str(metadata_template),
+            "--report-json",
+            str(metadata_lint_json),
+            "--redaction-report",
+            str(metadata_lint_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -1812,8 +1866,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         metadata_lint_report,
         required_stdout='"schema": "ragflow_metadata_lint_report_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb metadata lint redaction", metadata_lint_redaction)
     topology_advice = artifacts_dir / "kb_topology_advice.json"
     topology_advice_md = artifacts_dir / "kb_topology_advice.md"
+    topology_advice_redaction = artifacts_dir / "kb_topology_advice_redaction.json"
     topology_advice_result = _run_command(
         [
             sys.executable,
@@ -1834,6 +1890,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(topology_advice),
             "--report-md",
             str(topology_advice_md),
+            "--redaction-report",
+            str(topology_advice_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -1845,8 +1903,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         topology_advice_result,
         required_stdout='"schema": "kb_topology_advice_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb topology advise redaction", topology_advice_redaction)
     split_plan = artifacts_dir / "kb_split_plan.json"
     split_plan_md = artifacts_dir / "kb_split_plan.md"
+    split_plan_redaction = artifacts_dir / "kb_split_plan_redaction.json"
     split_plan_result = _run_command(
         [
             sys.executable,
@@ -1865,6 +1925,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(split_plan),
             "--report-md",
             str(split_plan_md),
+            "--redaction-report",
+            str(split_plan_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -1876,6 +1938,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         split_plan_result,
         required_stdout='"schema": "kb_split_plan_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb topology split-plan redaction", split_plan_redaction)
     tagset_template = artifacts_dir / "tagset.template.json"
     tagset_template_result = _run_command(
         [
@@ -1896,6 +1959,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         tagset_template_result,
         required_stdout='"schema": "ragflow_tagset_v1"',
     )
+    tagset_report_json = artifacts_dir / "tagset_report.json"
+    tagset_report_redaction = artifacts_dir / "tagset_report_redaction.json"
     tagset_report_result = _run_command(
         [
             sys.executable,
@@ -1904,6 +1969,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "report",
             "--tagset",
             str(tagset_template),
+            "--report-json",
+            str(tagset_report_json),
+            "--redaction-report",
+            str(tagset_report_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -1915,6 +1984,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         tagset_report_result,
         required_stdout='"schema": "ragflow_tagset_report_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb tagset report redaction", tagset_report_redaction)
 
     kb_manifest = _write_fake_kb_manifest(workspace, artifacts_dir)
     queries_path = _write_query_set(artifacts_dir)
@@ -1923,6 +1993,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     activation_route_tests = artifacts_dir / "activation_route_tests.json"
     activation_plan = artifacts_dir / "kb_activation_plan.json"
     activation_plan_md = artifacts_dir / "kb_activation_plan.md"
+    activation_plan_redaction = artifacts_dir / "kb_activation_plan_redaction.json"
     activation_chunk_snapshot.write_text(
         json.dumps(
             {
@@ -1989,6 +2060,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(activation_plan),
             "--report-md",
             str(activation_plan_md),
+            "--redaction-report",
+            str(activation_plan_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -2000,11 +2073,13 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         activation_plan_result,
         required_stdout='"schema": "kb_activation_plan_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb activation-plan redaction", activation_plan_redaction)
 
     parse_documents_json = artifacts_dir / "parse_documents.json"
     parse_log = artifacts_dir / "parse.log"
     parse_report = artifacts_dir / "parse_report.json"
     parse_report_md = artifacts_dir / "parse_report.md"
+    parse_report_redaction = artifacts_dir / "parse_report_redaction.json"
     parse_documents_json.write_text(
         json.dumps(
             {
@@ -2043,6 +2118,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(parse_report),
             "--report-md",
             str(parse_report_md),
+            "--redaction-report",
+            str(parse_report_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -2057,6 +2134,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
 
     health_report = artifacts_dir / "kb_health_report.json"
     health_report_md = artifacts_dir / "kb_health_report.md"
+    health_report_redaction = artifacts_dir / "kb_health_report_redaction.json"
     health_report_result = _run_command(
         [
             sys.executable,
@@ -2074,6 +2152,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(health_report),
             "--report-md",
             str(health_report_md),
+            "--redaction-report",
+            str(health_report_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -2274,6 +2354,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         required_stdout='"schema": "ragflow_benchmark_preflight_report_v1"',
     )
     optimization_plan = artifacts_dir / "optimization_plan.json"
+    optimization_plan_redaction = artifacts_dir / "optimization_plan_redaction.json"
     optimize_plan_result = _run_command(
         [
             sys.executable,
@@ -2298,6 +2379,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "platform",
             "--output",
             str(optimization_plan),
+            "--redaction-report",
+            str(optimization_plan_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -2309,8 +2392,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         optimize_plan_result,
         required_stdout='"schema": "ragflow_optimization_plan_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb optimize plan-only redaction", optimization_plan_redaction)
     optimization_cleanup_plan = artifacts_dir / "optimization_cleanup_plan.json"
     optimization_cleanup_plan_md = artifacts_dir / "optimization_cleanup_plan.md"
+    optimization_cleanup_plan_redaction = artifacts_dir / "optimization_cleanup_plan_redaction.json"
     optimize_cleanup_plan_result = _run_command(
         [
             sys.executable,
@@ -2323,6 +2408,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(optimization_cleanup_plan),
             "--report-md",
             str(optimization_cleanup_plan_md),
+            "--redaction-report",
+            str(optimization_cleanup_plan_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -2334,6 +2421,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         optimize_cleanup_plan_result,
         required_stdout='"schema": "ragflow_optimization_cleanup_plan_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb optimize cleanup-plan redaction", optimization_cleanup_plan_redaction)
     benchmark_sample_dir = artifacts_dir / "benchmark-sample"
     benchmark_sample_result = _run_command(
         [
@@ -2416,6 +2504,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     )
     profile_experiment_results = artifacts_dir / "profile_experiment_results.json"
     best_profile_report = artifacts_dir / "best_profile_report.md"
+    best_profile_report_redaction = artifacts_dir / "best_profile_report_redaction.json"
     optimize_summary_result = _run_command(
         [
             sys.executable,
@@ -2432,6 +2521,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(profile_experiment_results),
             "--report-md",
             str(best_profile_report),
+            "--redaction-report",
+            str(best_profile_report_redaction),
             "--json",
         ],
         cwd=workspace,
@@ -2443,6 +2534,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         optimize_summary_result,
         required_stdout='"schema": "ragflow_profile_experiment_results_v1"',
     )
+    _record_redaction_sidecar_check(checks, "kb optimize summarize redaction", best_profile_report_redaction)
 
     profile_script = script_root / "ragflow-kb-build" / "scripts" / "profile.py"
     profile_lint_result = _run_command(
@@ -3008,16 +3100,21 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         workspace / "mineru-sync-handoff" / "doc_manifest.json",
         workspace / "backend_probe.json",
         workspace / "backend_probe.md",
+        workspace / "convert_redaction.json",
         workspace / "backend_probe_redaction.json",
         workspace / "backend_warmup.json",
         workspace / "backend_warmup.md",
+        workspace / "backend_warmup_redaction.json",
+        workspace / "postprocess_redaction.json",
         kb_manifest,
         artifacts_dir / "parse_documents.json",
         artifacts_dir / "parse.log",
         artifacts_dir / "parse_report.json",
         artifacts_dir / "parse_report.md",
+        artifacts_dir / "parse_report_redaction.json",
         artifacts_dir / "kb_health_report.json",
         artifacts_dir / "kb_health_report.md",
+        artifacts_dir / "kb_health_report_redaction.json",
         artifacts_dir / "query_endpoint_report.json",
         artifacts_dir / "query_endpoint_report.md",
         artifacts_dir / "query_endpoint_redaction.json",
@@ -3112,7 +3209,20 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "model_provider_probe.md",
         artifacts_dir / "model_provider_redaction.json",
         artifacts_dir / "metadata.template.json",
+        artifacts_dir / "metadata_lint.json",
+        artifacts_dir / "metadata_lint_redaction.json",
+        artifacts_dir / "kb_topology_advice.json",
+        artifacts_dir / "kb_topology_advice.md",
+        artifacts_dir / "kb_topology_advice_redaction.json",
+        artifacts_dir / "kb_split_plan.json",
+        artifacts_dir / "kb_split_plan.md",
+        artifacts_dir / "kb_split_plan_redaction.json",
         artifacts_dir / "tagset.template.json",
+        artifacts_dir / "tagset_report.json",
+        artifacts_dir / "tagset_report_redaction.json",
+        artifacts_dir / "kb_activation_plan.json",
+        artifacts_dir / "kb_activation_plan.md",
+        artifacts_dir / "kb_activation_plan_redaction.json",
         artifacts_dir / "benchmark" / "manifest.json",
         artifacts_dir / "benchmark" / "queries.json",
         artifacts_dir / "benchmark" / "qrels.json",
@@ -3122,10 +3232,13 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "segment_metadata_report.json",
         artifacts_dir / "suppression_report.json",
         artifacts_dir / "optimization_plan.json",
+        artifacts_dir / "optimization_plan_redaction.json",
         artifacts_dir / "optimization_cleanup_plan.json",
         artifacts_dir / "optimization_cleanup_plan.md",
+        artifacts_dir / "optimization_cleanup_plan_redaction.json",
         artifacts_dir / "profile_experiment_results.json",
         artifacts_dir / "best_profile_report.md",
+        artifacts_dir / "best_profile_report_redaction.json",
         artifacts_dir / "benchmark_current.json",
         artifacts_dir / "benchmark_baseline.json",
         artifacts_dir / "benchmark_suggestions.json",

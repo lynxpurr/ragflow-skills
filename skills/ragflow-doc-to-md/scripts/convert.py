@@ -7,7 +7,9 @@ from pathlib import Path
 import argparse
 import json
 import os
+import re
 import sys
+import tempfile
 from typing import Any
 
 
@@ -74,6 +76,10 @@ BACKEND_CHOICES = {
     "pandoc",
     "remote",
 }
+_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
+_ASSIGNMENT_SECRET_VALUE_RE = re.compile(
+    r"(?i)\b(?:api[_-]?key|token|secret|password|authorization)\s*[:=]\s*([^\s,;\"']+)"
+)
 
 
 def _dump_json(data: Any) -> None:
@@ -126,18 +132,147 @@ def _sidecar_path(root: Path, name: str | None) -> Path | None:
     return root / path
 
 
-def _write_runtime_report(
+def _collect_urls(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return _URL_RE.findall(value)
+    if isinstance(value, dict):
+        urls: list[str] = []
+        for item in value.values():
+            urls.extend(_collect_urls(item))
+        return urls
+    if isinstance(value, (list, tuple)):
+        urls = []
+        for item in value:
+            urls.extend(_collect_urls(item))
+        return urls
+    return []
+
+
+def _collect_secret_literals(value: Any) -> list[str]:
+    if isinstance(value, str):
+        values: list[str] = []
+        for match in _ASSIGNMENT_SECRET_VALUE_RE.finditer(value):
+            secret = match.group(1).strip()
+            if len(secret) < 4:
+                continue
+            values.append(secret)
+            stem = Path(secret).stem
+            if len(stem) >= 4 and stem != secret:
+                values.append(stem)
+        return values
+    if isinstance(value, dict):
+        secrets: list[str] = []
+        for item in value.values():
+            secrets.extend(_collect_secret_literals(item))
+        return secrets
+    if isinstance(value, (list, tuple)):
+        secrets = []
+        for item in value:
+            secrets.extend(_collect_secret_literals(item))
+        return secrets
+    return []
+
+
+def _collect_manifest_paths(manifest: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    source_root = manifest.get("source_root")
+    if source_root:
+        paths.append(str(source_root))
+    documents = manifest.get("documents", [])
+    if isinstance(documents, list):
+        for item in documents:
+            if not isinstance(item, dict):
+                continue
+            for key in ("source_path", "markdown_path"):
+                value = item.get(key)
+                if value:
+                    paths.append(str(value))
+    return paths
+
+
+def _sanitize_generated_report(
+    report: dict[str, Any],
+    redaction_report: str | None,
+    *,
+    explicit_secrets: list[str | None] | None = None,
+    url_candidates: list[str | None] | None = None,
+    home_paths: list[str | None] | None = None,
+    config_paths: list[str | None] | None = None,
+) -> dict[str, Any]:
+    if not redaction_report:
+        return report
+    urls = [*(url_candidates or []), *_collect_urls(report)]
+    secrets = [*(explicit_secrets or []), *_collect_secret_literals(report)]
+    sanitized, redaction_payload = sanitize_report_payload(
+        report,
+        explicit_secrets=secrets,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        home_paths=home_paths,
+        config_paths=config_paths,
+    )
+    redaction_path = Path(redaction_report)
+    redaction_path.parent.mkdir(parents=True, exist_ok=True)
+    redaction_path.write_text(json.dumps(redaction_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return sanitized
+
+
+def _sanitize_output_payload(
+    payload: dict[str, Any],
+    *,
+    explicit_secrets: list[str | None] | None = None,
+    url_candidates: list[str | None] | None = None,
+    home_paths: list[str | None] | None = None,
+    config_paths: list[str | None] | None = None,
+) -> dict[str, Any]:
+    urls = [*(url_candidates or []), *_collect_urls(payload)]
+    sanitized, _redaction_payload = sanitize_report_payload(
+        payload,
+        explicit_secrets=explicit_secrets,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        home_paths=home_paths,
+        config_paths=config_paths,
+    )
+    return sanitized
+
+
+def _postprocess_report_path(args: argparse.Namespace) -> Path:
+    if args.report_json:
+        return Path(args.report_json)
+    if args.doc_manifest:
+        if args.write:
+            return Path(args.doc_manifest).parent / "postprocess_report.json"
+        return Path(args.output) / "postprocess_report.json"
+    if args.output:
+        output = Path(args.output)
+        return (output if output.exists() and output.is_dir() else output.parent) / "postprocess_report.json"
+    return Path(args.markdown).parent / "postprocess_report.json"
+
+
+def _make_runtime_report(
     *,
     output_root: Path,
-    args: argparse.Namespace,
     process_attempts: list[dict[str, Any]],
-) -> tuple[dict[str, Any] | None, Path | None, Path | None]:
+) -> dict[str, Any] | None:
     if not process_attempts:
-        return None, None, None
-    report = make_doc_runtime_report_payload(
+        return None
+    return make_doc_runtime_report_payload(
         output_root=output_root,
         process_attempts=process_attempts,
     )
+
+
+def _runtime_report_paths(output_root: Path, args: argparse.Namespace) -> tuple[Path | None, Path | None]:
+    return _sidecar_path(output_root, args.runtime_report_name), _sidecar_path(output_root, args.runtime_report_md)
+
+
+def _write_runtime_report_payload(
+    *,
+    output_root: Path,
+    args: argparse.Namespace,
+    report: dict[str, Any] | None,
+) -> tuple[Path | None, Path | None]:
+    if not report:
+        return None, None
     report_json_path = _sidecar_path(output_root, args.runtime_report_name)
     if report_json_path:
         report_json_path.parent.mkdir(parents=True, exist_ok=True)
@@ -146,7 +281,62 @@ def _write_runtime_report(
     if report_md_path:
         report_md_path.parent.mkdir(parents=True, exist_ok=True)
         report_md_path.write_text(render_doc_runtime_markdown(report), encoding="utf-8")
-    return report, report_json_path, report_md_path
+    return report_json_path, report_md_path
+
+
+def _sanitize_conversion_reports(
+    *,
+    quality_report: dict[str, Any] | None,
+    runtime_report: dict[str, Any] | None,
+    args: argparse.Namespace,
+    config: Any,
+    output_root: Path,
+    remote_url: str | None,
+    remote_api_key: str | None,
+    mineru_base_url: str | None,
+    mineru_api_key: str | None,
+    mineru_cli_path: str | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if not args.redaction_report:
+        return quality_report, runtime_report
+    bundle: dict[str, Any] = {}
+    if quality_report is not None:
+        bundle["quality_report"] = quality_report
+    if runtime_report is not None:
+        bundle["runtime_report"] = runtime_report
+    sanitized = _sanitize_generated_report(
+        bundle,
+        args.redaction_report,
+        explicit_secrets=[
+            remote_api_key,
+            mineru_api_key,
+            args.remote_api_key,
+            args.mineru_api_key,
+            config.doc_to_md.remote_api_key,
+            config.mineru.api_key,
+        ],
+        url_candidates=[remote_url, mineru_base_url],
+        home_paths=[
+            args.input,
+            args.output,
+            args.config,
+            str(output_root),
+            mineru_cli_path,
+            os.environ.get("MINERU_CLI_PATH"),
+        ],
+        config_paths=[
+            args.input,
+            args.output,
+            args.config,
+            args.quality_report_name,
+            args.quality_report_md,
+            args.runtime_report_name,
+            args.runtime_report_md,
+            args.redaction_report,
+            os.environ.get("RAGFLOW_CONFIG"),
+        ],
+    )
+    return sanitized.get("quality_report"), sanitized.get("runtime_report")
 
 
 def _config_or_arg(args: argparse.Namespace, field: str, config_value, default=None):
@@ -202,6 +392,10 @@ def _run(args: argparse.Namespace) -> int:
             if args.remote_timeout is not None
             else config.doc_to_md.remote_timeout or 120.0
         )
+        remote_api_key = _remote_api_key(args, config)
+        mineru_base_url = _config_or_arg(args, "mineru_base_url", config.mineru.base_url)
+        mineru_api_key = _config_or_arg(args, "mineru_api_key", config.mineru.api_key)
+        mineru_cli_path = _config_or_arg(args, "mineru_cli_path", config.mineru.cli_path)
         mineru_timeout = _float_config_or_arg(
             args,
             "mineru_timeout",
@@ -242,13 +436,13 @@ def _run(args: argparse.Namespace) -> int:
                     mode=args.mode,
                     backend=backend,
                     remote_url=remote_url,
-                    remote_api_key=_remote_api_key(args, config),
+                    remote_api_key=remote_api_key,
                     remote_timeout=remote_timeout,
-                    mineru_base_url=_config_or_arg(args, "mineru_base_url", config.mineru.base_url),
-                    mineru_api_key=_config_or_arg(args, "mineru_api_key", config.mineru.api_key),
+                    mineru_base_url=mineru_base_url,
+                    mineru_api_key=mineru_api_key,
                     mineru_timeout=mineru_timeout,
                     mineru_poll_interval=mineru_poll_interval,
-                    mineru_cli_path=_config_or_arg(args, "mineru_cli_path", config.mineru.cli_path),
+                    mineru_cli_path=mineru_cli_path,
                     mineru_cli_backend=_config_or_arg(
                         args,
                         "mineru_cli_backend",
@@ -285,10 +479,26 @@ def _run(args: argparse.Namespace) -> int:
                 )
             except (UnicodeDecodeError, OSError, DocConvertError) as exc:
                 if args.strict:
-                    _write_runtime_report(
+                    runtime_report = _make_runtime_report(
+                        output_root=output_root,
+                        process_attempts=process_attempts,
+                    )
+                    _, runtime_report = _sanitize_conversion_reports(
+                        quality_report=None,
+                        runtime_report=runtime_report,
+                        args=args,
+                        config=config,
+                        output_root=output_root,
+                        remote_url=remote_url,
+                        remote_api_key=remote_api_key,
+                        mineru_base_url=mineru_base_url,
+                        mineru_api_key=mineru_api_key,
+                        mineru_cli_path=mineru_cli_path,
+                    )
+                    _write_runtime_report_payload(
                         output_root=output_root,
                         args=args,
-                        process_attempts=process_attempts,
+                        report=runtime_report,
                     )
                     raise DocConvertError(str(exc)) from exc
                 skipped.append({"source_path": source.source_path, "reason": str(exc)})
@@ -305,9 +515,8 @@ def _run(args: argparse.Namespace) -> int:
                 )
             )
 
-        runtime_report, runtime_report_path, runtime_report_md_path = _write_runtime_report(
+        runtime_report = _make_runtime_report(
             output_root=output_root,
-            args=args,
             process_attempts=process_attempts,
         )
         if not converted:
@@ -325,6 +534,23 @@ def _run(args: argparse.Namespace) -> int:
         quality_report = make_quality_report_payload(
             output_root=output_root,
             documents=quality_documents,
+        )
+        quality_report, runtime_report = _sanitize_conversion_reports(
+            quality_report=quality_report,
+            runtime_report=runtime_report,
+            args=args,
+            config=config,
+            output_root=output_root,
+            remote_url=remote_url,
+            remote_api_key=remote_api_key,
+            mineru_base_url=mineru_base_url,
+            mineru_api_key=mineru_api_key,
+            mineru_cli_path=mineru_cli_path,
+        )
+        runtime_report_path, runtime_report_md_path = _write_runtime_report_payload(
+            output_root=output_root,
+            args=args,
+            report=runtime_report,
         )
         quality_report_path = _sidecar_path(output_root, args.quality_report_name)
         if quality_report_path:
@@ -344,18 +570,33 @@ def _run(args: argparse.Namespace) -> int:
         manifest_path = output_root / args.manifest_name
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        _dump_json(
-            {
-                "ok": True,
-                "doc_manifest": str(manifest_path),
-                "quality_report": str(quality_report_path) if quality_report_path else None,
-                "quality_gate": quality_report["gate"],
-                "runtime_report": str(runtime_report_path) if runtime_report_path else None,
-                "runtime_summary": runtime_report["summary"] if runtime_report else None,
-                "document_count": len(converted),
-                "skipped": skipped,
-            }
-        )
+        response = {
+            "ok": True,
+            "doc_manifest": str(manifest_path),
+            "quality_report": str(quality_report_path) if quality_report_path else None,
+            "quality_gate": quality_report["gate"],
+            "runtime_report": str(runtime_report_path) if runtime_report_path else None,
+            "runtime_summary": runtime_report["summary"] if runtime_report else None,
+            "document_count": len(converted),
+            "skipped": skipped,
+        }
+        if args.redaction_report:
+            response = _sanitize_output_payload(
+                response,
+                explicit_secrets=[remote_api_key, mineru_api_key],
+                url_candidates=[remote_url, mineru_base_url],
+                home_paths=[args.input, args.output, str(output_root), mineru_cli_path],
+                config_paths=[
+                    args.input,
+                    args.output,
+                    args.config,
+                    str(manifest_path),
+                    str(quality_report_path) if quality_report_path else None,
+                    str(runtime_report_path) if runtime_report_path else None,
+                    args.redaction_report,
+                ],
+            )
+        _dump_json(response)
         return 0 if not skipped else 1
     except (DocConvertError, DocQualityError, OSError) as exc:
         return _error(str(exc), json_output=args.json)
@@ -369,6 +610,18 @@ def _run_inspect(args: argparse.Namespace) -> int:
             manifest_path=args.doc_manifest,
         )
         report = make_quality_report_payload(output_root=output_root, documents=documents)
+        report = _sanitize_generated_report(
+            report,
+            args.redaction_report,
+            url_candidates=_collect_urls(manifest),
+            home_paths=[
+                args.doc_manifest,
+                args.report_json,
+                args.report_md,
+                *_collect_manifest_paths(manifest),
+            ],
+            config_paths=[args.doc_manifest, args.report_json, args.report_md, args.redaction_report],
+        )
         report_json = Path(args.report_json) if args.report_json else Path(args.doc_manifest).parent / "quality_report.json"
         report_json.parent.mkdir(parents=True, exist_ok=True)
         report_json.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -376,15 +629,21 @@ def _run_inspect(args: argparse.Namespace) -> int:
             report_md = Path(args.report_md)
             report_md.parent.mkdir(parents=True, exist_ok=True)
             report_md.write_text(render_quality_markdown(report), encoding="utf-8")
-        _dump_json(
-            {
-                "ok": True,
-                "quality_report": str(report_json),
-                "quality_report_md": str(args.report_md) if args.report_md else None,
-                "quality_gate": report["gate"],
-                "document_count": len(documents),
-            }
-        )
+        response = {
+            "ok": True,
+            "quality_report": str(report_json),
+            "quality_report_md": str(args.report_md) if args.report_md else None,
+            "quality_gate": report["gate"],
+            "document_count": len(documents),
+        }
+        if args.redaction_report:
+            response = _sanitize_output_payload(
+                response,
+                url_candidates=_collect_urls(manifest),
+                home_paths=[args.doc_manifest, args.report_json, args.report_md, *_collect_manifest_paths(manifest)],
+                config_paths=[args.doc_manifest, args.report_json, args.report_md, args.redaction_report],
+            )
+        _dump_json(response)
         if args.fail_on_blocked and report["gate"].get("status") == "BLOCKED":
             return 1
         return 0
@@ -400,12 +659,24 @@ def _run_segment_plan(args: argparse.Namespace) -> int:
             hard_max_chars=args.hard_max_chars,
             min_segment_chars=args.min_segment_chars,
         )
-        payload = plan.to_dict()
+        response = {
+            "ok": True,
+            "segmentation_plan": plan.to_dict(),
+            "output": args.output,
+        }
+        if args.redaction_report:
+            response = _sanitize_generated_report(
+                response,
+                args.redaction_report,
+                home_paths=[args.markdown, args.output],
+                config_paths=[args.markdown, args.output, args.redaction_report],
+            )
+        payload = response["segmentation_plan"]
         if args.output:
             output = Path(args.output)
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        _dump_json({"ok": True, "segmentation_plan": payload, "output": args.output})
+        _dump_json(response)
         return 0
     except (DocSegmentError, OSError, UnicodeDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
@@ -416,13 +687,28 @@ def _run_split(args: argparse.Namespace) -> int:
         materialized = materialize_segments(
             args.markdown,
             output_dir=args.output,
-            plan_output=args.plan_output,
+            plan_output=None,
             soft_max_chars=args.soft_max_chars,
             hard_max_chars=args.hard_max_chars,
             min_segment_chars=args.min_segment_chars,
             force=args.force,
         )
-        _dump_json(materialized.to_dict())
+        payload = materialized.to_dict()
+        if args.redaction_report:
+            payload = _sanitize_generated_report(
+                payload,
+                args.redaction_report,
+                home_paths=[args.markdown, args.output, args.plan_output],
+                config_paths=[args.markdown, args.output, args.plan_output, args.redaction_report],
+            )
+        if args.plan_output:
+            plan_output = Path(args.plan_output)
+            plan_output.parent.mkdir(parents=True, exist_ok=True)
+            plan_output.write_text(
+                json.dumps(payload["segmentation_plan"], ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        _dump_json(payload)
         return 0
     except (DocSegmentError, OSError, UnicodeDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
@@ -453,22 +739,48 @@ def _run_postprocess(args: argparse.Namespace) -> int:
     try:
         if bool(args.markdown) == bool(args.doc_manifest):
             raise DocPostprocessError("provide exactly one of --markdown or --doc-manifest")
-        if args.markdown:
-            report = postprocess_single_markdown(
-                args.markdown,
-                profile=args.profile,
-                output_path=args.output,
-                write=args.write,
-                report_json=args.report_json,
-            )
+        report_json = args.report_json
+        if args.redaction_report:
+            raw_report_dir = tempfile.TemporaryDirectory(prefix="ragflow-doc-postprocess-report-")
+            report_json = str(Path(raw_report_dir.name) / "postprocess_report.json")
         else:
-            report = postprocess_handoff(
-                args.doc_manifest,
-                profile=args.profile,
-                output_dir=args.output,
-                write=args.write,
-                report_json=args.report_json,
-            )
+            raw_report_dir = None
+        try:
+            if args.markdown:
+                report = postprocess_single_markdown(
+                    args.markdown,
+                    profile=args.profile,
+                    output_path=args.output,
+                    write=args.write,
+                    report_json=report_json,
+                )
+            else:
+                report = postprocess_handoff(
+                    args.doc_manifest,
+                    profile=args.profile,
+                    output_dir=args.output,
+                    write=args.write,
+                    report_json=report_json,
+                )
+            if args.redaction_report:
+                report = _sanitize_generated_report(
+                    report,
+                    args.redaction_report,
+                    home_paths=[args.markdown, args.doc_manifest, args.output, args.report_json],
+                    config_paths=[
+                        args.markdown,
+                        args.doc_manifest,
+                        args.output,
+                        args.report_json,
+                        args.redaction_report,
+                    ],
+                )
+                report_path = _postprocess_report_path(args)
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        finally:
+            if raw_report_dir is not None:
+                raw_report_dir.cleanup()
         _dump_json({"ok": True, "postprocess_report": report})
         return 0
     except (DocPostprocessError, OSError, UnicodeDecodeError) as exc:
@@ -588,6 +900,32 @@ def _run_backend_warmup(args: argparse.Namespace) -> int:
                 label="MINERU_ENABLE_FORMULA",
             ),
         )
+        report = _sanitize_generated_report(
+            report,
+            args.redaction_report,
+            explicit_secrets=[
+                config.doc_to_md.remote_api_key,
+                config.mineru.api_key,
+                args.remote_api_key,
+                args.mineru_api_key,
+            ],
+            url_candidates=[
+                _config_or_arg(args, "remote_url", config.doc_to_md.remote_url),
+                _config_or_arg(args, "mineru_base_url", config.mineru.base_url),
+            ],
+            home_paths=[
+                args.fixture,
+                args.output_markdown,
+                _config_or_arg(args, "mineru_cli_path", config.mineru.cli_path),
+            ],
+            config_paths=[
+                args.config,
+                os.environ.get("RAGFLOW_CONFIG"),
+                args.report_json,
+                args.report_md,
+                args.redaction_report,
+            ],
+        )
         if args.report_json:
             report_json = Path(args.report_json)
             report_json.parent.mkdir(parents=True, exist_ok=True)
@@ -617,6 +955,7 @@ def build_inspect_parser() -> argparse.ArgumentParser:
     parser.add_argument("--doc-manifest", required=True, help="Path to doc_manifest.json")
     parser.add_argument("--report-json", help="Output quality_report.json path; defaults beside the doc manifest")
     parser.add_argument("--report-md", help="Optional Markdown quality report path")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     parser.add_argument("--fail-on-blocked", action="store_true", help="Return exit code 1 when the gate status is BLOCKED")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     return parser
@@ -626,6 +965,7 @@ def build_segment_plan_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Plan Markdown segmentation without writing segment files")
     parser.add_argument("--markdown", required=True, help="Markdown file to inspect")
     parser.add_argument("--output", help="Optional segmentation_plan.json output path")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     _add_segmentation_threshold_args(parser)
     return parser
 
@@ -635,6 +975,7 @@ def build_split_parser() -> argparse.ArgumentParser:
     parser.add_argument("--markdown", required=True, help="Markdown file to split")
     parser.add_argument("--output", required=True, help="Output directory for segment Markdown files")
     parser.add_argument("--plan-output", help="Optional segmentation_plan.json output path")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     parser.add_argument("--force", action="store_true", help="Allow writing into a non-empty output directory")
     _add_segmentation_threshold_args(parser)
     return parser
@@ -664,6 +1005,7 @@ def build_postprocess_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", help="Output file for --markdown or output handoff directory for --doc-manifest")
     parser.add_argument("--write", action="store_true", help="Rewrite the source Markdown file(s) in place")
     parser.add_argument("--report-json", help="Optional postprocess_report.json output path")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     return parser
 
@@ -706,6 +1048,7 @@ def build_backend_parser() -> argparse.ArgumentParser:
     warmup.add_argument("--mineru-enable-formula", help="MinerU formula parsing true/false; defaults to MINERU_ENABLE_FORMULA or true")
     warmup.add_argument("--report-json", help="Optional backend warmup JSON report path")
     warmup.add_argument("--report-md", help="Optional backend warmup Markdown report path")
+    warmup.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     warmup.add_argument("--fail-on-failed", action="store_true", help="Return non-zero when warmup conversion fails")
     warmup.add_argument("--json", action="store_true", help="Emit JSON")
     warmup.set_defaults(func=_run_backend_warmup)
@@ -741,6 +1084,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quality-report-md", help="Optional Markdown quality report sidecar name under the output directory")
     parser.add_argument("--runtime-report-name", default="runtime_report.json", help="Runtime process cleanup report sidecar name; written when local process-backed converters run")
     parser.add_argument("--runtime-report-md", help="Optional Markdown runtime report sidecar name under the output directory")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     parser.add_argument("--no-image-fallback", action="store_true", help="Skip source-image Markdown fallback when OCR/conversion is unavailable")
     parser.add_argument("--no-recursive", action="store_true", help="Do not recurse into input directories")
     parser.add_argument("--strict", action="store_true", help="Fail on the first skipped file")

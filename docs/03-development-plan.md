@@ -695,9 +695,9 @@ Exit criteria:
 - No public artifact contains machine-specific MinerU paths.
 - Existing v0.1 HTTP MinerU behavior remains backward-compatible.
 
-## Spec Coding Rules For Phase 24-35
+## Spec Coding Rules For Phase 24-36
 
-The detailed design source for Phase 24 through Phase 35 is
+The detailed design source for Phase 24 through Phase 36 is
 `docs/10-legacy-feature-gap-closure-design.md`. Use that document's Spec Coding Map to
 connect each feature design to its owning skill, command surface, schemas, and required
 test gates.
@@ -715,6 +715,10 @@ Phase dependency groups:
   exposes the Phase 24-30 command surfaces.
 - Phase 34-35 are post-ingest productization and health telemetry. They should reuse
   rich handoff retrieval hints, routing reports, diagnostics, and sanitized report helpers.
+- Phase 36 is a post-Phase-35 safety closure. It should first audit report-producing
+  commands across all public skills, then add remaining redaction sidecars where reports
+  may echo host inputs, and only then pilot small retry/backoff or metrics helpers in one
+  read-only command before broader runtime primitives are attempted.
 
 Per-phase implementation checklist:
 
@@ -1053,8 +1057,18 @@ Status note: `--redaction-report` currently covers `ragflow-query endpoint-repor
 `ragflow-query intent route`, `ragflow-query session inspect`, `ragflow-query session enrich`,
 `ragflow-query agentic-plan`, `ragflow-query audit-citations`, `ragflow-query fallback-test`,
 `ragflow-query centroid build --plan-only`, `ragflow-query centroid build`,
-`ragflow-kb-build model-providers probe`, and `ragflow-doc-to-md backend probe`. Broader
-report-command coverage remains open. Release hygiene now scans generated reports/examples
+`ragflow-kb-build model-providers probe`, `ragflow-kb-build parse-report`,
+`ragflow-kb-build health-report`, `ragflow-kb-build metadata lint`,
+`ragflow-kb-build metadata merge`, `ragflow-kb-build tagset lint`,
+`ragflow-kb-build tagset report`, `ragflow-kb-build topology advise`,
+`ragflow-kb-build topology split-plan`, `ragflow-kb-build activation-plan`,
+`ragflow-kb-build optimize --plan-only`, `ragflow-kb-build optimize cleanup-plan`,
+`ragflow-kb-build optimize summarize`,
+`ragflow-doc-to-md`, `ragflow-doc-to-md inspect`,
+`ragflow-doc-to-md backend probe`, `ragflow-doc-to-md backend warmup`,
+`ragflow-doc-to-md postprocess`, `ragflow-doc-to-md segment-plan`, and
+`ragflow-doc-to-md split`. Broader `ragflow-kb-build` report-command coverage remains
+open. Release hygiene now scans generated reports/examples
 for raw sensitive literals and validates redaction sidecars; consumer acceptance includes a
 fake generated-report redaction fixture. Public host-agent setup references document where
 sanitized reports and redaction sidecars should be stored and what must stay out of shared
@@ -1062,12 +1076,15 @@ transcripts.
 
 Recommended next slices:
 
-1. Finish generated-report safety before broader runtime primitives: add focused
-   `--redaction-report` coverage to report commands that may include endpoints, config
-   paths, work paths, or host-supplied sidecar paths.
-2. Add the smallest shared retry/backoff and metrics helpers first, recording retry budgets
+1. Use the Phase 36 report-surface inventory to finish generated-report safety before
+   broader runtime primitives.
+2. Add focused `--redaction-report` coverage to the highest-risk remaining report commands
+   that may include endpoints, config paths, work paths, user-supplied report paths, parse
+   logs, or host-provided sidecar paths. When redaction is enabled, Markdown reports must be
+   rendered from sanitized payloads as well as JSON.
+3. Add the smallest shared retry/backoff and metrics helpers first, recording retry budgets
    and latency summaries in traces or reports where those helpers are used.
-3. Defer broader rate limiting, circuit breakers, cache invalidation, checkpoint/resume,
+4. Defer broader rate limiting, circuit breakers, cache invalidation, checkpoint/resume,
    and partial-failure schemas until at least one narrow report or probe command consumes
    the helper with deterministic tests.
 
@@ -1212,6 +1229,100 @@ Exit criteria:
 - Users can distinguish parse success from slow-path or fragile parser configuration.
 - KB health reports explain route activation, model distribution, and chunk completeness risks.
 - Public reports can recommend private-operator checks without performing private repairs.
+
+## Phase 36: Generated Report Safety Closure And Runtime Helper Pilot
+
+Goal: close the remaining generated-report redaction gap across public commands and prove a
+minimal shared runtime helper path before larger resilience primitives are added.
+
+Tasks:
+
+- [x] Add a report-surface inventory that classifies public commands with JSON, Markdown,
+  runtime, plan, or sidecar outputs as `covered`, `not_applicable`, or `needs_redaction`.
+- [ ] Add `--redaction-report` coverage to the highest-risk remaining `ragflow-kb-build`
+  report families that read host-supplied manifests, reports, parser configs, parse logs,
+  or work paths.
+- [x] Add `--redaction-report` coverage to `ragflow-kb-build parse-report` and
+  `ragflow-kb-build health-report`, including sanitized Markdown rendering.
+- [x] Add `--redaction-report` coverage to `ragflow-kb-build metadata lint`,
+  `ragflow-kb-build metadata merge`, `ragflow-kb-build tagset lint`, and
+  `ragflow-kb-build tagset report` generated reports. The `metadata merge --output`
+  artifact remains a raw user-owned `ragflow_metadata_v1` file for downstream build
+  workflows.
+- [x] Add `--redaction-report` coverage to `ragflow-kb-build topology advise`,
+  `ragflow-kb-build topology split-plan`, and `ragflow-kb-build activation-plan` advisory
+  plan reports.
+- [x] Add `--redaction-report` coverage to `ragflow-kb-build optimize --plan-only`,
+  `ragflow-kb-build optimize cleanup-plan`, and `ragflow-kb-build optimize summarize`
+  offline optimization report surfaces.
+- [x] Add `--redaction-report` coverage to remaining `ragflow-doc-to-md` report surfaces
+  that may echo local paths, converter endpoints, runtime process details, or fixture
+  paths.
+- [x] Add `--redaction-report` coverage to `ragflow-doc-to-md inspect` and
+  `ragflow-doc-to-md backend warmup`, including sanitized Markdown rendering.
+- [x] Add `--redaction-report` coverage to `ragflow-doc-to-md postprocess`,
+  `ragflow-doc-to-md segment-plan`, and `ragflow-doc-to-md split`, including sanitized
+  JSON stdout and plan/report artifacts.
+- [ ] Ensure every redacted Markdown report is rendered from the sanitized JSON payload,
+  not from the raw pre-redaction report.
+- [x] Add consumer acceptance or platform smoke coverage for at least one newly redacted
+  non-query report family with fake secrets, fake endpoints, and fake host paths.
+- [ ] Add a minimal retry/backoff helper with an explicit retry budget and deterministic
+  tests in one read-only probe or report command.
+- [ ] Add a minimal metrics summary helper for counters and latency samples in one
+  read-only probe or report command.
+- [ ] Keep token-bucket rate limiting, circuit breakers, cache invalidation,
+  checkpoint/resume, and broad partial-failure schemas deferred until the helper pilot is
+  covered by tests and release gates.
+
+Status note: `tools/report_surface_inventory.py` now emits
+`ragflow_report_surface_inventory_v1`, dynamically enumerates public argparse command
+leaves, and overlays an explicit Phase 36 classification. The verified inventory currently
+names 78 public commands: 43 `covered`, 26 `needs_redaction`, and 9 `not_applicable`, with
+no uncatalogued or stale classification findings. Remaining redaction work is concentrated
+in `ragflow-kb-build` benchmark, diagnose/probe, segment-metadata, profile,
+append/cleanup, inspect, and validation report/plan surfaces; `ragflow-doc-to-md`
+and `ragflow-query` report commands are currently classified as covered or not applicable.
+`ragflow-kb-build parse-report` and
+`ragflow-kb-build health-report` now sanitize JSON and Markdown from the same sanitized
+payload when `--redaction-report` is enabled. `ragflow-doc-to-md inspect` and
+`ragflow-doc-to-md backend warmup` now do the same, with focused CLI tests covering fake
+source URLs, fake fixture names, fake secrets, private hosts, and sanitized Markdown.
+`ragflow-doc-to-md postprocess`, `ragflow-doc-to-md segment-plan`, and
+`ragflow-doc-to-md split` now sanitize JSON stdout and report/plan artifacts when
+`--redaction-report` is enabled; focused CLI tests cover fake path tokens and fake local
+URLs, while consumer acceptance exercises the new sidecars.
+Top-level `ragflow-doc-to-md` conversion now supports `--redaction-report` for
+`quality_report.json`, optional quality Markdown, runtime reports, runtime Markdown, and
+JSON stdout. The sanitizer also redacts derived Markdown filenames when an input filename
+contains assignment-style fake secrets.
+`ragflow-kb-build metadata lint`, `ragflow-kb-build metadata merge`,
+`ragflow-kb-build tagset lint`, and `ragflow-kb-build tagset report` now emit
+`ragflow_report_redaction_report_v1` sidecars for generated JSON/Markdown/stdout reports;
+focused CLI tests cover fake assignment-style path tokens and verify that raw
+`metadata merge --output` stays user-owned while shareable reports stay sanitized.
+`ragflow-kb-build topology advise`, `ragflow-kb-build topology split-plan`, and
+`ragflow-kb-build activation-plan` now emit redaction sidecars and render Markdown from
+the sanitized advisory plan payload when redaction is enabled; focused CLI tests cover
+fake local path tokens, private hosts, and query-style fake secrets.
+`ragflow-kb-build optimize --plan-only`, `ragflow-kb-build optimize cleanup-plan`, and
+`ragflow-kb-build optimize summarize` now emit redaction sidecars for offline optimization
+plan/result surfaces. JSON stdout, JSON artifacts, and Markdown reports are rendered from
+the sanitized payload when redaction is enabled, including plan-derived candidate artifact
+paths and validation report paths.
+Consumer acceptance now verifies newly redacted non-query fake-sensitive fixtures, and
+platform smoke retains doc-to-md conversion, backend warmup, and KB metadata/tagset plus
+topology/activation and optimization redaction sidecars as artifacts.
+
+Exit criteria:
+
+- The project can name every public generated-report surface and explain whether redaction
+  is covered, unnecessary, or intentionally deferred.
+- High-risk non-query reports produce sanitized JSON, sanitized Markdown when applicable,
+  and a valid `ragflow_report_redaction_report_v1` sidecar.
+- The first retry/backoff or metrics helper is consumed by a narrow read-only command with
+  offline deterministic tests.
+- No new live RAGFlow mutation, LLM answer generation, or private repair workflow is added.
 
 ## Definition of Done
 

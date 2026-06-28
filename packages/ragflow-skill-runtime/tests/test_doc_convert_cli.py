@@ -988,6 +988,65 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(report["gate"]["status"], "BLOCKED")
         self.assertIn("Document Quality Report", report_md_text)
 
+    def test_inspect_writes_redaction_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = Path(tmp) / "handoff"
+            docs = handoff / "documents"
+            docs.mkdir(parents=True)
+            (docs / "sample.md").write_text("# Sample\n\nready\n", encoding="utf-8")
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [
+                            {
+                                "source_path": "http://100.64.10.20/source.md?token=inspect-secret",
+                                "markdown_path": "documents/sample.md",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report_json = handoff / "quality_report.inspect.json"
+            report_md = handoff / "quality_report.inspect.md"
+            redaction_json = handoff / "quality_report.inspect.redaction.json"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "inspect",
+                    "--doc-manifest",
+                    str(manifest),
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                    "--redaction-report",
+                    str(redaction_json),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            report_text = report_json.read_text(encoding="utf-8")
+            markdown = report_md.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
+
+        combined = "\n".join([result.stdout, report_text, markdown, redaction_text])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertNotIn("100.64.10.20", combined)
+        self.assertNotIn("inspect-secret", combined)
+
     def test_segment_plan_and_split_cli(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1053,6 +1112,247 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(split_payload["segment_count"], 2)
         self.assertTrue(first_segment_exists)
 
+    def test_postprocess_writes_redaction_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            handoff = root / "handoff"
+            docs = handoff / "documents"
+            docs.mkdir(parents=True)
+            markdown_name = "postprocess.local-token=postprocess-secret.md"
+            (docs / markdown_name).write_text("#Title\n\nline with trailing spaces  \n", encoding="utf-8")
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [
+                            {
+                                "source_path": markdown_name,
+                                "markdown_path": f"documents/{markdown_name}",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output_dir = root / "postprocessed"
+            report_json = root / "postprocess_report.json"
+            redaction_json = root / "postprocess_redaction.json"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "postprocess",
+                    "--doc-manifest",
+                    str(manifest),
+                    "--profile",
+                    "safe",
+                    "--output",
+                    str(output_dir),
+                    "--report-json",
+                    str(report_json),
+                    "--redaction-report",
+                    str(redaction_json),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            report_text = report_json.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
+
+        combined = "\n".join([result.stdout, report_text, redaction_text])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertNotIn("postprocess-secret", combined)
+
+    def test_segment_plan_and_split_write_redaction_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "long.md"
+            markdown.write_text(
+                "# http://segment.local/doc?token=segment-secret\n"
+                + ("a" * 70)
+                + "\n# Two\n"
+                + ("b" * 70)
+                + "\n",
+                encoding="utf-8",
+            )
+            plan_output = root / "segmentation_plan.json"
+            plan_redaction = root / "segmentation_plan_redaction.json"
+            split_output = root / "segments"
+            split_plan = root / "split_plan.json"
+            split_redaction = root / "split_plan_redaction.json"
+
+            plan_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "segment-plan",
+                    "--markdown",
+                    str(markdown),
+                    "--output",
+                    str(plan_output),
+                    "--redaction-report",
+                    str(plan_redaction),
+                    "--soft-max-chars",
+                    "50",
+                    "--hard-max-chars",
+                    "90",
+                    "--min-segment-chars",
+                    "20",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            split_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "split",
+                    "--markdown",
+                    str(markdown),
+                    "--output",
+                    str(split_output),
+                    "--plan-output",
+                    str(split_plan),
+                    "--redaction-report",
+                    str(split_redaction),
+                    "--soft-max-chars",
+                    "50",
+                    "--hard-max-chars",
+                    "90",
+                    "--min-segment-chars",
+                    "20",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            plan_text = plan_output.read_text(encoding="utf-8")
+            plan_redaction_text = plan_redaction.read_text(encoding="utf-8")
+            split_plan_text = split_plan.read_text(encoding="utf-8")
+            split_redaction_text = split_redaction.read_text(encoding="utf-8")
+            plan_redaction_payload = json.loads(plan_redaction_text)
+            split_redaction_payload = json.loads(split_redaction_text)
+
+        combined = "\n".join(
+            [
+                plan_result.stdout,
+                split_result.stdout,
+                plan_text,
+                plan_redaction_text,
+                split_plan_text,
+                split_redaction_text,
+            ]
+        )
+        self.assertEqual(plan_result.returncode, 0, plan_result.stderr)
+        self.assertEqual(split_result.returncode, 0, split_result.stderr)
+        self.assertEqual(plan_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertEqual(split_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(plan_redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(plan_redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(split_redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(split_redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertNotIn("segment.local", combined)
+        self.assertNotIn("segment-secret", combined)
+
+    def test_convert_writes_redaction_report_for_quality_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "handoff"
+            input_dir.mkdir()
+            (input_dir / "convert.local-token=convert-secret.md").write_text("# Convert\n\nBody\n", encoding="utf-8")
+            quality_md = output_dir / "quality_report.md"
+            redaction_json = root / "convert_redaction.json"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                    "--mode",
+                    "passthrough",
+                    "--quality-report-md",
+                    str(quality_md),
+                    "--redaction-report",
+                    str(redaction_json),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            quality_report_text = (output_dir / "quality_report.json").read_text(encoding="utf-8")
+            quality_markdown = quality_md.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
+
+        combined = "\n".join([result.stdout, quality_report_text, quality_markdown, redaction_text])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertNotIn("convert-secret", combined)
+
+    def test_convert_writes_redaction_report_for_runtime_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "handoff"
+            input_dir.mkdir()
+            (input_dir / "paper.pdf").write_bytes(b"%PDF fake cli redaction")
+            fake_cli = _write_fake_mineru_cli(root / "mineru-token=runtime-secret")
+            runtime_md = output_dir / "runtime_report.md"
+            redaction_json = root / "convert_runtime_redaction.json"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                    "--backend",
+                    "mineru-cli",
+                    "--mineru-cli-path",
+                    str(fake_cli),
+                    "--runtime-report-md",
+                    str(runtime_md),
+                    "--redaction-report",
+                    str(redaction_json),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            runtime_report_text = (output_dir / "runtime_report.json").read_text(encoding="utf-8")
+            runtime_markdown = runtime_md.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
+
+        combined = "\n".join([result.stdout, runtime_report_text, runtime_markdown, redaction_text])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertNotIn("runtime-secret", combined)
+
     def test_convert_help_renders(self) -> None:
         result = subprocess.run(
             [sys.executable, str(CONVERT_SCRIPT), "--help"],
@@ -1068,6 +1368,7 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertIn("--mineru-cli-path", result.stdout)
         self.assertIn("--quality-report-name", result.stdout)
         self.assertIn("--runtime-report-name", result.stdout)
+        self.assertIn("--redaction-report", result.stdout)
         self.assertIn("--no-image-fallback", result.stdout)
         self.assertIn("backend probe", result.stdout)
         self.assertIn("backend warmup", result.stdout)
@@ -1258,6 +1559,59 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(report_payload["output"]["markdown_name"], "warmup.md")
         self.assertIn("RAGFlow Doc Backend Warmup", markdown_report)
         self.assertIn("# MinerU CLI", converted_markdown)
+
+    def test_backend_warmup_writes_redaction_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = root / "warmup.local-token=warmup-secret.pdf"
+            fixture.write_bytes(b"%PDF warmup")
+            fake_cli = _write_fake_mineru_cli(root / "mineru")
+            report_json = root / "backend_warmup.json"
+            report_md = root / "backend_warmup.md"
+            redaction_json = root / "backend_warmup_redaction.json"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "backend",
+                    "warmup",
+                    "--backend",
+                    "mineru-cli",
+                    "--fixture",
+                    str(fixture),
+                    "--mineru-cli-path",
+                    str(fake_cli),
+                    "--mineru-base-url",
+                    "http://warmup.local:8080/api/v1?token=warmup-secret",
+                    "--remote-api-key",
+                    "warmup-secret",
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                    "--redaction-report",
+                    str(redaction_json),
+                    "--json",
+                    "--fail-on-failed",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            report_text = report_json.read_text(encoding="utf-8")
+            markdown = report_md.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
+
+        combined = "\n".join([result.stdout, report_text, markdown, redaction_text])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["summary"]["redaction_count"], 2)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertNotIn("warmup.local", combined)
+        self.assertNotIn("warmup-secret", combined)
 
     def test_backend_warmup_fail_on_failed_returns_nonzero(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

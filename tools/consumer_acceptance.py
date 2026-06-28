@@ -17,7 +17,7 @@ import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -146,6 +146,52 @@ def _record_file_check(checks: list[dict[str, Any]], name: str, path: Path) -> b
             "ok": ok,
             "path": str(path),
             "error": "" if ok else f"missing {path}",
+        }
+    )
+    return ok
+
+
+def _record_redaction_sidecar_check(
+    checks: list[dict[str, Any]],
+    name: str,
+    redaction_path: Path,
+    *,
+    result: Mapping[str, Any] | None = None,
+    checked_paths: Sequence[Path] = (),
+    forbidden_literals: Sequence[str] = (),
+) -> bool:
+    error = ""
+    ok = redaction_path.exists()
+    combined = ""
+    if not ok:
+        error = f"missing {redaction_path}"
+    else:
+        try:
+            redaction_payload = json.loads(redaction_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            ok = False
+            error = f"invalid redaction sidecar: {exc}"
+        else:
+            ok = redaction_payload.get("schema") == "ragflow_report_redaction_report_v1"
+            if not ok:
+                error = "unexpected redaction sidecar schema"
+        combined = redaction_path.read_text(encoding="utf-8") if redaction_path.exists() else ""
+    if ok and result is not None:
+        combined += "\n" + str(result.get("stdout", "")) + "\n" + str(result.get("stderr", ""))
+    if ok:
+        for path in checked_paths:
+            if path.exists():
+                combined += "\n" + path.read_text(encoding="utf-8")
+        leaked = [literal for literal in forbidden_literals if literal and literal in combined]
+        if leaked:
+            ok = False
+            error = f"redaction output leaked forbidden literal {leaked[0]!r}"
+    checks.append(
+        {
+            "name": name,
+            "ok": ok,
+            "path": str(redaction_path),
+            "error": error,
         }
     )
     return ok
@@ -787,6 +833,65 @@ def _run_no_network_checks(
     if quality_report.exists():
         produced.append(quality_report)
 
+    convert_redaction_input = work_root / "convert-redaction-input"
+    convert_redaction_input.mkdir(parents=True, exist_ok=True)
+    (convert_redaction_input / "convert.local-token=convert-secret.md").write_text(
+        "# Convert redaction\n\nReady.\n",
+        encoding="utf-8",
+    )
+    convert_redaction_output = work_root / "convert-redaction-handoff"
+    convert_redaction_report = work_root / "convert_redaction.json"
+    convert_quality_md = convert_redaction_output / "quality_report.md"
+    convert_redaction_result = _run_command(
+        [
+            python_executable,
+            str(convert_script),
+            "--input",
+            str(convert_redaction_input),
+            "--output",
+            str(convert_redaction_output),
+            "--mode",
+            "passthrough",
+            "--quality-report-md",
+            str(convert_quality_md),
+            "--redaction-report",
+            str(convert_redaction_report),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(checks, "doc-to-md convert redaction", convert_redaction_result, required_output='"ok": true')
+    convert_quality_report = convert_redaction_output / "quality_report.json"
+    if convert_quality_report.exists():
+        produced.append(convert_quality_report)
+    if convert_quality_md.exists():
+        produced.append(convert_quality_md)
+    if convert_redaction_report.exists():
+        produced.append(convert_redaction_report)
+        redaction_payload = json.loads(convert_redaction_report.read_text(encoding="utf-8"))
+        combined = "\n".join(
+            [
+                convert_redaction_result.get("stdout", ""),
+                convert_quality_report.read_text(encoding="utf-8") if convert_quality_report.exists() else "",
+                convert_quality_md.read_text(encoding="utf-8") if convert_quality_md.exists() else "",
+                convert_redaction_report.read_text(encoding="utf-8"),
+            ]
+        )
+        redaction_ok = (
+            redaction_payload.get("schema") == "ragflow_report_redaction_report_v1"
+            and redaction_payload.get("summary", {}).get("redaction_count", 0) >= 1
+            and "convert-secret" not in combined
+        )
+        checks.append(
+            {
+                "name": "doc-to-md convert redaction sidecar",
+                "ok": redaction_ok,
+                "path": str(convert_redaction_report),
+                "error": "" if redaction_ok else "top-level convert redaction did not hide fake-sensitive values",
+            }
+        )
+
     image_input = work_root / "image-fallback-input"
     image_input.mkdir(parents=True, exist_ok=True)
     (image_input / "diagram.png").write_bytes(b"fake image fallback bytes")
@@ -866,7 +971,8 @@ def _run_no_network_checks(
     mineru_cli_input.mkdir(parents=True, exist_ok=True)
     (mineru_cli_input / "sample.pdf").write_bytes(b"%PDF fake mineru cli acceptance")
     mineru_cli_output = work_root / "mineru-cli-handoff"
-    fake_mineru_cli = _write_fake_mineru_cli(work_root / "mineru")
+    fake_mineru_cli = _write_fake_mineru_cli(work_root / "mineru-token=runtime-secret")
+    mineru_cli_redaction = work_root / "convert_runtime_redaction.json"
     mineru_cli_result = _run_command(
         [
             python_executable,
@@ -877,6 +983,8 @@ def _run_no_network_checks(
             str(mineru_cli_output),
             "--backend",
             "auto",
+            "--redaction-report",
+            str(mineru_cli_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -927,6 +1035,29 @@ def _run_no_network_checks(
             }
         )
         produced.append(mineru_cli_runtime)
+    if mineru_cli_redaction.exists():
+        produced.append(mineru_cli_redaction)
+        redaction_payload = json.loads(mineru_cli_redaction.read_text(encoding="utf-8"))
+        combined = "\n".join(
+            [
+                mineru_cli_result.get("stdout", ""),
+                mineru_cli_runtime.read_text(encoding="utf-8") if mineru_cli_runtime.exists() else "",
+                mineru_cli_redaction.read_text(encoding="utf-8"),
+            ]
+        )
+        redaction_ok = (
+            redaction_payload.get("schema") == "ragflow_report_redaction_report_v1"
+            and redaction_payload.get("summary", {}).get("redaction_count", 0) >= 1
+            and "runtime-secret" not in combined
+        )
+        checks.append(
+            {
+                "name": "doc-to-md convert runtime redaction",
+                "ok": redaction_ok,
+                "path": str(mineru_cli_redaction),
+                "error": "" if redaction_ok else "top-level convert runtime redaction did not hide fake-sensitive values",
+            }
+        )
 
     backend_probe_json = work_root / "backend_probe.json"
     backend_probe_md = work_root / "backend_probe.md"
@@ -967,6 +1098,9 @@ def _run_no_network_checks(
 
     backend_warmup_json = work_root / "backend_warmup.json"
     backend_warmup_md = work_root / "backend_warmup.md"
+    backend_warmup_redaction = work_root / "backend_warmup_redaction.json"
+    backend_warmup_fixture = work_root / "warmup.local-token=warmup-secret.pdf"
+    backend_warmup_fixture.write_bytes(b"%PDF fake warmup")
     backend_warmup_result = _run_command(
         [
             python_executable,
@@ -976,13 +1110,19 @@ def _run_no_network_checks(
             "--backend",
             "mineru-cli",
             "--fixture",
-            str(mineru_cli_input / "sample.pdf"),
+            str(backend_warmup_fixture),
             "--mineru-cli-path",
             str(fake_mineru_cli),
+            "--mineru-base-url",
+            "http://warmup.local:8080/api/v1?token=warmup-secret",
+            "--remote-api-key",
+            "warmup-secret",
             "--report-json",
             str(backend_warmup_json),
             "--report-md",
             str(backend_warmup_md),
+            "--redaction-report",
+            str(backend_warmup_redaction),
             "--json",
             "--fail-on-failed",
         ],
@@ -999,27 +1139,109 @@ def _run_no_network_checks(
         produced.append(backend_warmup_json)
     if backend_warmup_md.exists():
         produced.append(backend_warmup_md)
+    if backend_warmup_redaction.exists():
+        produced.append(backend_warmup_redaction)
+        redaction_payload = json.loads(backend_warmup_redaction.read_text(encoding="utf-8"))
+        combined = "\n".join(
+            [
+                backend_warmup_result.get("stdout", ""),
+                backend_warmup_json.read_text(encoding="utf-8") if backend_warmup_json.exists() else "",
+                backend_warmup_md.read_text(encoding="utf-8") if backend_warmup_md.exists() else "",
+                backend_warmup_redaction.read_text(encoding="utf-8"),
+            ]
+        )
+        redaction_ok = (
+            redaction_payload.get("schema") == "ragflow_report_redaction_report_v1"
+            and redaction_payload.get("summary", {}).get("redaction_count", 0) >= 2
+            and "warmup-secret" not in combined
+            and "warmup.local" not in combined
+        )
+        checks.append(
+            {
+                "name": "doc-to-md backend warmup redaction",
+                "ok": redaction_ok,
+                "path": str(backend_warmup_redaction),
+                "error": "" if redaction_ok else "backend warmup redaction did not hide fake-sensitive values",
+            }
+        )
 
+    inspect_handoff = work_root / "inspect-redaction-handoff"
+    inspect_docs = inspect_handoff / "documents"
+    inspect_docs.mkdir(parents=True, exist_ok=True)
+    (inspect_docs / "sample.md").write_text("# Inspect\n\nready\n", encoding="utf-8")
+    inspect_manifest = inspect_handoff / "doc_manifest.json"
+    inspect_manifest.write_text(
+        json.dumps(
+            {
+                "version": "0.1",
+                "source_root": ".",
+                "documents": [
+                    {
+                        "source_path": "http://inspect.local/source.md?token=inspect-secret",
+                        "markdown_path": "documents/sample.md",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    inspect_report = work_root / "quality_report.inspect.json"
+    inspect_report_md = work_root / "quality_report.inspect.md"
+    inspect_redaction = work_root / "quality_report.inspect_redaction.json"
     inspect_result = _run_command(
         [
             python_executable,
             str(convert_script),
             "inspect",
             "--doc-manifest",
-            str(doc_manifest),
+            str(inspect_manifest),
             "--report-json",
-            str(work_root / "quality_report.inspect.json"),
+            str(inspect_report),
+            "--report-md",
+            str(inspect_report_md),
+            "--redaction-report",
+            str(inspect_redaction),
             "--json",
         ],
         cwd=work_root,
         env=env,
     )
     _record_command_check(checks, "doc-to-md inspect quality", inspect_result, required_output='"status": "PASS"')
-    inspect_report = work_root / "quality_report.inspect.json"
     if inspect_report.exists():
         produced.append(inspect_report)
+    if inspect_report_md.exists():
+        produced.append(inspect_report_md)
+    if inspect_redaction.exists():
+        produced.append(inspect_redaction)
+        redaction_payload = json.loads(inspect_redaction.read_text(encoding="utf-8"))
+        combined = "\n".join(
+            [
+                inspect_result.get("stdout", ""),
+                inspect_report.read_text(encoding="utf-8") if inspect_report.exists() else "",
+                inspect_report_md.read_text(encoding="utf-8") if inspect_report_md.exists() else "",
+                inspect_redaction.read_text(encoding="utf-8"),
+            ]
+        )
+        redaction_ok = (
+            redaction_payload.get("schema") == "ragflow_report_redaction_report_v1"
+            and redaction_payload.get("summary", {}).get("redaction_count", 0) >= 2
+            and "inspect-secret" not in combined
+            and "inspect.local" not in combined
+        )
+        checks.append(
+            {
+                "name": "doc-to-md inspect redaction",
+                "ok": redaction_ok,
+                "path": str(inspect_redaction),
+                "error": "" if redaction_ok else "inspect redaction did not hide fake-sensitive values",
+            }
+        )
 
     postprocess_dir = work_root / "postprocessed-handoff"
+    postprocess_redaction = work_root / "postprocess_redaction.json"
     postprocess_result = _run_command(
         [
             python_executable,
@@ -1031,6 +1253,8 @@ def _run_no_network_checks(
             "safe",
             "--output",
             str(postprocess_dir),
+            "--redaction-report",
+            str(postprocess_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -1039,15 +1263,22 @@ def _run_no_network_checks(
     _record_command_check(checks, "doc-to-md postprocess safe", postprocess_result, required_output='"schema": "doc_postprocess_report_v1"')
     postprocess_report = postprocess_dir / "postprocess_report.json"
     _record_file_check(checks, "postprocess_report produced", postprocess_report)
+    _record_file_check(checks, "doc-to-md postprocess redaction", postprocess_redaction)
     if postprocess_report.exists():
         produced.append(postprocess_report)
+    if postprocess_redaction.exists():
+        produced.append(postprocess_redaction)
     postprocessed_manifest = postprocess_dir / "doc_manifest.json"
     if postprocessed_manifest.exists():
         produced.append(postprocessed_manifest)
 
     long_markdown = work_root / "long.md"
-    long_markdown.write_text("# One\n" + ("a" * 70) + "\n# Two\n" + ("b" * 70) + "\n", encoding="utf-8")
+    long_markdown.write_text(
+        "# http://segment.local/doc?token=segment-secret\n" + ("a" * 70) + "\n# Two\n" + ("b" * 70) + "\n",
+        encoding="utf-8",
+    )
     segmentation_plan = work_root / "segmentation_plan.json"
+    segmentation_plan_redaction = work_root / "segmentation_plan_redaction.json"
     segment_plan_result = _run_command(
         [
             python_executable,
@@ -1057,6 +1288,8 @@ def _run_no_network_checks(
             str(long_markdown),
             "--output",
             str(segmentation_plan),
+            "--redaction-report",
+            str(segmentation_plan_redaction),
             "--soft-max-chars",
             "50",
             "--hard-max-chars",
@@ -1070,9 +1303,34 @@ def _run_no_network_checks(
     _record_command_check(checks, "doc-to-md segment plan", segment_plan_result, required_output='"recommended": true')
     if segmentation_plan.exists():
         produced.append(segmentation_plan)
+    if segmentation_plan_redaction.exists():
+        produced.append(segmentation_plan_redaction)
+        redaction_payload = json.loads(segmentation_plan_redaction.read_text(encoding="utf-8"))
+        combined = "\n".join(
+            [
+                segment_plan_result.get("stdout", ""),
+                segmentation_plan.read_text(encoding="utf-8") if segmentation_plan.exists() else "",
+                segmentation_plan_redaction.read_text(encoding="utf-8"),
+            ]
+        )
+        redaction_ok = (
+            redaction_payload.get("schema") == "ragflow_report_redaction_report_v1"
+            and redaction_payload.get("summary", {}).get("redaction_count", 0) >= 2
+            and "segment-secret" not in combined
+            and "segment.local" not in combined
+        )
+        checks.append(
+            {
+                "name": "doc-to-md segment plan redaction",
+                "ok": redaction_ok,
+                "path": str(segmentation_plan_redaction),
+                "error": "" if redaction_ok else "segment plan redaction did not hide fake-sensitive values",
+            }
+        )
 
     segments_dir = work_root / "segments"
     split_plan = work_root / "split_plan.json"
+    split_redaction = work_root / "split_plan_redaction.json"
     split_result = _run_command(
         [
             python_executable,
@@ -1084,6 +1342,8 @@ def _run_no_network_checks(
             str(segments_dir),
             "--plan-output",
             str(split_plan),
+            "--redaction-report",
+            str(split_redaction),
             "--soft-max-chars",
             "50",
             "--hard-max-chars",
@@ -1097,6 +1357,30 @@ def _run_no_network_checks(
     _record_command_check(checks, "doc-to-md split", split_result, required_output='"segment_count": 2')
     if split_plan.exists():
         produced.append(split_plan)
+    if split_redaction.exists():
+        produced.append(split_redaction)
+        redaction_payload = json.loads(split_redaction.read_text(encoding="utf-8"))
+        combined = "\n".join(
+            [
+                split_result.get("stdout", ""),
+                split_plan.read_text(encoding="utf-8") if split_plan.exists() else "",
+                split_redaction.read_text(encoding="utf-8"),
+            ]
+        )
+        redaction_ok = (
+            redaction_payload.get("schema") == "ragflow_report_redaction_report_v1"
+            and redaction_payload.get("summary", {}).get("redaction_count", 0) >= 2
+            and "segment-secret" not in combined
+            and "segment.local" not in combined
+        )
+        checks.append(
+            {
+                "name": "doc-to-md split redaction",
+                "ok": redaction_ok,
+                "path": str(split_redaction),
+                "error": "" if redaction_ok else "split redaction did not hide fake-sensitive values",
+            }
+        )
 
     build_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "build.py")
     profile = _skill_path(extract_dir, "ragflow-kb-build", "templates", "default-en-768.json")
@@ -1132,8 +1416,12 @@ def _run_no_network_checks(
     )
     metadata_template = work_root / "metadata.template.json"
     metadata_merged = work_root / "metadata.merged.json"
+    metadata_lint_json = work_root / "metadata_lint.json"
     metadata_lint_md = work_root / "metadata_lint.md"
+    metadata_lint_redaction = work_root / "metadata_lint_redaction.json"
+    metadata_merge_json = work_root / "metadata_merge.json"
     metadata_merge_md = work_root / "metadata_merge.md"
+    metadata_merge_redaction = work_root / "metadata_merge_redaction.json"
     metadata_template_result = _run_command(
         [
             python_executable,
@@ -1163,8 +1451,12 @@ def _run_no_network_checks(
             "lint",
             "--metadata",
             str(metadata_template),
+            "--report-json",
+            str(metadata_lint_json),
             "--report-md",
             str(metadata_lint_md),
+            "--redaction-report",
+            str(metadata_lint_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -1175,6 +1467,13 @@ def _run_no_network_checks(
         "kb-build metadata lint",
         metadata_lint_result,
         required_output='"schema": "ragflow_metadata_lint_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build metadata lint redaction",
+        metadata_lint_redaction,
+        result=metadata_lint_result,
+        checked_paths=(metadata_lint_json, metadata_lint_md),
     )
     metadata_merge_result = _run_command(
         [
@@ -1190,8 +1489,12 @@ def _run_no_network_checks(
             str(metadata_template),
             "--output",
             str(metadata_merged),
+            "--report-json",
+            str(metadata_merge_json),
             "--report-md",
             str(metadata_merge_md),
+            "--redaction-report",
+            str(metadata_merge_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -1203,12 +1506,29 @@ def _run_no_network_checks(
         metadata_merge_result,
         required_output='"schema": "ragflow_metadata_merge_report_v1"',
     )
-    for path in (metadata_template, metadata_merged, metadata_lint_md, metadata_merge_md):
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build metadata merge redaction",
+        metadata_merge_redaction,
+        result=metadata_merge_result,
+        checked_paths=(metadata_merge_json, metadata_merge_md),
+    )
+    for path in (
+        metadata_template,
+        metadata_merged,
+        metadata_lint_json,
+        metadata_lint_md,
+        metadata_lint_redaction,
+        metadata_merge_json,
+        metadata_merge_md,
+        metadata_merge_redaction,
+    ):
         if path.exists():
             produced.append(path)
 
     topology_advice = work_root / "kb_topology_advice.json"
     topology_advice_md = work_root / "kb_topology_advice.md"
+    topology_advice_redaction = work_root / "kb_topology_advice_redaction.json"
     topology_result = _run_command(
         [
             python_executable,
@@ -1229,6 +1549,8 @@ def _run_no_network_checks(
             str(topology_advice),
             "--report-md",
             str(topology_advice_md),
+            "--redaction-report",
+            str(topology_advice_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -1240,12 +1562,20 @@ def _run_no_network_checks(
         topology_result,
         required_output='"schema": "kb_topology_advice_v1"',
     )
-    for path in (topology_advice, topology_advice_md):
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build topology advise redaction",
+        topology_advice_redaction,
+        result=topology_result,
+        checked_paths=(topology_advice, topology_advice_md),
+    )
+    for path in (topology_advice, topology_advice_md, topology_advice_redaction):
         if path.exists():
             produced.append(path)
 
     split_plan = work_root / "kb_split_plan.json"
     split_plan_md = work_root / "kb_split_plan.md"
+    split_plan_redaction = work_root / "kb_split_plan_redaction.json"
     split_plan_result = _run_command(
         [
             python_executable,
@@ -1264,6 +1594,8 @@ def _run_no_network_checks(
             str(split_plan),
             "--report-md",
             str(split_plan_md),
+            "--redaction-report",
+            str(split_plan_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -1275,7 +1607,14 @@ def _run_no_network_checks(
         split_plan_result,
         required_output='"schema": "kb_split_plan_v1"',
     )
-    for path in (split_plan, split_plan_md):
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build topology split-plan redaction",
+        split_plan_redaction,
+        result=split_plan_result,
+        checked_paths=(split_plan, split_plan_md),
+    )
+    for path in (split_plan, split_plan_md, split_plan_redaction):
         if path.exists():
             produced.append(path)
 
@@ -1285,6 +1624,7 @@ def _run_no_network_checks(
     activation_route_tests = work_root / "activation_route_tests.json"
     activation_plan = work_root / "kb_activation_plan.json"
     activation_plan_md = work_root / "kb_activation_plan.md"
+    activation_plan_redaction = work_root / "kb_activation_plan_redaction.json"
     activation_kb_manifest.write_text(
         json.dumps(
             {
@@ -1370,6 +1710,8 @@ def _run_no_network_checks(
             str(activation_plan),
             "--report-md",
             str(activation_plan_md),
+            "--redaction-report",
+            str(activation_plan_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -1381,6 +1723,13 @@ def _run_no_network_checks(
         activation_plan_result,
         required_output='"schema": "kb_activation_plan_v1"',
     )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build activation-plan redaction",
+        activation_plan_redaction,
+        result=activation_plan_result,
+        checked_paths=(activation_plan, activation_plan_md),
+    )
     for path in (
         activation_kb_manifest,
         activation_chunk_snapshot,
@@ -1388,6 +1737,7 @@ def _run_no_network_checks(
         activation_route_tests,
         activation_plan,
         activation_plan_md,
+        activation_plan_redaction,
     ):
         if path.exists():
             produced.append(path)
@@ -1396,6 +1746,7 @@ def _run_no_network_checks(
     parse_log = work_root / "parse.log"
     parse_report = work_root / "parse_report.json"
     parse_report_md = work_root / "parse_report.md"
+    parse_report_redaction = work_root / "parse_report_redaction.json"
     parse_documents_json.write_text(
         json.dumps(
             {
@@ -1434,6 +1785,8 @@ def _run_no_network_checks(
             str(parse_report),
             "--report-md",
             str(parse_report_md),
+            "--redaction-report",
+            str(parse_report_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -1445,12 +1798,14 @@ def _run_no_network_checks(
         parse_report_result,
         required_output='"schema": "ragflow_parse_report_v1"',
     )
-    for path in (parse_documents_json, parse_log, parse_report, parse_report_md):
+    _record_file_check(checks, "kb-build parse-report redaction", parse_report_redaction)
+    for path in (parse_documents_json, parse_log, parse_report, parse_report_md, parse_report_redaction):
         if path.exists():
             produced.append(path)
 
     health_report = work_root / "kb_health_report.json"
     health_report_md = work_root / "kb_health_report.md"
+    health_report_redaction = work_root / "kb_health_report_redaction.json"
     health_report_result = _run_command(
         [
             python_executable,
@@ -1468,6 +1823,8 @@ def _run_no_network_checks(
             str(health_report),
             "--report-md",
             str(health_report_md),
+            "--redaction-report",
+            str(health_report_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -1479,13 +1836,19 @@ def _run_no_network_checks(
         health_report_result,
         required_output='"schema": "ragflow_kb_health_report_v1"',
     )
-    for path in (health_report, health_report_md):
+    _record_file_check(checks, "kb-build health-report redaction", health_report_redaction)
+    for path in (health_report, health_report_md, health_report_redaction):
         if path.exists():
             produced.append(path)
 
     tagset_template = work_root / "tagset.template.json"
     tagset_csv = work_root / "tagset.csv"
+    tagset_lint_json = work_root / "tagset_lint.json"
+    tagset_lint_md = work_root / "tagset_lint.md"
+    tagset_lint_redaction = work_root / "tagset_lint_redaction.json"
+    tagset_report_json = work_root / "tagset_report.json"
     tagset_report_md = work_root / "tagset_report.md"
+    tagset_report_redaction = work_root / "tagset_report_redaction.json"
     tagset_template_result = _run_command(
         [
             python_executable,
@@ -1513,6 +1876,12 @@ def _run_no_network_checks(
             "lint",
             "--tagset",
             str(tagset_template),
+            "--report-json",
+            str(tagset_lint_json),
+            "--report-md",
+            str(tagset_lint_md),
+            "--redaction-report",
+            str(tagset_lint_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -1523,6 +1892,13 @@ def _run_no_network_checks(
         "kb-build tagset lint",
         tagset_lint_result,
         required_output='"schema": "ragflow_tagset_lint_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build tagset lint redaction",
+        tagset_lint_redaction,
+        result=tagset_lint_result,
+        checked_paths=(tagset_lint_json, tagset_lint_md),
     )
     tagset_export_result = _run_command(
         [
@@ -1555,8 +1931,12 @@ def _run_no_network_checks(
             "report",
             "--tagset",
             str(tagset_template),
+            "--report-json",
+            str(tagset_report_json),
             "--report-md",
             str(tagset_report_md),
+            "--redaction-report",
+            str(tagset_report_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -1568,7 +1948,23 @@ def _run_no_network_checks(
         tagset_report_result,
         required_output='"schema": "ragflow_tagset_report_v1"',
     )
-    for path in (tagset_template, tagset_csv, tagset_report_md):
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build tagset report redaction",
+        tagset_report_redaction,
+        result=tagset_report_result,
+        checked_paths=(tagset_report_json, tagset_report_md),
+    )
+    for path in (
+        tagset_template,
+        tagset_lint_json,
+        tagset_lint_md,
+        tagset_lint_redaction,
+        tagset_csv,
+        tagset_report_json,
+        tagset_report_md,
+        tagset_report_redaction,
+    ):
         if path.exists():
             produced.append(path)
 
@@ -2027,10 +2423,13 @@ raise SystemExit(code)
     segment_metadata_md = work_root / "segment_metadata.md"
     optimization_plan = work_root / "optimization_plan.json"
     optimization_plan_md = work_root / "optimization_plan.md"
+    optimization_plan_redaction = work_root / "optimization_plan_redaction.json"
     optimization_cleanup_plan = work_root / "optimization_cleanup_plan.json"
     optimization_cleanup_plan_md = work_root / "optimization_cleanup_plan.md"
+    optimization_cleanup_plan_redaction = work_root / "optimization_cleanup_plan_redaction.json"
     profile_experiment_results = work_root / "profile_experiment_results.json"
     best_profile_report_md = work_root / "best_profile_report.md"
+    best_profile_report_redaction = work_root / "best_profile_report_redaction.json"
     benchmark_import_result = _run_command(
         [
             python_executable,
@@ -2188,6 +2587,8 @@ raise SystemExit(code)
             str(optimization_plan),
             "--report-md",
             str(optimization_plan_md),
+            "--redaction-report",
+            str(optimization_plan_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2198,6 +2599,13 @@ raise SystemExit(code)
         "kb-build optimize plan-only",
         optimize_plan_result,
         required_output='"schema": "ragflow_optimization_plan_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build optimize plan-only redaction",
+        optimization_plan_redaction,
+        result=optimize_plan_result,
+        checked_paths=(optimization_plan, optimization_plan_md),
     )
     optimize_cleanup_plan_result = _run_command(
         [
@@ -2211,6 +2619,8 @@ raise SystemExit(code)
             str(optimization_cleanup_plan),
             "--report-md",
             str(optimization_cleanup_plan_md),
+            "--redaction-report",
+            str(optimization_cleanup_plan_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2221,6 +2631,13 @@ raise SystemExit(code)
         "kb-build optimize cleanup-plan",
         optimize_cleanup_plan_result,
         required_output='"schema": "ragflow_optimization_cleanup_plan_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build optimize cleanup-plan redaction",
+        optimization_cleanup_plan_redaction,
+        result=optimize_cleanup_plan_result,
+        checked_paths=(optimization_cleanup_plan, optimization_cleanup_plan_md),
     )
     optimize_summary_result = _run_command(
         [
@@ -2238,6 +2655,8 @@ raise SystemExit(code)
             str(profile_experiment_results),
             "--report-md",
             str(best_profile_report_md),
+            "--redaction-report",
+            str(best_profile_report_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2248,6 +2667,13 @@ raise SystemExit(code)
         "kb-build optimize summarize",
         optimize_summary_result,
         required_output='"schema": "ragflow_profile_experiment_results_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build optimize summarize redaction",
+        best_profile_report_redaction,
+        result=optimize_summary_result,
+        checked_paths=(profile_experiment_results, best_profile_report_md),
     )
     benchmark_preflight_result = _run_command(
         [
@@ -2442,10 +2868,13 @@ raise SystemExit(code)
         segment_metadata_md,
         optimization_plan,
         optimization_plan_md,
+        optimization_plan_redaction,
         optimization_cleanup_plan,
         optimization_cleanup_plan_md,
+        optimization_cleanup_plan_redaction,
         profile_experiment_results,
         best_profile_report_md,
+        best_profile_report_redaction,
         benchmark_preflight_md,
         benchmark_sample_md,
         benchmark_summary_md,

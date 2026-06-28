@@ -630,6 +630,196 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(report_result.returncode, 0, report_result.stdout)
         self.assertIn("RAGFlow Tagset Report", report_md_text)
 
+    def test_metadata_governance_writes_redaction_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata = root / "metadata.local-token=metadata-secret.json"
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_metadata_v1",
+                        "documents": [
+                            {
+                                "path": "documents/metadata.local-token=metadata-secret.md",
+                                "metadata": {"topic": "Metadata redaction"},
+                                "tags": ["example-tag"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            lint_json = root / "metadata_lint.json"
+            lint_md = root / "metadata_lint.md"
+            lint_redaction = root / "metadata_lint_redaction.json"
+            merged = root / "metadata_merged.json"
+            merge_json = root / "metadata_merge.json"
+            merge_md = root / "metadata_merge.md"
+            merge_redaction = root / "metadata_merge_redaction.json"
+
+            lint_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "metadata",
+                    "lint",
+                    "--metadata",
+                    str(metadata),
+                    "--report-json",
+                    str(lint_json),
+                    "--report-md",
+                    str(lint_md),
+                    "--redaction-report",
+                    str(lint_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            merge_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "metadata",
+                    "merge",
+                    "--metadata",
+                    str(metadata),
+                    "--output",
+                    str(merged),
+                    "--no-derive-from-path",
+                    "--report-json",
+                    str(merge_json),
+                    "--report-md",
+                    str(merge_md),
+                    "--redaction-report",
+                    str(merge_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            combined = "\n".join(
+                [
+                    lint_result.stdout,
+                    merge_result.stdout,
+                    lint_json.read_text(encoding="utf-8"),
+                    lint_md.read_text(encoding="utf-8"),
+                    lint_redaction.read_text(encoding="utf-8"),
+                    merge_json.read_text(encoding="utf-8"),
+                    merge_md.read_text(encoding="utf-8"),
+                    merge_redaction.read_text(encoding="utf-8"),
+                ]
+            )
+            lint_redaction_payload = json.loads(lint_redaction.read_text(encoding="utf-8"))
+            merge_redaction_payload = json.loads(merge_redaction.read_text(encoding="utf-8"))
+            merged_text = merged.read_text(encoding="utf-8")
+
+        self.assertEqual(lint_result.returncode, 0, lint_result.stdout)
+        self.assertEqual(merge_result.returncode, 0, merge_result.stdout)
+        self.assertEqual(lint_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertEqual(merge_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(lint_redaction_payload["target_counts"]["config_paths"], 1)
+        self.assertGreaterEqual(merge_redaction_payload["target_counts"]["config_paths"], 1)
+        self.assertNotIn("metadata-secret", combined)
+        self.assertIn("[REDACTED]", combined)
+        self.assertIn("metadata-secret", merged_text)
+
+    def test_tagset_governance_writes_redaction_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tagset = root / "tagset.local-token=tagset-secret.json"
+            tagset.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_tagset_v1",
+                        "tags": [{"name": "example-tag", "label": "Example"}],
+                        "assignments": [
+                            {
+                                "path": "documents/tagset.local-token=tagset-secret.md",
+                                "tags": ["example-tag"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            lint_json = root / "tagset_lint.json"
+            lint_md = root / "tagset_lint.md"
+            lint_redaction = root / "tagset_lint_redaction.json"
+            report_json = root / "tagset_report.json"
+            report_md = root / "tagset_report.md"
+            report_redaction = root / "tagset_report_redaction.json"
+
+            lint_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "tagset",
+                    "lint",
+                    "--tagset",
+                    str(tagset),
+                    "--report-json",
+                    str(lint_json),
+                    "--report-md",
+                    str(lint_md),
+                    "--redaction-report",
+                    str(lint_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            report_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "tagset",
+                    "report",
+                    "--tagset",
+                    str(tagset),
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                    "--redaction-report",
+                    str(report_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            combined = "\n".join(
+                [
+                    lint_result.stdout,
+                    report_result.stdout,
+                    lint_json.read_text(encoding="utf-8"),
+                    lint_md.read_text(encoding="utf-8"),
+                    lint_redaction.read_text(encoding="utf-8"),
+                    report_json.read_text(encoding="utf-8"),
+                    report_md.read_text(encoding="utf-8"),
+                    report_redaction.read_text(encoding="utf-8"),
+                ]
+            )
+            lint_redaction_payload = json.loads(lint_redaction.read_text(encoding="utf-8"))
+            report_redaction_payload = json.loads(report_redaction.read_text(encoding="utf-8"))
+
+        self.assertEqual(lint_result.returncode, 0, lint_result.stdout)
+        self.assertEqual(report_result.returncode, 0, report_result.stdout)
+        self.assertEqual(lint_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertEqual(report_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(lint_redaction_payload["target_counts"]["config_paths"], 1)
+        self.assertGreaterEqual(report_redaction_payload["target_counts"]["config_paths"], 1)
+        self.assertNotIn("tagset-secret", combined)
+        self.assertIn("[REDACTED]", combined)
+
     def test_benchmark_governance_subcommands_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1617,6 +1807,295 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["checks"]["route_test_readiness"]["passed_target_query_count"], 1)
         self.assertIn("RAGFlow KB Activation Plan", report_md_text)
 
+    def test_topology_and_activation_write_redaction_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            handoff = root / "handoff"
+            docs = handoff / "documents"
+            docs.mkdir(parents=True)
+            topology_doc = docs / "topology.local-token=topology-secret.md"
+            topology_doc.write_text(
+                "# Topology Redaction\n\n" + "Topology redaction routing review. " * 35,
+                encoding="utf-8",
+            )
+            manifest = handoff / "doc_manifest.local-token=topology-secret.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [
+                            {
+                                "source_path": "source/topology.local-token=topology-secret.pdf",
+                                "markdown_path": f"documents/{topology_doc.name}",
+                                "title": "Topology Redaction",
+                            }
+                        ],
+                        "quality_gate": {"status": "PASS"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            metadata = root / "metadata.local-token=topology-secret.json"
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_metadata_v1",
+                        "documents": [
+                            {
+                                "path": str(topology_doc),
+                                "metadata": {"domain": "routing", "topic": "Topology Redaction"},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            retrieval_hints = handoff / "retrieval_hints.local-token=topology-secret.json"
+            retrieval_hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "keyword_candidates": [{"term": "topology redaction"}],
+                        "question_candidates": [{"question": "How does topology redaction work?"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            route_config = root / "routing.local-token=topology-secret.json"
+            route_config.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "knowledge_bases": [
+                            {"name": "kb:general", "dataset_id": "ds-general", "hints": ["general"]}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            topology_json = root / "kb_topology_advice.json"
+            topology_md = root / "kb_topology_advice.md"
+            topology_redaction = root / "kb_topology_advice_redaction.json"
+            split_json = root / "kb_split_plan.json"
+            split_md = root / "kb_split_plan.md"
+            split_redaction = root / "kb_split_plan_redaction.json"
+
+            topology_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "topology",
+                    "advise",
+                    "--doc-manifest",
+                    str(manifest),
+                    "--kb-name",
+                    "kb:http://topology.internal.local:9380?token=topology-secret",
+                    "--metadata",
+                    str(metadata),
+                    "--retrieval-hints",
+                    str(retrieval_hints),
+                    "--route-config",
+                    str(route_config),
+                    "--output",
+                    str(topology_json),
+                    "--report-md",
+                    str(topology_md),
+                    "--redaction-report",
+                    str(topology_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            split_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "topology",
+                    "split-plan",
+                    "--doc-manifest",
+                    str(manifest),
+                    "--kb-name",
+                    "kb:http://topology.internal.local:9380?token=topology-secret",
+                    "--metadata",
+                    str(metadata),
+                    "--retrieval-hints",
+                    str(retrieval_hints),
+                    "--output",
+                    str(split_json),
+                    "--report-md",
+                    str(split_md),
+                    "--redaction-report",
+                    str(split_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+            activation_secret = "activation-secret"
+            activation_kb_manifest = root / "activation.local-token=activation-secret.kb_manifest.json"
+            activation_doc_manifest = root / "activation.local-token=activation-secret.doc_manifest.json"
+            activation_route_config = root / "activation.local-token=activation-secret.routing.json"
+            activation_retrieval_hints = root / "activation.local-token=activation-secret.retrieval_hints.json"
+            activation_chunk_snapshot = root / "activation.local-token=activation-secret.chunk_snapshot.json"
+            activation_route_tests = root / "activation.local-token=activation-secret.route_tests.json"
+            activation_output = root / "kb_activation_plan.json"
+            activation_md = root / "kb_activation_plan.md"
+            activation_redaction = root / "kb_activation_plan_redaction.json"
+            activation_kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {
+                            "id": "ds-activation-redaction",
+                            "name": f"kb:http://activation.internal.local:9380?token={activation_secret}",
+                        },
+                        "documents": [
+                            {
+                                "document_id": "doc-activation-redaction",
+                                "source_path": "source.md",
+                                "markdown_path": "documents/source.md",
+                                "status": "done",
+                                "chunk_count": 1,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            activation_doc_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "documents": [{"source_path": "source.md", "markdown_path": "documents/source.md"}],
+                        "quality_gate": {"status": "PASS"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            activation_route_config.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "knowledge_bases": [
+                            {
+                                "name": f"kb:http://activation.internal.local:9380?token={activation_secret}",
+                                "dataset_id": "ds-activation-redaction",
+                                "hints": ["activation redaction"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            activation_retrieval_hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "keyword_candidates": [{"term": "activation redaction"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            activation_chunk_snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "chunks": [
+                            {
+                                "dataset_id": "ds-activation-redaction",
+                                "document_id": "doc-activation-redaction",
+                                "chunk_id": "chunk-activation-redaction-1",
+                                "content": "Activation redaction evidence.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            activation_route_tests.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {
+                                "id": "activation-redaction-1",
+                                "question": "How does activation redaction work?",
+                                "expected_kb": f"kb:http://activation.internal.local:9380?token={activation_secret}",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            activation_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "activation-plan",
+                    "--kb-manifest",
+                    str(activation_kb_manifest),
+                    "--doc-manifest",
+                    str(activation_doc_manifest),
+                    "--route-config",
+                    str(activation_route_config),
+                    "--retrieval-hints",
+                    str(activation_retrieval_hints),
+                    "--chunk-snapshot",
+                    str(activation_chunk_snapshot),
+                    "--route-tests",
+                    str(activation_route_tests),
+                    "--output",
+                    str(activation_output),
+                    "--report-md",
+                    str(activation_md),
+                    "--redaction-report",
+                    str(activation_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            combined = "\n".join(
+                [
+                    topology_result.stdout,
+                    split_result.stdout,
+                    activation_result.stdout,
+                    topology_json.read_text(encoding="utf-8"),
+                    topology_md.read_text(encoding="utf-8"),
+                    topology_redaction.read_text(encoding="utf-8"),
+                    split_json.read_text(encoding="utf-8"),
+                    split_md.read_text(encoding="utf-8"),
+                    split_redaction.read_text(encoding="utf-8"),
+                    activation_output.read_text(encoding="utf-8"),
+                    activation_md.read_text(encoding="utf-8"),
+                    activation_redaction.read_text(encoding="utf-8"),
+                ]
+            )
+            redaction_payloads = [
+                json.loads(topology_redaction.read_text(encoding="utf-8")),
+                json.loads(split_redaction.read_text(encoding="utf-8")),
+                json.loads(activation_redaction.read_text(encoding="utf-8")),
+            ]
+
+        self.assertEqual(topology_result.returncode, 0, topology_result.stdout)
+        self.assertEqual(split_result.returncode, 0, split_result.stdout)
+        self.assertEqual(activation_result.returncode, 0, activation_result.stdout)
+        for redaction_payload in redaction_payloads:
+            self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+            self.assertGreaterEqual(redaction_payload["summary"]["redaction_count"], 1)
+        self.assertNotIn("topology-secret", combined)
+        self.assertNotIn("activation-secret", combined)
+        self.assertNotIn("topology.internal.local", combined)
+        self.assertNotIn("activation.internal.local", combined)
+
     def test_parse_report_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1624,16 +2103,24 @@ class KbBuildCliTests(unittest.TestCase):
             documents_json = root / "documents.json"
             parse_log = root / "parse.log"
             profile = root / "profile.json"
+            parser_config_dir = root / "private-home" / ".ragflow"
+            parser_config_dir.mkdir(parents=True)
+            parser_config = parser_config_dir / "parser_config.local.json"
             output = root / "parse_report.json"
             report_md = root / "parse_report.md"
+            redaction_json = root / "parse_report.redaction.json"
+            fake_host = "parse.internal.local"
+            fake_secret = "fake-parse-report-secret"
+            fake_url = f"http://{fake_host}:9380/parser?token={fake_secret}"
             kb_manifest.write_text(
                 json.dumps(
                     {
                         "version": "0.1",
-                        "dataset": {"id": "ds-parse-cli", "name": "kb:parse-cli"},
+                        "ragflow_base_url": fake_url,
+                        "dataset": {"id": "ds-parse-cli", "name": f"kb:{fake_url}"},
                         "documents": [
                             {
-                                "document_id": "doc-parse-cli",
+                                "document_id": f"doc-{fake_host}",
                                 "source_path": "source.md",
                                 "markdown_path": "documents/source.md",
                                 "status": "done",
@@ -1652,7 +2139,7 @@ class KbBuildCliTests(unittest.TestCase):
                             "chunk_count": 1,
                             "docs": [
                                 {
-                                    "id": "doc-parse-cli",
+                                    "id": f"doc-{fake_host}",
                                     "name": "source.md",
                                     "run": "1",
                                     "progress": 1,
@@ -1681,6 +2168,19 @@ class KbBuildCliTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            parser_config.write_text(
+                json.dumps(
+                    {
+                        "parser_config": {
+                            "chunk_token_num": 512,
+                            "auto_keywords": 0,
+                            "auto_questions": 0,
+                            "__language__": "English",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             result = subprocess.run(
                 [
@@ -1695,10 +2195,14 @@ class KbBuildCliTests(unittest.TestCase):
                     str(parse_log),
                     "--profile",
                     str(profile),
+                    "--parser-config",
+                    str(parser_config),
                     "--report-json",
                     str(output),
                     "--report-md",
                     str(report_md),
+                    "--redaction-report",
+                    str(redaction_json),
                     "--json",
                 ],
                 text=True,
@@ -1708,16 +2212,25 @@ class KbBuildCliTests(unittest.TestCase):
             )
             payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
             report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+            redaction_payload = json.loads(redaction_json.read_text(encoding="utf-8")) if redaction_json.exists() else {}
 
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("ragflow_parse_report_v1", result.stdout)
         self.assertEqual(payload["schema"], "ragflow_parse_report_v1")
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["summary"]["redaction_count"], 3)
         self.assertTrue(payload["advisory_only"])
         self.assertEqual(payload["mutation"], "none")
         self.assertEqual(payload["execution"]["ragflow_calls"], 0)
         self.assertEqual(payload["summary"]["failed_document_count"], 0)
         self.assertEqual(payload["parse_log_summary"]["slowest_phase"]["phase"], "parse")
         self.assertIn("RAGFlow Parse Report", report_md_text)
+        combined = json.dumps(payload, ensure_ascii=False) + report_md_text + result.stdout
+        self.assertNotIn(fake_host, combined)
+        self.assertNotIn(fake_secret, combined)
+        self.assertNotIn(str(parser_config), combined)
+        self.assertIn("<redacted:private-host>", combined)
+        self.assertIn("<redacted:config-path>", combined)
 
     def test_health_report_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1727,11 +2240,16 @@ class KbBuildCliTests(unittest.TestCase):
             activation_plan = root / "activation_plan.json"
             output = root / "kb_health_report.json"
             report_md = root / "kb_health_report.md"
+            redaction_json = root / "kb_health_report.redaction.json"
+            fake_host = "health.internal.local"
+            fake_secret = "fake-health-report-secret"
+            fake_url = f"http://{fake_host}:9380/health?token={fake_secret}"
             kb_manifest.write_text(
                 json.dumps(
                     {
                         "version": "0.1",
-                        "dataset": {"id": "ds-health-cli", "name": "kb:health-cli"},
+                        "ragflow_base_url": fake_url,
+                        "dataset": {"id": "ds-health-cli", "name": f"kb:{fake_url}"},
                         "profile": {"id": "health-cli-profile", "embedding_model": "bge-m3"},
                         "documents": [
                             {
@@ -1752,7 +2270,7 @@ class KbBuildCliTests(unittest.TestCase):
                         "ok": True,
                         "schema": "ragflow_parse_report_v1",
                         "status": "PASS",
-                        "dataset": {"id": "ds-health-cli", "name": "kb:health-cli"},
+                        "dataset": {"id": "ds-health-cli", "name": f"kb:{fake_url}"},
                         "summary": {
                             "failed_document_count": 0,
                             "pending_document_count": 0,
@@ -1771,7 +2289,7 @@ class KbBuildCliTests(unittest.TestCase):
                     {
                         "ok": True,
                         "schema": "kb_activation_plan_v1",
-                        "kb_name": "kb:health-cli",
+                        "kb_name": f"kb:{fake_url}",
                         "dataset_id": "ds-health-cli",
                         "summary": {
                             "blocked_check_count": 0,
@@ -1800,6 +2318,8 @@ class KbBuildCliTests(unittest.TestCase):
                     str(output),
                     "--report-md",
                     str(report_md),
+                    "--redaction-report",
+                    str(redaction_json),
                     "--json",
                 ],
                 text=True,
@@ -1809,10 +2329,13 @@ class KbBuildCliTests(unittest.TestCase):
             )
             payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
             report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+            redaction_payload = json.loads(redaction_json.read_text(encoding="utf-8")) if redaction_json.exists() else {}
 
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("ragflow_kb_health_report_v1", result.stdout)
         self.assertEqual(payload["schema"], "ragflow_kb_health_report_v1")
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["summary"]["redaction_count"], 3)
         self.assertTrue(payload["advisory_only"])
         self.assertEqual(payload["mutation"], "none")
         self.assertEqual(payload["execution"]["ragflow_calls"], 0)
@@ -1821,6 +2344,14 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["inputs"]["expected_embedding_models"], ["bge-m3"])
         self.assertEqual(payload["summary"]["route_activation"]["ready"], 1)
         self.assertIn("RAGFlow KB Health Report", report_md_text)
+        combined = json.dumps(payload, ensure_ascii=False) + report_md_text + result.stdout
+        self.assertNotIn(fake_host, combined)
+        self.assertNotIn(fake_secret, combined)
+        self.assertNotIn(str(kb_manifest), combined)
+        self.assertNotIn(str(parse_report), combined)
+        self.assertNotIn(str(activation_plan), combined)
+        self.assertIn("<redacted:private-host>", combined)
+        self.assertIn("<redacted:config-path>", combined)
 
     def test_optimize_plan_only_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2107,6 +2638,239 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(cleanup_payload["summary"]["ready_target_count"], 1)
         self.assertIn("--confirm-dataset-id", cleanup_payload["targets"][0]["commands"]["execute"])
         self.assertIn("RAGFlow Optimization Cleanup Plan", cleanup_md_text)
+
+    def test_optimize_report_surfaces_emit_redaction_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_host = "optimize.internal.local"
+            fake_secret = "optimize-secret"
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "source.md").write_text("# Source\n\nKnown optimize answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "candidate-a",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                        "parser_config": {
+                            "chunk_token_num": 512,
+                            "auto_keywords": 0,
+                            "auto_questions": 0,
+                            "__language__": "English",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"source.md": 1}}), encoding="utf-8")
+            raw_plan = root / "raw_optimization_plan.json"
+            raw_artifact_dir = root / "raw-artifacts"
+            redacted_plan = root / "optimization_plan.json"
+            redacted_plan_md = root / "optimization_plan.md"
+            redacted_plan_sidecar = root / "optimization_plan_redaction.json"
+            redacted_cleanup = root / "optimization_cleanup_plan.json"
+            redacted_cleanup_md = root / "optimization_cleanup_plan.md"
+            redacted_cleanup_sidecar = root / "optimization_cleanup_plan_redaction.json"
+            redacted_summary = root / "profile_experiment_results.json"
+            redacted_summary_md = root / "best_profile_report.md"
+            redacted_summary_sidecar = root / "best_profile_report_redaction.json"
+            private_config = root / "ragflow.local.yaml"
+
+            raw_plan_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "--plan-only",
+                    "--input",
+                    str(docs),
+                    "--kb-name",
+                    f"kb:http://{fake_host}:9380?token={fake_secret}",
+                    "--profile",
+                    str(profile),
+                    "--queries",
+                    str(queries),
+                    "--qrels",
+                    str(qrels),
+                    "--run-id",
+                    "redaction",
+                    "--artifact-dir",
+                    str(raw_artifact_dir),
+                    "--output",
+                    str(raw_plan),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            raw_payload = json.loads(raw_plan.read_text(encoding="utf-8")) if raw_plan.exists() else {}
+            candidate = raw_payload["candidates"][0]
+            kb_manifest = Path(candidate["artifacts"]["kb_manifest"])
+            kb_manifest.parent.mkdir(parents=True, exist_ok=True)
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "0123456789abcdef", "name": candidate["disposable_kb_name"]},
+                        "documents": [{"document_id": "doc-0123456789abcdef", "status": "done", "chunk_count": 1}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            validation_report = Path(candidate["artifacts"]["validation_report"])
+            validation_report.parent.mkdir(parents=True, exist_ok=True)
+            validation_report.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "level": "benchmark",
+                        "dataset": {
+                            "id": "ds-optimize",
+                            "name": f"kb:http://{fake_host}:9380?token={fake_secret}",
+                        },
+                        "metrics": {"pass_rate": 1.0},
+                        "benchmark": {
+                            "metrics": {
+                                "hit_rate": 1.0,
+                                "mrr": 1.0,
+                                "precision_at_k": 1.0,
+                                "recall_at_k": 1.0,
+                                "ndcg_at_k": 1.0,
+                                "map_at_k": 1.0,
+                                "strict_chunk_recall_at_k": 1.0,
+                                "expected_chunk_hit_rate": 1.0,
+                                "empty_result_rate": 0.0,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            redacted_plan_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "--plan-only",
+                    "--input",
+                    str(docs),
+                    "--kb-name",
+                    f"kb:http://{fake_host}:9380?token={fake_secret}",
+                    "--profile",
+                    str(profile),
+                    "--queries",
+                    str(queries),
+                    "--qrels",
+                    str(qrels),
+                    "--run-id",
+                    "redaction",
+                    "--artifact-dir",
+                    str(root / "redacted-artifacts"),
+                    "--output",
+                    str(redacted_plan),
+                    "--report-md",
+                    str(redacted_plan_md),
+                    "--redaction-report",
+                    str(redacted_plan_sidecar),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            cleanup_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "cleanup-plan",
+                    "--plan",
+                    str(raw_plan),
+                    "--output",
+                    str(redacted_cleanup),
+                    "--report-md",
+                    str(redacted_cleanup_md),
+                    "--config",
+                    str(private_config),
+                    "--redaction-report",
+                    str(redacted_cleanup_sidecar),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            summary_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "summarize",
+                    "--plan",
+                    str(raw_plan),
+                    "--report",
+                    str(validation_report),
+                    "--output",
+                    str(redacted_summary),
+                    "--report-md",
+                    str(redacted_summary_md),
+                    "--redaction-report",
+                    str(redacted_summary_sidecar),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            plan_payload = json.loads(redacted_plan.read_text(encoding="utf-8")) if redacted_plan.exists() else {}
+            cleanup_payload = json.loads(redacted_cleanup.read_text(encoding="utf-8")) if redacted_cleanup.exists() else {}
+            summary_payload = json.loads(redacted_summary.read_text(encoding="utf-8")) if redacted_summary.exists() else {}
+            sidecars = [
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in (redacted_plan_sidecar, redacted_cleanup_sidecar, redacted_summary_sidecar)
+            ]
+            combined = (
+                json.dumps(plan_payload, ensure_ascii=False)
+                + redacted_plan_md.read_text(encoding="utf-8")
+                + redacted_plan_result.stdout
+                + json.dumps(cleanup_payload, ensure_ascii=False)
+                + redacted_cleanup_md.read_text(encoding="utf-8")
+                + cleanup_result.stdout
+                + json.dumps(summary_payload, ensure_ascii=False)
+                + redacted_summary_md.read_text(encoding="utf-8")
+                + summary_result.stdout
+                + json.dumps(sidecars, ensure_ascii=False)
+            )
+
+        self.assertEqual(raw_plan_result.returncode, 0, raw_plan_result.stdout)
+        self.assertEqual(redacted_plan_result.returncode, 0, redacted_plan_result.stdout)
+        self.assertEqual(cleanup_result.returncode, 0, cleanup_result.stdout)
+        self.assertEqual(summary_result.returncode, 0, summary_result.stdout)
+        self.assertEqual(plan_payload["schema"], "ragflow_optimization_plan_v1")
+        self.assertEqual(cleanup_payload["schema"], "ragflow_optimization_cleanup_plan_v1")
+        self.assertEqual(summary_payload["schema"], "ragflow_profile_experiment_results_v1")
+        for sidecar in sidecars:
+            self.assertEqual(sidecar["schema"], "ragflow_report_redaction_report_v1")
+            self.assertGreaterEqual(sidecar["summary"]["redaction_count"], 1)
+        self.assertNotIn(fake_host, combined)
+        self.assertNotIn(fake_secret, combined)
+        self.assertNotIn(str(root), combined)
+        self.assertNotIn(str(raw_plan), combined)
+        self.assertNotIn(str(kb_manifest), combined)
+        self.assertNotIn(str(validation_report), combined)
+        self.assertIn("<redacted:private-host>", combined)
+        self.assertIn("<redacted:secret>", combined)
+        self.assertIn("<redacted:config-path>", combined)
 
     def test_inspect_manifest_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

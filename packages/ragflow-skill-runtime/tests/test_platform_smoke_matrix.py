@@ -52,6 +52,7 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertEqual(profile["config_mode"], "env")
         self.assertTrue(profile["ok"], profile)
         check_names = [item["name"] for item in profile["checks"]]
+        self.assertIn("doc-to-md convert redaction", check_names)
         self.assertIn("doc-to-md image fallback", check_names)
         self.assertIn("image fallback preserves source image with review gate", check_names)
         self.assertIn("doc-to-md mineru-cli auto backend", check_names)
@@ -66,6 +67,14 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("doc-to-md backend probe", check_names)
         self.assertIn("doc-to-md backend warmup", check_names)
         self.assertIn("kb model-providers probe", check_names)
+        self.assertIn("kb metadata lint redaction", check_names)
+        self.assertIn("kb tagset report redaction", check_names)
+        self.assertIn("kb topology advise redaction", check_names)
+        self.assertIn("kb topology split-plan redaction", check_names)
+        self.assertIn("kb activation-plan redaction", check_names)
+        self.assertIn("kb optimize plan-only redaction", check_names)
+        self.assertIn("kb optimize cleanup-plan redaction", check_names)
+        self.assertIn("kb optimize summarize redaction", check_names)
         self.assertIn("query endpoint-report", check_names)
         self.assertIn("query fallback-test", check_names)
         self.assertTrue(
@@ -97,7 +106,19 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
             profile["artifacts"],
         )
         self.assertTrue(
+            any(path.endswith("convert_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
             any(path.endswith("backend_warmup.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("backend_warmup_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("postprocess_redaction.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
         self.assertTrue(
@@ -106,6 +127,46 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("model_provider_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("metadata_lint_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("tagset_report_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("kb_topology_advice_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("kb_split_plan_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("kb_activation_plan_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("optimization_plan_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("optimization_cleanup_plan_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("best_profile_report_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("parse_report_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("kb_health_report_redaction.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
         self.assertTrue(
