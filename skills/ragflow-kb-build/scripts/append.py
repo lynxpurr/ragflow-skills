@@ -13,8 +13,12 @@ from typing import Any, Mapping
 
 
 def bootstrap_runtime() -> None:
+    script_dir = Path(__file__).parent
+    if str(script_dir) not in sys.path:
+        sys.path.insert(0, str(script_dir))
     candidates = [
         os.environ.get("RAGFLOW_SKILL_RUNTIME_PATH"),
+        Path(__file__).parents[3] / "packages/ragflow-skill-runtime/src",
         Path(__file__).parent / "_vendor",
         Path(__file__).parents[1] / "_shared",
     ]
@@ -42,6 +46,7 @@ from ragflow_skill_runtime import (  # noqa: E402
 from ragflow_skill_runtime.config import ConfigError  # noqa: E402
 from ragflow_skill_runtime.kb_build import extract_uploaded_document_id  # noqa: E402
 from ragflow_skill_runtime.manifests import ManifestError  # noqa: E402
+from _report_redaction import sanitize_cli_report  # noqa: E402
 
 
 def _dump_json(data: Any) -> None:
@@ -192,6 +197,15 @@ def _run(args: argparse.Namespace) -> int:
         )
 
         if not args.execute:
+            if args.redaction_report:
+                plan, redaction_report = sanitize_cli_report(
+                    plan,
+                    args,
+                    input_paths=[args.kb_manifest, args.input, args.doc_manifest, args.config],
+                    output_paths=[args.output, args.redaction_report],
+                    context_json_paths=[args.kb_manifest, args.doc_manifest],
+                )
+                _write_output(args.redaction_report, redaction_report)
             _write_output(args.output, plan)
             _dump_json(plan)
             return 0
@@ -266,6 +280,16 @@ def _run(args: argparse.Namespace) -> int:
             ],
             "append_manifest": append_manifest,
         }
+        if args.redaction_report:
+            payload, redaction_report = sanitize_cli_report(
+                payload,
+                args,
+                input_paths=[args.kb_manifest, args.input, args.doc_manifest, args.config],
+                output_paths=[args.output, args.redaction_report],
+                context_json_paths=[args.kb_manifest, args.doc_manifest],
+                config=client.config,
+            )
+            _write_output(args.redaction_report, redaction_report)
         _write_output(args.output, payload)
         _dump_json(payload)
         return 0
@@ -281,6 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset-id", help="Override target dataset ID from kb_manifest")
     parser.add_argument("--kb-name", help="Override target dataset name from kb_manifest")
     parser.add_argument("--output", help="Optional append plan or execution report path")
+    parser.add_argument("--redaction-report", help="Optional redaction sidecar for append plan or execution reports")
     parser.add_argument("--config", help="Runtime config file")
     parser.add_argument("--base-url", help="RAGFlow base URL")
     parser.add_argument("--api-key", help="RAGFlow API key")

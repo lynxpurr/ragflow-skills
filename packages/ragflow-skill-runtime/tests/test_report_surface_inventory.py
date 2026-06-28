@@ -25,8 +25,8 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
         self.assertEqual(
             report["summary"]["status_counts"],
             {
-                "covered": 67,
-                "needs_redaction": 2,
+                "covered": 69,
+                "needs_redaction": 0,
                 "not_applicable": 9,
             },
         )
@@ -87,6 +87,14 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
         self.assertEqual(snapshot_chunks["status"], "covered")
         self.assertIn("redaction_sidecar", snapshot_chunks["output_categories"])
 
+        append = by_command["ragflow-kb-build append"]
+        self.assertEqual(append["status"], "covered")
+        self.assertIn("redaction_sidecar", append["output_categories"])
+
+        cleanup = by_command["ragflow-kb-build cleanup"]
+        self.assertEqual(cleanup["status"], "covered")
+        self.assertIn("redaction_sidecar", cleanup["output_categories"])
+
         template = by_command["ragflow-kb-build metadata generate-template"]
         self.assertEqual(template["status"], "not_applicable")
         self.assertIn("artifact_json", template["output_categories"])
@@ -101,7 +109,7 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
 
         self.assertIn("# RAGFlow Report Surface Inventory", text)
         self.assertIn("`ragflow-query endpoint-report`", text)
-        self.assertIn("needs redaction: `2`", text)
+        self.assertIn("needs redaction: `0`", text)
 
 
 if __name__ == "__main__":

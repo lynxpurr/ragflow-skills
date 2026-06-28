@@ -1328,7 +1328,7 @@ Inventory implemented. `tools/report_surface_inventory.py` emits
 `ragflow_report_surface_inventory_v1`, imports the public CLI parsers offline, and fails
 the inventory when a public command lacks an explicit `covered`, `not_applicable`, or
 `needs_redaction` classification. The current verified inventory names 78 public commands:
-67 `covered`, 2 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
+69 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
 classification findings.
 
 `ragflow-kb-build parse-report` and `ragflow-kb-build health-report` now support
@@ -1354,9 +1354,8 @@ Top-level `ragflow-doc-to-md` conversion now supports `--redaction-report` for
 JSON stdout. Reports are sanitized as a combined quality/runtime bundle, and focused CLI
 tests cover derived Markdown filenames created from assignment-style fake-secret input
 names plus runtime process paths. Consumer acceptance and platform smoke both retain the
-top-level conversion redaction sidecar as an artifact. Remaining Phase 36 redaction work
-should use the inventory to review `ragflow-kb-build append` and `cleanup` raw user-owned
-artifact boundaries before adding sidecars to shareable report or plan surfaces.
+top-level conversion redaction sidecar as an artifact. The Phase 36 report-surface
+inventory is now the authoritative generated-report redaction ledger for public commands.
 
 `ragflow-kb-build metadata lint`, `ragflow-kb-build metadata merge`,
 `ragflow-kb-build tagset lint`, and `ragflow-kb-build tagset report` now support
@@ -1427,10 +1426,18 @@ and evidence-mapping workflows consume them directly. Focused CLI tests cover fa
 hosts, fake secrets, host paths, sanitized Markdown, and the raw artifact boundary;
 consumer acceptance and platform smoke retain the new sidecars as release artifacts.
 
+`ragflow-kb-build append` and `ragflow-kb-build cleanup` now support `--redaction-report`
+for their generated plan and execution report surfaces. Boundary review found no separate
+canonical downstream raw artifact: `--output` is the shareable append/cleanup plan or
+execution report, so stdout and `--output` are written from the sanitized payload when
+redaction is enabled. Focused CLI tests cover fake private hosts, fake secrets, host paths,
+and the sanitized-output boundary, while consumer acceptance and platform smoke retain
+the new sidecars.
+
 Next implementation order should keep closing generated-report safety before starting the
-runtime helper pilot. Review `append`/`cleanup` plan surfaces next, decide which outputs
-remain raw user-owned artifacts, then add sidecars to any shareable generated reports
-before starting the narrow runtime helper pilot.
+runtime helper pilot. Generated-report redaction coverage has no remaining
+`needs_redaction` inventory entries, so the next slice should add one minimal retry/backoff
+or metrics helper to a read-only probe/report command with deterministic tests.
 
 ## Implementation Notes And Pitfalls
 

@@ -123,7 +123,11 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("kb-build benchmark suggest redaction", check_names)
         self.assertIn("kb-build validate redaction", check_names)
         self.assertIn("kb-build append help", check_names)
+        self.assertIn("kb-build append redaction", check_names)
+        self.assertIn("kb-build append redaction sidecar", check_names)
         self.assertIn("kb-build cleanup help", check_names)
+        self.assertIn("kb-build cleanup redaction", check_names)
+        self.assertIn("kb-build cleanup redaction sidecar", check_names)
         self.assertIn("kb-build diagnose help", check_names)
         self.assertIn("kb-build diagnose redaction", check_names)
         self.assertIn("kb-build probe help", check_names)
@@ -261,6 +265,14 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("suppression_report_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("append_plan_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("cleanup_plan_redaction.json") for path in payload["produced_artifacts"]),
             payload["produced_artifacts"],
         )
         self.assertTrue(

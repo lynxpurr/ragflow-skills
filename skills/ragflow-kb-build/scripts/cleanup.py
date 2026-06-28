@@ -13,8 +13,12 @@ from typing import Any, Mapping
 
 
 def bootstrap_runtime() -> None:
+    script_dir = Path(__file__).parent
+    if str(script_dir) not in sys.path:
+        sys.path.insert(0, str(script_dir))
     candidates = [
         os.environ.get("RAGFLOW_SKILL_RUNTIME_PATH"),
+        Path(__file__).parents[3] / "packages/ragflow-skill-runtime/src",
         Path(__file__).parent / "_vendor",
         Path(__file__).parents[1] / "_shared",
     ]
@@ -29,6 +33,7 @@ bootstrap_runtime()
 from ragflow_skill_runtime import BuildError, RAGFlowClient, load_config, load_kb_manifest  # noqa: E402
 from ragflow_skill_runtime.config import ConfigError  # noqa: E402
 from ragflow_skill_runtime.manifests import ManifestError  # noqa: E402
+from _report_redaction import sanitize_cli_report  # noqa: E402
 
 
 def _dump_json(data: Any) -> None:
@@ -101,6 +106,15 @@ def _run(args: argparse.Namespace) -> int:
         dataset_id, dataset_name = _target(args)
         payload = _plan_payload(dataset_id=dataset_id, dataset_name=dataset_name, execute=args.execute)
         if not args.execute:
+            if args.redaction_report:
+                payload, redaction_report = sanitize_cli_report(
+                    payload,
+                    args,
+                    input_paths=[args.kb_manifest, args.config],
+                    output_paths=[args.output, args.redaction_report],
+                    context_json_paths=[args.kb_manifest],
+                )
+                _write_output(args.redaction_report, redaction_report)
             _write_output(args.output, payload)
             _dump_json(payload)
             return 0
@@ -114,6 +128,16 @@ def _run(args: argparse.Namespace) -> int:
             "dry_run": False,
             "delete_response": delete_response,
         }
+        if args.redaction_report:
+            payload, redaction_report = sanitize_cli_report(
+                payload,
+                args,
+                input_paths=[args.kb_manifest, args.config],
+                output_paths=[args.output, args.redaction_report],
+                context_json_paths=[args.kb_manifest],
+                config=config,
+            )
+            _write_output(args.redaction_report, redaction_report)
         _write_output(args.output, payload)
         _dump_json(payload)
         return 0
@@ -127,6 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset-id", help="Target dataset ID; overrides kb_manifest when provided")
     parser.add_argument("--kb-name", help="Target KB name; overrides kb_manifest when provided")
     parser.add_argument("--output", help="Optional cleanup plan or execution report path")
+    parser.add_argument("--redaction-report", help="Optional redaction sidecar for cleanup plan or execution reports")
     parser.add_argument("--execute", action="store_true", help="Actually delete the target dataset")
     parser.add_argument("--confirm-dataset-id", help="Required with --execute; must exactly match the target dataset ID")
     parser.add_argument("--confirm-kb-name", help="Required with --execute when a target KB name is known")

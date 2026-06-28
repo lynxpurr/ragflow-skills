@@ -70,9 +70,10 @@ def _collect_path_like_literals(value: Any) -> list[str]:
             or text.endswith((".json", ".jsonl", ".md", ".yaml", ".yml", ".py", ".toml", ".txt"))
         ):
             paths = [text]
-            path = Path(text)
-            if str(path.parent) not in {"", "."}:
-                paths.append(str(path.parent))
+            if "://" not in text:
+                path = Path(text)
+                if str(path.parent) not in {"", ".", "/"}:
+                    paths.append(str(path.parent))
             return paths
         return []
     if isinstance(value, dict):
@@ -86,6 +87,21 @@ def _collect_path_like_literals(value: Any) -> list[str]:
             paths.extend(_collect_path_like_literals(item))
         return paths
     return []
+
+
+def _expand_config_paths(paths: list[str | None]) -> list[str | None]:
+    expanded: list[str | None] = []
+    for raw_path in paths:
+        if not raw_path:
+            continue
+        text = str(raw_path)
+        expanded.append(text)
+        if "://" in text:
+            continue
+        parent = Path(text).parent
+        if str(parent) not in {"", ".", "/"}:
+            expanded.append(str(parent))
+    return expanded
 
 
 def _collect_redaction_context_from_json_paths(paths: list[str | None]) -> tuple[list[str], list[str], list[str]]:
@@ -131,12 +147,16 @@ def sanitize_cli_report(
     ]
     urls = [*_collect_urls(report), *config_urls]
     config_paths = [
-        *(input_paths or []),
-        *(output_paths or []),
-        getattr(args, "config", None),
-        getattr(args, "report_json", None),
-        getattr(args, "report_md", None),
-        getattr(args, "redaction_report", None),
+        *_expand_config_paths(input_paths or []),
+        *_expand_config_paths(output_paths or []),
+        *_expand_config_paths(
+            [
+                getattr(args, "config", None),
+                getattr(args, "report_json", None),
+                getattr(args, "report_md", None),
+                getattr(args, "redaction_report", None),
+            ]
+        ),
         *context_paths,
         *_collect_path_like_literals(report),
     ]

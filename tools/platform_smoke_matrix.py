@@ -1814,6 +1814,94 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         env=env,
     )
     _record_command_check(checks, "kb-build dry-run", build_result, required_stdout='"dry_run": true')
+    append_script = script_root / "ragflow-kb-build" / "scripts" / "append.py"
+    append_secret = "platform-append-secret"
+    append_host = "append.internal.local"
+    append_input = workspace / f"append-token={append_secret}"
+    append_input.mkdir(parents=True, exist_ok=True)
+    (append_input / f"source-token={append_secret}.md").write_text("# Append\n", encoding="utf-8")
+    append_manifest = artifacts_dir / f"append-kb-token={append_secret}.json"
+    append_manifest.write_text(
+        json.dumps(
+            {
+                "version": "0.1",
+                "dataset": {
+                    "id": "append-dataset",
+                    "name": f"kb:http://{append_host}:9380?token={append_secret}",
+                },
+                "documents": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    append_plan = artifacts_dir / "append_plan.json"
+    append_redaction = artifacts_dir / "append_plan_redaction.json"
+    append_result = _run_command(
+        [
+            sys.executable,
+            str(append_script),
+            "--kb-manifest",
+            str(append_manifest),
+            "--input",
+            str(append_input),
+            "--output",
+            str(append_plan),
+            "--redaction-report",
+            str(append_redaction),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb append redaction",
+        append_result,
+        required_stdout='"schema": "ragflow_append_plan_v1"',
+    )
+    _record_redaction_sidecar_check(checks, "kb append redaction sidecar", append_redaction)
+
+    cleanup_script = script_root / "ragflow-kb-build" / "scripts" / "cleanup.py"
+    cleanup_secret = "platform-cleanup-secret"
+    cleanup_host = "cleanup.internal.local"
+    cleanup_manifest = artifacts_dir / f"cleanup-kb-token={cleanup_secret}.json"
+    cleanup_manifest.write_text(
+        json.dumps(
+            {
+                "version": "0.1",
+                "dataset": {
+                    "id": "cleanup-dataset",
+                    "name": f"kb:http://{cleanup_host}:9380?token={cleanup_secret}",
+                },
+                "documents": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cleanup_plan = artifacts_dir / "cleanup_plan.json"
+    cleanup_redaction = artifacts_dir / "cleanup_plan_redaction.json"
+    cleanup_result = _run_command(
+        [
+            sys.executable,
+            str(cleanup_script),
+            "--kb-manifest",
+            str(cleanup_manifest),
+            "--output",
+            str(cleanup_plan),
+            "--redaction-report",
+            str(cleanup_redaction),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb cleanup redaction",
+        cleanup_result,
+        required_stdout='"schema": "ragflow_cleanup_plan_v1"',
+    )
+    _record_redaction_sidecar_check(checks, "kb cleanup redaction sidecar", cleanup_redaction)
     _run_model_provider_probe_check(
         build_script=build_script,
         workspace=workspace,
@@ -3248,6 +3336,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "handoff_inspection.md",
         artifacts_dir / "handoff_inspection_redaction.json",
         kb_manifest,
+        artifacts_dir / "append_plan.json",
+        artifacts_dir / "append_plan_redaction.json",
+        artifacts_dir / "cleanup_plan.json",
+        artifacts_dir / "cleanup_plan_redaction.json",
         artifacts_dir / "parse_documents.json",
         artifacts_dir / "parse.log",
         artifacts_dir / "parse_report.json",

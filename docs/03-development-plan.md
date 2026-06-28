@@ -1239,7 +1239,7 @@ Tasks:
 
 - [x] Add a report-surface inventory that classifies public commands with JSON, Markdown,
   runtime, plan, or sidecar outputs as `covered`, `not_applicable`, or `needs_redaction`.
-- [ ] Add `--redaction-report` coverage to the highest-risk remaining `ragflow-kb-build`
+- [x] Add `--redaction-report` coverage to the highest-risk remaining `ragflow-kb-build`
   report families that read host-supplied manifests, reports, parser configs, parse logs,
   or work paths.
 - [x] Add `--redaction-report` coverage to `ragflow-kb-build benchmark import`,
@@ -1253,7 +1253,7 @@ Tasks:
 - [x] Add `--redaction-report` coverage to `ragflow-kb-build snapshot-chunks`,
   `qa generate`, `qa validate`, `qa map-evidence`, `segment-metadata report`, and
   `suppression-report` report surfaces.
-- [ ] Add `--redaction-report` coverage to `ragflow-kb-build append` and `cleanup`
+- [x] Add `--redaction-report` coverage to `ragflow-kb-build append` and `cleanup`
   plan surfaces after confirming which generated artifacts remain raw user-owned outputs.
 - [x] Add `--redaction-report` coverage to `ragflow-kb-build parse-report` and
   `ragflow-kb-build health-report`, including sanitized Markdown rendering.
@@ -1291,10 +1291,9 @@ Tasks:
 Status note: `tools/report_surface_inventory.py` now emits
 `ragflow_report_surface_inventory_v1`, dynamically enumerates public argparse command
 leaves, and overlays an explicit Phase 36 classification. The verified inventory currently
-names 78 public commands: 67 `covered`, 2 `needs_redaction`, and 9 `not_applicable`, with
-no uncatalogued or stale classification findings. Remaining redaction work is concentrated
-in `ragflow-kb-build` append/cleanup report/plan surfaces after their raw user-owned
-artifact boundaries are reviewed; `ragflow-doc-to-md`
+names 78 public commands: 69 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with
+no uncatalogued or stale classification findings. Generated-report redaction coverage is
+now closed across inventoried public command surfaces; `ragflow-doc-to-md`
 and `ragflow-query` report commands are currently classified as covered or not applicable.
 `ragflow-kb-build parse-report` and
 `ragflow-kb-build health-report` now sanitize JSON and Markdown from the same sanitized
@@ -1351,13 +1350,18 @@ now emit redaction sidecars for offline snapshot, grounded-QA, enrichment, and s
 report surfaces. JSON stdout, optional JSON reports, and Markdown reports are rendered
 from sanitized payloads when redaction is enabled; raw chunk snapshot, generated QA, and
 evidence-map output artifacts remain user-owned inputs for downstream benchmark workflows.
+`ragflow-kb-build append` and `ragflow-kb-build cleanup` now emit redaction sidecars for
+their generated plan/execution report surfaces. Their `--output` JSON files and stdout are
+sanitized when `--redaction-report` is enabled because these outputs are shareable review
+plans/reports rather than canonical downstream artifacts; no additional raw user-owned
+append/cleanup artifact is produced by these commands.
 Consumer acceptance now verifies newly redacted non-query fake-sensitive fixtures, and
 platform smoke retains doc-to-md conversion, backend warmup, and KB metadata/tagset plus
 topology/activation, optimization, benchmark lifecycle, validation/diagnostic, profile,
-and snapshot/QA/enrichment redaction sidecars as artifacts.
-The next recommended redaction tranche is `ragflow-kb-build append` and `cleanup`: first
-review which outputs are raw user-owned artifacts, then add sidecars only to shareable
-report/plan surfaces. After that, start the narrow runtime helper pilot.
+snapshot/QA/enrichment, and append/cleanup redaction sidecars as artifacts.
+The next recommended Phase 36 task is the narrow runtime helper pilot: add one minimal
+retry/backoff or metrics helper to a read-only probe/report command with deterministic
+tests and release-gate coverage.
 
 Exit criteria:
 

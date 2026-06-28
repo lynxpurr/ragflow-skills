@@ -121,6 +121,7 @@ DOC_COVERED_COMMANDS = (
 DOC_NOT_APPLICABLE_COMMANDS = ("ragflow-doc-to-md package",)
 KB_COVERED_COMMANDS = (
     "ragflow-kb-build activation-plan",
+    "ragflow-kb-build append",
     "ragflow-kb-build benchmark delta",
     "ragflow-kb-build benchmark gate",
     "ragflow-kb-build benchmark import",
@@ -129,6 +130,7 @@ KB_COVERED_COMMANDS = (
     "ragflow-kb-build benchmark suggest",
     "ragflow-kb-build benchmark summarize",
     "ragflow-kb-build benchmark trend",
+    "ragflow-kb-build cleanup",
     "ragflow-kb-build diagnose",
     "ragflow-kb-build health-report",
     "ragflow-kb-build inspect-handoff",
@@ -158,10 +160,7 @@ KB_COVERED_COMMANDS = (
     "ragflow-kb-build topology split-plan",
     "ragflow-kb-build validate",
 )
-KB_NEEDS_REDACTION_COMMANDS = (
-    "ragflow-kb-build append",
-    "ragflow-kb-build cleanup",
-)
+KB_NEEDS_REDACTION_COMMANDS: tuple[str, ...] = ()
 KB_NOT_APPLICABLE_COMMANDS = (
     "ragflow-kb-build",
     "ragflow-kb-build metadata generate-template",

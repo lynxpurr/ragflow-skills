@@ -3923,6 +3923,7 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Append Markdown documents", result.stdout)
         self.assertIn("--execute", result.stdout)
+        self.assertIn("--redaction-report", result.stdout)
 
     def test_cleanup_preview_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3962,6 +3963,117 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertTrue(payload["dry_run"])
         self.assertEqual(payload["schema"], "ragflow_cleanup_plan_v1")
         self.assertEqual(file_payload["required_confirmation"]["confirm_dataset_id"], "0123456789abcdef")
+
+    def test_append_and_cleanup_plan_redaction_sidecars(self) -> None:
+        append_secret = "append-secret"
+        append_host = "append.internal.local"
+        cleanup_secret = "cleanup-secret"
+        cleanup_host = "cleanup.internal.local"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / f"append-token={append_secret}"
+            input_dir.mkdir()
+            (input_dir / f"source-token={append_secret}.md").write_text("# Append\n", encoding="utf-8")
+            append_manifest = root / f"kb-token={append_secret}.json"
+            append_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {
+                            "id": "0123456789abcdef",
+                            "name": f"kb:http://{append_host}:9380?token={append_secret}",
+                        },
+                        "documents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            append_output = root / "append_plan.json"
+            append_redaction = root / "append_redaction.json"
+            append_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(APPEND_SCRIPT),
+                    "--kb-manifest",
+                    str(append_manifest),
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(append_output),
+                    "--redaction-report",
+                    str(append_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+            cleanup_manifest = root / f"cleanup-token={cleanup_secret}.json"
+            cleanup_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {
+                            "id": "fedcba9876543210",
+                            "name": f"kb:http://{cleanup_host}:9380?token={cleanup_secret}",
+                        },
+                        "documents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            cleanup_output = root / "cleanup_plan.json"
+            cleanup_redaction = root / "cleanup_redaction.json"
+            cleanup_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLEANUP_SCRIPT),
+                    "--kb-manifest",
+                    str(cleanup_manifest),
+                    "--output",
+                    str(cleanup_output),
+                    "--redaction-report",
+                    str(cleanup_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            append_payload = json.loads(append_output.read_text(encoding="utf-8")) if append_output.exists() else {}
+            cleanup_payload = json.loads(cleanup_output.read_text(encoding="utf-8")) if cleanup_output.exists() else {}
+            append_sidecar = json.loads(append_redaction.read_text(encoding="utf-8")) if append_redaction.exists() else {}
+            cleanup_sidecar = json.loads(cleanup_redaction.read_text(encoding="utf-8")) if cleanup_redaction.exists() else {}
+            combined = "\n".join(
+                [
+                    append_result.stdout,
+                    cleanup_result.stdout,
+                    append_output.read_text(encoding="utf-8") if append_output.exists() else "",
+                    cleanup_output.read_text(encoding="utf-8") if cleanup_output.exists() else "",
+                    append_redaction.read_text(encoding="utf-8") if append_redaction.exists() else "",
+                    cleanup_redaction.read_text(encoding="utf-8") if cleanup_redaction.exists() else "",
+                ]
+            )
+
+        self.assertEqual(append_result.returncode, 0, append_result.stderr)
+        self.assertEqual(cleanup_result.returncode, 0, cleanup_result.stderr)
+        self.assertEqual(append_payload["schema"], "ragflow_append_plan_v1")
+        self.assertEqual(cleanup_payload["schema"], "ragflow_cleanup_plan_v1")
+        self.assertEqual(append_sidecar["schema"], "ragflow_report_redaction_report_v1")
+        self.assertEqual(cleanup_sidecar["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(append_sidecar["summary"]["redaction_count"], 1)
+        self.assertGreaterEqual(cleanup_sidecar["summary"]["redaction_count"], 1)
+        self.assertNotIn(append_secret, combined)
+        self.assertNotIn(cleanup_secret, combined)
+        self.assertNotIn(append_host, combined)
+        self.assertNotIn(cleanup_host, combined)
+        self.assertNotIn(str(root), combined)
+        self.assertIn("<redacted:private-host>", combined)
+        self.assertIn("<redacted:secret>", combined)
+        self.assertIn("<redacted:config-path>", combined)
 
     def test_cleanup_execute_requires_confirmation_before_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4007,6 +4119,7 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Preview or execute cleanup", result.stdout)
         self.assertIn("--confirm-dataset-id", result.stdout)
+        self.assertIn("--redaction-report", result.stdout)
 
     def test_probe_help_renders(self) -> None:
         result = subprocess.run(

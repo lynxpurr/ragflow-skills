@@ -3145,6 +3145,61 @@ raise SystemExit(code)
         append_help,
         required_output="Append Markdown documents",
     )
+    append_secret = "consumer-append-secret"
+    append_host = "append.internal.local"
+    append_input = work_root / f"append-token={append_secret}"
+    append_input.mkdir(parents=True, exist_ok=True)
+    (append_input / f"source-token={append_secret}.md").write_text("# Append\n", encoding="utf-8")
+    append_manifest = work_root / f"append-kb-token={append_secret}.json"
+    append_manifest.write_text(
+        json.dumps(
+            {
+                "version": "0.1",
+                "dataset": {
+                    "id": "append-dataset",
+                    "name": f"kb:http://{append_host}:9380?token={append_secret}",
+                },
+                "documents": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    append_plan = work_root / "append_plan.json"
+    append_redaction = work_root / "append_plan_redaction.json"
+    append_result = _run_command(
+        [
+            python_executable,
+            str(append_script),
+            "--kb-manifest",
+            str(append_manifest),
+            "--input",
+            str(append_input),
+            "--output",
+            str(append_plan),
+            "--redaction-report",
+            str(append_redaction),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build append redaction",
+        append_result,
+        required_output='"schema": "ragflow_append_plan_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build append redaction sidecar",
+        append_redaction,
+        result=append_result,
+        checked_paths=(append_plan,),
+        forbidden_literals=(append_secret, append_host, str(work_root)),
+    )
+    for path in (append_plan, append_redaction):
+        if path.exists():
+            produced.append(path)
 
     cleanup_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "cleanup.py")
     cleanup_help = _run_command([python_executable, str(cleanup_script), "--help"], cwd=work_root, env=env)
@@ -3154,6 +3209,56 @@ raise SystemExit(code)
         cleanup_help,
         required_output="Preview or execute cleanup",
     )
+    cleanup_secret = "consumer-cleanup-secret"
+    cleanup_host = "cleanup.internal.local"
+    cleanup_manifest = work_root / f"cleanup-kb-token={cleanup_secret}.json"
+    cleanup_manifest.write_text(
+        json.dumps(
+            {
+                "version": "0.1",
+                "dataset": {
+                    "id": "cleanup-dataset",
+                    "name": f"kb:http://{cleanup_host}:9380?token={cleanup_secret}",
+                },
+                "documents": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cleanup_plan = work_root / "cleanup_plan.json"
+    cleanup_redaction = work_root / "cleanup_plan_redaction.json"
+    cleanup_result = _run_command(
+        [
+            python_executable,
+            str(cleanup_script),
+            "--kb-manifest",
+            str(cleanup_manifest),
+            "--output",
+            str(cleanup_plan),
+            "--redaction-report",
+            str(cleanup_redaction),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build cleanup redaction",
+        cleanup_result,
+        required_output='"schema": "ragflow_cleanup_plan_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build cleanup redaction sidecar",
+        cleanup_redaction,
+        result=cleanup_result,
+        checked_paths=(cleanup_plan,),
+        forbidden_literals=(cleanup_secret, cleanup_host, str(work_root)),
+    )
+    for path in (cleanup_plan, cleanup_redaction):
+        if path.exists():
+            produced.append(path)
 
     diagnose_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "diagnose.py")
     diagnose_help = _run_command([python_executable, str(diagnose_script), "--help"], cwd=work_root, env=env)
