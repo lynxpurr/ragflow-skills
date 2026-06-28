@@ -117,6 +117,46 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
             profile["artifacts"],
         )
         self.assertTrue(
+            any(path.endswith("query_rewrite_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_intent_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_intent_route_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_session_inspect_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_session_enrich_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_agentic_plan_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("citation_audit_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_fallback_test_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("centroid_plan_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("centroid_build_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
             any(path.endswith("assistant_profile_recommendation_redaction.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
@@ -150,6 +190,18 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("query_fusion_test_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("route_test_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("route_report_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("route_diagnose_redaction.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
         self.assertTrue(

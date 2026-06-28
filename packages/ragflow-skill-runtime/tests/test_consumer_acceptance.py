@@ -99,9 +99,18 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("query host-assisted help", check_names)
         self.assertIn("query rewrite help", check_names)
         self.assertIn("query rewrite report", check_names)
+        self.assertIn("query rewrite redaction", check_names)
+        self.assertIn("query intent classify redaction", check_names)
+        self.assertIn("query intent route redaction", check_names)
+        self.assertIn("query session inspect redaction", check_names)
+        self.assertIn("query session enrich redaction", check_names)
+        self.assertIn("query agentic plan redaction", check_names)
         self.assertIn("query endpoint-report", check_names)
         self.assertIn("query assistant-profile redaction", check_names)
         self.assertIn("query assistant-test-plan redaction", check_names)
+        self.assertIn("query centroid build plan-only redaction", check_names)
+        self.assertIn("query centroid build redaction", check_names)
+        self.assertIn("query citation audit redaction", check_names)
         self.assertIn("query answer evaluation", check_names)
         self.assertIn("query answer evaluation redaction", check_names)
         self.assertIn("query diagnostic redaction", check_names)
@@ -110,12 +119,56 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("query cross-language ab redaction", check_names)
         self.assertIn("query fusion redaction", check_names)
         self.assertIn("query fusion test redaction", check_names)
+        self.assertIn("query route-test redaction", check_names)
+        self.assertIn("query route-report redaction", check_names)
+        self.assertIn("query route-diagnose redaction", check_names)
         self.assertIn("query route-activation-check redaction", check_names)
         self.assertIn("query fallback test report", check_names)
+        self.assertIn("query fallback test redaction", check_names)
         self.assertIn("query missing config guard", check_names)
         self.assertIn("live build skipped", check_names)
         self.assertTrue(
             any(path.endswith("query_answer_eval_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_rewrite_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_intent_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_intent_route_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_session_inspect_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_session_enrich_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_agentic_plan_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("centroid_plan_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("centroid_build_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("citation_audit_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_fallback_test_redaction.json") for path in payload["produced_artifacts"]),
             payload["produced_artifacts"],
         )
         self.assertTrue(
@@ -148,6 +201,18 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("query_fusion_test_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("route_test_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("route_report_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("route_diagnose_redaction.json") for path in payload["produced_artifacts"]),
             payload["produced_artifacts"],
         )
         self.assertTrue(

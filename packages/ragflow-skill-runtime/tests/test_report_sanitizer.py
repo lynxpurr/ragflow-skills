@@ -45,6 +45,35 @@ class ReportSanitizerTests(unittest.TestCase):
         self.assertIn("<redacted:secret>", serialized)
         self.assertIn("<redacted:private-host>", serialized)
 
+    def test_sanitize_report_payload_redacts_sensitive_mapping_keys(self) -> None:
+        payload = {
+            "coverage_by_locale": {
+                "http://172.23.33.46:9380/bad?token=fake-token secret=fake-secret /tmp/user-home/.ragflow/config.yaml": {
+                    "total": 1
+                }
+            }
+        }
+
+        sanitized, report = sanitize_report_payload(
+            payload,
+            private_hosts=["172.23.33.46"],
+            home_paths=["/tmp/user-home"],
+            config_paths=["/tmp/user-home/.ragflow/config.yaml"],
+        )
+        serialized = json.dumps({"payload": sanitized, "report": report}, sort_keys=True)
+
+        self.assertEqual(report["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(report["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(report["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(report["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(report["rule_counts"]["config_path"], 1)
+        self.assertGreaterEqual(report["target_counts"]["home_paths"], 1)
+        self.assertNotIn("172.23.33.46", serialized)
+        self.assertNotIn("fake-token", serialized)
+        self.assertNotIn("fake-secret", serialized)
+        self.assertNotIn("/tmp/user-home", serialized)
+        self.assertIn("<redacted:private-host>", serialized)
+
     def test_configured_private_hosts_from_urls_excludes_public_hosts(self) -> None:
         hosts = configured_private_hosts_from_urls(
             [

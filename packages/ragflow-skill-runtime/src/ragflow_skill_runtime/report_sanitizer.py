@@ -136,7 +136,15 @@ def sanitize_report_payload(
         if isinstance(value, tuple):
             return [walk(item, f"{path}[{index}]") for index, item in enumerate(value)]
         if isinstance(value, Mapping):
-            return {key: walk(item, f"{path}{_path_key(key)}") for key, item in value.items()}
+            sanitized_items: dict[Any, Any] = {}
+            for index, (key, item) in enumerate(value.items()):
+                sanitized_key = sanitize_text(key, f"{path}.<key[{index}]>") if isinstance(key, str) else key
+                output_key = sanitized_key
+                if sanitized_key in sanitized_items:
+                    output_key = f"{sanitized_key}<duplicate:{index}>" if isinstance(sanitized_key, str) else index
+                item_path = f"{path}{_path_key(output_key)}"
+                sanitized_items[output_key] = walk(item, item_path)
+            return sanitized_items
         return value
 
     sanitized = walk(payload, "$")

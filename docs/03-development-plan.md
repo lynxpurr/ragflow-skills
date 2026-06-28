@@ -1024,10 +1024,21 @@ Tasks:
 - [ ] Add partial-failure report schemas for timeout, partial, and skipped profiles.
 - [x] Add a shared report sanitizer for API keys, bearer tokens, configured private hosts, home paths, and local config paths.
 - [ ] Add `--redaction-report` to relevant commands.
+- [x] Add `--redaction-report` to `ragflow-query route-test` route fixture reports.
+- [x] Add `--redaction-report` to `ragflow-query route-report` route quality reports.
+- [x] Add `--redaction-report` to `ragflow-query route-diagnose` route diagnosis reports.
 - [x] Add `--redaction-report` to `ragflow-query fusion-test` saved-output fixture reports.
 - [x] Add `--redaction-report` to `ragflow-query route-activation-check` activation and route sidecar reports.
 - [x] Add `--redaction-report` to `ragflow-query assistant-profile recommend` review reports.
 - [x] Add `--redaction-report` to `ragflow-query assistant-test-plan` review reports.
+- [x] Add `--redaction-report` to `ragflow-query rewrite` query planning reports.
+- [x] Add `--redaction-report` to `ragflow-query intent classify` and `ragflow-query intent route` planning reports.
+- [x] Add `--redaction-report` to `ragflow-query session inspect` and `ragflow-query session enrich` context reports.
+- [x] Add `--redaction-report` to `ragflow-query agentic-plan` orchestration planning reports.
+- [x] Add `--redaction-report` to `ragflow-query audit-citations` citation audit reports.
+- [x] Add `--redaction-report` to `ragflow-query fallback-test` fallback coverage reports.
+- [x] Add `--redaction-report` to `ragflow-query centroid build --plan-only` centroid plan reports.
+- [x] Add `--redaction-report` to `ragflow-query centroid build` centroid build reports.
 - [x] Extend release hygiene to scan generated reports and examples.
 - [x] Add acceptance fixtures that intentionally include fake secrets and verify redaction.
 - [x] Add documentation for host agents explaining where sanitized reports should be stored.
@@ -1036,8 +1047,12 @@ Status note: `--redaction-report` currently covers `ragflow-query endpoint-repor
 `ragflow-query evaluate-answer`, `ragflow-query diagnose-result`,
 `ragflow-query pollution-report`, `ragflow-query rerank-ab`,
 `ragflow-query cross-language-ab`, `ragflow-query fusion`, `ragflow-query fusion-test`,
+`ragflow-query route-test`, `ragflow-query route-report`, `ragflow-query route-diagnose`,
 `ragflow-query route-activation-check`, `ragflow-query assistant-profile recommend`,
-`ragflow-query assistant-test-plan`,
+`ragflow-query assistant-test-plan`, `ragflow-query rewrite`, `ragflow-query intent classify`,
+`ragflow-query intent route`, `ragflow-query session inspect`, `ragflow-query session enrich`,
+`ragflow-query agentic-plan`, `ragflow-query audit-citations`, `ragflow-query fallback-test`,
+`ragflow-query centroid build --plan-only`, `ragflow-query centroid build`,
 `ragflow-kb-build model-providers probe`, and `ragflow-doc-to-md backend probe`. Broader
 report-command coverage remains open. Release hygiene now scans generated reports/examples
 for raw sensitive literals and validates redaction sidecars; consumer acceptance includes a

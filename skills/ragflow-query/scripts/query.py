@@ -609,13 +609,52 @@ def _route(args: argparse.Namespace) -> int:
     return 0 if result.selected else 1
 
 
+def _sanitize_route_review_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    routing: Any,
+    queries: Any | None,
+    centroid_index: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    routing_payload = routing.to_dict() if hasattr(routing, "to_dict") else {}
+    urls = [
+        *_collect_urls(routing_payload),
+        *_collect_urls(queries or {}),
+        *_collect_urls(centroid_index or {}),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            _routing_config_path(args),
+            getattr(args, "queries", None),
+            _centroid_index_path(args),
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
 def _route_test(args: argparse.Namespace) -> int:
     try:
         routing = _load_routing(args)
         queries = load_route_test_queries(args.queries)
-        report = run_route_tests(routing, queries, centroid_index=_load_centroid_index(args))
+        centroid_index = _load_centroid_index(args)
+        report = run_route_tests(routing, queries, centroid_index=centroid_index)
     except (RoutingError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=True)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_route_review_report(
+            report,
+            args,
+            routing,
+            queries,
+            centroid_index,
+        )
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_route_test_markdown(report))
     _json_dump(report)
@@ -626,9 +665,19 @@ def _route_report(args: argparse.Namespace) -> int:
     try:
         routing = _load_routing(args)
         queries = load_route_test_queries(args.queries) if args.queries else None
-        report = run_route_report(routing, queries, centroid_index=_load_centroid_index(args))
+        centroid_index = _load_centroid_index(args)
+        report = run_route_report(routing, queries, centroid_index=centroid_index)
     except (RoutingError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=True)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_route_review_report(
+            report,
+            args,
+            routing,
+            queries,
+            centroid_index,
+        )
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_route_report_markdown(report))
     _json_dump(report)
@@ -639,9 +688,19 @@ def _route_diagnose(args: argparse.Namespace) -> int:
     try:
         routing = _load_routing(args)
         queries = load_route_test_queries(args.queries)
-        report = run_route_diagnose(routing, queries, centroid_index=_load_centroid_index(args))
+        centroid_index = _load_centroid_index(args)
+        report = run_route_diagnose(routing, queries, centroid_index=centroid_index)
     except (RoutingError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=True)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_route_review_report(
+            report,
+            args,
+            routing,
+            queries,
+            centroid_index,
+        )
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_route_diagnose_markdown(report))
     _json_dump(report)
@@ -832,6 +891,27 @@ def _assistant_test_plan(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _sanitize_centroid_build_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [*_collect_urls(report)]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            *getattr(args, "kb_manifest", []),
+            *getattr(args, "chunk_snapshot", []),
+            getattr(args, "index_output", None),
+            getattr(args, "checkpoint", None),
+            getattr(args, "report_json", None),
+            getattr(args, "report_md", None),
+            getattr(args, "redaction_report", None),
+        ],
+    )
+    return sanitized, redaction_report
+
+
 def _centroid_build(args: argparse.Namespace) -> int:
     try:
         if args.plan_only:
@@ -862,6 +942,10 @@ def _centroid_build(args: argparse.Namespace) -> int:
             markdown = render_centroid_build_markdown(report)
     except (CentroidRoutingError, OSError, json.JSONDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_centroid_build_report(report, args)
+        markdown = render_centroid_plan_markdown(report) if args.plan_only else render_centroid_build_markdown(report)
+        _write_json(args.redaction_report, redaction_report)
     if args.report_json:
         if args.plan_only:
             write_centroid_plan(args.report_json, report)
@@ -871,6 +955,29 @@ def _centroid_build(args: argparse.Namespace) -> int:
     if args.json or not args.report_json:
         _json_dump(report)
     return 0 if report["ok"] else 1
+
+
+def _sanitize_query_planning_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    *source_payloads: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [*_collect_urls(report)]
+    for payload in source_payloads:
+        urls.extend(_collect_urls(payload))
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            getattr(args, "config", None),
+            getattr(args, "multi_query", None),
+            getattr(args, "session", None),
+            getattr(args, "report_json", None),
+            getattr(args, "report_md", None),
+            getattr(args, "redaction_report", None),
+        ],
+    )
+    return sanitized, redaction_report
 
 
 def _rewrite(args: argparse.Namespace) -> int:
@@ -885,6 +992,9 @@ def _rewrite(args: argparse.Namespace) -> int:
         )
     except (ConfigError, QueryRewriteError, OSError, json.JSONDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_planning_report(report, args, multi_queries)
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_query_rewrite_markdown(report))
     if args.json or not args.report_json:
@@ -900,6 +1010,9 @@ def _intent_classify(args: argparse.Namespace) -> int:
         )
     except QueryIntentError as exc:
         return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_planning_report(report, args)
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_query_intent_markdown(report))
     if args.json or not args.report_json:
@@ -916,6 +1029,9 @@ def _intent_route(args: argparse.Namespace) -> int:
         )
     except QueryIntentError as exc:
         return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_planning_report(report, args)
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_query_route_decision_markdown(report))
     if args.json or not args.report_json:
@@ -933,6 +1049,9 @@ def _session_inspect(args: argparse.Namespace) -> int:
         )
     except (QuerySessionError, OSError, json.JSONDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_planning_report(report, args, session)
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_query_session_inspection_markdown(report))
     if args.json or not args.report_json:
@@ -951,6 +1070,9 @@ def _session_enrich(args: argparse.Namespace) -> int:
         )
     except (QuerySessionError, OSError, json.JSONDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_planning_report(report, args, session)
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_query_session_enrichment_markdown(report))
     if args.json or not args.report_json:
@@ -970,6 +1092,9 @@ def _agentic_plan(args: argparse.Namespace) -> int:
         )
     except AgenticPlanError as exc:
         return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_planning_report(report, args)
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_agentic_plan_markdown(report))
     if args.json or not args.report_json:
@@ -991,11 +1116,39 @@ def _audit_citations(args: argparse.Namespace) -> int:
         report = audit_citations(answer, evidence)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_citation_audit_report(report, args, query_payload, answer or "")
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_citation_audit_markdown(report))
     if args.json or not args.report_json:
         _json_dump(report)
     return 0 if report["ok"] else 1
+
+
+def _sanitize_citation_audit_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+    answer: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(answer),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.answer_file,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
 
 
 def _sanitize_answer_evaluation_report(
@@ -1388,11 +1541,36 @@ def _fallback_test(args: argparse.Namespace) -> int:
         report = run_query_fallback_tests(cases)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_fallback_test_report(report, args, cases)
+        _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
     _write_text(args.report_md, render_query_fallback_test_markdown(report))
     if args.json or not args.report_json:
         _json_dump(report)
     return 0 if report["ok"] else 1
+
+
+def _sanitize_query_fallback_test_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    cases: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(cases),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.cases,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
 
 
 def _parse_endpoint_args(values: list[str]) -> list[dict[str, Any]]:
@@ -1498,6 +1676,7 @@ def build_parser() -> argparse.ArgumentParser:
     route_test.add_argument("--queries", required=True, help="Route-test queries JSON")
     route_test.add_argument("--report-json", help="Optional JSON report output path")
     route_test.add_argument("--report-md", help="Optional Markdown report output path")
+    route_test.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     route_test.set_defaults(func=_route_test)
 
     route_report = sub.add_parser("route-report", help="Summarize route quality coverage")
@@ -1506,6 +1685,7 @@ def build_parser() -> argparse.ArgumentParser:
     route_report.add_argument("--queries", help="Optional route-test queries JSON")
     route_report.add_argument("--report-json", help="Optional JSON report output path")
     route_report.add_argument("--report-md", help="Optional Markdown report output path")
+    route_report.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     route_report.set_defaults(func=_route_report)
 
     route_diagnose = sub.add_parser("route-diagnose", help="Classify route-test failures")
@@ -1514,6 +1694,7 @@ def build_parser() -> argparse.ArgumentParser:
     route_diagnose.add_argument("--queries", required=True, help="Route-test queries JSON")
     route_diagnose.add_argument("--report-json", help="Optional JSON report output path")
     route_diagnose.add_argument("--report-md", help="Optional Markdown report output path")
+    route_diagnose.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     route_diagnose.set_defaults(func=_route_diagnose)
 
     route_activation_check = sub.add_parser(
@@ -1569,6 +1750,7 @@ def build_parser() -> argparse.ArgumentParser:
     rewrite.add_argument("--multi-query", help="Optional JSON list of host-owned query variants")
     rewrite.add_argument("--report-json", help="Optional JSON report output path")
     rewrite.add_argument("--report-md", help="Optional Markdown report output path")
+    rewrite.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     rewrite.add_argument("--json", action="store_true", help="Emit JSON report")
     rewrite.set_defaults(func=_rewrite)
 
@@ -1579,6 +1761,7 @@ def build_parser() -> argparse.ArgumentParser:
     intent_classify.add_argument("--low-confidence-threshold", type=float, default=0.7)
     intent_classify.add_argument("--report-json", help="Optional JSON report output path")
     intent_classify.add_argument("--report-md", help="Optional Markdown report output path")
+    intent_classify.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     intent_classify.add_argument("--json", action="store_true", help="Emit JSON report")
     intent_classify.set_defaults(func=_intent_classify)
     intent_route = intent_sub.add_parser("route", help="Create a deterministic intent route decision")
@@ -1587,6 +1770,7 @@ def build_parser() -> argparse.ArgumentParser:
     intent_route.add_argument("--low-confidence-threshold", type=float, default=0.7)
     intent_route.add_argument("--report-json", help="Optional JSON report output path")
     intent_route.add_argument("--report-md", help="Optional Markdown report output path")
+    intent_route.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     intent_route.add_argument("--json", action="store_true", help="Emit JSON report")
     intent_route.set_defaults(func=_intent_route)
 
@@ -1598,6 +1782,7 @@ def build_parser() -> argparse.ArgumentParser:
     session_inspect.add_argument("--max-tokens", type=int, default=400)
     session_inspect.add_argument("--report-json", help="Optional JSON report output path")
     session_inspect.add_argument("--report-md", help="Optional Markdown report output path")
+    session_inspect.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     session_inspect.add_argument("--json", action="store_true", help="Emit JSON report")
     session_inspect.set_defaults(func=_session_inspect)
     session_enrich = session_sub.add_parser("enrich", help="Enrich a follow-up query with bounded context")
@@ -1607,6 +1792,7 @@ def build_parser() -> argparse.ArgumentParser:
     session_enrich.add_argument("--max-tokens", type=int, default=400)
     session_enrich.add_argument("--report-json", help="Optional JSON report output path")
     session_enrich.add_argument("--report-md", help="Optional Markdown report output path")
+    session_enrich.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     session_enrich.add_argument("--json", action="store_true", help="Emit JSON report")
     session_enrich.set_defaults(func=_session_enrich)
 
@@ -1623,6 +1809,7 @@ def build_parser() -> argparse.ArgumentParser:
     agentic_plan.add_argument("--no-require-citations", dest="require_citations", action="store_false")
     agentic_plan.add_argument("--report-json", help="Optional JSON report output path")
     agentic_plan.add_argument("--report-md", help="Optional Markdown report output path")
+    agentic_plan.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     agentic_plan.add_argument("--json", action="store_true", help="Emit JSON report")
     agentic_plan.set_defaults(func=_agentic_plan, require_citations=True)
 
@@ -1633,6 +1820,7 @@ def build_parser() -> argparse.ArgumentParser:
     answer_group.add_argument("--answer-file", help="File containing host-generated answer text")
     audit.add_argument("--report-json", help="Optional JSON report output path")
     audit.add_argument("--report-md", help="Optional Markdown report output path")
+    audit.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     audit.add_argument("--json", action="store_true", help="Emit JSON report")
     audit.set_defaults(func=_audit_citations)
 
@@ -1730,6 +1918,7 @@ def build_parser() -> argparse.ArgumentParser:
     fallback_test.add_argument("--cases", help="Optional fallback test cases JSON; defaults to built-in coverage")
     fallback_test.add_argument("--report-json", help="Optional JSON report output path")
     fallback_test.add_argument("--report-md", help="Optional Markdown report output path")
+    fallback_test.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     fallback_test.add_argument("--json", action="store_true", help="Emit JSON report")
     fallback_test.set_defaults(func=_fallback_test)
 
@@ -1768,6 +1957,7 @@ def build_parser() -> argparse.ArgumentParser:
     centroid_build.add_argument("--resume", action="store_true", help="Resume from an existing checkpoint")
     centroid_build.add_argument("--report-json", help="Optional JSON report output path")
     centroid_build.add_argument("--report-md", help="Optional Markdown report output path")
+    centroid_build.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     centroid_build.add_argument("--json", action="store_true", help="Emit JSON report")
     centroid_build.set_defaults(func=_centroid_build)
 

@@ -222,7 +222,7 @@ class QueryCliTests(unittest.TestCase):
         self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
         self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
         self.assertGreaterEqual(redaction_payload["rule_counts"]["home_path"], 1)
-        self.assertGreaterEqual(redaction_payload["rule_counts"]["config_path"], 1)
+        self.assertGreaterEqual(redaction_payload["target_counts"]["config_paths"], 4)
         self.assertIn("<redacted:private-host>", combined)
         self.assertIn("<redacted:secret>", combined)
         self.assertNotIn(private_host, combined)
@@ -493,33 +493,58 @@ class QueryCliTests(unittest.TestCase):
             root = Path(tmp)
             report_json = root / "rewrite.json"
             report_md = root / "rewrite.md"
+            redaction_json = root / "rewrite_redaction.json"
+            private_host = ".".join(["192", "168", "67", "88"])
+            fake_token = "fake-rewrite-token"
+            fake_key = "fake-rewrite-secret"
+            home_path = str(Path.home() / ".ragflow" / "rewrite.local.yaml")
+            question = (
+                f"How do I configure runtime using http://{private_host}:9380/v1?token={fake_token} "
+                f"api_key={fake_key} from {home_path}?"
+            )
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 code = module.main(
                     [
                         "rewrite",
-                        "How do I configure runtime?",
+                        question,
                         "--rewrite",
                         "simple",
                         "--report-json",
                         str(report_json),
                         "--report-md",
                         str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
                         "--json",
                     ]
                 )
-            payload = json.loads(stdout.getvalue())
+            output = stdout.getvalue()
+            payload = json.loads(output)
+            report_text = report_json.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
             report_json_exists = report_json.exists()
             report_md_exists = report_md.exists()
             markdown = report_md.read_text(encoding="utf-8")
 
-        self.assertEqual(code, 0, stdout.getvalue())
+        combined = "\n".join([output, report_text, markdown, redaction_text])
+        self.assertEqual(code, 0, output)
         self.assertEqual(payload["schema"], "ragflow_query_rewrite_plan_v1")
         self.assertGreaterEqual(payload["summary"]["generated_query_count"], 1)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["home_path"], 1)
         self.assertTrue(report_json_exists)
         self.assertTrue(report_md_exists)
         self.assertIn("RAGFlow Query Rewrite Plan", markdown)
         self.assertIn("how to configure runtime", markdown)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
 
     def test_intent_commands_write_reports(self) -> None:
         module = load_query_module()
@@ -527,8 +552,17 @@ class QueryCliTests(unittest.TestCase):
             root = Path(tmp)
             intent_json = root / "intent.json"
             intent_md = root / "intent.md"
+            intent_redaction_json = root / "intent_redaction.json"
             route_json = root / "route.json"
             route_md = root / "route.md"
+            route_redaction_json = root / "route_redaction.json"
+            private_host = ".".join(["192", "168", "68", "90"])
+            fake_token = "fake-intent-token"
+            fake_key = "fake-intent-secret"
+            question = (
+                f"Compare runtime config versus metadata routing at http://{private_host}:9380/v1?token={fake_token} "
+                f"api_key={fake_key}"
+            )
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
@@ -536,15 +570,18 @@ class QueryCliTests(unittest.TestCase):
                     [
                         "intent",
                         "classify",
-                        "Compare runtime config versus metadata routing",
+                        question,
                         "--report-json",
                         str(intent_json),
                         "--report-md",
                         str(intent_md),
+                        "--redaction-report",
+                        str(intent_redaction_json),
                         "--json",
                     ]
                 )
-            intent_payload = json.loads(stdout.getvalue())
+            intent_output = stdout.getvalue()
+            intent_payload = json.loads(intent_output)
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
@@ -557,19 +594,34 @@ class QueryCliTests(unittest.TestCase):
                         str(route_json),
                         "--report-md",
                         str(route_md),
+                        "--redaction-report",
+                        str(route_redaction_json),
                         "--json",
                     ]
                 )
-            route_payload = json.loads(stdout.getvalue())
+            route_output = stdout.getvalue()
+            route_payload = json.loads(route_output)
 
             intent_json_exists = intent_json.exists()
             route_json_exists = route_json.exists()
+            intent_report_text = intent_json.read_text(encoding="utf-8")
+            intent_redaction_text = intent_redaction_json.read_text(encoding="utf-8")
+            intent_redaction_payload = json.loads(intent_redaction_text)
+            route_redaction_text = route_redaction_json.read_text(encoding="utf-8")
+            route_redaction_payload = json.loads(route_redaction_text)
             intent_markdown = intent_md.read_text(encoding="utf-8")
             route_markdown = route_md.read_text(encoding="utf-8")
 
+        combined = "\n".join([intent_output, intent_report_text, intent_markdown, intent_redaction_text])
         self.assertEqual(classify_code, 0)
         self.assertEqual(intent_payload["schema"], "ragflow_query_intent_v1")
         self.assertEqual(intent_payload["intent"], "comparison")
+        self.assertEqual(intent_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(intent_redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(intent_redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(intent_redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertEqual(route_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(route_redaction_payload["target_counts"]["config_paths"], 3)
         self.assertTrue(intent_json_exists)
         self.assertIn("RAGFlow Query Intent", intent_markdown)
         self.assertEqual(route_code, 0)
@@ -577,6 +629,9 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(route_payload["status"], "clarification")
         self.assertTrue(route_json_exists)
         self.assertIn("RAGFlow Query Route Decision", route_markdown)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
 
     def test_session_commands_write_reports(self) -> None:
         module = load_query_module()
@@ -585,15 +640,27 @@ class QueryCliTests(unittest.TestCase):
             session = root / "session.json"
             inspect_json = root / "session_inspect.json"
             inspect_md = root / "session_inspect.md"
+            inspect_redaction_json = root / "session_inspect_redaction.json"
             enrich_json = root / "session_enrich.json"
             enrich_md = root / "session_enrich.md"
+            enrich_redaction_json = root / "session_enrich_redaction.json"
+            private_host = ".".join(["192", "168", "69", "91"])
+            fake_token = "fake-session-token"
+            fake_key = "fake-session-secret"
+            home_path = str(Path.home() / ".ragflow" / "session.local.yaml")
             session.write_text(
                 json.dumps(
                     {
                         "schema": "ragflow_query_session_v1",
                         "session_id": "cli-session",
                         "turns": [
-                            {"role": "user", "content": "How do I configure runtime settings?"},
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"How do I configure runtime settings with http://{private_host}:9380/v1?"
+                                    f"token={fake_token} api_key={fake_key} from {home_path}?"
+                                ),
+                            },
                             {"role": "assistant", "content": "Use a runtime config file."},
                         ],
                     }
@@ -613,6 +680,8 @@ class QueryCliTests(unittest.TestCase):
                         str(inspect_json),
                         "--report-md",
                         str(inspect_md),
+                        "--redaction-report",
+                        str(inspect_redaction_json),
                         "--json",
                     ]
                 )
@@ -631,25 +700,57 @@ class QueryCliTests(unittest.TestCase):
                         str(enrich_json),
                         "--report-md",
                         str(enrich_md),
+                        "--redaction-report",
+                        str(enrich_redaction_json),
                         "--json",
                     ]
                 )
             enrich_payload = json.loads(stdout.getvalue())
             inspect_json_exists = inspect_json.exists()
             enrich_json_exists = enrich_json.exists()
+            inspect_report_text = inspect_json.read_text(encoding="utf-8")
+            enrich_report_text = enrich_json.read_text(encoding="utf-8")
+            inspect_redaction_text = inspect_redaction_json.read_text(encoding="utf-8")
+            enrich_redaction_text = enrich_redaction_json.read_text(encoding="utf-8")
+            inspect_redaction_payload = json.loads(inspect_redaction_text)
+            enrich_redaction_payload = json.loads(enrich_redaction_text)
             inspect_markdown = inspect_md.read_text(encoding="utf-8")
             enrich_markdown = enrich_md.read_text(encoding="utf-8")
 
+        combined = "\n".join(
+            [
+                inspect_report_text,
+                enrich_report_text,
+                inspect_markdown,
+                enrich_markdown,
+                inspect_redaction_text,
+                enrich_redaction_text,
+            ]
+        )
         self.assertEqual(inspect_code, 0)
         self.assertEqual(inspect_payload["schema"], "ragflow_query_session_inspection_v1")
+        self.assertEqual(inspect_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(inspect_redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(inspect_redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(inspect_redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(inspect_redaction_payload["rule_counts"]["home_path"], 1)
         self.assertTrue(inspect_json_exists)
         self.assertIn("RAGFlow Query Session Inspection", inspect_markdown)
         self.assertEqual(enrich_code, 0)
         self.assertEqual(enrich_payload["schema"], "ragflow_query_session_enrichment_v1")
+        self.assertEqual(enrich_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(enrich_redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(enrich_redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(enrich_redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(enrich_redaction_payload["rule_counts"]["home_path"], 1)
         self.assertTrue(enrich_payload["context_applied"])
-        self.assertIn("How do I configure runtime settings?", enrich_payload["enriched_question"])
+        self.assertIn("How do I configure runtime settings with", enrich_payload["enriched_question"])
         self.assertTrue(enrich_json_exists)
         self.assertIn("RAGFlow Query Session Enrichment", enrich_markdown)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
 
     def test_agentic_plan_command_writes_plan_outputs(self) -> None:
         module = load_query_module()
@@ -657,12 +758,21 @@ class QueryCliTests(unittest.TestCase):
             root = Path(tmp)
             report_json = root / "agentic_plan.json"
             report_md = root / "agentic_plan.md"
+            redaction_json = root / "agentic_plan_redaction.json"
+            private_host = ".".join(["192", "168", "70", "92"])
+            fake_token = "fake-agentic-token"
+            fake_key = "fake-agentic-secret"
+            home_path = str(Path.home() / ".ragflow" / "agentic.local.yaml")
+            question = (
+                f"Compare runtime configuration and metadata routing tradeoffs using "
+                f"http://{private_host}:9380/v1?token={fake_token} api_key={fake_key} from {home_path}"
+            )
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 code = module.main(
                     [
                         "agentic-plan",
-                        "Compare runtime configuration and metadata routing tradeoffs",
+                        question,
                         "--max-subqueries",
                         "2",
                         "--reflection-budget",
@@ -671,21 +781,37 @@ class QueryCliTests(unittest.TestCase):
                         str(report_json),
                         "--report-md",
                         str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
                         "--json",
                     ]
                 )
-            payload = json.loads(stdout.getvalue())
+            output = stdout.getvalue()
+            payload = json.loads(output)
+            report_text = report_json.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
             report_json_exists = report_json.exists()
             report_md_exists = report_md.exists()
             markdown = report_md.read_text(encoding="utf-8")
 
-        self.assertEqual(code, 0, stdout.getvalue())
+        combined = "\n".join([output, report_text, markdown, redaction_text])
+        self.assertEqual(code, 0, output)
         self.assertEqual(payload["schema"], "ragflow_agentic_plan_v1")
         self.assertEqual(payload["trace_template"]["schema"], "ragflow_agentic_trace_v1")
         self.assertEqual(payload["summary"]["llm_calls"], 0)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["home_path"], 1)
         self.assertTrue(report_json_exists)
         self.assertTrue(report_md_exists)
         self.assertIn("RAGFlow Agentic Plan", markdown)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
 
     def test_ask_rewrite_and_multi_query_record_trace_and_retrievals(self) -> None:
         class RewriteClient(FakeQueryClient):
@@ -1025,6 +1151,78 @@ class QueryCliTests(unittest.TestCase):
             self.assertTrue(diagnostic_json.exists())
             self.assertIn("RAGFlow Query Diagnostic", diagnostic_md.read_text(encoding="utf-8"))
 
+    def test_audit_citations_writes_redacted_reports(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            query_output = root / "query.json"
+            report_json = root / "audit.json"
+            report_md = root / "audit.md"
+            redaction_json = root / "audit_redaction.json"
+            private_host = ".".join(["192", "168", "71", "93"])
+            fake_token = "fake-audit-token"
+            fake_key = "fake-audit-secret"
+            home_path = str(Path.home() / ".ragflow" / "audit.local.yaml")
+            query_output.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "question": "What is supported?",
+                        "evidence": [
+                            {
+                                "rank": 1,
+                                "citation_id": "[1]",
+                                "content_preview": "Supported evidence is available.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            answer = (
+                "Supported evidence is available [1]. "
+                f"Debug http://{private_host}:9380/v1?token={fake_token} api_key={fake_key} from {home_path}."
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "audit-citations",
+                        "--query-output",
+                        str(query_output),
+                        "--answer",
+                        answer,
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
+                        "--json",
+                    ]
+                )
+            output = stdout.getvalue()
+            payload = json.loads(output)
+            report_text = report_json.read_text(encoding="utf-8")
+            markdown = report_md.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
+
+        combined = "\n".join([output, report_text, markdown, redaction_text])
+        self.assertEqual(code, 0, output)
+        self.assertEqual(payload["schema"], "ragflow_citation_audit_v1")
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertGreaterEqual(redaction_payload["target_counts"]["config_paths"], 3)
+        self.assertIn("RAGFlow Citation Audit", markdown)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
+
     def test_pollution_report_can_write_json_and_markdown(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:
@@ -1099,7 +1297,7 @@ class QueryCliTests(unittest.TestCase):
         self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
         self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
         self.assertGreaterEqual(redaction_payload["rule_counts"]["home_path"], 1)
-        self.assertGreaterEqual(redaction_payload["rule_counts"]["config_path"], 1)
+        self.assertGreaterEqual(redaction_payload["target_counts"]["config_paths"], 4)
         self.assertTrue(report_json_exists)
         self.assertTrue(report_md_exists)
         self.assertIn("RAGFlow Query Pollution Report", markdown)
@@ -1536,27 +1734,101 @@ class QueryCliTests(unittest.TestCase):
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            cases = root / "fallback_cases.json"
             report_json = root / "fallback_test.json"
             report_md = root / "fallback_test.md"
+            redaction_json = root / "fallback_test_redaction.json"
+            private_host = ".".join(["192", "168", "72", "94"])
+            fake_token = "fake-fallback-token"
+            fake_key = "fake-fallback-secret"
+            home_path = str(Path.home() / ".ragflow" / "fallback.local.yaml")
+            cases.write_text(
+                json.dumps(
+                    {
+                        "cases": [
+                            {
+                                "id": "llm-unavailable-direct-retrieval",
+                                "description": f"LLM unavailable at http://{private_host}:9380/v1?token={fake_token}.",
+                                "failure_mode": "llm_unavailable",
+                                "primary_status": "unavailable",
+                                "fallback_strategy": "direct_retrieval",
+                                "fallback_status": "success",
+                                "direct_retrieval_chunk_count": 2,
+                                "fallback_reason": f"api_key={fake_key} from {home_path}",
+                            },
+                            {
+                                "id": "malformed-llm-json-direct-retrieval",
+                                "failure_mode": "malformed_llm_json",
+                                "primary_status": "malformed_json",
+                                "fallback_strategy": "direct_retrieval",
+                                "fallback_status": "success",
+                                "direct_retrieval_chunk_count": 1,
+                            },
+                            {
+                                "id": "network-timeout-direct-retrieval",
+                                "failure_mode": "network_timeout",
+                                "primary_status": "timeout",
+                                "fallback_strategy": "direct_retrieval",
+                                "fallback_status": "success",
+                                "direct_retrieval_chunk_count": 1,
+                                "timeout_ms": 1500,
+                            },
+                            {
+                                "id": "partial-failure-preserves-evidence",
+                                "failure_mode": "partial_failure",
+                                "primary_status": "partial_failure",
+                                "fallback_strategy": "direct_retrieval",
+                                "fallback_status": "partial",
+                                "direct_retrieval_chunk_count": 1,
+                                "partial_failure_count": 1,
+                            },
+                            {
+                                "id": "direct-retrieval-fallback",
+                                "failure_mode": "direct_retrieval_fallback",
+                                "primary_status": "fallback_requested",
+                                "fallback_strategy": "direct_retrieval",
+                                "fallback_status": "success",
+                                "direct_retrieval_chunk_count": 3,
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 code = module.main(
                     [
                         "fallback-test",
+                        "--cases",
+                        str(cases),
                         "--report-json",
                         str(report_json),
                         "--report-md",
                         str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
                         "--json",
                     ]
                 )
-            payload = json.loads(stdout.getvalue())
-            file_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            output = stdout.getvalue()
+            payload = json.loads(output)
+            report_text = report_json.read_text(encoding="utf-8")
+            file_payload = json.loads(report_text)
             markdown = report_md.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
 
-        self.assertEqual(code, 0, stdout.getvalue())
+        combined = "\n".join([output, report_text, markdown, redaction_text])
+        self.assertEqual(code, 0, output)
         self.assertEqual(payload["schema"], "ragflow_query_fallback_test_report_v1")
         self.assertEqual(file_payload["schema"], "ragflow_query_fallback_test_report_v1")
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertGreaterEqual(redaction_payload["target_counts"]["config_paths"], 4)
         self.assertTrue(payload["ok"])
         self.assertEqual(
             payload["summary"]["covered_required_mode_count"],
@@ -1565,6 +1837,10 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["fallback_success_rate"], 1.0)
         self.assertIn("RAGFlow Query Fallback Test Report", markdown)
         self.assertIn("direct-retrieval-fallback", markdown)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
 
     def test_route_commands_use_routing_config(self) -> None:
         module = load_query_module()
@@ -1573,19 +1849,27 @@ class QueryCliTests(unittest.TestCase):
             routing = root / "routing.json"
             routes = root / "routes.json"
             bad_routes = root / "bad-routes.json"
+            route_test_json = root / "route-test.json"
             report_md = root / "route-test.md"
+            route_test_redaction_json = root / "route-test-redaction.json"
             route_report_json = root / "route-report.json"
             route_report_md = root / "route-report.md"
+            route_report_redaction_json = root / "route-report-redaction.json"
             route_diagnose_json = root / "route-diagnose.json"
             route_diagnose_md = root / "route-diagnose.md"
+            route_diagnose_redaction_json = root / "route-diagnose-redaction.json"
             route_activation_plan = root / "kb_activation_plan.json"
             route_activation_check_json = root / "route-activation-check.json"
             route_activation_check_md = root / "route-activation-check.md"
             route_activation_redaction_json = root / "route-activation-check-redaction.json"
             private_host = ".".join(["172", "23", "33", "45"])
+            diagnose_private_host = ".".join(["172", "23", "33", "46"])
             fake_token = "fake-route-activation-token"
             fake_key = "fake-route-activation-secret"
+            diagnose_token = "fake-diagnose-token"
+            diagnose_key = "fake-diagnose-secret"
             home_path = str(Path.home() / ".ragflow" / "route-activation.local.yaml")
+            diagnose_home_path = str(Path.home() / ".ragflow" / "route-diagnose.local.yaml")
             routing.write_text(
                 json.dumps(
                     {
@@ -1625,6 +1909,10 @@ class QueryCliTests(unittest.TestCase):
                             {
                                 "id": "missing-route-hint",
                                 "question": "unmatched topic",
+                                "locale": (
+                                    f"http://{diagnose_private_host}:9380/bad?token={diagnose_token} "
+                                    f"secret={diagnose_key} {diagnose_home_path}"
+                                ),
                                 "expected_kb": "kb:technical",
                             }
                         ]
@@ -1638,7 +1926,10 @@ class QueryCliTests(unittest.TestCase):
                         "queries": [
                             {
                                 "id": "q1",
-                                "question": f"How does the API runtime work? api_key={fake_key}",
+                                "question": (
+                                    f"How does the API runtime work? "
+                                    f"http://{private_host}:9380/route?token={fake_token} api_key={fake_key}"
+                                ),
                                 "expected_kb": "kb:technical",
                                 "category": "exact",
                                 "locale": "en",
@@ -1690,12 +1981,20 @@ class QueryCliTests(unittest.TestCase):
                         str(routing),
                         "--queries",
                         str(routes),
+                        "--report-json",
+                        str(route_test_json),
                         "--report-md",
                         str(report_md),
+                        "--redaction-report",
+                        str(route_test_redaction_json),
                     ]
                 )
             route_test_payload = json.loads(stdout.getvalue())
+            route_test_text = route_test_json.read_text(encoding="utf-8")
+            route_test_file_payload = json.loads(route_test_text)
             route_test_markdown = report_md.read_text(encoding="utf-8")
+            route_test_redaction_text = route_test_redaction_json.read_text(encoding="utf-8")
+            route_test_redaction_payload = json.loads(route_test_redaction_text)
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
@@ -1710,11 +2009,16 @@ class QueryCliTests(unittest.TestCase):
                         str(route_report_json),
                         "--report-md",
                         str(route_report_md),
+                        "--redaction-report",
+                        str(route_report_redaction_json),
                     ]
                 )
             route_report_payload = json.loads(stdout.getvalue())
+            route_report_text = route_report_json.read_text(encoding="utf-8")
             route_report_markdown = route_report_md.read_text(encoding="utf-8")
-            route_report_file_payload = json.loads(route_report_json.read_text(encoding="utf-8"))
+            route_report_file_payload = json.loads(route_report_text)
+            route_report_redaction_text = route_report_redaction_json.read_text(encoding="utf-8")
+            route_report_redaction_payload = json.loads(route_report_redaction_text)
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
@@ -1729,11 +2033,16 @@ class QueryCliTests(unittest.TestCase):
                         str(route_diagnose_json),
                         "--report-md",
                         str(route_diagnose_md),
+                        "--redaction-report",
+                        str(route_diagnose_redaction_json),
                     ]
                 )
             route_diagnose_payload = json.loads(stdout.getvalue())
+            route_diagnose_text = route_diagnose_json.read_text(encoding="utf-8")
             route_diagnose_markdown = route_diagnose_md.read_text(encoding="utf-8")
-            route_diagnose_file_payload = json.loads(route_diagnose_json.read_text(encoding="utf-8"))
+            route_diagnose_file_payload = json.loads(route_diagnose_text)
+            route_diagnose_redaction_text = route_diagnose_redaction_json.read_text(encoding="utf-8")
+            route_diagnose_redaction_payload = json.loads(route_diagnose_redaction_text)
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
@@ -1771,12 +2080,34 @@ class QueryCliTests(unittest.TestCase):
                 route_activation_redaction_text,
             ]
         )
+        route_review_combined = "\n".join(
+            [
+                json.dumps(route_test_payload, ensure_ascii=False),
+                route_test_text,
+                route_test_markdown,
+                route_test_redaction_text,
+                json.dumps(route_report_payload, ensure_ascii=False),
+                route_report_text,
+                route_report_markdown,
+                route_report_redaction_text,
+                json.dumps(route_diagnose_payload, ensure_ascii=False),
+                route_diagnose_text,
+                route_diagnose_markdown,
+                route_diagnose_redaction_text,
+            ]
+        )
         self.assertEqual(list_code, 0)
         self.assertEqual(list_payload["count"], 3)
         self.assertEqual(route_code, 0)
         self.assertEqual(route_payload["selected"]["dataset_id"], "ds-technical")
         self.assertEqual(test_code, 0)
         self.assertEqual(route_test_payload["metrics"]["accuracy"], 1.0)
+        self.assertEqual(route_test_file_payload["schema"], "ragflow_route_test_report_v1")
+        self.assertEqual(route_test_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(route_test_redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(route_test_redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(route_test_redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(route_test_redaction_payload["target_counts"]["config_paths"], 1)
         self.assertIn("Route Test", route_test_markdown)
         self.assertEqual(route_report_code, 0)
         self.assertEqual(route_report_payload["schema"], "ragflow_route_report_v1")
@@ -1787,6 +2118,11 @@ class QueryCliTests(unittest.TestCase):
         self.assertGreater(route_report_payload["summary"]["route_test_category_gap_count"], 0)
         self.assertIn("required_route_test_categories", route_report_payload)
         self.assertEqual(route_report_file_payload["schema"], "ragflow_route_report_v1")
+        self.assertEqual(route_report_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(route_report_redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(route_report_redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(route_report_redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(route_report_redaction_payload["target_counts"]["config_paths"], 1)
         self.assertIn("RAGFlow Route Report", route_report_markdown)
         self.assertIn("Missing Route Tests", route_report_markdown)
         self.assertIn("Config Lints", route_report_markdown)
@@ -1796,7 +2132,24 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(route_diagnose_payload["schema"], "ragflow_route_diagnose_report_v1")
         self.assertEqual(route_diagnose_payload["issues"][0]["category"], "missing_hint")
         self.assertEqual(route_diagnose_file_payload["schema"], "ragflow_route_diagnose_report_v1")
+        self.assertEqual(route_diagnose_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(route_diagnose_redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(route_diagnose_redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(route_diagnose_redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(route_diagnose_redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertGreaterEqual(route_diagnose_redaction_payload["target_counts"]["config_paths"], 1)
         self.assertIn("RAGFlow Route Diagnosis", route_diagnose_markdown)
+        self.assertNotIn(private_host, route_review_combined)
+        self.assertNotIn(diagnose_private_host, route_review_combined)
+        self.assertNotIn(fake_token, route_review_combined)
+        self.assertNotIn(fake_key, route_review_combined)
+        self.assertNotIn(diagnose_token, route_review_combined)
+        self.assertNotIn(diagnose_key, route_review_combined)
+        self.assertNotIn(home_path, route_review_combined)
+        self.assertNotIn(diagnose_home_path, route_review_combined)
+        self.assertNotIn(str(routing), route_review_combined)
+        self.assertNotIn(str(routes), route_review_combined)
+        self.assertNotIn(str(bad_routes), route_review_combined)
         self.assertEqual(route_activation_check_code, 0)
         self.assertEqual(route_activation_check_payload["schema"], "ragflow_route_activation_check_v1")
         self.assertEqual(route_activation_check_payload["status"], "PASS")
@@ -2178,11 +2531,20 @@ class QueryCliTests(unittest.TestCase):
             snapshot = root / "chunk_snapshot.json"
             report_json = root / "centroid_plan.json"
             report_md = root / "centroid_plan.md"
+            redaction_json = root / "centroid_plan_redaction.json"
+            index_output = root / "centroids.json"
+            private_host = ".".join(["192", "168", "73", "95"])
+            fake_token = "fake-centroid-plan-token"
+            fake_key = "fake-centroid-plan-secret"
+            home_path = str(Path.home() / ".ragflow" / "centroid-plan.local.yaml")
             manifest.write_text(
                 json.dumps(
                     {
                         "version": "0.1",
-                        "dataset": {"id": "ds-technical", "name": "kb:technical"},
+                        "dataset": {
+                            "id": "ds-technical",
+                            "name": f"kb:http://{private_host}:9380/v1?token={fake_token}",
+                        },
                         "documents": [{"document_id": "doc-1", "chunk_count": 1}],
                     }
                 ),
@@ -2216,27 +2578,49 @@ class QueryCliTests(unittest.TestCase):
                         "--chunk-snapshot",
                         str(snapshot),
                         "--embedding-model",
-                        "example-embedding",
+                        f"example-embedding api_key={fake_key}",
+                        "--embedding-provider",
+                        home_path,
                         "--embedding-dimension",
                         "3",
                         "--index-output",
-                        str(root / "centroids.json"),
+                        str(index_output),
                         "--report-json",
                         str(report_json),
                         "--report-md",
                         str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
                         "--json",
                     ]
                 )
-            payload = json.loads(stdout.getvalue())
-            file_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            output = stdout.getvalue()
+            payload = json.loads(output)
+            report_text = report_json.read_text(encoding="utf-8")
+            file_payload = json.loads(report_text)
             markdown = report_md.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
 
+        combined = "\n".join([output, report_text, markdown, redaction_text])
         self.assertEqual(code, 0)
         self.assertEqual(payload["schema"], "ragflow_route_centroid_build_plan_v1")
         self.assertEqual(file_payload["index_schema"], "ragflow_route_centroid_index_v1")
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["config_path"], 1)
         self.assertEqual(payload["summary"]["ready_centroid_count"], 1)
         self.assertIn("RAGFlow Centroid Build Plan", markdown)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
+        self.assertNotIn(str(manifest), combined)
+        self.assertNotIn(str(snapshot), combined)
+        self.assertNotIn(str(index_output), combined)
 
     def test_centroid_build_writes_index_checkpoint_and_reports(self) -> None:
         module = load_query_module()
@@ -2248,6 +2632,11 @@ class QueryCliTests(unittest.TestCase):
             checkpoint = root / "centroid.checkpoint.json"
             report_json = root / "centroid_build.json"
             report_md = root / "centroid_build.md"
+            redaction_json = root / "centroid_build_redaction.json"
+            private_host = ".".join(["192", "168", "74", "96"])
+            fake_token = "fake-centroid-build-token"
+            fake_key = "fake-centroid-build-secret"
+            home_path = str(Path.home() / ".ragflow" / "centroid-build.local.yaml")
             manifest.write_text(
                 json.dumps(
                     {
@@ -2292,7 +2681,9 @@ class QueryCliTests(unittest.TestCase):
                         "--chunk-snapshot",
                         str(snapshot),
                         "--embedding-model",
-                        "example-embedding",
+                        f"http://{private_host}:9380/v1?token={fake_token} api_key={fake_key}",
+                        "--embedding-provider",
+                        home_path,
                         "--embedding-dimension",
                         "2",
                         "--batch-size",
@@ -2305,22 +2696,43 @@ class QueryCliTests(unittest.TestCase):
                         str(report_json),
                         "--report-md",
                         str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
                         "--json",
                     ]
                 )
-            payload = json.loads(stdout.getvalue())
-            file_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            output = stdout.getvalue()
+            payload = json.loads(output)
+            report_text = report_json.read_text(encoding="utf-8")
+            file_payload = json.loads(report_text)
             index_payload = json.loads(index_output.read_text(encoding="utf-8"))
             checkpoint_payload = json.loads(checkpoint.read_text(encoding="utf-8"))
             markdown = report_md.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
 
+        combined = "\n".join([output, report_text, markdown, redaction_text])
         self.assertEqual(code, 0)
         self.assertEqual(payload["schema"], "ragflow_route_centroid_build_report_v1")
         self.assertEqual(file_payload["summary"]["completed"], True)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertGreaterEqual(redaction_payload["rule_counts"]["config_path"], 1)
         self.assertEqual(index_payload["schema"], "ragflow_route_centroid_index_v1")
         self.assertEqual(index_payload["centroids"][0]["vector"], [2.0, 3.0])
         self.assertEqual(checkpoint_payload["schema"], "ragflow_route_centroid_build_checkpoint_v1")
         self.assertIn("RAGFlow Centroid Build Report", markdown)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
+        self.assertNotIn(str(manifest), combined)
+        self.assertNotIn(str(snapshot), combined)
+        self.assertNotIn(str(index_output), combined)
+        self.assertNotIn(str(checkpoint), combined)
 
     def test_auto_mode_uses_routing_config_with_fake_client(self) -> None:
         module = load_query_module()

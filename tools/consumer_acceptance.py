@@ -2798,7 +2798,9 @@ raise SystemExit(code)
         route_centroid_result,
         required_output='"tie_breaker": "centroid"',
     )
+    route_test_json = work_root / "route_test.json"
     route_test_report = work_root / "route_test.md"
+    route_test_redaction = work_root / "route_test_redaction.json"
     route_test = _run_command(
         [
             python_executable,
@@ -2808,13 +2810,18 @@ raise SystemExit(code)
             str(routing_config),
             "--queries",
             str(route_queries),
+            "--report-json",
+            str(route_test_json),
             "--report-md",
             str(route_test_report),
+            "--redaction-report",
+            str(route_test_redaction),
         ],
         cwd=work_root,
         env=env,
     )
     _record_command_check(checks, "query route-test", route_test, required_output='"accuracy": 1.0')
+    _record_file_check(checks, "query route-test redaction", route_test_redaction)
     route_centroid_test = _run_command(
         [
             python_executable,
@@ -2836,13 +2843,15 @@ raise SystemExit(code)
         route_centroid_test,
         required_output='"accuracy": 1.0',
     )
-    if route_test_report.exists():
-        produced.append(route_test_report)
+    for path in (route_test_json, route_test_report, route_test_redaction):
+        if path.exists():
+            produced.append(path)
     for path in (route_tie_queries, route_centroids, route_query_vector):
         if path.exists():
             produced.append(path)
     route_report_json = work_root / "route_report.json"
     route_report_md = work_root / "route_report.md"
+    route_report_redaction = work_root / "route_report_redaction.json"
     route_report = _run_command(
         [
             python_executable,
@@ -2856,16 +2865,20 @@ raise SystemExit(code)
             str(route_report_json),
             "--report-md",
             str(route_report_md),
+            "--redaction-report",
+            str(route_report_redaction),
         ],
         cwd=work_root,
         env=env,
     )
     _record_command_check(checks, "query route-report", route_report, required_output='"ragflow_route_report_v1"')
-    for path in (route_report_json, route_report_md):
+    _record_file_check(checks, "query route-report redaction", route_report_redaction)
+    for path in (route_report_json, route_report_md, route_report_redaction):
         if path.exists():
             produced.append(path)
     route_diagnose_json = work_root / "route_diagnose.json"
     route_diagnose_md = work_root / "route_diagnose.md"
+    route_diagnose_redaction = work_root / "route_diagnose_redaction.json"
     route_diagnose = _run_command(
         [
             python_executable,
@@ -2879,6 +2892,8 @@ raise SystemExit(code)
             str(route_diagnose_json),
             "--report-md",
             str(route_diagnose_md),
+            "--redaction-report",
+            str(route_diagnose_redaction),
         ],
         cwd=work_root,
         env=env,
@@ -2889,7 +2904,8 @@ raise SystemExit(code)
         route_diagnose,
         required_output='"ragflow_route_diagnose_report_v1"',
     )
-    for path in (route_diagnose_json, route_diagnose_md):
+    _record_file_check(checks, "query route-diagnose redaction", route_diagnose_redaction)
+    for path in (route_diagnose_json, route_diagnose_md, route_diagnose_redaction):
         if path.exists():
             produced.append(path)
     route_activation_check_json = work_root / "route_activation_check.json"
@@ -2935,6 +2951,7 @@ raise SystemExit(code)
             produced.append(path)
     centroid_plan_json = work_root / "centroid_plan.json"
     centroid_plan_md = work_root / "centroid_plan.md"
+    centroid_plan_redaction = work_root / "centroid_plan_redaction.json"
     centroid_plan = _run_command(
         [
             python_executable,
@@ -2956,6 +2973,8 @@ raise SystemExit(code)
             str(centroid_plan_json),
             "--report-md",
             str(centroid_plan_md),
+            "--redaction-report",
+            str(centroid_plan_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -2967,7 +2986,8 @@ raise SystemExit(code)
         centroid_plan,
         required_output='"ragflow_route_centroid_build_plan_v1"',
     )
-    for path in (centroid_plan_json, centroid_plan_md):
+    _record_file_check(checks, "query centroid build plan-only redaction", centroid_plan_redaction)
+    for path in (centroid_plan_json, centroid_plan_md, centroid_plan_redaction):
         if path.exists():
             produced.append(path)
     centroid_chunk_snapshot = work_root / "centroid_chunk_snapshot.json"
@@ -3001,6 +3021,7 @@ raise SystemExit(code)
     )
     centroid_build_json = work_root / "centroid_build.json"
     centroid_build_md = work_root / "centroid_build.md"
+    centroid_build_redaction = work_root / "centroid_build_redaction.json"
     centroid_checkpoint = work_root / "centroid.checkpoint.json"
     centroid_index = work_root / "centroids.built.json"
     centroid_build = _run_command(
@@ -3027,6 +3048,8 @@ raise SystemExit(code)
             str(centroid_build_json),
             "--report-md",
             str(centroid_build_md),
+            "--redaction-report",
+            str(centroid_build_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -3038,13 +3061,22 @@ raise SystemExit(code)
         centroid_build,
         required_output='"ragflow_route_centroid_build_report_v1"',
     )
-    for path in (centroid_chunk_snapshot, centroid_build_json, centroid_build_md, centroid_checkpoint, centroid_index):
+    _record_file_check(checks, "query centroid build redaction", centroid_build_redaction)
+    for path in (
+        centroid_chunk_snapshot,
+        centroid_build_json,
+        centroid_build_md,
+        centroid_build_redaction,
+        centroid_checkpoint,
+        centroid_index,
+    ):
         if path.exists():
             produced.append(path)
 
     query_output = work_root / "query_output.json"
     citation_audit_json = work_root / "citation_audit.json"
     citation_audit_md = work_root / "citation_audit.md"
+    citation_audit_redaction = work_root / "citation_audit_redaction.json"
     query_answer_eval_json = work_root / "query_answer_eval.json"
     query_answer_eval_md = work_root / "query_answer_eval.md"
     query_answer_eval_redaction = work_root / "query_answer_eval_redaction.json"
@@ -3071,19 +3103,26 @@ raise SystemExit(code)
     query_fusion_test_redaction = work_root / "query_fusion_test_redaction.json"
     query_fallback_test_json = work_root / "query_fallback_test.json"
     query_fallback_test_md = work_root / "query_fallback_test.md"
+    query_fallback_test_redaction = work_root / "query_fallback_test_redaction.json"
     query_rewrite_json = work_root / "query_rewrite.json"
     query_rewrite_md = work_root / "query_rewrite.md"
+    query_rewrite_redaction = work_root / "query_rewrite_redaction.json"
     query_intent_json = work_root / "query_intent.json"
     query_intent_md = work_root / "query_intent.md"
+    query_intent_redaction = work_root / "query_intent_redaction.json"
     query_intent_route_json = work_root / "query_intent_route.json"
     query_intent_route_md = work_root / "query_intent_route.md"
+    query_intent_route_redaction = work_root / "query_intent_route_redaction.json"
     query_session_input = work_root / "query_session.json"
     query_session_inspect_json = work_root / "query_session_inspect.json"
     query_session_inspect_md = work_root / "query_session_inspect.md"
+    query_session_inspect_redaction = work_root / "query_session_inspect_redaction.json"
     query_session_enrich_json = work_root / "query_session_enrich.json"
     query_session_enrich_md = work_root / "query_session_enrich.md"
+    query_session_enrich_redaction = work_root / "query_session_enrich_redaction.json"
     query_agentic_plan_json = work_root / "query_agentic_plan.json"
     query_agentic_plan_md = work_root / "query_agentic_plan.md"
+    query_agentic_plan_redaction = work_root / "query_agentic_plan_redaction.json"
     query_output.write_text(
         json.dumps(
             {
@@ -3175,6 +3214,8 @@ raise SystemExit(code)
             str(citation_audit_json),
             "--report-md",
             str(citation_audit_md),
+            "--redaction-report",
+            str(citation_audit_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -3190,6 +3231,9 @@ raise SystemExit(code)
         produced.append(citation_audit_json)
     if citation_audit_md.exists():
         produced.append(citation_audit_md)
+    _record_file_check(checks, "query citation audit redaction", citation_audit_redaction)
+    if citation_audit_redaction.exists():
+        produced.append(citation_audit_redaction)
 
     query_answer_eval = _run_command(
         [
@@ -3474,6 +3518,8 @@ raise SystemExit(code)
             str(query_fallback_test_json),
             "--report-md",
             str(query_fallback_test_md),
+            "--redaction-report",
+            str(query_fallback_test_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -3489,6 +3535,9 @@ raise SystemExit(code)
         produced.append(query_fallback_test_json)
     if query_fallback_test_md.exists():
         produced.append(query_fallback_test_md)
+    _record_file_check(checks, "query fallback test redaction", query_fallback_test_redaction)
+    if query_fallback_test_redaction.exists():
+        produced.append(query_fallback_test_redaction)
 
     query_rewrite = _run_command(
         [
@@ -3502,6 +3551,8 @@ raise SystemExit(code)
             str(query_rewrite_json),
             "--report-md",
             str(query_rewrite_md),
+            "--redaction-report",
+            str(query_rewrite_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -3517,6 +3568,9 @@ raise SystemExit(code)
         produced.append(query_rewrite_json)
     if query_rewrite_md.exists():
         produced.append(query_rewrite_md)
+    _record_file_check(checks, "query rewrite redaction", query_rewrite_redaction)
+    if query_rewrite_redaction.exists():
+        produced.append(query_rewrite_redaction)
 
     query_intent = _run_command(
         [
@@ -3529,6 +3583,8 @@ raise SystemExit(code)
             str(query_intent_json),
             "--report-md",
             str(query_intent_md),
+            "--redaction-report",
+            str(query_intent_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -3544,6 +3600,9 @@ raise SystemExit(code)
         produced.append(query_intent_json)
     if query_intent_md.exists():
         produced.append(query_intent_md)
+    _record_file_check(checks, "query intent classify redaction", query_intent_redaction)
+    if query_intent_redaction.exists():
+        produced.append(query_intent_redaction)
 
     query_intent_route = _run_command(
         [
@@ -3556,6 +3615,8 @@ raise SystemExit(code)
             str(query_intent_route_json),
             "--report-md",
             str(query_intent_route_md),
+            "--redaction-report",
+            str(query_intent_route_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -3571,6 +3632,9 @@ raise SystemExit(code)
         produced.append(query_intent_route_json)
     if query_intent_route_md.exists():
         produced.append(query_intent_route_md)
+    _record_file_check(checks, "query intent route redaction", query_intent_route_redaction)
+    if query_intent_route_redaction.exists():
+        produced.append(query_intent_route_redaction)
 
     query_session_inspect = _run_command(
         [
@@ -3584,6 +3648,8 @@ raise SystemExit(code)
             str(query_session_inspect_json),
             "--report-md",
             str(query_session_inspect_md),
+            "--redaction-report",
+            str(query_session_inspect_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -3598,6 +3664,9 @@ raise SystemExit(code)
     for path in (query_session_input, query_session_inspect_json, query_session_inspect_md):
         if path.exists():
             produced.append(path)
+    _record_file_check(checks, "query session inspect redaction", query_session_inspect_redaction)
+    if query_session_inspect_redaction.exists():
+        produced.append(query_session_inspect_redaction)
 
     query_session_enrich = _run_command(
         [
@@ -3612,6 +3681,8 @@ raise SystemExit(code)
             str(query_session_enrich_json),
             "--report-md",
             str(query_session_enrich_md),
+            "--redaction-report",
+            str(query_session_enrich_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -3627,6 +3698,9 @@ raise SystemExit(code)
         produced.append(query_session_enrich_json)
     if query_session_enrich_md.exists():
         produced.append(query_session_enrich_md)
+    _record_file_check(checks, "query session enrich redaction", query_session_enrich_redaction)
+    if query_session_enrich_redaction.exists():
+        produced.append(query_session_enrich_redaction)
 
     query_agentic_plan = _run_command(
         [
@@ -3642,6 +3716,8 @@ raise SystemExit(code)
             str(query_agentic_plan_json),
             "--report-md",
             str(query_agentic_plan_md),
+            "--redaction-report",
+            str(query_agentic_plan_redaction),
             "--json",
         ],
         cwd=work_root,
@@ -3657,6 +3733,9 @@ raise SystemExit(code)
         produced.append(query_agentic_plan_json)
     if query_agentic_plan_md.exists():
         produced.append(query_agentic_plan_md)
+    _record_file_check(checks, "query agentic plan redaction", query_agentic_plan_redaction)
+    if query_agentic_plan_redaction.exists():
+        produced.append(query_agentic_plan_redaction)
 
     missing_config = _run_command(
         [
