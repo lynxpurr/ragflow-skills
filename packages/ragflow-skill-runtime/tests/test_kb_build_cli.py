@@ -182,6 +182,46 @@ def diagnostic_probe_server():
         server.server_close()
 
 
+class InspectKbLiveHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path.startswith("/api/v1/datasets/ds-live/documents"):
+            body = json.dumps(
+                {
+                    "data": {
+                        "documents": [
+                            {"id": "doc-ok", "status": "1", "chunk_count": 3},
+                            {"id": "doc-fail", "status": "failed", "progress_msg": "parse failed"},
+                            {"id": "doc-pending", "status": "running", "progress": 0.5},
+                        ]
+                    }
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, format, *args):  # noqa: A002
+        return
+
+
+@contextlib.contextmanager
+def inspect_kb_live_server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), InspectKbLiveHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 class KbBuildCliTests(unittest.TestCase):
     def test_build_dry_run_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3688,6 +3728,58 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["dataset"]["id"], "ds-1")
         self.assertEqual(payload["document_count"], 1)
+        self.assertEqual(payload["summary"]["runtime_partial_failure_status"], "skipped")
+        self.assertEqual(payload["runtime_partial_failure"]["schema"], "ragflow_runtime_partial_failure_report_v1")
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["skipped_count"], 1)
+
+    def test_inspect_manifest_live_partial_failure_via_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, inspect_kb_live_server() as base_url:
+            manifest = Path(tmp) / "kb_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-live", "name": "kb:live"},
+                        "documents": [
+                            {"document_id": "doc-ok", "status": "uploaded"},
+                            {"document_id": "doc-fail", "status": "uploaded"},
+                            {"document_id": "doc-pending", "status": "uploaded"},
+                            {"document_id": "doc-missing", "status": "uploaded"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(INSPECT_SCRIPT),
+                    "--kb-manifest",
+                    str(manifest),
+                    "--live",
+                    "--base-url",
+                    base_url,
+                    "--api-key",
+                    "fake-inspect-key",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["summary"]["live_document_count"], 3)
+        self.assertEqual(payload["summary"]["runtime_partial_failure_status"], "partial")
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["success_count"], 1)
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["failure_count"], 1)
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["warning_count"], 2)
+        self.assertEqual(payload["runtime_partial_failure"]["status_counts"]["parsed"], 1)
+        self.assertEqual(payload["runtime_partial_failure"]["status_counts"]["failed"], 1)
+        self.assertEqual(payload["runtime_partial_failure"]["status_counts"]["in_progress"], 1)
+        self.assertEqual(payload["runtime_partial_failure"]["status_counts"]["missing"], 1)
 
     def test_diagnose_manifest_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

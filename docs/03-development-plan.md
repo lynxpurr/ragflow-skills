@@ -1080,16 +1080,16 @@ transcripts.
 `tools/runtime_resilience_inventory.py` now emits
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene to track Phase 31
 runtime helper coverage without broadening live behavior. The current inventory names 79
-public commands: 14 `covered`, 5 `candidate`, 2 `deferred`, and 58 `not_applicable`, with
+public commands: 15 `covered`, 4 `candidate`, 2 `deferred`, and 58 `not_applicable`, with
 no stale classification findings. Covered surfaces include `ragflow-query endpoint-report`,
 `ragflow-query fallback-test`, `ragflow-query cache-report`, `ragflow-query centroid build`,
 `ragflow-doc-to-md` process cleanup reporting, `ragflow-doc-to-md backend probe`,
 `ragflow-doc-to-md backend warmup`, `ragflow-kb-build model-providers probe`,
-`ragflow-kb-build probe`, `ragflow-kb-build validate`, `ragflow-kb-build snapshot-chunks`,
-`ragflow-kb-build qa validate`, `ragflow-kb-build qa map-evidence`, and offline
-`ragflow-kb-build benchmark import` checkpoint/resume. Candidate surfaces keep broad
-checkpoint/resume and the remaining partial-failure rollout visible without marking the
-Phase 31 umbrella tasks complete.
+`ragflow-kb-build probe`, `ragflow-kb-build inspect-kb`, `ragflow-kb-build validate`,
+`ragflow-kb-build snapshot-chunks`, `ragflow-kb-build qa validate`,
+`ragflow-kb-build qa map-evidence`, and offline `ragflow-kb-build benchmark import`
+checkpoint/resume. Candidate surfaces keep broad checkpoint/resume and the remaining
+partial-failure rollout visible without marking the Phase 31 umbrella tasks complete.
 
 Recommended next slices:
 
@@ -1110,7 +1110,9 @@ Recommended next slices:
    now also emits the schema for default candidate endpoint sweeps and explicit adapter
    empty-input probes. `ragflow-kb-build probe` now emits the schema for read-only dataset
    list diagnostics, including completed-with-warnings probes when fake or live responses
-   expose short dataset IDs. `ragflow-kb-build validate` now emits the schema for passed,
+   expose short dataset IDs. `ragflow-kb-build inspect-kb` now emits the schema for
+   manifest-only not-checked rows and optional live parsed, failed, in-progress, and
+   missing document rows. `ragflow-kb-build validate` now emits the schema for passed,
    semantic-warning, error, and timeout query outcomes. `ragflow-kb-build snapshot-chunks`
    now emits the schema for snapshotted, duplicate-skipped, and missing-content chunk
    profiles. `ragflow-kb-build qa validate` now emits the schema for validated, invalid,
@@ -1119,10 +1121,10 @@ Recommended next slices:
    rows.
 3. Keep broad checkpoint/resume helpers and cross-skill partial-failure rollout as the
    next Phase 31 resilience work. Offline `ragflow-kb-build benchmark import`
-   checkpoint/resume is now covered, and `validate`, `snapshot-chunks`, `qa validate`,
-   plus `qa map-evidence` now have partial-failure coverage; the next lower-risk candidate
-   is fake-client partial-failure coverage for `inspect-kb`, followed by broader
-   checkpoint/resume rollout for other bounded offline jobs.
+   checkpoint/resume is now covered, and `inspect-kb`, `validate`, `snapshot-chunks`,
+   `qa validate`, plus `qa map-evidence` now have partial-failure coverage; the next
+   lower-risk candidates are checkpoint/resume coverage for bounded offline `qa generate`,
+   `profile experiment`, `optimize`, and `doc-to-md split` jobs.
 
 Exit criteria:
 
@@ -1429,6 +1431,8 @@ source-check rows while keeping the offline exact-span validation gate semantics
 `ragflow-kb-build qa map-evidence` emits it for mapped, unmapped, partially mapped,
 invalid, and warning evidence-map rows while keeping the raw evidence-map artifact focused
 on deterministic chunk mapping.
+`ragflow-kb-build inspect-kb` emits it for manifest-only not-checked rows and optional
+live parsed, failed, in-progress, and missing document rows without mutating RAGFlow.
 `tools/generated_markdown_audit.py`
 now emits `ragflow_generated_markdown_audit_v1` and is
 run by release hygiene alongside generated-report safety. It audits 62 covered Markdown

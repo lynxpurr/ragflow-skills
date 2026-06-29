@@ -56,6 +56,12 @@ _COVERED = {
         rationale="Read-only RAGFlow diagnostics report completed, warning-only, failed, skipped, and timeout dataset-list outcomes.",
         next_action="Keep fake diagnostic probes covered without adding mutation.",
     ),
+    "ragflow-kb-build inspect-kb": RuntimeClassification(
+        status="covered",
+        features=("partial_failure",),
+        rationale="Optional live KB inspection emits partial-failure reports for parsed, failed, in-progress, missing, and not-checked document rows.",
+        next_action="Keep inspection read-only; evaluate pagination only if large live KBs need broader status coverage.",
+    ),
     "ragflow-kb-build snapshot-chunks": RuntimeClassification(
         status="covered",
         features=("partial_failure",),
@@ -118,12 +124,6 @@ _CANDIDATES = {
         features=("checkpoint_resume",),
         rationale="Large document split jobs are offline and could reuse bounded checkpoint semantics if split plans become batch-executed.",
         next_action="Defer until users need resume for multi-document split execution.",
-    ),
-    "ragflow-kb-build inspect-kb": RuntimeClassification(
-        status="candidate",
-        features=("partial_failure",),
-        rationale="Optional live status inspection is read-only and can report partial document-status failures with fake-client tests.",
-        next_action="Add only after the current read-only probe rollout is committed.",
     ),
     "ragflow-kb-build optimize": RuntimeClassification(
         status="candidate",

@@ -25,8 +25,8 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
         self.assertEqual(
             report["summary"]["status_counts"],
             {
-                "candidate": 5,
-                "covered": 14,
+                "candidate": 4,
+                "covered": 15,
                 "deferred": 2,
                 "not_applicable": 58,
             },
@@ -58,6 +58,10 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
         kb_probe = by_command["ragflow-kb-build probe"]
         self.assertEqual(kb_probe["status"], "covered")
         self.assertEqual(kb_probe["features"], ["partial_failure"])
+
+        inspect_kb = by_command["ragflow-kb-build inspect-kb"]
+        self.assertEqual(inspect_kb["status"], "covered")
+        self.assertEqual(inspect_kb["features"], ["partial_failure"])
 
         benchmark_import = by_command["ragflow-kb-build benchmark import"]
         self.assertEqual(benchmark_import["status"], "covered")
@@ -97,7 +101,7 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
 
         self.assertIn("# RAGFlow Runtime Resilience Inventory", text)
         self.assertIn("`ragflow-query endpoint-report`", text)
-        self.assertIn("candidate: `5`", text)
+        self.assertIn("candidate: `4`", text)
         self.assertIn("`checkpoint_resume`: `7`", text)
 
 
