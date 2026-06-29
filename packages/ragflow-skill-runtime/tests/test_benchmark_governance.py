@@ -219,6 +219,9 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertTrue(report["ok"], report["issues"])
         self.assertEqual(report["summary"]["item_count"], 1)
         self.assertEqual(report["summary"]["grounded_span_count"], 1)
+        self.assertEqual(report["summary"]["runtime_partial_failure_status"], "completed")
+        self.assertEqual(report["runtime_partial_failure"]["schema"], "ragflow_runtime_partial_failure_report_v1")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["success_count"], 1)
 
     def test_generate_grounded_qa_from_source_spans(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -275,10 +278,75 @@ class BenchmarkGovernanceTests(unittest.TestCase):
 
         self.assertFalse(report["ok"])
         self.assertEqual(report["summary"]["invalid_item_count"], 2)
+        self.assertEqual(report["summary"]["runtime_partial_failure_status"], "failed")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["failure_count"], 2)
         self.assertEqual(
             [issue["code"] for issue in report["issues"]],
             ["qa_item_missing_evidence", "evidence_span_not_found"],
         )
+
+    def test_validate_grounded_qa_runtime_partial_failure_reports_mixed_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "sources.json"
+            source.write_text(json.dumps({"source.md": "The grounded sentence is present."}), encoding="utf-8")
+            qa = root / "qa.json"
+            qa.write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "id": "valid",
+                                "question": "What is present?",
+                                "answer": "A grounded sentence.",
+                                "evidence": [{"document": "source.md", "text": "The grounded sentence is present."}],
+                            },
+                            {
+                                "id": "invalid",
+                                "question": "What is absent?",
+                                "answer": "An absent sentence.",
+                                "evidence": [{"document": "source.md", "text": "This span is absent."}],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = validate_grounded_qa(qa_path=qa, sources_path=source)
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["status"], "partial")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["success_count"], 1)
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["failure_count"], 1)
+        self.assertEqual(report["runtime_partial_failure"]["status_counts"]["validated"], 1)
+        self.assertEqual(report["runtime_partial_failure"]["status_counts"]["invalid"], 1)
+
+    def test_validate_grounded_qa_runtime_partial_failure_marks_unchecked_sources_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            qa = root / "qa.json"
+            qa.write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "id": "unchecked",
+                                "question": "What is unchecked?",
+                                "answer": "Evidence was supplied.",
+                                "evidence": [{"document": "source.md", "text": "The span is not source-checked."}],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = validate_grounded_qa(qa_path=qa)
+
+        self.assertTrue(report["ok"], report["issues"])
+        self.assertEqual(report["summary"]["runtime_partial_failure_status"], "skipped")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["skipped_count"], 1)
 
     def test_map_grounded_qa_evidence_to_chunk_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

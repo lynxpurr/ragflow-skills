@@ -577,6 +577,18 @@ def _sources_containing_span(sources: list[_SourceText], span: str) -> list[_Sou
     return [source for source in sources if span in source.text]
 
 
+def _qa_validate_runtime_partial_failure_report(items: list[dict[str, Any]]) -> dict[str, Any]:
+    return build_runtime_partial_failure_report(
+        "ragflow-kb-build qa validate",
+        items,
+        success_statuses=("validated",),
+        warning_statuses=("warning",),
+        failure_statuses=("invalid",),
+        skipped_statuses=("skipped",),
+        timeout_statuses=(),
+    )
+
+
 def validate_grounded_qa(
     *,
     qa_path: str | Path,
@@ -594,6 +606,7 @@ def validate_grounded_qa(
     evidence_span_count = 0
     checked_span_count = 0
     grounded_span_count = 0
+    runtime_items: list[dict[str, Any]] = []
 
     if not isinstance(raw_items, list):
         issues.append(BenchmarkGovernanceIssue("error", "qa_items_invalid", "qa items must be a list", "items"))
@@ -606,12 +619,15 @@ def validate_grounded_qa(
         if not isinstance(raw_item, Mapping):
             item_id = f"item-{index + 1}"
             item_error_ids.add(item_id)
+            runtime_items.append({"label": item_id, "status": "invalid"})
             issues.append(
                 BenchmarkGovernanceIssue("error", "qa_item_invalid", "qa item must be a JSON object", field_prefix)
             )
             continue
 
         item_id = _qa_item_identifier(raw_item, index)
+        issue_start = len(issues)
+        item_checked_span_count = 0
         question = _first_string(raw_item, ("question", "query", "prompt", "input"))
         answer = _first_string(raw_item, ("answer", "expected_answer", "reference_answer", "response"))
         if not question:
@@ -647,6 +663,7 @@ def validate_grounded_qa(
                     "Add evidence spans copied exactly from source documents.",
                 )
             )
+            runtime_items.append({"label": item_id, "status": "invalid"})
             continue
 
         for evidence_index, evidence in enumerate(evidence_items):
@@ -670,6 +687,7 @@ def validate_grounded_qa(
                 continue
 
             checked_span_count += 1
+            item_checked_span_count += 1
             candidates = _matching_sources(sources, document_ref)
             if candidates and _sources_containing_span(candidates, span):
                 grounded_span_count += 1
@@ -709,6 +727,38 @@ def validate_grounded_qa(
                 )
             )
 
+        item_issues = issues[issue_start:]
+        if any(issue.severity == "error" for issue in item_issues):
+            status = "invalid"
+        elif any(issue.severity == "warning" for issue in item_issues):
+            status = "warning"
+        elif sources and item_checked_span_count > 0:
+            status = "validated"
+        else:
+            status = "skipped"
+        runtime_items.append({"label": item_id, "status": status})
+
+    if not runtime_items and issues:
+        runtime_items.append({"label": "items", "status": "invalid"})
+    runtime_partial_failure = _qa_validate_runtime_partial_failure_report(runtime_items)
+    runtime_partial_summary = runtime_partial_failure["summary"]
+    summary = {
+        **_issue_counts(issues),
+        "item_count": len(raw_items),
+        "valid_item_count": max(0, len(raw_items) - len(item_error_ids)),
+        "invalid_item_count": len(item_error_ids),
+        "evidence_span_count": evidence_span_count,
+        "checked_span_count": checked_span_count,
+        "grounded_span_count": grounded_span_count,
+        "source_count": len(sources),
+        "require_answer": require_answer,
+        "runtime_partial_failure_status": runtime_partial_summary["status"],
+        "runtime_warning_count": runtime_partial_summary["warning_count"],
+        "runtime_failure_count": runtime_partial_summary["failure_count"],
+        "runtime_timeout_count": runtime_partial_summary["timeout_count"],
+        "runtime_skipped_count": runtime_partial_summary["skipped_count"],
+    }
+
     return {
         "ok": _ok(issues),
         "schema": GROUNDED_QA_VALIDATE_REPORT_SCHEMA,
@@ -717,17 +767,8 @@ def validate_grounded_qa(
             "sources": str(sources_path) if sources_path else None,
             "source_dir": str(source_dir) if source_dir else None,
         },
-        "summary": {
-            **_issue_counts(issues),
-            "item_count": len(raw_items),
-            "valid_item_count": max(0, len(raw_items) - len(item_error_ids)),
-            "invalid_item_count": len(item_error_ids),
-            "evidence_span_count": evidence_span_count,
-            "checked_span_count": checked_span_count,
-            "grounded_span_count": grounded_span_count,
-            "source_count": len(sources),
-            "require_answer": require_answer,
-        },
+        "summary": summary,
+        "runtime_partial_failure": runtime_partial_failure,
         "issues": [issue.to_dict() for issue in issues],
     }
 

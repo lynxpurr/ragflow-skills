@@ -1847,6 +1847,8 @@ class KbBuildCliTests(unittest.TestCase):
                 env=_env(),
             )
             generated_payload = json.loads(generated_qa.read_text(encoding="utf-8")) if generated_qa.exists() else {}
+            validate_payload = json.loads(result.stdout)
+            bad_validate_payload = json.loads(bad_result.stdout)
             generate_report_md_text = generate_report_md.read_text(encoding="utf-8") if generate_report_md.exists() else ""
             report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
             map_report_md_text = map_report_md.read_text(encoding="utf-8") if map_report_md.exists() else ""
@@ -1859,9 +1861,13 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(len(generated_payload["items"]), 1)
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("ragflow_grounded_qa_validate_report_v1", result.stdout)
+        self.assertEqual(validate_payload["summary"]["runtime_partial_failure_status"], "completed")
+        self.assertEqual(validate_payload["runtime_partial_failure"]["summary"]["success_count"], 1)
         self.assertIn("RAGFlow Grounded QA Validate Report", report_md_text)
+        self.assertIn("runtime_partial_failure_status: `completed`", report_md_text)
         self.assertEqual(bad_result.returncode, 1, bad_result.stdout)
         self.assertIn("qa_item_missing_evidence", bad_result.stdout)
+        self.assertEqual(bad_validate_payload["runtime_partial_failure"]["summary"]["status"], "failed")
         self.assertEqual(map_result.returncode, 0, map_result.stdout)
         self.assertIn("ragflow_grounded_qa_evidence_map_report_v1", map_result.stdout)
         self.assertIn("RAGFlow QA Evidence Map Report", map_report_md_text)
@@ -2170,6 +2176,7 @@ class KbBuildCliTests(unittest.TestCase):
             ]
             sidecars = [json.loads(paths[2].read_text(encoding="utf-8")) for paths in outputs.values()]
             snapshot_payload = json.loads(outputs["snapshot"][0].read_text(encoding="utf-8"))
+            qa_validate_payload = json.loads(outputs["qa_validate"][0].read_text(encoding="utf-8"))
             combined_parts = [result.stdout for result in results]
             for report_json, report_md, redaction in outputs.values():
                 combined_parts.append(report_json.read_text(encoding="utf-8"))
@@ -2191,6 +2198,9 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("runtime_partial_failure_status: `partial`", combined)
         self.assertIn("ragflow_grounded_qa_generate_report_v1", results[1].stdout)
         self.assertIn("ragflow_grounded_qa_validate_report_v1", results[2].stdout)
+        self.assertEqual(qa_validate_payload["summary"]["runtime_partial_failure_status"], "completed")
+        self.assertEqual(qa_validate_payload["runtime_partial_failure"]["summary"]["success_count"], 1)
+        self.assertIn("runtime_partial_failure_status: `completed`", combined)
         self.assertIn("ragflow_grounded_qa_evidence_map_report_v1", results[3].stdout)
         self.assertIn("ragflow_segment_metadata_report_v1", results[4].stdout)
         self.assertIn("ragflow_suppression_report_v1", results[5].stdout)

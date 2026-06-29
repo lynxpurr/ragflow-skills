@@ -25,8 +25,8 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
         self.assertEqual(
             report["summary"]["status_counts"],
             {
-                "candidate": 7,
-                "covered": 12,
+                "candidate": 6,
+                "covered": 13,
                 "deferred": 2,
                 "not_applicable": 58,
             },
@@ -71,6 +71,10 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
         self.assertEqual(snapshot["status"], "covered")
         self.assertEqual(snapshot["features"], ["partial_failure"])
 
+        qa_validate = by_command["ragflow-kb-build qa validate"]
+        self.assertEqual(qa_validate["status"], "covered")
+        self.assertEqual(qa_validate["features"], ["partial_failure"])
+
         live_build = by_command["ragflow-kb-build"]
         self.assertEqual(live_build["status"], "deferred")
         self.assertIn("retry", live_build["features"])
@@ -89,7 +93,7 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
 
         self.assertIn("# RAGFlow Runtime Resilience Inventory", text)
         self.assertIn("`ragflow-query endpoint-report`", text)
-        self.assertIn("candidate: `7`", text)
+        self.assertIn("candidate: `6`", text)
         self.assertIn("`checkpoint_resume`: `8`", text)
 
 

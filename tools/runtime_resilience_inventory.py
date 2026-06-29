@@ -68,6 +68,12 @@ _COVERED = {
         rationale="Retrieval validation emits partial-failure reports for passed, semantic-warning, error, and timeout query outcomes.",
         next_action="Evaluate checkpoint/resume later for very large benchmark validation runs.",
     ),
+    "ragflow-kb-build qa validate": RuntimeClassification(
+        status="covered",
+        features=("partial_failure",),
+        rationale="Offline grounded-QA validation emits partial-failure reports for validated, invalid, warning, and skipped source-check rows.",
+        next_action="Keep validation local and deterministic; consider evidence-map partial-failure coverage next.",
+    ),
     "ragflow-kb-build benchmark import": RuntimeClassification(
         status="covered",
         features=("checkpoint_resume",),
@@ -136,12 +142,6 @@ _CANDIDATES = {
         features=("checkpoint_resume", "partial_failure"),
         rationale="Evidence mapping over snapshots is offline and can report partial mapped/unmapped item outcomes.",
         next_action="Use saved chunk snapshots and fixture qrels only.",
-    ),
-    "ragflow-kb-build qa validate": RuntimeClassification(
-        status="candidate",
-        features=("partial_failure",),
-        rationale="Offline QA validation can expose malformed, skipped, and partially validated fixture rows.",
-        next_action="Keep validation local and deterministic.",
     ),
 }
 
