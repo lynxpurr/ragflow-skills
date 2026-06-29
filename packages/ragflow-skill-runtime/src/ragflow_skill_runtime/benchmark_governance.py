@@ -589,6 +589,18 @@ def _qa_validate_runtime_partial_failure_report(items: list[dict[str, Any]]) -> 
     )
 
 
+def _qa_evidence_map_runtime_partial_failure_report(items: list[dict[str, Any]]) -> dict[str, Any]:
+    return build_runtime_partial_failure_report(
+        "ragflow-kb-build qa map-evidence",
+        items,
+        success_statuses=("mapped",),
+        warning_statuses=("mapped_with_warnings",),
+        failure_statuses=("invalid", "partially_mapped", "unmapped"),
+        skipped_statuses=(),
+        timeout_statuses=(),
+    )
+
+
 def validate_grounded_qa(
     *,
     qa_path: str | Path,
@@ -893,6 +905,7 @@ def map_grounded_qa_evidence(
     mapped_expected_chunks: set[str] = set()
     item_error_ids: set[str] = set()
     mapped_items: list[dict[str, Any]] = []
+    runtime_items: list[dict[str, Any]] = []
 
     if not chunks:
         issues.append(
@@ -918,17 +931,20 @@ def map_grounded_qa_evidence(
         if not isinstance(raw_item, Mapping):
             item_id = f"item-{item_index + 1}"
             item_error_ids.add(item_id)
+            runtime_items.append({"label": item_id, "status": "invalid"})
             issues.append(
                 BenchmarkGovernanceIssue("error", "qa_item_invalid", "qa item must be a JSON object", field_prefix)
             )
             continue
 
         item_id = _qa_item_identifier(raw_item, item_index)
+        issue_start = len(issues)
         evidence_items = _qa_evidence_items(raw_item)
         item_expected_chunks: set[str] = set()
         item_confidence_sum = 0.0
         item_span_count = 0
         item_mapped_span_count = 0
+        item_unmapped_span_count = 0
         evidence_mappings: list[dict[str, Any]] = []
         if not evidence_items:
             item_error_ids.add(item_id)
@@ -1009,6 +1025,7 @@ def map_grounded_qa_evidence(
                         "Regenerate the chunk snapshot with content, check chunk boundaries, or refresh the QA evidence.",
                     )
                 )
+                item_unmapped_span_count += 1
 
             evidence_mappings.append(
                 {
@@ -1041,6 +1058,22 @@ def map_grounded_qa_evidence(
             }
         )
 
+        item_issues = issues[issue_start:]
+        if any(issue.severity == "error" for issue in item_issues):
+            if item_mapped_span_count > 0 and item_unmapped_span_count > 0:
+                status = "partially_mapped"
+            elif item_unmapped_span_count > 0:
+                status = "unmapped"
+            else:
+                status = "invalid"
+        elif any(issue.severity == "warning" for issue in item_issues):
+            status = "mapped_with_warnings"
+        elif item_span_count > 0 and item_mapped_span_count == item_span_count:
+            status = "mapped"
+        else:
+            status = "invalid"
+        runtime_items.append({"label": item_id, "status": status})
+
     summary = {
         **_issue_counts(issues),
         "item_count": len(raw_items),
@@ -1055,6 +1088,18 @@ def map_grounded_qa_evidence(
         "mapped_chunk_count": len(mapped_expected_chunks),
         "mapped_chunk_coverage": _rate(len(mapped_expected_chunks), len(chunks)),
         "chunk_count": len(chunks),
+    }
+    if not runtime_items and issues:
+        runtime_items.append({"label": "items", "status": "invalid"})
+    runtime_partial_failure = _qa_evidence_map_runtime_partial_failure_report(runtime_items)
+    runtime_partial_summary = runtime_partial_failure["summary"]
+    report_summary = {
+        **summary,
+        "runtime_partial_failure_status": runtime_partial_summary["status"],
+        "runtime_warning_count": runtime_partial_summary["warning_count"],
+        "runtime_failure_count": runtime_partial_summary["failure_count"],
+        "runtime_timeout_count": runtime_partial_summary["timeout_count"],
+        "runtime_skipped_count": runtime_partial_summary["skipped_count"],
     }
     artifact = {
         "schema": GROUNDED_QA_EVIDENCE_MAP_SCHEMA,
@@ -1076,7 +1121,8 @@ def map_grounded_qa_evidence(
             "chunk_snapshot": str(chunk_snapshot_path),
             "output": str(output_path),
         },
-        "summary": summary,
+        "summary": report_summary,
+        "runtime_partial_failure": runtime_partial_failure,
         "issues": [issue.to_dict() for issue in issues],
     }
 

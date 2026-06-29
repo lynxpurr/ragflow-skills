@@ -398,6 +398,9 @@ class BenchmarkGovernanceTests(unittest.TestCase):
 
         self.assertEqual(report["schema"], GROUNDED_QA_EVIDENCE_MAP_REPORT_SCHEMA)
         self.assertTrue(report["ok"], report["issues"])
+        self.assertEqual(report["summary"]["runtime_partial_failure_status"], "completed")
+        self.assertEqual(report["runtime_partial_failure"]["schema"], "ragflow_runtime_partial_failure_report_v1")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["success_count"], 1)
         self.assertEqual(evidence_map["schema"], GROUNDED_QA_EVIDENCE_MAP_SCHEMA)
         self.assertEqual(evidence_map["summary"]["mapped_span_count"], 1)
         self.assertEqual(evidence_map["summary"]["evidence_mapping_coverage"], 1.0)
@@ -449,8 +452,110 @@ class BenchmarkGovernanceTests(unittest.TestCase):
 
         self.assertFalse(report["ok"])
         self.assertEqual(report["summary"]["unmapped_span_count"], 1)
+        self.assertEqual(report["summary"]["runtime_partial_failure_status"], "failed")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["failure_count"], 1)
+        self.assertEqual(report["runtime_partial_failure"]["status_counts"]["unmapped"], 1)
         self.assertEqual(report["summary"]["evidence_mapping_confidence"], 0.0)
         self.assertEqual(report["issues"][0]["code"], "evidence_span_unmapped")
+
+    def test_map_grounded_qa_evidence_runtime_partial_failure_reports_mixed_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snapshot = root / "chunk_snapshot.json"
+            qa = root / "qa.json"
+            output = root / "qa_evidence_map.json"
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "chunks": [
+                            {
+                                "id": "chunk-1",
+                                "stable_hash": "sha256:" + "b" * 64,
+                                "content": "The mapped sentence is available.",
+                                "document_name": "source.md",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            qa.write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "id": "mapped",
+                                "question": "What maps?",
+                                "answer": "The mapped sentence.",
+                                "evidence": [{"document": "source.md", "text": "The mapped sentence is available."}],
+                            },
+                            {
+                                "id": "unmapped",
+                                "question": "What does not map?",
+                                "answer": "The absent sentence.",
+                                "evidence": [{"document": "source.md", "text": "The absent sentence is unavailable."}],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = map_grounded_qa_evidence(qa_path=qa, chunk_snapshot_path=snapshot, output_path=output)
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["status"], "partial")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["success_count"], 1)
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["failure_count"], 1)
+        self.assertEqual(report["runtime_partial_failure"]["status_counts"]["mapped"], 1)
+        self.assertEqual(report["runtime_partial_failure"]["status_counts"]["unmapped"], 1)
+
+    def test_map_grounded_qa_evidence_runtime_partial_failure_reports_warning_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snapshot = root / "chunk_snapshot.json"
+            qa = root / "qa.json"
+            output = root / "qa_evidence_map.json"
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "chunks": [
+                            {
+                                "id": "chunk-1",
+                                "stable_hash": "sha256:" + "c" * 64,
+                                "content": "The mapped sentence is available.",
+                                "document_name": "other.md",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            qa.write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "id": "warning",
+                                "question": "What maps elsewhere?",
+                                "answer": "The mapped sentence.",
+                                "evidence": [{"document": "source.md", "text": "The mapped sentence is available."}],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = map_grounded_qa_evidence(qa_path=qa, chunk_snapshot_path=snapshot, output_path=output)
+
+        self.assertTrue(report["ok"], report["issues"])
+        self.assertEqual(report["issues"][0]["code"], "evidence_document_unmatched")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["status"], "completed_with_warnings")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["warning_count"], 1)
+        self.assertEqual(report["runtime_partial_failure"]["status_counts"]["mapped_with_warnings"], 1)
 
     def test_sample_benchmark_dataset_is_deterministic_and_filters_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

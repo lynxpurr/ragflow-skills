@@ -74,6 +74,12 @@ _COVERED = {
         rationale="Offline grounded-QA validation emits partial-failure reports for validated, invalid, warning, and skipped source-check rows.",
         next_action="Keep validation local and deterministic; consider evidence-map partial-failure coverage next.",
     ),
+    "ragflow-kb-build qa map-evidence": RuntimeClassification(
+        status="covered",
+        features=("partial_failure",),
+        rationale="Offline grounded-QA evidence mapping emits partial-failure reports for mapped, unmapped, partially mapped, invalid, and warning rows.",
+        next_action="Evaluate checkpoint/resume later if large evidence-map inputs need resumable batching.",
+    ),
     "ragflow-kb-build benchmark import": RuntimeClassification(
         status="covered",
         features=("checkpoint_resume",),
@@ -136,12 +142,6 @@ _CANDIDATES = {
         features=("checkpoint_resume",),
         rationale="Deterministic, script-owned QA generation over snapshots can be batched and resumed without LLM calls.",
         next_action="Keep generation deterministic; do not add script-owned LLM QA.",
-    ),
-    "ragflow-kb-build qa map-evidence": RuntimeClassification(
-        status="candidate",
-        features=("checkpoint_resume", "partial_failure"),
-        rationale="Evidence mapping over snapshots is offline and can report partial mapped/unmapped item outcomes.",
-        next_action="Use saved chunk snapshots and fixture qrels only.",
     ),
 }
 
