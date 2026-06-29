@@ -1619,6 +1619,8 @@ def _endpoint_report(args: argparse.Namespace) -> int:
             network_check=args.network_check,
             timeout=timeout,
             verify_ssl=True if runtime.verify_ssl is None else bool(runtime.verify_ssl),
+            retry_budget=args.retry_budget if args.retry_budget is not None else 1,
+            retry_backoff_seconds=args.retry_backoff_seconds,
         )
         report, redaction_report = _sanitize_endpoint_report(report, args, runtime, endpoints)
     except (ConfigError, ValueError) as exc:
@@ -1936,6 +1938,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run redacted HEAD reachability checks; disabled by default",
     )
     endpoint_report.add_argument("--timeout", type=float, help="Reachability timeout in seconds")
+    endpoint_report.add_argument(
+        "--retry-budget",
+        type=int,
+        help="Total reachability attempts per endpoint when --network-check is enabled; defaults to 1",
+    )
+    endpoint_report.add_argument(
+        "--retry-backoff-seconds",
+        type=float,
+        default=0.0,
+        help="Initial retry backoff in seconds for --network-check; defaults to 0",
+    )
     endpoint_report.add_argument("--report-json", help="Optional JSON report output path")
     endpoint_report.add_argument("--report-md", help="Optional Markdown report output path")
     endpoint_report.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")

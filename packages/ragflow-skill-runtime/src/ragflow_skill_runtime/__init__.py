@@ -300,6 +300,13 @@ from .runtime_metrics import (
     build_runtime_metrics_summary,
     latency_summary_ms,
 )
+from .runtime_resilience import (
+    DEFAULT_RETRYABLE_STATUSES,
+    RUNTIME_RETRY_TRACE_SCHEMA,
+    RuntimeRetryPolicy,
+    RuntimeRetryResult,
+    run_with_retry,
+)
 from .kb_build import (
     BuildDocument,
     BuildError,
@@ -529,6 +536,7 @@ __all__ = [
     "DEFAULT_MIN_EVIDENCE_SCORE",
     "DEFAULT_MIN_RETRIEVAL_SIMILARITY",
     "DEFAULT_MODEL_PROVIDER_ENDPOINTS",
+    "DEFAULT_RETRYABLE_STATUSES",
     "DEFAULT_SESSION_MAX_TOKENS",
     "DEFAULT_SESSION_MAX_TURNS",
     "CANDIDATE_PROFILE_SET_SCHEMA",
@@ -561,6 +569,7 @@ __all__ = [
     "RETRIEVAL_STATUS_VALUES",
     "REPORT_REDACTION_REPORT_SCHEMA",
     "RUNTIME_METRICS_SCHEMA",
+    "RUNTIME_RETRY_TRACE_SCHEMA",
     "METADATA_LINT_REPORT_SCHEMA",
     "METADATA_MERGE_REPORT_SCHEMA",
     "MODEL_PROVIDER_PROBE_REPORT_SCHEMA",
@@ -590,6 +599,8 @@ __all__ = [
     "RoutingConfig",
     "RoutingError",
     "RoutingKnowledgeBase",
+    "RuntimeRetryPolicy",
+    "RuntimeRetryResult",
     "TRACE_SCHEMA",
     "TopologyError",
     "SAFE_METADATA_FIELDS",
@@ -772,6 +783,7 @@ __all__ = [
     "render_route_test_markdown",
     "render_route_report_markdown",
     "run_retrieval_validation",
+    "run_with_retry",
     "run_fusion_tests",
     "run_query_fallback_tests",
     "route_question",

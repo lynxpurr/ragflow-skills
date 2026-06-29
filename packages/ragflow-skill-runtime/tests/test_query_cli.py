@@ -119,6 +119,10 @@ class QueryCliTests(unittest.TestCase):
                         "secret-key",
                         "--endpoint",
                         "vpn=http://100.64.10.20:8080/v1?token=fake-secret",
+                        "--retry-budget",
+                        "2",
+                        "--retry-backoff-seconds",
+                        "0",
                         "--report-json",
                         str(report_json),
                         "--report-md",
@@ -144,6 +148,9 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(file_payload["runtime_metrics"]["schema"], "ragflow_runtime_metrics_v1")
         self.assertEqual(payload["runtime_metrics"]["counters"]["endpoint_count"], 2)
         self.assertEqual(payload["runtime_metrics"]["latency_ms"]["sample_count"], 0)
+        self.assertEqual(payload["retry_policy"]["retry_budget"], 2)
+        self.assertEqual(payload["summary"]["network_attempt_count"], 0)
+        self.assertEqual(payload["summary"]["retry_count"], 0)
         self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
         self.assertGreaterEqual(redaction_payload["target_counts"]["explicit_secrets"], 1)
         self.assertGreaterEqual(redaction_payload["target_counts"]["private_hosts"], 1)
@@ -151,6 +158,8 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(payload["endpoints"][1]["endpoint"]["network_zone"], "vpn")
         self.assertIn("RAGFlow Query Endpoint Report", markdown)
         self.assertIn("latency_samples: `0`", markdown)
+        self.assertIn("retry_budget: `2`", markdown)
+        self.assertIn("retry_count: `0`", markdown)
         self.assertIn("<lan-host>", combined)
         self.assertIn("<vpn-host>", combined)
         self.assertNotIn("192.168.10.20", combined)

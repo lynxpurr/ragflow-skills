@@ -3474,6 +3474,36 @@ raise SystemExit(code)
             "error": endpoint_metrics_error,
         }
     )
+    endpoint_retry_ok = endpoint_report_json.exists()
+    endpoint_retry_error = ""
+    if endpoint_retry_ok:
+        try:
+            endpoint_payload = json.loads(endpoint_report_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            endpoint_retry_ok = False
+            endpoint_retry_error = f"invalid endpoint report JSON: {exc}"
+        else:
+            endpoint_retry = endpoint_payload.get("retry_policy")
+            endpoint_summary = endpoint_payload.get("summary")
+            endpoint_retry_ok = (
+                isinstance(endpoint_retry, dict)
+                and endpoint_retry.get("retry_budget") == 1
+                and isinstance(endpoint_summary, dict)
+                and endpoint_summary.get("network_attempt_count") == 0
+                and endpoint_summary.get("retry_count") == 0
+            )
+            if not endpoint_retry_ok:
+                endpoint_retry_error = "missing endpoint retry policy summary"
+    else:
+        endpoint_retry_error = f"missing {endpoint_report_json}"
+    checks.append(
+        {
+            "name": "query endpoint-report retry policy",
+            "ok": endpoint_retry_ok,
+            "path": str(endpoint_report_json),
+            "error": endpoint_retry_error,
+        }
+    )
     for path in (endpoint_report_json, endpoint_report_md, endpoint_redaction_json):
         if path.exists():
             produced.append(path)

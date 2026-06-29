@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ragflow_skill_runtime import (
     RUNTIME_METRICS_SCHEMA,
+    RUNTIME_RETRY_TRACE_SCHEMA,
     build_query_endpoint_report,
     classify_endpoint_host,
     render_query_endpoint_report_markdown,
@@ -16,10 +17,15 @@ from ragflow_skill_runtime import (
 
 class EndpointReportHandler(BaseHTTPRequestHandler):
     authorization = None
+    request_count = 0
+    statuses = [200]
 
     def do_HEAD(self) -> None:  # noqa: N802
         EndpointReportHandler.authorization = self.headers.get("Authorization")
-        self.send_response(200)
+        status_index = min(EndpointReportHandler.request_count, len(EndpointReportHandler.statuses) - 1)
+        status = EndpointReportHandler.statuses[status_index]
+        EndpointReportHandler.request_count += 1
+        self.send_response(status)
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -28,8 +34,10 @@ class EndpointReportHandler(BaseHTTPRequestHandler):
 
 
 @contextlib.contextmanager
-def endpoint_report_server():
+def endpoint_report_server(statuses=None):
     EndpointReportHandler.authorization = None
+    EndpointReportHandler.request_count = 0
+    EndpointReportHandler.statuses = list(statuses or [200])
     server = ThreadingHTTPServer(("127.0.0.1", 0), EndpointReportHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -97,9 +105,61 @@ class QueryEndpointReportTests(unittest.TestCase):
         self.assertEqual(report["runtime_metrics"]["counters"]["status_reachable"], 1)
         self.assertEqual(report["runtime_metrics"]["latency_ms"]["sample_count"], 1)
         self.assertIsNotNone(report["runtime_metrics"]["latency_ms"]["p95"])
+        self.assertEqual(report["retry_policy"]["retry_budget"], 1)
+        self.assertEqual(report["summary"]["network_attempt_count"], 1)
+        self.assertEqual(report["summary"]["retry_count"], 0)
+        self.assertEqual(report["endpoints"][0]["retry_trace"]["schema"], RUNTIME_RETRY_TRACE_SCHEMA)
+        self.assertEqual(report["endpoints"][0]["retry_trace"]["attempt_count"], 1)
+        self.assertEqual(report["endpoints"][0]["retry_trace"]["retry_count"], 0)
         self.assertEqual(EndpointReportHandler.authorization, "Bearer query-test-key")
         self.assertNotIn("query-test-key", serialized)
         self.assertNotIn(base_url, serialized)
+
+    def test_endpoint_report_default_retry_budget_preserves_single_attempt(self) -> None:
+        with endpoint_report_server(statuses=[500, 200]) as base_url:
+            report = build_query_endpoint_report(
+                ragflow_base_url=f"{base_url}/api/v1",
+                network_check=True,
+                timeout=2.0,
+            )
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["status_counts"]["error"], 1)
+        self.assertEqual(report["summary"]["network_attempt_count"], 1)
+        self.assertEqual(report["summary"]["retry_count"], 0)
+        self.assertEqual(EndpointReportHandler.request_count, 1)
+        trace = report["endpoints"][0]["retry_trace"]
+        self.assertEqual(trace["schema"], RUNTIME_RETRY_TRACE_SCHEMA)
+        self.assertEqual(trace["retry_budget"], 1)
+        self.assertEqual(trace["attempt_count"], 1)
+        self.assertEqual(trace["retry_count"], 0)
+        self.assertEqual(trace["final_status"], "error")
+        self.assertTrue(trace["budget_exhausted"])
+
+    def test_endpoint_report_retries_retryable_status_with_explicit_budget(self) -> None:
+        with endpoint_report_server(statuses=[500, 200]) as base_url:
+            report = build_query_endpoint_report(
+                ragflow_base_url=f"{base_url}/api/v1",
+                network_check=True,
+                timeout=2.0,
+                retry_budget=2,
+                retry_backoff_seconds=0.0,
+            )
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["status_counts"]["reachable"], 1)
+        self.assertEqual(report["summary"]["network_attempt_count"], 2)
+        self.assertEqual(report["summary"]["retry_count"], 1)
+        self.assertEqual(EndpointReportHandler.request_count, 2)
+        self.assertEqual(report["runtime_metrics"]["counters"]["network_attempt_count"], 2)
+        self.assertEqual(report["runtime_metrics"]["counters"]["retry_count"], 1)
+        trace = report["endpoints"][0]["retry_trace"]
+        self.assertEqual(trace["retry_budget"], 2)
+        self.assertEqual(trace["attempt_count"], 2)
+        self.assertEqual(trace["retry_count"], 1)
+        self.assertEqual(trace["final_status"], "reachable")
+        self.assertFalse(trace["budget_exhausted"])
+        self.assertEqual([attempt["status"] for attempt in trace["attempts"]], ["error", "reachable"])
 
     def test_endpoint_report_invalid_url_is_error(self) -> None:
         report = build_query_endpoint_report(ragflow_base_url="ftp://ragflow.example.test")

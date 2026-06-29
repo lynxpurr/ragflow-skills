@@ -1017,7 +1017,7 @@ Tasks:
 - [x] Add `ragflow-query endpoint-report` for local/LAN/VPN/HTTPS endpoint classification and redacted reachability summaries.
 - [x] Add `ragflow-query fallback-test`.
 - [x] Cover LLM unavailable, malformed LLM JSON, network timeout, partial failure, direct retrieval fallback, and fallback metrics.
-- [ ] Add retry/backoff policy helpers with retry budgets recorded in traces.
+- [x] Add retry/backoff policy helpers with retry budgets recorded in traces.
 - [ ] Add token-bucket rate limiter for RAGFlow and optional LLM calls.
 - [ ] Add circuit-breaker state for repeated service failures during a run.
 - [ ] Add read-only cache helpers for list/probe operations.
@@ -1080,7 +1080,9 @@ Recommended next slices:
 2. Add the smallest shared retry/backoff and metrics helpers first, recording retry budgets
    and latency summaries in traces or reports where those helpers are used.
 3. `ragflow-query endpoint-report` now pilots the shared `ragflow_runtime_metrics_v1`
-   metrics helper with counters, gauges, and deterministic latency p50/p95/p99 summaries.
+   metrics helper with counters, gauges, and deterministic latency p50/p95/p99 summaries,
+   plus the opt-in `ragflow_runtime_retry_trace_v1` helper for bounded reachability
+   retries.
 4. Defer broader rate limiting, circuit breakers, cache invalidation, checkpoint/resume,
    and partial-failure schemas until at least one narrow report or probe command consumes
    the helper with deterministic tests.
@@ -1277,7 +1279,7 @@ Tasks:
   not from the raw pre-redaction report.
 - [x] Add consumer acceptance or platform smoke coverage for at least one newly redacted
   non-query report family with fake secrets, fake endpoints, and fake host paths.
-- [ ] Add a minimal retry/backoff helper with an explicit retry budget and deterministic
+- [x] Add a minimal retry/backoff helper with an explicit retry budget and deterministic
   tests in one read-only probe or report command.
 - [x] Add a minimal metrics summary helper for counters and latency samples in one
   read-only probe or report command.
@@ -1356,11 +1358,11 @@ Consumer acceptance now verifies newly redacted non-query fake-sensitive fixture
 platform smoke retains doc-to-md conversion, backend warmup, and KB metadata/tagset plus
 topology/activation, optimization, benchmark lifecycle, validation/diagnostic, profile,
 snapshot/QA/enrichment, and append/cleanup redaction sidecars as artifacts.
-The `ragflow-query endpoint-report` command now pilots a shared
-`ragflow_runtime_metrics_v1` helper for counters, gauges, and deterministic latency
-p50/p95/p99 summaries. The next recommended Phase 36 task is either the final generated
-Markdown audit or an opt-in retry/backoff helper with an explicit retry budget in the same
-read-only command.
+The `ragflow-query endpoint-report` command now pilots shared runtime helpers:
+`ragflow_runtime_metrics_v1` for counters, gauges, and deterministic latency p50/p95/p99
+summaries, and `ragflow_runtime_retry_trace_v1` for opt-in bounded reachability retries
+with explicit retry budget, attempt count, retry count, and final status. The next
+recommended Phase 36 task is the final generated Markdown audit.
 
 Near-term task list:
 
@@ -1372,9 +1374,9 @@ Near-term task list:
   metrics using no-network CLI and fake HTTP-server cases.
 - [x] Decide whether the same pilot should add opt-in retry/backoff in this slice or in the
   next slice; preserve current behavior with a default single attempt.
-- [ ] If retry/backoff is included, record retry budget, attempt count, retry count, and
+- [x] If retry/backoff is included, record retry budget, attempt count, retry count, and
   final status in the emitted report without adding live RAGFlow mutation.
-- [ ] Keep consumer acceptance and platform smoke changes scoped to schema or CLI-surface
+- [x] Keep consumer acceptance and platform smoke changes scoped to schema or CLI-surface
   changes from the helper pilot.
 - [ ] Run a final generated-Markdown audit before marking the sanitized Markdown umbrella
   task complete.

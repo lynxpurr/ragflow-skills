@@ -13,6 +13,7 @@ from urllib import error, request
 from urllib.parse import urlparse
 
 from .runtime_metrics import RuntimeMetrics
+from .runtime_resilience import RuntimeRetryPolicy, run_with_retry
 
 
 QUERY_ENDPOINT_REPORT_SCHEMA = "ragflow_query_endpoint_report_v1"
@@ -230,6 +231,7 @@ def _endpoint_report_entry(
     network_check: bool,
     timeout: float,
     verify_ssl: bool,
+    retry_policy: RuntimeRetryPolicy,
 ) -> dict[str, Any]:
     summary = endpoint_url_summary(url)
     checks: list[dict[str, Any]] = [
@@ -273,12 +275,17 @@ def _endpoint_report_entry(
         }
 
     started = time.monotonic()
-    status, reason, http_status = _network_probe(
-        str(url),
-        api_key=api_key,
-        timeout=timeout,
-        verify_ssl=verify_ssl,
+    probe = run_with_retry(
+        lambda: _network_probe(
+            str(url),
+            api_key=api_key,
+            timeout=timeout,
+            verify_ssl=verify_ssl,
+        ),
+        status_getter=lambda result: str(result[0]),
+        policy=retry_policy,
     )
+    status, reason, http_status = probe.result
     checks.append({"name": "network_check", "ok": status in {"reachable", "unauthorized"}})
     entry: dict[str, Any] = {
         "label": label,
@@ -288,6 +295,7 @@ def _endpoint_report_entry(
         "api_key_configured": bool(api_key_configured),
         "checks": checks,
         "latency_ms": round((time.monotonic() - started) * 1000, 3),
+        "retry_trace": probe.trace,
         "reason": reason,
     }
     if http_status is not None:
@@ -365,11 +373,17 @@ def build_query_endpoint_report(
     network_check: bool = False,
     timeout: float = 5.0,
     verify_ssl: bool = True,
+    retry_budget: int = 1,
+    retry_backoff_seconds: float = 0.0,
 ) -> dict[str, Any]:
     """Build a redaction-safe endpoint report for query workflows."""
 
     if timeout <= 0:
         raise ValueError("endpoint report timeout must be greater than zero")
+    retry_policy = RuntimeRetryPolicy(
+        retry_budget=retry_budget,
+        backoff_seconds=retry_backoff_seconds,
+    )
 
     specs = [
         {
@@ -402,6 +416,7 @@ def build_query_endpoint_report(
             network_check=network_check,
             timeout=timeout,
             verify_ssl=verify_ssl,
+            retry_policy=retry_policy,
         )
         for spec in specs
     ]
@@ -423,10 +438,18 @@ def build_query_endpoint_report(
     issues = [issue for issue in (_issue_for_entry(entry) for entry in endpoints) if issue]
     error_count = sum(1 for issue in issues if issue.get("severity") == "error")
     warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
+    network_attempt_count = 0
+    retry_count = 0
+    for entry in endpoints:
+        retry_trace = entry.get("retry_trace") if isinstance(entry.get("retry_trace"), Mapping) else {}
+        network_attempt_count += int(retry_trace.get("attempt_count", 0) or 0)
+        retry_count += int(retry_trace.get("retry_count", 0) or 0)
     runtime_metrics = RuntimeMetrics(operation=QUERY_ENDPOINT_REPORT_SCHEMA)
     runtime_metrics.increment_counter("endpoint_count", len(endpoints))
     runtime_metrics.increment_counter("configured_endpoint_count", configured_count)
     runtime_metrics.increment_counter("checked_endpoint_count", len(endpoints) if network_check else 0)
+    runtime_metrics.increment_counter("network_attempt_count", network_attempt_count)
+    runtime_metrics.increment_counter("retry_count", retry_count)
     runtime_metrics.increment_counter("reachable_endpoint_count", status_counts.get("reachable", 0))
     runtime_metrics.increment_counter("warning_count", warning_count)
     runtime_metrics.increment_counter("error_count", error_count)
@@ -449,12 +472,15 @@ def build_query_endpoint_report(
         "network_check": bool(network_check),
         "timeout_seconds": timeout,
         "verify_ssl": bool(verify_ssl),
+        "retry_policy": retry_policy.to_report(),
         "allowed_statuses": list(QUERY_ENDPOINT_REACHABILITY_STATUSES),
         "summary": {
             "endpoint_count": len(endpoints),
             "configured_endpoint_count": configured_count,
             "https_endpoint_count": https_count,
             "checked_endpoint_count": len(endpoints) if network_check else 0,
+            "network_attempt_count": network_attempt_count,
+            "retry_count": retry_count,
             "reachable_endpoint_count": status_counts.get("reachable", 0),
             "warning_count": warning_count,
             "error_count": error_count,
@@ -471,6 +497,7 @@ def render_query_endpoint_report_markdown(report: Mapping[str, Any]) -> str:
     """Render a compact Markdown endpoint report."""
 
     summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    retry_policy = report.get("retry_policy") if isinstance(report.get("retry_policy"), Mapping) else {}
     runtime_metrics = report.get("runtime_metrics") if isinstance(report.get("runtime_metrics"), Mapping) else {}
     latency = runtime_metrics.get("latency_ms") if isinstance(runtime_metrics.get("latency_ms"), Mapping) else {}
     lines = [
@@ -483,6 +510,8 @@ def render_query_endpoint_report_markdown(report: Mapping[str, Any]) -> str:
         f"- configured: `{summary.get('configured_endpoint_count', 0)}`",
         f"- https: `{summary.get('https_endpoint_count', 0)}`",
         f"- reachable: `{summary.get('reachable_endpoint_count', 0)}`",
+        f"- retry_budget: `{retry_policy.get('retry_budget', 1)}`",
+        f"- retry_count: `{summary.get('retry_count', 0)}`",
     ]
     if runtime_metrics:
         p95 = latency.get("p95")
