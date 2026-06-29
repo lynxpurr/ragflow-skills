@@ -1021,8 +1021,8 @@ Tasks:
 - [x] Add token-bucket rate limiter for RAGFlow and optional LLM calls.
 - [x] Add circuit-breaker state for repeated service failures during a run.
 - [x] Add read-only cache helpers for list/probe operations.
-- [ ] Add cache keys that include query text, dataset IDs, route/rewrite/fusion params, top-k, threshold, and relevant config version.
-- [ ] Add cache stats and invalidation reports.
+- [x] Add query-output cache-key reports that include query text, dataset IDs, route/rewrite/fusion params, top-k, threshold, and relevant config version.
+- [ ] Add cache stats and invalidation reports for actual query-output cache stores.
 - [x] Add metrics collector for counters, gauges, and latency histograms with p50/p95/p99 summaries.
 - [ ] Add checkpoint/resume helpers for bounded long-running jobs such as centroid build, benchmark import, optimize, and report generation.
 - [ ] Add partial-failure report schemas for timeout, partial, and skipped profiles.
@@ -1051,11 +1051,12 @@ Status note: `--redaction-report` currently covers `ragflow-query endpoint-repor
 `ragflow-query evaluate-answer`, `ragflow-query diagnose-result`,
 `ragflow-query pollution-report`, `ragflow-query rerank-ab`,
 `ragflow-query cross-language-ab`, `ragflow-query fusion`, `ragflow-query fusion-test`,
-`ragflow-query route-test`, `ragflow-query route-report`, `ragflow-query route-diagnose`,
-`ragflow-query route-activation-check`, `ragflow-query assistant-profile recommend`,
-`ragflow-query assistant-test-plan`, `ragflow-query rewrite`, `ragflow-query intent classify`,
-`ragflow-query intent route`, `ragflow-query session inspect`, `ragflow-query session enrich`,
-`ragflow-query agentic-plan`, `ragflow-query audit-citations`, `ragflow-query fallback-test`,
+`ragflow-query cache-report`, `ragflow-query route-test`, `ragflow-query route-report`,
+`ragflow-query route-diagnose`, `ragflow-query route-activation-check`,
+`ragflow-query assistant-profile recommend`, `ragflow-query assistant-test-plan`,
+`ragflow-query rewrite`, `ragflow-query intent classify`, `ragflow-query intent route`,
+`ragflow-query session inspect`, `ragflow-query session enrich`, `ragflow-query agentic-plan`,
+`ragflow-query audit-citations`, `ragflow-query fallback-test`,
 `ragflow-query centroid build --plan-only`, `ragflow-query centroid build`,
 `ragflow-kb-build model-providers probe`, `ragflow-kb-build parse-report`,
 `ragflow-kb-build health-report`, `ragflow-kb-build metadata lint`,
@@ -1084,7 +1085,7 @@ Recommended next slices:
    `ragflow_runtime_rate_limit_report_v1` token-bucket rate limiting for explicit
    reachability attempts and `ragflow_runtime_circuit_breaker_report_v1` per-run
    circuit-breaker summaries for repeated reachability failures.
-3. Keep broader cache keys for retrieval/query outputs, explicit invalidation reports,
+3. Keep actual query-output cache stores, cache statistics, active invalidation execution,
    checkpoint/resume, and partial-failure schemas as the next Phase 31 resilience work.
 
 Exit criteria:
@@ -1289,7 +1290,7 @@ Tasks:
 Status note: `tools/report_surface_inventory.py` now emits
 `ragflow_report_surface_inventory_v1`, dynamically enumerates public argparse command
 leaves, and overlays an explicit Phase 36 classification. The verified inventory currently
-names 78 public commands: 69 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with
+names 79 public commands: 70 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with
 no uncatalogued or stale classification findings. Generated-report redaction coverage is
 now closed across inventoried public command surfaces; `ragflow-doc-to-md`
 and `ragflow-query` report commands are currently classified as covered or not applicable.
@@ -1372,7 +1373,7 @@ read-only RAGFlow/LLM endpoint reachability attempts. It also emits
 short-circuit, failure, and recovery state while leaving the breaker disabled by default.
 `tools/generated_markdown_audit.py`
 now emits `ragflow_generated_markdown_audit_v1` and is
-run by release hygiene alongside generated-report safety. It audits 61 covered Markdown
+run by release hygiene alongside generated-report safety. It audits 62 covered Markdown
 report surfaces from the report-surface inventory and requires each to have explicit
 sanitized-rendering evidence, with 0 missing and 0 stale entries in the verified suite.
 Broader runtime primitives remain deferred outside Phase 36.
@@ -1395,6 +1396,8 @@ Near-term task list:
   task complete.
 - [x] Pilot a default-off circuit breaker in `ragflow-query endpoint-report`, with fake
   HTTP failure tests and release gate checks that verify no-network short-circuit counts.
+- [x] Add `ragflow-query cache-report` for offline saved query-output cache keys and
+  baseline invalidation diffs without storing or replaying query results.
 
 Exit criteria:
 

@@ -20,12 +20,12 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_report_surface_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 78)
+        self.assertEqual(report["summary"]["command_count"], 79)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
             {
-                "covered": 69,
+                "covered": 70,
                 "needs_redaction": 0,
                 "not_applicable": 9,
             },
@@ -38,6 +38,11 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
         endpoint = by_command["ragflow-query endpoint-report"]
         self.assertEqual(endpoint["status"], "covered")
         self.assertIn("redaction_sidecar", endpoint["output_categories"])
+
+        cache_report = by_command["ragflow-query cache-report"]
+        self.assertEqual(cache_report["status"], "covered")
+        self.assertIn("redaction_sidecar", cache_report["output_categories"])
+        self.assertIn("markdown_report", cache_report["output_categories"])
 
         backend_warmup = by_command["ragflow-doc-to-md backend warmup"]
         self.assertEqual(backend_warmup["status"], "covered")

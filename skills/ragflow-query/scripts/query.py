@@ -48,6 +48,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     build_centroid_plan,
     build_host_synthesis_contract,
     build_query_rewrite_plan,
+    build_query_output_cache_report,
     classify_query_intent,
     build_query_session_inspection,
     build_query_endpoint_report,
@@ -88,6 +89,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_query_fusion_markdown,
     render_query_fusion_test_markdown,
     render_query_intent_markdown,
+    render_query_output_cache_markdown,
     render_query_session_enrichment_markdown,
     render_query_session_inspection_markdown,
     render_query_diagnostic_markdown,
@@ -1535,6 +1537,57 @@ def _fusion_test(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _sanitize_query_cache_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+    baseline_report: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(baseline_report),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.baseline_report,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _cache_report(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        baseline_report = _read_json(args.baseline_report) if args.baseline_report else None
+        if baseline_report is not None and not isinstance(baseline_report, dict):
+            raise ValueError("baseline report must be a JSON object")
+        report = build_query_output_cache_report(
+            query_payload,
+            baseline_report=baseline_report,
+            config_version=args.config_version,
+            route_config_version=args.route_config_version,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_cache_report(report, args, query_payload, baseline_report)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_output_cache_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _fallback_test(args: argparse.Namespace) -> int:
     try:
         cases = load_query_fallback_test_cases(args.cases)
@@ -1921,6 +1974,17 @@ def build_parser() -> argparse.ArgumentParser:
     fusion_test.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     fusion_test.add_argument("--json", action="store_true", help="Emit JSON report")
     fusion_test.set_defaults(func=_fusion_test)
+
+    cache_report = sub.add_parser("cache-report", help="Report saved query-output cache keys and invalidation")
+    cache_report.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    cache_report.add_argument("--baseline-report", help="Previous cache-report JSON to compare for invalidation")
+    cache_report.add_argument("--config-version", help="Retrieval config version label included in cache identity")
+    cache_report.add_argument("--route-config-version", help="Route config version label included in cache identity")
+    cache_report.add_argument("--report-json", help="Optional JSON report output path")
+    cache_report.add_argument("--report-md", help="Optional Markdown report output path")
+    cache_report.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    cache_report.add_argument("--json", action="store_true", help="Emit JSON report")
+    cache_report.set_defaults(func=_cache_report)
 
     fallback_test = sub.add_parser("fallback-test", help="Run offline fallback coverage fixtures")
     fallback_test.add_argument("--cases", help="Optional fallback test cases JSON; defaults to built-in coverage")

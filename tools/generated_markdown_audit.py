@@ -62,6 +62,7 @@ SANITIZED_MARKDOWN_VERIFIED_COMMANDS = (
     "ragflow-query assistant-profile recommend",
     "ragflow-query assistant-test-plan",
     "ragflow-query audit-citations",
+    "ragflow-query cache-report",
     "ragflow-query centroid build",
     "ragflow-query cross-language-ab",
     "ragflow-query diagnose-result",

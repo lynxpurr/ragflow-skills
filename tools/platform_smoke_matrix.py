@@ -1487,6 +1487,48 @@ if fusion_test_payload.get("schema") != "ragflow_fusion_test_report_v1":
 
 stdout = StringIO()
 with contextlib.redirect_stdout(stdout):
+    cache_baseline_code = module.main([
+        "cache-report",
+        "--query-output",
+        str(rerank_query_input),
+        "--config-version",
+        "retrieval-v1",
+        "--report-json",
+        str(artifacts_dir / "query_cache_baseline.json"),
+        "--json",
+    ])
+if cache_baseline_code != 0:
+    raise SystemExit(cache_baseline_code)
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    cache_report_code = module.main([
+        "cache-report",
+        "--query-output",
+        str(rerank_query_input),
+        "--baseline-report",
+        str(artifacts_dir / "query_cache_baseline.json"),
+        "--config-version",
+        "retrieval-v2",
+        "--route-config-version",
+        "routes-v1",
+        "--report-json",
+        str(artifacts_dir / "query_cache_report.json"),
+        "--report-md",
+        str(artifacts_dir / "query_cache_report.md"),
+        "--redaction-report",
+        str(artifacts_dir / "query_cache_redaction.json"),
+        "--json",
+    ])
+if cache_report_code != 0:
+    raise SystemExit(cache_report_code)
+cache_report_payload = json.loads(stdout.getvalue())
+if cache_report_payload.get("schema") != "ragflow_query_output_cache_report_v1":
+    raise SystemExit(15)
+if cache_report_payload.get("invalidation", {{}}).get("status") != "invalidate":
+    raise SystemExit(16)
+
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
     fallback_test_code = module.main([
         "fallback-test",
         "--report-json",
@@ -1505,7 +1547,7 @@ if fallback_test_payload.get("schema") != "ragflow_query_fallback_test_report_v1
 if fallback_test_payload.get("summary", {{}}).get("covered_required_mode_count") != len(fallback_test_payload.get("required_failure_modes", [])):
     raise SystemExit(14)
 
-print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload, "pollution": pollution_payload, "rerank": rerank_payload, "cross_language": cross_language_payload, "fusion": fusion_payload, "fusion_test": fusion_test_payload, "fallback_test": fallback_test_payload}}, ensure_ascii=False))
+print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload, "pollution": pollution_payload, "rerank": rerank_payload, "cross_language": cross_language_payload, "fusion": fusion_payload, "fusion_test": fusion_test_payload, "cache_report": cache_report_payload, "fallback_test": fallback_test_payload}}, ensure_ascii=False))
 """,
         encoding="utf-8",
     )
@@ -3577,6 +3619,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_fusion_test.json",
         artifacts_dir / "query_fusion_test.md",
         artifacts_dir / "query_fusion_test_redaction.json",
+        artifacts_dir / "query_cache_baseline.json",
+        artifacts_dir / "query_cache_report.json",
+        artifacts_dir / "query_cache_report.md",
+        artifacts_dir / "query_cache_redaction.json",
         artifacts_dir / "route_test.json",
         artifacts_dir / "route_test.md",
         artifacts_dir / "route_test_redaction.json",

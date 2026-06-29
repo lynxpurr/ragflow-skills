@@ -1329,8 +1329,8 @@ breaker pilots must stay default-off, read-only, and scoped to `endpoint-report`
 Inventory implemented. `tools/report_surface_inventory.py` emits
 `ragflow_report_surface_inventory_v1`, imports the public CLI parsers offline, and fails
 the inventory when a public command lacks an explicit `covered`, `not_applicable`, or
-`needs_redaction` classification. The current verified inventory names 78 public commands:
-69 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
+`needs_redaction` classification. The current verified inventory names 79 public commands:
+70 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
 classification findings.
 
 `ragflow-kb-build parse-report` and `ragflow-kb-build health-report` now support
@@ -1452,8 +1452,17 @@ stats when `--cache-dir` is supplied, while the command keeps cache disabled by 
 Cache identity uses stable digests that can include endpoint settings and secret
 fingerprints without echoing raw URLs, API keys, cache paths, or config paths in reports.
 The pilot covers miss/write/hit/stale helper behavior, fake HTTP-server reuse, CLI option
-parsing, consumer acceptance, and platform smoke. Query-output cache keys, explicit
-invalidation reports, checkpoint/resume, and partial-failure schemas remain separate
+parsing, consumer acceptance, and platform smoke.
+
+`ragflow-query cache-report` adds the first query-output cache-key and invalidation
+surface without storing or replaying saved query results. It reads a saved `ask --json`
+payload, derives a stable cache key from the original query text, dataset IDs,
+route/rewrite/fusion parameters, top-k, similarity threshold, and explicit config version
+labels, and emits only digests plus safe summaries. When a previous cache report is
+provided, it compares field fingerprints and reports changed fields such as retrieval,
+route, rewrite, fusion, or config so host workflows can decide when a query-output cache
+entry should be invalidated. Actual query-output cache stores, cache statistics, active
+invalidation execution, checkpoint/resume, and partial-failure schemas remain separate
 Phase 31 follow-up work.
 
 The token-bucket rate limiter pilot is implemented in the same read-only endpoint-report
@@ -1468,9 +1477,9 @@ The circuit-breaker pilot is likewise scoped to `ragflow-query endpoint-report`.
 count, open count, short-circuit count, and half-open count. Cache hits still bypass live
 reachability work, while cache misses consult the per-run circuit before making a HEAD
 request. Focused tests use fake clocks and fake HTTP 500 responses to prove the breaker
-opens and short-circuits later endpoints without enabling it by default. Query-output
-cache invalidation, checkpoint/resume, and partial-failure schemas remain open Phase 31
-work.
+opens and short-circuits later endpoints without enabling it by default. Actual
+query-output cache stores, cache statistics, active invalidation execution,
+checkpoint/resume, and partial-failure schemas remain open Phase 31 work.
 
 The final generated-Markdown audit is implemented in `tools/generated_markdown_audit.py`.
 It consumes the report-surface inventory, selects covered report surfaces with generated

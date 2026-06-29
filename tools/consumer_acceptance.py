@@ -4142,6 +4142,10 @@ raise SystemExit(code)
     query_fusion_test_json = work_root / "query_fusion_test.json"
     query_fusion_test_md = work_root / "query_fusion_test.md"
     query_fusion_test_redaction = work_root / "query_fusion_test_redaction.json"
+    query_cache_baseline_json = work_root / "query_cache_baseline.json"
+    query_cache_json = work_root / "query_cache_report.json"
+    query_cache_md = work_root / "query_cache_report.md"
+    query_cache_redaction = work_root / "query_cache_redaction.json"
     query_fallback_test_json = work_root / "query_fallback_test.json"
     query_fallback_test_md = work_root / "query_fallback_test.md"
     query_fallback_test_redaction = work_root / "query_fallback_test_redaction.json"
@@ -4242,6 +4246,94 @@ raise SystemExit(code)
         ),
         encoding="utf-8",
     )
+    query_cache_baseline = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "cache-report",
+            "--query-output",
+            str(query_output),
+            "--config-version",
+            "retrieval-v1",
+            "--report-json",
+            str(query_cache_baseline_json),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query cache-report baseline",
+        query_cache_baseline,
+        required_output='"schema": "ragflow_query_output_cache_report_v1"',
+    )
+    query_cache = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "cache-report",
+            "--query-output",
+            str(query_output),
+            "--baseline-report",
+            str(query_cache_baseline_json),
+            "--config-version",
+            "retrieval-v2",
+            "--route-config-version",
+            "routes-v1",
+            "--report-json",
+            str(query_cache_json),
+            "--report-md",
+            str(query_cache_md),
+            "--redaction-report",
+            str(query_cache_redaction),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query cache-report",
+        query_cache,
+        required_output='"schema": "ragflow_query_output_cache_report_v1"',
+    )
+    query_cache_ok = query_cache_json.exists()
+    query_cache_error = ""
+    if query_cache_ok:
+        try:
+            query_cache_payload = json.loads(query_cache_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            query_cache_ok = False
+            query_cache_error = f"invalid query cache report JSON: {exc}"
+        else:
+            invalidation = query_cache_payload.get("invalidation")
+            changed_fields = invalidation.get("changed_fields") if isinstance(invalidation, dict) else []
+            query_cache_ok = (
+                query_cache_payload.get("schema") == "ragflow_query_output_cache_report_v1"
+                and isinstance(invalidation, dict)
+                and invalidation.get("status") == "invalidate"
+                and isinstance(changed_fields, list)
+                and "config" in changed_fields
+            )
+            if not query_cache_ok:
+                query_cache_error = "missing query cache invalidation summary"
+    else:
+        query_cache_error = f"missing {query_cache_json}"
+    checks.append(
+        {
+            "name": "query cache-report invalidation",
+            "ok": query_cache_ok,
+            "path": str(query_cache_json),
+            "error": query_cache_error,
+        }
+    )
+    for path in (query_cache_baseline_json, query_cache_json, query_cache_md):
+        if path.exists():
+            produced.append(path)
+    _record_file_check(checks, "query cache-report redaction", query_cache_redaction)
+    if query_cache_redaction.exists():
+        produced.append(query_cache_redaction)
     citation_audit = _run_command(
         [
             python_executable,

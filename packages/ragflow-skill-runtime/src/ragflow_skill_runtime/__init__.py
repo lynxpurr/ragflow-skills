@@ -197,6 +197,12 @@ from .query_session import (
     render_query_session_enrichment_markdown,
     render_query_session_inspection_markdown,
 )
+from .query_cache import (
+    QUERY_OUTPUT_CACHE_OPERATION,
+    QUERY_OUTPUT_CACHE_REPORT_SCHEMA,
+    build_query_output_cache_report,
+    render_query_output_cache_markdown,
+)
 from .centroid_routing import (
     CENTROID_BUILD_CHECKPOINT_SCHEMA,
     CENTROID_BUILD_PLAN_SCHEMA,
@@ -580,6 +586,8 @@ __all__ = [
     "QUERY_ENDPOINT_REPORT_SCHEMA",
     "QUERY_ENDPOINT_REACHABILITY_STATUSES",
     "QUERY_FALLBACK_TEST_REPORT_SCHEMA",
+    "QUERY_OUTPUT_CACHE_OPERATION",
+    "QUERY_OUTPUT_CACHE_REPORT_SCHEMA",
     "QUERY_POLLUTION_REPORT_SCHEMA",
     "QUERY_RERANK_AB_REPORT_SCHEMA",
     "RETRIEVAL_STATUS_SCHEMA",
@@ -642,6 +650,7 @@ __all__ = [
     "build_agentic_plan",
     "build_host_synthesis_contract",
     "build_query_endpoint_report",
+    "build_query_output_cache_report",
     "build_query_trace",
     "build_query_rewrite_plan",
     "build_runtime_metrics_summary",
@@ -780,6 +789,7 @@ __all__ = [
     "render_query_fusion_markdown",
     "render_query_fusion_test_markdown",
     "render_query_intent_markdown",
+    "render_query_output_cache_markdown",
     "render_query_session_enrichment_markdown",
     "render_query_session_inspection_markdown",
     "render_query_rewrite_markdown",

@@ -271,6 +271,105 @@ class QueryCliTests(unittest.TestCase):
         self.assertNotIn(home_path, combined)
         self.assertNotIn(str(query_output), combined)
 
+    def test_cache_report_writes_redacted_invalidation_report(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            query_output = root / "query.json"
+            baseline_json = root / "cache_baseline.json"
+            report_json = root / "cache_report.json"
+            report_md = root / "cache_report.md"
+            redaction_json = root / "cache_redaction.json"
+            private_host = ".".join(["192", "168", "77", "88"])
+            fake_token = "fake-cache-token"
+            home_path = str(Path.home() / ".ragflow" / "cache.local.yaml")
+            question = f"Can cache keys avoid http://{private_host}:9380/v1?token={fake_token} from {home_path}?"
+            query_output.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "question": question,
+                        "mode": "auto",
+                        "dataset_ids": ["ds-cache"],
+                        "metadata": {
+                            "requested_mode": "auto",
+                            "top_k": 5,
+                            "similarity_threshold": 0.2,
+                            "fusion": "none",
+                            "rewrite": "none",
+                            "route": {
+                                "selected": {
+                                    "name": home_path,
+                                    "dataset_id": "ds-cache",
+                                    "reason": "hint",
+                                    "params": {"top_k": 5},
+                                }
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                baseline_code = module.main(
+                    [
+                        "cache-report",
+                        "--query-output",
+                        str(query_output),
+                        "--config-version",
+                        "retrieval-v1",
+                        "--report-json",
+                        str(baseline_json),
+                        "--json",
+                    ]
+                )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "cache-report",
+                        "--query-output",
+                        str(query_output),
+                        "--baseline-report",
+                        str(baseline_json),
+                        "--config-version",
+                        "retrieval-v2",
+                        "--route-config-version",
+                        "routes-v1",
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
+                        "--json",
+                    ]
+                )
+            output = stdout.getvalue()
+            payload = json.loads(output)
+            report_text = report_json.read_text(encoding="utf-8")
+            markdown = report_md.read_text(encoding="utf-8")
+            redaction_text = redaction_json.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_text)
+
+        combined = "\n".join([output, report_text, markdown, redaction_text])
+        self.assertEqual(baseline_code, 0)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(payload["schema"], "ragflow_query_output_cache_report_v1")
+        self.assertEqual(payload["invalidation"]["status"], "invalidate")
+        self.assertIn("config", payload["invalidation"]["changed_fields"])
+        self.assertIn("RAGFlow Query Output Cache Report", markdown)
+        self.assertIn("invalidation_status: `invalidate`", markdown)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["target_counts"]["config_paths"], 5)
+        self.assertNotIn(question, combined)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(home_path, combined)
+        self.assertNotIn(str(query_output), combined)
+
     def test_diagnose_result_writes_redacted_report_sidecar(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:
