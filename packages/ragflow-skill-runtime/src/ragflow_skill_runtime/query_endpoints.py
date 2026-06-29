@@ -12,6 +12,8 @@ from typing import Any, Mapping, Sequence
 from urllib import error, request
 from urllib.parse import urlparse
 
+from .runtime_metrics import RuntimeMetrics
+
 
 QUERY_ENDPOINT_REPORT_SCHEMA = "ragflow_query_endpoint_report_v1"
 QUERY_ENDPOINT_REACHABILITY_STATUSES = (
@@ -421,6 +423,25 @@ def build_query_endpoint_report(
     issues = [issue for issue in (_issue_for_entry(entry) for entry in endpoints) if issue]
     error_count = sum(1 for issue in issues if issue.get("severity") == "error")
     warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
+    runtime_metrics = RuntimeMetrics(operation=QUERY_ENDPOINT_REPORT_SCHEMA)
+    runtime_metrics.increment_counter("endpoint_count", len(endpoints))
+    runtime_metrics.increment_counter("configured_endpoint_count", configured_count)
+    runtime_metrics.increment_counter("checked_endpoint_count", len(endpoints) if network_check else 0)
+    runtime_metrics.increment_counter("reachable_endpoint_count", status_counts.get("reachable", 0))
+    runtime_metrics.increment_counter("warning_count", warning_count)
+    runtime_metrics.increment_counter("error_count", error_count)
+    for status in QUERY_ENDPOINT_REACHABILITY_STATUSES:
+        runtime_metrics.increment_counter(f"status_{status}", status_counts.get(status, 0))
+    if endpoints:
+        runtime_metrics.set_gauge("configured_endpoint_ratio", configured_count / len(endpoints))
+        runtime_metrics.set_gauge("https_endpoint_ratio", https_count / len(endpoints))
+    else:
+        runtime_metrics.set_gauge("configured_endpoint_ratio", 0.0)
+        runtime_metrics.set_gauge("https_endpoint_ratio", 0.0)
+    for entry in endpoints:
+        latency = entry.get("latency_ms")
+        if isinstance(latency, (int, float)) and not isinstance(latency, bool):
+            runtime_metrics.observe_latency_ms(latency)
     return {
         "schema": QUERY_ENDPOINT_REPORT_SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -440,6 +461,7 @@ def build_query_endpoint_report(
         },
         "status_counts": status_counts,
         "network_zone_counts": zone_counts,
+        "runtime_metrics": runtime_metrics.to_report(),
         "endpoints": endpoints,
         "issues": issues,
     }
@@ -449,6 +471,8 @@ def render_query_endpoint_report_markdown(report: Mapping[str, Any]) -> str:
     """Render a compact Markdown endpoint report."""
 
     summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    runtime_metrics = report.get("runtime_metrics") if isinstance(report.get("runtime_metrics"), Mapping) else {}
+    latency = runtime_metrics.get("latency_ms") if isinstance(runtime_metrics.get("latency_ms"), Mapping) else {}
     lines = [
         "# RAGFlow Query Endpoint Report",
         "",
@@ -459,10 +483,22 @@ def render_query_endpoint_report_markdown(report: Mapping[str, Any]) -> str:
         f"- configured: `{summary.get('configured_endpoint_count', 0)}`",
         f"- https: `{summary.get('https_endpoint_count', 0)}`",
         f"- reachable: `{summary.get('reachable_endpoint_count', 0)}`",
-        "",
-        "| endpoint | status | zone | scheme | URL summary | reason |",
-        "| --- | --- | --- | --- | --- | --- |",
     ]
+    if runtime_metrics:
+        p95 = latency.get("p95")
+        lines.extend(
+            [
+                f"- latency_samples: `{latency.get('sample_count', 0)}`",
+                f"- latency_p95_ms: `{p95 if p95 is not None else 'n/a'}`",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "| endpoint | status | zone | scheme | URL summary | reason |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+    )
     for entry in report.get("endpoints", []) if isinstance(report.get("endpoints"), list) else []:
         if not isinstance(entry, Mapping):
             continue

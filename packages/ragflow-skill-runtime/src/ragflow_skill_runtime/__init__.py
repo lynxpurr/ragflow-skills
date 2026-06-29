@@ -294,6 +294,12 @@ from .report_sanitizer import (
     configured_private_hosts_from_urls,
     sanitize_report_payload,
 )
+from .runtime_metrics import (
+    RUNTIME_METRICS_SCHEMA,
+    RuntimeMetrics,
+    build_runtime_metrics_summary,
+    latency_summary_ms,
+)
 from .kb_build import (
     BuildDocument,
     BuildError,
@@ -491,6 +497,7 @@ __all__ = [
     "QualityIssue",
     "RAGFlowClient",
     "RagflowConfig",
+    "RuntimeMetrics",
     "SegmentationPlan",
     "SkillConfig",
     "SourceDocument",
@@ -553,6 +560,7 @@ __all__ = [
     "RETRIEVAL_STATUS_SCHEMA",
     "RETRIEVAL_STATUS_VALUES",
     "REPORT_REDACTION_REPORT_SCHEMA",
+    "RUNTIME_METRICS_SCHEMA",
     "METADATA_LINT_REPORT_SCHEMA",
     "METADATA_MERGE_REPORT_SCHEMA",
     "MODEL_PROVIDER_PROBE_REPORT_SCHEMA",
@@ -601,6 +609,7 @@ __all__ = [
     "build_query_endpoint_report",
     "build_query_trace",
     "build_query_rewrite_plan",
+    "build_runtime_metrics_summary",
     "build_query_session_inspection",
     "build_centroid_index",
     "build_centroid_plan",
@@ -705,6 +714,7 @@ __all__ = [
     "load_routing_config",
     "load_validation_queries",
     "lint_profile",
+    "latency_summary_ms",
     "normalize_retrieval_response",
     "normalize_retrieval_status",
     "normalize_query_question",

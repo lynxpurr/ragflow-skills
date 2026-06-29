@@ -1434,14 +1434,15 @@ redaction is enabled. Focused CLI tests cover fake private hosts, fake secrets, 
 and the sanitized-output boundary, while consumer acceptance and platform smoke retain
 the new sidecars.
 
-Next implementation order should now move into the runtime helper pilot, while keeping a
-small generated-Markdown audit as the final report-safety closeout. Generated-report
-redaction coverage has no remaining `needs_redaction` inventory entries, so the next
-slice should add a minimal metrics helper to `ragflow-query endpoint-report`, a read-only
-probe/report command that defaults to no network work and already has JSON, Markdown, and
-redaction surfaces. If retry/backoff is included in the same pilot, it should be opt-in,
-preserve the current single-attempt default, and record retry budget and attempt counts in
-the emitted report with deterministic tests.
+The runtime helper pilot is now underway through `ragflow-query endpoint-report`, a
+read-only probe/report command that defaults to no network work and already has JSON,
+Markdown, and redaction surfaces. The first pilot adds `ragflow_runtime_metrics_v1`
+counters, gauges, and deterministic latency p50/p95/p99 summaries to the emitted report,
+with no-network CLI coverage and fake HTTP-server unit coverage. The next implementation
+order should keep a small generated-Markdown audit as the final report-safety closeout,
+then add opt-in retry/backoff if needed. Any retry/backoff helper should preserve the
+current single-attempt default and record retry budget and attempt counts in the emitted
+report with deterministic tests.
 
 ## Implementation Notes And Pitfalls
 

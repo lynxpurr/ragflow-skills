@@ -1023,7 +1023,7 @@ Tasks:
 - [ ] Add read-only cache helpers for list/probe operations.
 - [ ] Add cache keys that include query text, dataset IDs, route/rewrite/fusion params, top-k, threshold, and relevant config version.
 - [ ] Add cache stats and invalidation reports.
-- [ ] Add metrics collector for counters, gauges, and latency histograms with p50/p95/p99 summaries.
+- [x] Add metrics collector for counters, gauges, and latency histograms with p50/p95/p99 summaries.
 - [ ] Add checkpoint/resume helpers for bounded long-running jobs such as centroid build, benchmark import, optimize, and report generation.
 - [ ] Add partial-failure report schemas for timeout, partial, and skipped profiles.
 - [x] Add a shared report sanitizer for API keys, bearer tokens, configured private hosts, home paths, and local config paths.
@@ -1079,7 +1079,9 @@ Recommended next slices:
 1. Use a narrow Phase 36 helper pilot before broader runtime primitives.
 2. Add the smallest shared retry/backoff and metrics helpers first, recording retry budgets
    and latency summaries in traces or reports where those helpers are used.
-3. Defer broader rate limiting, circuit breakers, cache invalidation, checkpoint/resume,
+3. `ragflow-query endpoint-report` now pilots the shared `ragflow_runtime_metrics_v1`
+   metrics helper with counters, gauges, and deterministic latency p50/p95/p99 summaries.
+4. Defer broader rate limiting, circuit breakers, cache invalidation, checkpoint/resume,
    and partial-failure schemas until at least one narrow report or probe command consumes
    the helper with deterministic tests.
 
@@ -1277,7 +1279,7 @@ Tasks:
   non-query report family with fake secrets, fake endpoints, and fake host paths.
 - [ ] Add a minimal retry/backoff helper with an explicit retry budget and deterministic
   tests in one read-only probe or report command.
-- [ ] Add a minimal metrics summary helper for counters and latency samples in one
+- [x] Add a minimal metrics summary helper for counters and latency samples in one
   read-only probe or report command.
 - [ ] Keep token-bucket rate limiting, circuit breakers, cache invalidation,
   checkpoint/resume, and broad partial-failure schemas deferred until the helper pilot is
@@ -1354,19 +1356,21 @@ Consumer acceptance now verifies newly redacted non-query fake-sensitive fixture
 platform smoke retains doc-to-md conversion, backend warmup, and KB metadata/tagset plus
 topology/activation, optimization, benchmark lifecycle, validation/diagnostic, profile,
 snapshot/QA/enrichment, and append/cleanup redaction sidecars as artifacts.
-The next recommended Phase 36 task is the narrow runtime helper pilot: add one minimal
-retry/backoff or metrics helper to a read-only probe/report command with deterministic
-tests and release-gate coverage.
+The `ragflow-query endpoint-report` command now pilots a shared
+`ragflow_runtime_metrics_v1` helper for counters, gauges, and deterministic latency
+p50/p95/p99 summaries. The next recommended Phase 36 task is either the final generated
+Markdown audit or an opt-in retry/backoff helper with an explicit retry budget in the same
+read-only command.
 
 Near-term task list:
 
-- [ ] Add a small shared runtime metrics helper for counters and deterministic latency
+- [x] Add a small shared runtime metrics helper for counters and deterministic latency
   summaries, including p50/p95/p99 behavior with unit tests.
-- [ ] Pilot the metrics helper in `ragflow-query endpoint-report` because it is read-only,
+- [x] Pilot the metrics helper in `ragflow-query endpoint-report` because it is read-only,
   defaults to no network work, and already has JSON, Markdown, and redaction surfaces.
-- [ ] Add deterministic `endpoint-report` CLI tests for the emitted runtime metrics using
-  no-network and fake HTTP-server cases.
-- [ ] Decide whether the same pilot should add opt-in retry/backoff in this slice or in the
+- [x] Add deterministic `endpoint-report` unit and CLI tests for the emitted runtime
+  metrics using no-network CLI and fake HTTP-server cases.
+- [x] Decide whether the same pilot should add opt-in retry/backoff in this slice or in the
   next slice; preserve current behavior with a default single attempt.
 - [ ] If retry/backoff is included, record retry budget, attempt count, retry count, and
   final status in the emitted report without adding live RAGFlow mutation.

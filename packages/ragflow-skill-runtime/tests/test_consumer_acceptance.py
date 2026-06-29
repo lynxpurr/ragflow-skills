@@ -142,6 +142,7 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("query session enrich redaction", check_names)
         self.assertIn("query agentic plan redaction", check_names)
         self.assertIn("query endpoint-report", check_names)
+        self.assertIn("query endpoint-report runtime metrics", check_names)
         self.assertIn("query assistant-profile redaction", check_names)
         self.assertIn("query assistant-test-plan redaction", check_names)
         self.assertIn("query centroid build plan-only redaction", check_names)

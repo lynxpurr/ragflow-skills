@@ -3445,6 +3445,35 @@ raise SystemExit(code)
         endpoint_report,
         required_output='"schema": "ragflow_query_endpoint_report_v1"',
     )
+    endpoint_metrics_ok = endpoint_report_json.exists()
+    endpoint_metrics_error = ""
+    if endpoint_metrics_ok:
+        try:
+            endpoint_payload = json.loads(endpoint_report_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            endpoint_metrics_ok = False
+            endpoint_metrics_error = f"invalid endpoint report JSON: {exc}"
+        else:
+            endpoint_metrics = endpoint_payload.get("runtime_metrics")
+            endpoint_latency = endpoint_metrics.get("latency_ms") if isinstance(endpoint_metrics, dict) else {}
+            endpoint_metrics_ok = (
+                isinstance(endpoint_metrics, dict)
+                and endpoint_metrics.get("schema") == "ragflow_runtime_metrics_v1"
+                and isinstance(endpoint_latency, dict)
+                and endpoint_latency.get("sample_count") == 0
+            )
+            if not endpoint_metrics_ok:
+                endpoint_metrics_error = "missing endpoint runtime metrics summary"
+    else:
+        endpoint_metrics_error = f"missing {endpoint_report_json}"
+    checks.append(
+        {
+            "name": "query endpoint-report runtime metrics",
+            "ok": endpoint_metrics_ok,
+            "path": str(endpoint_report_json),
+            "error": endpoint_metrics_error,
+        }
+    )
     for path in (endpoint_report_json, endpoint_report_md, endpoint_redaction_json):
         if path.exists():
             produced.append(path)

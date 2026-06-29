@@ -97,6 +97,7 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("kb segment-metadata redaction", check_names)
         self.assertIn("kb suppression-report redaction", check_names)
         self.assertIn("query endpoint-report", check_names)
+        self.assertIn("query endpoint-report runtime metrics", check_names)
         self.assertIn("query fallback-test", check_names)
         self.assertTrue(
             any(path.endswith("mineru-handoff/doc_manifest.json") for path in profile["artifacts"]),

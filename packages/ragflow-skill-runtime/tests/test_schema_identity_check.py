@@ -27,6 +27,7 @@ class SchemaIdentityCheckTests(unittest.TestCase):
             "quality",
             "benchmark",
             "query",
+            "runtime",
             "trace",
             "diagnostic",
             "route",

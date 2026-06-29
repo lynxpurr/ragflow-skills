@@ -7,6 +7,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ragflow_skill_runtime import (
+    RUNTIME_METRICS_SCHEMA,
     build_query_endpoint_report,
     classify_endpoint_host,
     render_query_endpoint_report_markdown,
@@ -66,7 +67,12 @@ class QueryEndpointReportTests(unittest.TestCase):
         self.assertEqual(report["endpoints"][2]["endpoint"]["network_zone"], "vpn")
         self.assertIn("endpoint_public_http", {issue["code"] for issue in report["issues"]})
         self.assertIn("endpoint_url_query", {issue["code"] for issue in report["issues"]})
+        self.assertEqual(report["runtime_metrics"]["schema"], RUNTIME_METRICS_SCHEMA)
+        self.assertEqual(report["runtime_metrics"]["counters"]["endpoint_count"], 3)
+        self.assertEqual(report["runtime_metrics"]["counters"]["status_not_checked"], 3)
+        self.assertEqual(report["runtime_metrics"]["latency_ms"]["sample_count"], 0)
         self.assertIn("RAGFlow Query Endpoint Report", markdown)
+        self.assertIn("latency_samples: `0`", markdown)
         self.assertIn("<lan-host>", serialized)
         self.assertIn("<vpn-host>", serialized)
         self.assertNotIn("192.168.10.20", serialized)
@@ -88,6 +94,9 @@ class QueryEndpointReportTests(unittest.TestCase):
         self.assertTrue(report["ok"])
         self.assertEqual(report["status_counts"]["reachable"], 1)
         self.assertEqual(report["summary"]["reachable_endpoint_count"], 1)
+        self.assertEqual(report["runtime_metrics"]["counters"]["status_reachable"], 1)
+        self.assertEqual(report["runtime_metrics"]["latency_ms"]["sample_count"], 1)
+        self.assertIsNotNone(report["runtime_metrics"]["latency_ms"]["p95"])
         self.assertEqual(EndpointReportHandler.authorization, "Bearer query-test-key")
         self.assertNotIn("query-test-key", serialized)
         self.assertNotIn(base_url, serialized)
