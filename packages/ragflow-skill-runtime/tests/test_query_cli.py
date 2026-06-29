@@ -168,6 +168,9 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(payload["runtime_circuit_breaker"]["schema"], "ragflow_runtime_circuit_breaker_report_v1")
         self.assertTrue(payload["runtime_circuit_breaker"]["enabled"])
         self.assertEqual(payload["runtime_circuit_breaker"]["summary"]["short_circuit_count"], 0)
+        self.assertEqual(payload["runtime_partial_failure"]["schema"], "ragflow_runtime_partial_failure_report_v1")
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["status"], "skipped")
+        self.assertEqual(payload["summary"]["partial_skipped_count"], 2)
         self.assertEqual(payload["runtime_metrics"]["counters"]["endpoint_count"], 2)
         self.assertEqual(payload["runtime_metrics"]["latency_ms"]["sample_count"], 0)
         self.assertEqual(payload["retry_policy"]["retry_budget"], 2)
@@ -185,6 +188,8 @@ class QueryCliTests(unittest.TestCase):
         self.assertIn("cache_enabled: `true`", markdown)
         self.assertIn("rate_limit_enabled: `true`", markdown)
         self.assertIn("circuit_breaker_enabled: `true`", markdown)
+        self.assertIn("partial_failure_status: `skipped`", markdown)
+        self.assertIn("partial_failure_skipped: `2`", markdown)
         self.assertIn("<lan-host>", combined)
         self.assertIn("<vpn-host>", combined)
         self.assertNotIn("192.168.10.20", combined)
@@ -379,6 +384,98 @@ class QueryCliTests(unittest.TestCase):
         self.assertNotIn(home_path, combined)
         self.assertNotIn(str(query_output), combined)
         self.assertNotIn(str(cache_dir), combined)
+
+    def test_cache_report_can_write_and_invalidate_metadata_ledger(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_output = root / "query.baseline.json"
+            current_output = root / "query.current.json"
+            baseline_report = root / "cache.baseline.json"
+            current_report = root / "cache.current.json"
+            cache_dir = root / "query-output-cache"
+            question = "Can active cache ledgers avoid raw query output?"
+            baseline_output.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "question": question,
+                        "mode": "auto",
+                        "dataset_ids": ["ds-cache"],
+                        "metadata": {"requested_mode": "auto", "top_k": 5, "similarity_threshold": 0.2},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            current_output.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "question": question,
+                        "mode": "auto",
+                        "dataset_ids": ["ds-cache"],
+                        "metadata": {"requested_mode": "auto", "top_k": 10, "similarity_threshold": 0.2},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                baseline_code = module.main(
+                    [
+                        "cache-report",
+                        "--query-output",
+                        str(baseline_output),
+                        "--config-version",
+                        "retrieval-v1",
+                        "--cache-dir",
+                        str(cache_dir),
+                        "--cache-write",
+                        "--report-json",
+                        str(baseline_report),
+                        "--json",
+                    ]
+                )
+            baseline_payload = json.loads(stdout.getvalue())
+            baseline_path = cache_dir / "query-output" / f"{baseline_payload['cache_key'].replace(':', '-')}.json"
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                current_code = module.main(
+                    [
+                        "cache-report",
+                        "--query-output",
+                        str(current_output),
+                        "--baseline-report",
+                        str(baseline_report),
+                        "--config-version",
+                        "retrieval-v2",
+                        "--cache-dir",
+                        str(cache_dir),
+                        "--cache-write",
+                        "--cache-invalidate",
+                        "--report-json",
+                        str(current_report),
+                        "--json",
+                    ]
+                )
+            current_payload = json.loads(stdout.getvalue())
+            current_path = cache_dir / "query-output" / f"{current_payload['cache_key'].replace(':', '-')}.json"
+            current_entry_text = current_path.read_text(encoding="utf-8")
+            baseline_exists_after_invalidation = baseline_path.exists()
+            current_exists_after_write = current_path.exists()
+
+        self.assertEqual(baseline_code, 0)
+        self.assertEqual(current_code, 0)
+        self.assertEqual(baseline_payload["cache_store"]["write"]["status"], "stored")
+        self.assertFalse(baseline_exists_after_invalidation)
+        self.assertTrue(current_exists_after_write)
+        self.assertEqual(current_payload["cache_store"]["write"]["status"], "stored")
+        self.assertEqual(current_payload["cache_store"]["invalidation"]["execution_status"], "invalidated")
+        self.assertEqual(current_payload["cache_store"]["summary"]["write_count"], 1)
+        self.assertEqual(current_payload["cache_store"]["summary"]["invalidate_count"], 1)
+        self.assertNotIn(question, current_entry_text)
 
     def test_diagnose_result_writes_redacted_report_sidecar(self) -> None:
         module = load_query_module()

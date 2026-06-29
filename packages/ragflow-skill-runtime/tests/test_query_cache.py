@@ -181,6 +181,50 @@ class QueryOutputCacheReportTests(unittest.TestCase):
         self.assertEqual(current["cache_store"]["summary"]["would_invalidate_count"], 1)
         self.assertEqual(current["cache_store"]["summary"]["would_write_count"], 1)
 
+    def test_query_output_cache_store_active_write_and_invalidate_update_metadata_ledger(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline = build_query_output_cache_report(
+                self._payload(top_k=5),
+                config_version="retrieval-v1",
+                cache_dir=root,
+                cache_ttl_seconds=60,
+                cache_write=True,
+                now_epoch=1000.0,
+            )
+            baseline_path = root / "query-output" / f"{baseline['cache_key'].replace(':', '-')}.json"
+            baseline_entry_text = baseline_path.read_text(encoding="utf-8")
+
+            current = build_query_output_cache_report(
+                self._payload(top_k=10),
+                baseline_report=baseline,
+                config_version="retrieval-v2",
+                cache_dir=root,
+                cache_ttl_seconds=60,
+                cache_write=True,
+                cache_invalidate=True,
+                now_epoch=1010.0,
+            )
+            current_path = root / "query-output" / f"{current['cache_key'].replace(':', '-')}.json"
+            current_entry_text = current_path.read_text(encoding="utf-8")
+            baseline_exists_after_invalidation = baseline_path.exists()
+            current_exists_after_write = current_path.exists()
+
+        self.assertTrue(baseline["ok"])
+        self.assertEqual(baseline["cache_store"]["write"]["status"], "stored")
+        self.assertEqual(baseline["cache_store"]["summary"]["write_count"], 1)
+        self.assertIn(QUERY_OUTPUT_CACHE_ENTRY_SCHEMA, baseline_entry_text)
+        self.assertFalse(baseline_exists_after_invalidation)
+        self.assertTrue(current_exists_after_write)
+        self.assertTrue(current["ok"])
+        self.assertEqual(current["cache_store"]["write"]["status"], "stored")
+        self.assertEqual(current["cache_store"]["invalidation"]["execution_status"], "invalidated")
+        self.assertEqual(current["cache_store"]["summary"]["write_count"], 1)
+        self.assertEqual(current["cache_store"]["summary"]["invalidate_count"], 1)
+        self.assertIn(QUERY_OUTPUT_CACHE_ENTRY_SCHEMA, current_entry_text)
+        self.assertNotIn("How should cached retrieval output be keyed?", current_entry_text)
+        self.assertNotIn("cache invalidation key parts", current_entry_text)
+
 
 if __name__ == "__main__":
     unittest.main()

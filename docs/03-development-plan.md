@@ -1023,7 +1023,7 @@ Tasks:
 - [x] Add read-only cache helpers for list/probe operations.
 - [x] Add query-output cache-key reports that include query text, dataset IDs, route/rewrite/fusion params, top-k, threshold, and relevant config version.
 - [x] Add cache stats and dry-run invalidation reports for local query-output cache stores.
-- [ ] Add active query-output cache write and invalidation execution for host-owned cache stores.
+- [x] Add active query-output cache write and invalidation execution for host-owned cache stores.
 - [x] Add metrics collector for counters, gauges, and latency histograms with p50/p95/p99 summaries.
 - [ ] Add checkpoint/resume helpers for bounded long-running jobs such as centroid build, benchmark import, optimize, and report generation.
 - [ ] Add partial-failure report schemas for timeout, partial, and skipped profiles.
@@ -1085,9 +1085,11 @@ Recommended next slices:
    `ragflow_runtime_cache_report_v1` opt-in read-only endpoint reachability cache, plus
    `ragflow_runtime_rate_limit_report_v1` token-bucket rate limiting for explicit
    reachability attempts and `ragflow_runtime_circuit_breaker_report_v1` per-run
-   circuit-breaker summaries for repeated reachability failures.
-3. Keep active query-output cache writes/invalidation execution, checkpoint/resume, and
-   partial-failure schemas as the next Phase 31 resilience work.
+   circuit-breaker summaries for repeated reachability failures. It also pilots
+   `ragflow_runtime_partial_failure_report_v1` for endpoint timeout, skipped, failed, and
+   partial reachability outcomes without echoing raw URLs or credentials.
+3. Keep broad checkpoint/resume helpers and non-endpoint partial-failure schemas as the
+   next Phase 31 resilience work.
 
 Exit criteria:
 
@@ -1372,6 +1374,9 @@ read-only RAGFlow/LLM endpoint reachability attempts. It also emits
 `ragflow_runtime_circuit_breaker_report_v1` when explicit
 `--circuit-breaker-threshold` settings are supplied, recording per-run open,
 short-circuit, failure, and recovery state while leaving the breaker disabled by default.
+`ragflow_runtime_partial_failure_report_v1` is now emitted by the same endpoint report
+surface to summarize timeout, skipped, failed, warning, and partial endpoint outcomes
+without echoing raw URLs, API keys, or cache paths.
 `tools/generated_markdown_audit.py`
 now emits `ragflow_generated_markdown_audit_v1` and is
 run by release hygiene alongside generated-report safety. It audits 62 covered Markdown

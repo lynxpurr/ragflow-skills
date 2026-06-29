@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 import math
 import time
@@ -12,11 +12,127 @@ from typing import Any
 RUNTIME_RETRY_TRACE_SCHEMA = "ragflow_runtime_retry_trace_v1"
 RUNTIME_RATE_LIMIT_REPORT_SCHEMA = "ragflow_runtime_rate_limit_report_v1"
 RUNTIME_CIRCUIT_BREAKER_REPORT_SCHEMA = "ragflow_runtime_circuit_breaker_report_v1"
+RUNTIME_PARTIAL_FAILURE_REPORT_SCHEMA = "ragflow_runtime_partial_failure_report_v1"
 DEFAULT_RETRYABLE_STATUSES = ("timeout", "unreachable", "error")
+DEFAULT_PARTIAL_FAILURE_STATUSES = ("timeout", "unreachable", "error", "wrong_protocol", "invalid_url")
+DEFAULT_PARTIAL_SKIPPED_STATUSES = ("not_configured", "not_checked", "circuit_open")
+DEFAULT_PARTIAL_SUCCESS_STATUSES = ("reachable", "unauthorized")
+DEFAULT_PARTIAL_WARNING_STATUSES = ("missing",)
 
 
 def _rounded(value: float | int) -> float:
     return round(float(value), 3)
+
+
+def _safe_label(value: Any, *, fallback: str) -> str:
+    text = str(value or "").strip()
+    cleaned = "".join(char if char.isalnum() or char in "_.:-" else "_" for char in text).strip("_")
+    if not cleaned or "http:" in cleaned.lower() or "https:" in cleaned.lower():
+        return fallback
+    return cleaned[:64]
+
+
+def build_runtime_partial_failure_report(
+    operation: str,
+    items: Sequence[Mapping[str, Any]],
+    *,
+    status_field: str = "status",
+    label_field: str = "label",
+    success_statuses: Sequence[str] = DEFAULT_PARTIAL_SUCCESS_STATUSES,
+    warning_statuses: Sequence[str] = DEFAULT_PARTIAL_WARNING_STATUSES,
+    failure_statuses: Sequence[str] = DEFAULT_PARTIAL_FAILURE_STATUSES,
+    skipped_statuses: Sequence[str] = DEFAULT_PARTIAL_SKIPPED_STATUSES,
+    timeout_statuses: Sequence[str] = ("timeout",),
+) -> dict[str, Any]:
+    """Summarize timeout, skipped, and partial outcomes without echoing raw inputs."""
+
+    success = {str(value) for value in success_statuses}
+    warning = {str(value) for value in warning_statuses}
+    failure = {str(value) for value in failure_statuses}
+    skipped = {str(value) for value in skipped_statuses}
+    timeout = {str(value) for value in timeout_statuses}
+
+    status_counts: dict[str, int] = {}
+    success_labels: list[str] = []
+    warning_labels: list[str] = []
+    failure_labels: list[str] = []
+    skipped_labels: list[str] = []
+    timeout_labels: list[str] = []
+    unknown_labels: list[str] = []
+
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, Mapping):
+            continue
+        status = str(item.get(status_field) or "unknown")
+        label = _safe_label(item.get(label_field), fallback=f"item_{index}")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        if status in timeout:
+            timeout_labels.append(label)
+        if status in skipped:
+            skipped_labels.append(label)
+        if status in failure:
+            failure_labels.append(label)
+        elif status in success:
+            success_labels.append(label)
+        elif status in warning:
+            warning_labels.append(label)
+        elif status not in skipped:
+            unknown_labels.append(label)
+
+    total_count = sum(status_counts.values())
+    failure_count = len(failure_labels)
+    skipped_count = len(skipped_labels)
+    success_count = len(success_labels)
+    warning_count = len(warning_labels)
+    unknown_count = len(unknown_labels)
+    timeout_count = len(timeout_labels)
+    partial = success_count > 0 and (failure_count > 0 or skipped_count > 0 or timeout_count > 0)
+    completed = total_count > 0 and failure_count == 0 and skipped_count == 0 and unknown_count == 0
+    if total_count == 0:
+        status = "empty"
+    elif partial:
+        status = "partial"
+    elif failure_count > 0:
+        status = "failed"
+    elif skipped_count == total_count:
+        status = "skipped"
+    elif skipped_count > 0:
+        status = "incomplete"
+    elif unknown_count > 0:
+        status = "unknown"
+    elif warning_count > 0:
+        status = "completed_with_warnings"
+    else:
+        status = "completed"
+
+    return {
+        "schema": RUNTIME_PARTIAL_FAILURE_REPORT_SCHEMA,
+        "operation": str(operation),
+        "summary": {
+            "status": status,
+            "total_count": total_count,
+            "success_count": success_count,
+            "warning_count": warning_count,
+            "failure_count": failure_count,
+            "timeout_count": timeout_count,
+            "skipped_count": skipped_count,
+            "unknown_count": unknown_count,
+            "partial": partial,
+            "completed": completed,
+        },
+        "status_counts": dict(sorted(status_counts.items())),
+        "failure_labels": failure_labels,
+        "timeout_labels": timeout_labels,
+        "skipped_labels": skipped_labels,
+        "unknown_labels": unknown_labels,
+        "classification": {
+            "success_statuses": sorted(success),
+            "warning_statuses": sorted(warning),
+            "failure_statuses": sorted(failure),
+            "skipped_statuses": sorted(skipped),
+            "timeout_statuses": sorted(timeout),
+        },
+    }
 
 
 @dataclass(frozen=True)

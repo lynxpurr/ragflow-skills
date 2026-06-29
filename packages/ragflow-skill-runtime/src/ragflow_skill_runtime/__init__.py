@@ -319,6 +319,7 @@ from .runtime_metrics import (
 from .runtime_resilience import (
     DEFAULT_RETRYABLE_STATUSES,
     RUNTIME_CIRCUIT_BREAKER_REPORT_SCHEMA,
+    RUNTIME_PARTIAL_FAILURE_REPORT_SCHEMA,
     RUNTIME_RATE_LIMIT_REPORT_SCHEMA,
     RUNTIME_RETRY_TRACE_SCHEMA,
     RuntimeCircuitBreaker,
@@ -327,6 +328,7 @@ from .runtime_resilience import (
     RuntimeRateLimiter,
     RuntimeRetryPolicy,
     RuntimeRetryResult,
+    build_runtime_partial_failure_report,
     run_with_retry,
 )
 from .kb_build import (
@@ -600,8 +602,10 @@ __all__ = [
     "RUNTIME_CACHE_REPORT_SCHEMA",
     "RUNTIME_CIRCUIT_BREAKER_REPORT_SCHEMA",
     "RUNTIME_METRICS_SCHEMA",
+    "RUNTIME_PARTIAL_FAILURE_REPORT_SCHEMA",
     "RUNTIME_RATE_LIMIT_REPORT_SCHEMA",
     "RUNTIME_RETRY_TRACE_SCHEMA",
+    "build_runtime_partial_failure_report",
     "METADATA_LINT_REPORT_SCHEMA",
     "METADATA_MERGE_REPORT_SCHEMA",
     "MODEL_PROVIDER_PROBE_REPORT_SCHEMA",

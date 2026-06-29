@@ -102,6 +102,7 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("query endpoint-report runtime cache", check_names)
         self.assertIn("query endpoint-report runtime rate limit", check_names)
         self.assertIn("query endpoint-report runtime circuit breaker", check_names)
+        self.assertIn("query endpoint-report partial failure", check_names)
         self.assertIn("query fallback-test", check_names)
         self.assertTrue(
             any(path.endswith("mineru-handoff/doc_manifest.json") for path in profile["artifacts"]),

@@ -1493,6 +1493,11 @@ with contextlib.redirect_stdout(stdout):
         str(rerank_query_input),
         "--config-version",
         "retrieval-v1",
+        "--cache-dir",
+        str(artifacts_dir / "query_output_cache_store"),
+        "--cache-ttl-seconds",
+        "60",
+        "--cache-write",
         "--report-json",
         str(artifacts_dir / "query_cache_baseline.json"),
         "--json",
@@ -1515,6 +1520,8 @@ with contextlib.redirect_stdout(stdout):
         str(artifacts_dir / "query_output_cache_store"),
         "--cache-ttl-seconds",
         "60",
+        "--cache-write",
+        "--cache-invalidate",
         "--report-json",
         str(artifacts_dir / "query_cache_report.json"),
         "--report-md",
@@ -1533,8 +1540,10 @@ if cache_report_payload.get("invalidation", {{}}).get("status") != "invalidate":
 cache_store_payload = cache_report_payload.get("cache_store", {{}})
 if cache_store_payload.get("schema") != "ragflow_query_output_cache_store_report_v1":
     raise SystemExit(17)
-if cache_store_payload.get("summary", {{}}).get("would_write_count") != 1:
+if cache_store_payload.get("summary", {{}}).get("write_count") != 1:
     raise SystemExit(18)
+if cache_store_payload.get("summary", {{}}).get("invalidate_count") != 1:
+    raise SystemExit(19)
 
 stdout = StringIO()
 with contextlib.redirect_stdout(stdout):
@@ -3056,6 +3065,36 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "ok": endpoint_circuit_breaker_ok,
             "returncode": 0 if endpoint_circuit_breaker_ok else 1,
             "error": endpoint_circuit_breaker_error,
+        }
+    )
+    endpoint_partial_ok = endpoint_report_json.exists()
+    endpoint_partial_error = ""
+    if endpoint_partial_ok:
+        try:
+            endpoint_payload = json.loads(endpoint_report_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            endpoint_partial_ok = False
+            endpoint_partial_error = f"invalid endpoint report JSON: {exc}"
+        else:
+            endpoint_partial = endpoint_payload.get("runtime_partial_failure")
+            endpoint_partial_summary = endpoint_partial.get("summary") if isinstance(endpoint_partial, dict) else {}
+            endpoint_partial_ok = (
+                isinstance(endpoint_partial, dict)
+                and endpoint_partial.get("schema") == "ragflow_runtime_partial_failure_report_v1"
+                and isinstance(endpoint_partial_summary, dict)
+                and endpoint_partial_summary.get("status") == "skipped"
+                and endpoint_partial_summary.get("skipped_count") == 2
+            )
+            if not endpoint_partial_ok:
+                endpoint_partial_error = "missing endpoint runtime partial-failure summary"
+    else:
+        endpoint_partial_error = f"missing {endpoint_report_json}"
+    checks.append(
+        {
+            "name": "query endpoint-report partial failure",
+            "ok": endpoint_partial_ok,
+            "returncode": 0 if endpoint_partial_ok else 1,
+            "error": endpoint_partial_error,
         }
     )
     fallback_test_result = _run_command(

@@ -147,6 +147,7 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("query endpoint-report runtime cache", check_names)
         self.assertIn("query endpoint-report runtime rate limit", check_names)
         self.assertIn("query endpoint-report runtime circuit breaker", check_names)
+        self.assertIn("query endpoint-report partial failure", check_names)
         self.assertIn("query assistant-profile redaction", check_names)
         self.assertIn("query assistant-test-plan redaction", check_names)
         self.assertIn("query centroid build plan-only redaction", check_names)

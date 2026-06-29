@@ -20,6 +20,7 @@ from .runtime_resilience import (
     RuntimeRateLimitPolicy,
     RuntimeRateLimiter,
     RuntimeRetryPolicy,
+    build_runtime_partial_failure_report,
     run_with_retry,
 )
 
@@ -598,6 +599,14 @@ def build_query_endpoint_report(
         "circuit_breaker_short_circuit_count",
         circuit_breaker_summary["short_circuit_count"],
     )
+    runtime_partial_failure_report = build_runtime_partial_failure_report(
+        QUERY_ENDPOINT_REPORT_SCHEMA,
+        endpoints,
+    )
+    partial_summary = runtime_partial_failure_report["summary"]
+    runtime_metrics.increment_counter("partial_failure_count", partial_summary["failure_count"])
+    runtime_metrics.increment_counter("partial_timeout_count", partial_summary["timeout_count"])
+    runtime_metrics.increment_counter("partial_skipped_count", partial_summary["skipped_count"])
     return {
         "schema": QUERY_ENDPOINT_REPORT_SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -625,6 +634,10 @@ def build_query_endpoint_report(
             "circuit_breaker_failure_count": circuit_breaker_summary["failure_count"],
             "circuit_breaker_open_count": circuit_breaker_summary["open_count"],
             "circuit_breaker_short_circuit_count": circuit_breaker_summary["short_circuit_count"],
+            "partial_failure_status": partial_summary["status"],
+            "partial_failure_count": partial_summary["failure_count"],
+            "partial_timeout_count": partial_summary["timeout_count"],
+            "partial_skipped_count": partial_summary["skipped_count"],
         },
         "status_counts": status_counts,
         "network_zone_counts": zone_counts,
@@ -632,6 +645,7 @@ def build_query_endpoint_report(
         "runtime_cache": runtime_cache_report,
         "runtime_rate_limit": runtime_rate_limit_report,
         "runtime_circuit_breaker": runtime_circuit_breaker_report,
+        "runtime_partial_failure": runtime_partial_failure_report,
         "endpoints": endpoints,
         "issues": issues,
     }
@@ -658,6 +672,16 @@ def render_query_endpoint_report_markdown(report: Mapping[str, Any]) -> str:
     circuit_breaker_summary = (
         runtime_circuit_breaker.get("summary")
         if isinstance(runtime_circuit_breaker.get("summary"), Mapping)
+        else {}
+    )
+    runtime_partial_failure = (
+        report.get("runtime_partial_failure")
+        if isinstance(report.get("runtime_partial_failure"), Mapping)
+        else {}
+    )
+    partial_summary = (
+        runtime_partial_failure.get("summary")
+        if isinstance(runtime_partial_failure.get("summary"), Mapping)
         else {}
     )
     lines = [
@@ -704,6 +728,16 @@ def render_query_endpoint_report_markdown(report: Mapping[str, Any]) -> str:
                 f"- circuit_breaker_state: `{circuit_breaker_summary.get('state', 'closed')}`",
                 f"- circuit_breaker_opens: `{circuit_breaker_summary.get('open_count', 0)}`",
                 f"- circuit_breaker_short_circuits: `{circuit_breaker_summary.get('short_circuit_count', 0)}`",
+            ]
+        )
+    if runtime_partial_failure:
+        lines.extend(
+            [
+                f"- partial_failure_status: `{partial_summary.get('status', 'unknown')}`",
+                f"- partial_failure_partial: `{str(partial_summary.get('partial', False)).lower()}`",
+                f"- partial_failure_failures: `{partial_summary.get('failure_count', 0)}`",
+                f"- partial_failure_timeouts: `{partial_summary.get('timeout_count', 0)}`",
+                f"- partial_failure_skipped: `{partial_summary.get('skipped_count', 0)}`",
             ]
         )
     lines.extend(

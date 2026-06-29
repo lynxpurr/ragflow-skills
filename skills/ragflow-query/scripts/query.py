@@ -1571,6 +1571,8 @@ def _cache_report(args: argparse.Namespace) -> int:
         baseline_report = _read_json(args.baseline_report) if args.baseline_report else None
         if baseline_report is not None and not isinstance(baseline_report, dict):
             raise ValueError("baseline report must be a JSON object")
+        if (args.cache_write or args.cache_invalidate) and not args.cache_dir:
+            raise ValueError("--cache-dir is required when --cache-write or --cache-invalidate is enabled")
         report = build_query_output_cache_report(
             query_payload,
             baseline_report=baseline_report,
@@ -1579,6 +1581,8 @@ def _cache_report(args: argparse.Namespace) -> int:
             cache_dir=args.cache_dir,
             cache_ttl_seconds=args.cache_ttl_seconds,
             cache_namespace=args.cache_namespace,
+            cache_write=args.cache_write,
+            cache_invalidate=args.cache_invalidate,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
@@ -1984,7 +1988,7 @@ def build_parser() -> argparse.ArgumentParser:
     cache_report.add_argument("--baseline-report", help="Previous cache-report JSON to compare for invalidation")
     cache_report.add_argument("--config-version", help="Retrieval config version label included in cache identity")
     cache_report.add_argument("--route-config-version", help="Route config version label included in cache identity")
-    cache_report.add_argument("--cache-dir", help="Optional local query-output cache ledger directory for dry-run stats")
+    cache_report.add_argument("--cache-dir", help="Optional local query-output cache metadata ledger directory")
     cache_report.add_argument(
         "--cache-ttl-seconds",
         type=float,
@@ -1994,6 +1998,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--cache-namespace",
         default="query-output",
         help="Query-output cache ledger namespace under --cache-dir; defaults to query-output",
+    )
+    cache_report.add_argument(
+        "--cache-write",
+        action="store_true",
+        help="Write/update the local metadata ledger entry; does not store raw query output",
+    )
+    cache_report.add_argument(
+        "--cache-invalidate",
+        action="store_true",
+        help="Delete an invalidated baseline metadata ledger entry when present",
     )
     cache_report.add_argument("--report-json", help="Optional JSON report output path")
     cache_report.add_argument("--report-md", help="Optional Markdown report output path")

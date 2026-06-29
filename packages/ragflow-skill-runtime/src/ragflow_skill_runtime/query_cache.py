@@ -347,6 +347,25 @@ def _read_cache_entry(path: Path) -> tuple[Mapping[str, Any] | None, str]:
     return payload, ""
 
 
+def _write_cache_entry(path: Path, entry: Mapping[str, Any]) -> str:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(entry, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except OSError:
+        return "write_error"
+    return "stored"
+
+
+def _delete_cache_entry(path: Path) -> str:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return "missing"
+    except OSError:
+        return "invalidate_error"
+    return "invalidated"
+
+
 def _entry_lookup(
     *,
     path: Path,
@@ -424,7 +443,10 @@ def _empty_store_summary() -> dict[str, int]:
         "mismatch_count": 0,
         "would_write_count": 0,
         "write_count": 0,
+        "write_error_count": 0,
         "would_invalidate_count": 0,
+        "invalidate_count": 0,
+        "invalidate_error_count": 0,
     }
 
 
@@ -440,6 +462,8 @@ def _query_output_cache_store_report(
     cache_ttl_seconds: float | int | str | None,
     cache_namespace: str | None,
     dry_run: bool,
+    cache_write: bool,
+    cache_invalidate: bool,
     now_epoch: float,
 ) -> dict[str, Any]:
     ttl_seconds = _positive_ttl(cache_ttl_seconds)
@@ -447,6 +471,7 @@ def _query_output_cache_store_report(
     summary = _empty_store_summary()
     if cache_dir is None:
         return {
+            "ok": not (cache_write or cache_invalidate),
             "schema": QUERY_OUTPUT_CACHE_STORE_REPORT_SCHEMA,
             "enabled": False,
             "dry_run": True,
@@ -461,6 +486,7 @@ def _query_output_cache_store_report(
                 "status": invalidation.get("status", "not_evaluated"),
                 "changed_fields": list(invalidation.get("changed_fields", [])),
                 "would_invalidate": False,
+                "execution_status": "disabled",
             },
             "summary": summary,
         }
@@ -480,6 +506,7 @@ def _query_output_cache_store_report(
     needs_write = entry["status"] in {"miss", "stale", "invalid_entry", "read_error", "mismatch"}
     baseline_entry: dict[str, Any] | None = None
     would_invalidate = False
+    baseline_path: Path | None = None
     baseline_cache_key = baseline_report.get("cache_key") if isinstance(baseline_report, Mapping) else None
     if baseline_cache_key and baseline_cache_key != cache_key and invalidation.get("status") == "invalidate":
         baseline_path = _cache_entry_path(cache_root, namespace, str(baseline_cache_key))
@@ -493,17 +520,54 @@ def _query_output_cache_store_report(
         for key, value in baseline_counters.items():
             summary[key] = summary.get(key, 0) + value
         would_invalidate = baseline_entry["status"] in {"hit", "stale", "mismatch", "invalid_entry", "read_error"}
-        if would_invalidate:
+        if would_invalidate and dry_run:
             summary["would_invalidate_count"] = 1
 
-    if needs_write:
+    entry_payload = _query_output_cache_entry(
+        cache_key=cache_key,
+        field_fingerprints=field_fingerprints,
+        key_parts=key_parts,
+        query_output_digest=query_output_digest,
+        ttl_seconds=ttl_seconds,
+        now_epoch=now_epoch,
+    )
+    entry_digest = _digest(entry_payload, field="cache_entry")
+    ok = True
+    invalidate_execution_status = "not_needed"
+    if would_invalidate:
+        if dry_run:
+            invalidate_execution_status = "would_invalidate"
+        elif cache_invalidate and baseline_path is not None:
+            invalidate_execution_status = _delete_cache_entry(baseline_path)
+            if invalidate_execution_status == "invalidated":
+                summary["invalidate_count"] = 1
+            elif invalidate_execution_status == "invalidate_error":
+                summary["invalidate_error_count"] = 1
+                ok = False
+        else:
+            invalidate_execution_status = "not_requested"
+            summary["would_invalidate_count"] = 1
+
+    if needs_write and dry_run:
         summary["would_write_count"] = 1
     write_status = "would_store" if needs_write and dry_run else "not_needed"
     write_reason = "entry absent or stale" if needs_write else "fresh entry already present"
-    if not dry_run and needs_write:
-        write_status = "not_implemented"
-        write_reason = "query-output cache writes are intentionally dry-run only"
+    if needs_write and not dry_run:
+        if cache_write:
+            write_status = _write_cache_entry(entry_path, entry_payload)
+            if write_status == "stored":
+                summary["write_count"] = 1
+                write_reason = "metadata ledger entry stored"
+            else:
+                summary["write_error_count"] = 1
+                write_reason = "metadata ledger entry could not be written"
+                ok = False
+        else:
+            write_status = "not_requested"
+            write_reason = "entry absent or stale but cache write was not requested"
+            summary["would_write_count"] = 1
     return {
+        "ok": ok,
         "schema": QUERY_OUTPUT_CACHE_STORE_REPORT_SCHEMA,
         "enabled": True,
         "dry_run": dry_run,
@@ -517,22 +581,13 @@ def _query_output_cache_store_report(
             "status": write_status,
             "reason": write_reason,
             "entry_schema": QUERY_OUTPUT_CACHE_ENTRY_SCHEMA,
-            "entry_digest": _digest(
-                _query_output_cache_entry(
-                    cache_key=cache_key,
-                    field_fingerprints=field_fingerprints,
-                    key_parts=key_parts,
-                    query_output_digest=query_output_digest,
-                    ttl_seconds=ttl_seconds,
-                    now_epoch=now_epoch,
-                ),
-                field="cache_entry",
-            ),
+            "entry_digest": entry_digest,
         },
         "invalidation": {
             "status": invalidation.get("status", "not_evaluated"),
             "changed_fields": list(invalidation.get("changed_fields", [])),
             "would_invalidate": would_invalidate,
+            "execution_status": invalidate_execution_status,
             "baseline_cache_key": baseline_cache_key,
         },
         "summary": summary,
@@ -549,6 +604,8 @@ def build_query_output_cache_report(
     cache_ttl_seconds: float | int | str | None = None,
     cache_namespace: str | None = None,
     cache_dry_run: bool = True,
+    cache_write: bool = False,
+    cache_invalidate: bool = False,
     now_epoch: float | None = None,
 ) -> dict[str, Any]:
     """Build an offline cache-key and invalidation report for saved query output."""
@@ -564,6 +621,7 @@ def build_query_output_cache_report(
     ok = invalidation["status"] != "invalid_baseline"
     key_parts = _safe_key_parts(material)
     query_output_digest = _digest(query_payload, field="query_output")
+    dry_run = False if cache_write or cache_invalidate else cache_dry_run
     store_report = _query_output_cache_store_report(
         cache_key=cache_key,
         field_fingerprints=fingerprints,
@@ -574,9 +632,12 @@ def build_query_output_cache_report(
         cache_dir=cache_dir,
         cache_ttl_seconds=cache_ttl_seconds,
         cache_namespace=cache_namespace,
-        dry_run=cache_dry_run,
+        dry_run=dry_run,
+        cache_write=cache_write,
+        cache_invalidate=cache_invalidate,
         now_epoch=float(time.time() if now_epoch is None else now_epoch),
     )
+    ok = ok and bool(store_report.get("ok", True))
     return {
         "ok": ok,
         "schema": QUERY_OUTPUT_CACHE_REPORT_SCHEMA,
@@ -597,6 +658,8 @@ def build_query_output_cache_report(
             "cache_store_status": store_report["entry"]["status"],
             "cache_store_would_write_count": store_report["summary"]["would_write_count"],
             "cache_store_would_invalidate_count": store_report["summary"]["would_invalidate_count"],
+            "cache_store_write_count": store_report["summary"]["write_count"],
+            "cache_store_invalidate_count": store_report["summary"]["invalidate_count"],
         },
     }
 
@@ -631,6 +694,8 @@ def render_query_output_cache_markdown(report: Mapping[str, Any]) -> str:
         f"- cache_store_status: `{cache_store_entry.get('status', 'disabled')}`",
         f"- cache_store_would_write_count: `{cache_store_summary.get('would_write_count', 0)}`",
         f"- cache_store_would_invalidate_count: `{cache_store_summary.get('would_invalidate_count', 0)}`",
+        f"- cache_store_write_count: `{cache_store_summary.get('write_count', 0)}`",
+        f"- cache_store_invalidate_count: `{cache_store_summary.get('invalidate_count', 0)}`",
     ]
     if changed_fields:
         lines.extend(["", "## Changed Fields", ""])

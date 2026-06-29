@@ -3611,6 +3611,36 @@ raise SystemExit(code)
             "error": endpoint_circuit_breaker_error,
         }
     )
+    endpoint_partial_ok = endpoint_report_json.exists()
+    endpoint_partial_error = ""
+    if endpoint_partial_ok:
+        try:
+            endpoint_payload = json.loads(endpoint_report_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            endpoint_partial_ok = False
+            endpoint_partial_error = f"invalid endpoint report JSON: {exc}"
+        else:
+            endpoint_partial = endpoint_payload.get("runtime_partial_failure")
+            endpoint_partial_summary = endpoint_partial.get("summary") if isinstance(endpoint_partial, dict) else {}
+            endpoint_partial_ok = (
+                isinstance(endpoint_partial, dict)
+                and endpoint_partial.get("schema") == "ragflow_runtime_partial_failure_report_v1"
+                and isinstance(endpoint_partial_summary, dict)
+                and endpoint_partial_summary.get("status") == "skipped"
+                and endpoint_partial_summary.get("skipped_count") == 2
+            )
+            if not endpoint_partial_ok:
+                endpoint_partial_error = "missing endpoint runtime partial-failure summary"
+    else:
+        endpoint_partial_error = f"missing {endpoint_report_json}"
+    checks.append(
+        {
+            "name": "query endpoint-report partial failure",
+            "ok": endpoint_partial_ok,
+            "path": str(endpoint_report_json),
+            "error": endpoint_partial_error,
+        }
+    )
     for path in (endpoint_report_json, endpoint_report_md, endpoint_redaction_json):
         if path.exists():
             produced.append(path)
@@ -4256,6 +4286,11 @@ raise SystemExit(code)
             str(query_output),
             "--config-version",
             "retrieval-v1",
+            "--cache-dir",
+            str(query_cache_dir),
+            "--cache-ttl-seconds",
+            "60",
+            "--cache-write",
             "--report-json",
             str(query_cache_baseline_json),
             "--json",
@@ -4286,6 +4321,8 @@ raise SystemExit(code)
             str(query_cache_dir),
             "--cache-ttl-seconds",
             "60",
+            "--cache-write",
+            "--cache-invalidate",
             "--report-json",
             str(query_cache_json),
             "--report-md",
@@ -4325,12 +4362,13 @@ raise SystemExit(code)
                 and isinstance(cache_store, dict)
                 and cache_store.get("schema") == "ragflow_query_output_cache_store_report_v1"
                 and cache_store.get("enabled") is True
-                and cache_store.get("dry_run") is True
+                and cache_store.get("dry_run") is False
                 and isinstance(cache_store_summary, dict)
-                and cache_store_summary.get("would_write_count") == 1
+                and cache_store_summary.get("write_count") == 1
+                and cache_store_summary.get("invalidate_count") == 1
             )
             if not query_cache_ok:
-                query_cache_error = "missing query cache invalidation or store dry-run summary"
+                query_cache_error = "missing query cache invalidation or active store summary"
     else:
         query_cache_error = f"missing {query_cache_json}"
     checks.append(

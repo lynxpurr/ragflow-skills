@@ -11,6 +11,7 @@ from ragflow_skill_runtime import (
     RUNTIME_CACHE_REPORT_SCHEMA,
     RUNTIME_CIRCUIT_BREAKER_REPORT_SCHEMA,
     RUNTIME_METRICS_SCHEMA,
+    RUNTIME_PARTIAL_FAILURE_REPORT_SCHEMA,
     RUNTIME_RATE_LIMIT_REPORT_SCHEMA,
     RUNTIME_RETRY_TRACE_SCHEMA,
     build_query_endpoint_report,
@@ -89,11 +90,17 @@ class QueryEndpointReportTests(unittest.TestCase):
         self.assertFalse(report["runtime_rate_limit"]["enabled"])
         self.assertEqual(report["runtime_circuit_breaker"]["schema"], RUNTIME_CIRCUIT_BREAKER_REPORT_SCHEMA)
         self.assertFalse(report["runtime_circuit_breaker"]["enabled"])
+        self.assertEqual(report["runtime_partial_failure"]["schema"], RUNTIME_PARTIAL_FAILURE_REPORT_SCHEMA)
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["status"], "skipped")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["skipped_count"], 3)
+        self.assertEqual(report["summary"]["partial_skipped_count"], 3)
         self.assertIn("RAGFlow Query Endpoint Report", markdown)
         self.assertIn("latency_samples: `0`", markdown)
         self.assertIn("cache_enabled: `false`", markdown)
         self.assertIn("rate_limit_enabled: `false`", markdown)
         self.assertIn("circuit_breaker_enabled: `false`", markdown)
+        self.assertIn("partial_failure_status: `skipped`", markdown)
+        self.assertIn("partial_failure_skipped: `3`", markdown)
         self.assertIn("<lan-host>", serialized)
         self.assertIn("<vpn-host>", serialized)
         self.assertNotIn("192.168.10.20", serialized)
@@ -175,10 +182,40 @@ class QueryEndpointReportTests(unittest.TestCase):
         self.assertEqual(report["runtime_circuit_breaker"]["schema"], RUNTIME_CIRCUIT_BREAKER_REPORT_SCHEMA)
         self.assertTrue(report["runtime_circuit_breaker"]["enabled"])
         self.assertEqual(report["runtime_circuit_breaker"]["summary"]["state"], "open")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["status"], "failed")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["failure_count"], 1)
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["skipped_count"], 1)
         self.assertEqual(report["runtime_metrics"]["counters"]["circuit_breaker_short_circuit_count"], 1)
         self.assertEqual(report["endpoints"][0]["status"], "error")
         self.assertEqual(report["endpoints"][1]["status"], "circuit_open")
         self.assertIn("endpoint_circuit_open", {issue["code"] for issue in report["issues"]})
+
+    def test_endpoint_report_marks_mixed_reachability_as_partial_failure(self) -> None:
+        with endpoint_report_server(statuses=[500, 200]) as base_url:
+            report = build_query_endpoint_report(
+                ragflow_base_url=f"{base_url}/api/v1",
+                extra_endpoints=[
+                    {"label": "llm", "kind": "llm", "url": f"{base_url}/llm/v1"},
+                ],
+                network_check=True,
+                timeout=2.0,
+            )
+
+        markdown = render_query_endpoint_report_markdown(report)
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["status_counts"]["error"], 1)
+        self.assertEqual(report["status_counts"]["reachable"], 1)
+        self.assertEqual(report["runtime_partial_failure"]["schema"], RUNTIME_PARTIAL_FAILURE_REPORT_SCHEMA)
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["status"], "partial")
+        self.assertTrue(report["runtime_partial_failure"]["summary"]["partial"])
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["success_count"], 1)
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["failure_count"], 1)
+        self.assertEqual(report["summary"]["partial_failure_status"], "partial")
+        self.assertEqual(report["summary"]["partial_failure_count"], 1)
+        self.assertEqual(report["runtime_metrics"]["counters"]["partial_failure_count"], 1)
+        self.assertIn("partial_failure_status: `partial`", markdown)
+        self.assertIn("partial_failure_failures: `1`", markdown)
 
     def test_endpoint_report_reuses_cached_reachability_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -4,6 +4,7 @@ import unittest
 
 from ragflow_skill_runtime import (
     RUNTIME_CIRCUIT_BREAKER_REPORT_SCHEMA,
+    RUNTIME_PARTIAL_FAILURE_REPORT_SCHEMA,
     RUNTIME_RATE_LIMIT_REPORT_SCHEMA,
     RUNTIME_RETRY_TRACE_SCHEMA,
     RuntimeCircuitBreaker,
@@ -11,11 +12,36 @@ from ragflow_skill_runtime import (
     RuntimeRateLimitPolicy,
     RuntimeRateLimiter,
     RuntimeRetryPolicy,
+    build_runtime_partial_failure_report,
     run_with_retry,
 )
 
 
 class RuntimeResilienceTests(unittest.TestCase):
+    def test_partial_failure_report_summarizes_timeout_partial_and_skipped(self) -> None:
+        report = build_runtime_partial_failure_report(
+            "test_operation",
+            [
+                {"label": "primary", "status": "reachable"},
+                {"label": "slow", "status": "timeout"},
+                {"label": "http://example.test/leaky", "status": "not_checked"},
+            ],
+        )
+
+        self.assertEqual(report["schema"], RUNTIME_PARTIAL_FAILURE_REPORT_SCHEMA)
+        self.assertEqual(report["operation"], "test_operation")
+        self.assertEqual(report["summary"]["status"], "partial")
+        self.assertTrue(report["summary"]["partial"])
+        self.assertFalse(report["summary"]["completed"])
+        self.assertEqual(report["summary"]["success_count"], 1)
+        self.assertEqual(report["summary"]["failure_count"], 1)
+        self.assertEqual(report["summary"]["timeout_count"], 1)
+        self.assertEqual(report["summary"]["skipped_count"], 1)
+        self.assertEqual(report["status_counts"]["timeout"], 1)
+        self.assertEqual(report["timeout_labels"], ["slow"])
+        self.assertEqual(report["skipped_labels"], ["item_3"])
+        self.assertNotIn("http://example.test", str(report))
+
     def test_circuit_breaker_policy_rejects_invalid_threshold_and_recovery(self) -> None:
         with self.assertRaises(ValueError):
             RuntimeCircuitBreakerPolicy(failure_threshold=0)
