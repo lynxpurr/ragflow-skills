@@ -23,6 +23,8 @@ from typing import Any, Mapping
 from urllib import error, request
 from urllib.parse import unquote, urlparse
 
+from .runtime_resilience import build_runtime_partial_failure_report
+
 
 class DocConvertError(RuntimeError):
     """Raised when document conversion cannot proceed."""
@@ -61,6 +63,9 @@ MINERU_AUTO_EXTENSIONS = {
 DEFAULT_MINERU_BASE_URL = "https://mineru.net/api/v1/agent"
 BACKEND_PROBE_REPORT_SCHEMA = "ragflow_doc_backend_probe_report_v1"
 BACKEND_PROBE_STATUSES = ("available", "missing", "wrong_protocol", "timeout", "not_configured")
+BACKEND_PROBE_RUNTIME_SUCCESS_STATUSES = ("available",)
+BACKEND_PROBE_RUNTIME_FAILURE_STATUSES = ("missing", "wrong_protocol", "timeout")
+BACKEND_PROBE_RUNTIME_SKIPPED_STATUSES = ("not_configured",)
 BACKEND_WARMUP_REPORT_SCHEMA = "ragflow_doc_backend_warmup_report_v1"
 BACKEND_WARMUP_STATUSES = ("success", "failed")
 DOC_RUNTIME_REPORT_SCHEMA = "ragflow_doc_runtime_report_v1"
@@ -703,6 +708,18 @@ def _backend_probe_entry(
     }
 
 
+def _backend_runtime_partial_failure_report(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    return build_runtime_partial_failure_report(
+        BACKEND_PROBE_REPORT_SCHEMA,
+        entries,
+        label_field="backend",
+        success_statuses=BACKEND_PROBE_RUNTIME_SUCCESS_STATUSES,
+        warning_statuses=(),
+        failure_statuses=BACKEND_PROBE_RUNTIME_FAILURE_STATUSES,
+        skipped_statuses=BACKEND_PROBE_RUNTIME_SKIPPED_STATUSES,
+    )
+
+
 def _probe_single_backend(
     backend: str,
     *,
@@ -817,6 +834,8 @@ def probe_conversion_backends(
     status_counts = {status: 0 for status in BACKEND_PROBE_STATUSES}
     for entry in entries:
         status_counts[str(entry.get("status"))] = status_counts.get(str(entry.get("status")), 0) + 1
+    runtime_partial_failure = _backend_runtime_partial_failure_report(entries)
+    runtime_partial_summary = runtime_partial_failure["summary"]
     return {
         "ok": True,
         "schema": BACKEND_PROBE_REPORT_SCHEMA,
@@ -832,7 +851,12 @@ def probe_conversion_backends(
             "wrong_protocol": status_counts.get("wrong_protocol", 0),
             "timeout": status_counts.get("timeout", 0),
             "not_configured": status_counts.get("not_configured", 0),
+            "runtime_partial_failure_status": runtime_partial_summary["status"],
+            "runtime_failure_count": runtime_partial_summary["failure_count"],
+            "runtime_timeout_count": runtime_partial_summary["timeout_count"],
+            "runtime_skipped_count": runtime_partial_summary["skipped_count"],
         },
+        "runtime_partial_failure": runtime_partial_failure,
         "backends": entries,
     }
 
@@ -841,6 +865,16 @@ def render_backend_probe_markdown(report: Mapping[str, Any]) -> str:
     """Render a compact Markdown backend probe report."""
 
     summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    runtime_partial = (
+        report.get("runtime_partial_failure")
+        if isinstance(report.get("runtime_partial_failure"), Mapping)
+        else {}
+    )
+    runtime_partial_summary = (
+        runtime_partial.get("summary")
+        if isinstance(runtime_partial.get("summary"), Mapping)
+        else {}
+    )
     lines = [
         "# RAGFlow Doc Backend Probe",
         "",
@@ -852,10 +886,24 @@ def render_backend_probe_markdown(report: Mapping[str, Any]) -> str:
         f"- wrong_protocol: `{summary.get('wrong_protocol', 0)}`",
         f"- timeout: `{summary.get('timeout', 0)}`",
         f"- not_configured: `{summary.get('not_configured', 0)}`",
-        "",
-        "| backend | status | reasons |",
-        "| --- | --- | --- |",
     ]
+    if runtime_partial:
+        lines.extend(
+            [
+                f"- runtime_partial_failure_status: `{runtime_partial_summary.get('status', 'unknown')}`",
+                f"- runtime_partial_failure_partial: `{str(runtime_partial_summary.get('partial', False)).lower()}`",
+                f"- runtime_failures: `{runtime_partial_summary.get('failure_count', 0)}`",
+                f"- runtime_timeouts: `{runtime_partial_summary.get('timeout_count', 0)}`",
+                f"- runtime_skipped: `{runtime_partial_summary.get('skipped_count', 0)}`",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "| backend | status | reasons |",
+            "| --- | --- | --- |",
+        ]
+    )
     for entry in report.get("backends", []):
         if not isinstance(entry, Mapping):
             continue

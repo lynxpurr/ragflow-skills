@@ -16,6 +16,7 @@ from build_release import DIST_DIR, PUBLIC_SKILLS, ROOT, build_release
 from forward_test_prompt_check import run_forward_test_prompt_check
 from generated_markdown_audit import run_generated_markdown_audit
 from rename_governance_check import run_rename_governance_check
+from runtime_resilience_inventory import run_runtime_resilience_inventory
 from schema_identity_check import run_schema_identity_check
 from version_date_drift_check import run_version_date_drift_check
 
@@ -794,6 +795,7 @@ def run_hygiene_check(
     forward_test_prompts: bool = True,
     version_date_drift: bool = True,
     generated_report_safety: bool = True,
+    runtime_resilience_inventory: bool = True,
 ) -> dict[str, Any]:
     if rebuild:
         build_release(dist_dir)
@@ -852,6 +854,10 @@ def run_hygiene_check(
         generated_markdown_payload = run_generated_markdown_audit(root=ROOT)
         payload["generated_markdown_audit"] = generated_markdown_payload
         payload["ok"] = bool(payload["ok"] and generated_markdown_payload["ok"])
+    if runtime_resilience_inventory:
+        runtime_resilience_payload = run_runtime_resilience_inventory(root=ROOT)
+        payload["runtime_resilience_inventory"] = runtime_resilience_payload
+        payload["ok"] = bool(payload["ok"] and runtime_resilience_payload["ok"])
     return payload
 
 
@@ -866,6 +872,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-forward-test-prompts", action="store_true", help="Skip host-agent forward-test prompt checks")
     parser.add_argument("--skip-version-date-drift", action="store_true", help="Skip static version/date drift checks")
     parser.add_argument("--skip-generated-report-safety", action="store_true", help="Skip generated report/example safety checks")
+    parser.add_argument("--skip-runtime-resilience-inventory", action="store_true", help="Skip static runtime-resilience inventory checks")
     args = parser.parse_args(argv)
 
     payload = run_hygiene_check(
@@ -878,6 +885,7 @@ def main(argv: list[str] | None = None) -> int:
         forward_test_prompts=not args.skip_forward_test_prompts,
         version_date_drift=not args.skip_version_date_drift,
         generated_report_safety=not args.skip_generated_report_safety,
+        runtime_resilience_inventory=not args.skip_runtime_resilience_inventory,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if payload["ok"] else 1

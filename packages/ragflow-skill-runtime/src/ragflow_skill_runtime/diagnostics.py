@@ -9,9 +9,13 @@ from typing import Any, Mapping
 
 from .kb_build import parse_state_failed, parse_state_succeeded
 from .manifests import KbManifest
+from .runtime_resilience import build_runtime_partial_failure_report
 
 
 DIAGNOSTIC_REPORT_SCHEMA = "ragflow_kb_diagnostic_report_v1"
+DIAGNOSTIC_RUNTIME_SUCCESS_STATUSES = ("success",)
+DIAGNOSTIC_RUNTIME_WARNING_STATUSES = ("warning",)
+DIAGNOSTIC_RUNTIME_FAILURE_STATUSES = ("error",)
 SHORT_ID_MIN_LENGTH = 16
 SUFFIX_FRAGMENT_RE = re.compile(r"\(\d+\)$")
 
@@ -106,6 +110,28 @@ def _add_dataset_candidate_issues(
                 recommendation="Confirm the intended dataset before building or validating; suffix fragments often indicate duplicate-name retries.",
             )
         )
+
+
+def _diagnostic_runtime_partial_failure_report(
+    *,
+    operation: str,
+    label: str,
+    counts: Mapping[str, int],
+) -> dict[str, Any]:
+    if int(counts.get("error", 0) or 0) > 0:
+        status = "error"
+    elif int(counts.get("warning", 0) or 0) > 0:
+        status = "warning"
+    else:
+        status = "success"
+    return build_runtime_partial_failure_report(
+        operation,
+        [{"label": label, "status": status}],
+        success_statuses=DIAGNOSTIC_RUNTIME_SUCCESS_STATUSES,
+        warning_statuses=DIAGNOSTIC_RUNTIME_WARNING_STATUSES,
+        failure_statuses=DIAGNOSTIC_RUNTIME_FAILURE_STATUSES,
+        skipped_statuses=(),
+    )
 
 
 def diagnose_kb_manifest(
@@ -247,12 +273,25 @@ def probe_ragflow_client(client: Any, *, page_size: int = 50) -> dict[str, Any]:
         )
 
     counts = _issue_counts(issues)
+    runtime_partial_failure = _diagnostic_runtime_partial_failure_report(
+        operation=DIAGNOSTIC_REPORT_SCHEMA,
+        label="list_datasets",
+        counts=counts,
+    )
+    runtime_partial_summary = runtime_partial_failure["summary"]
     return {
         "schema": DIAGNOSTIC_REPORT_SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "ok": counts["error"] == 0,
         "subject": {"base_url": getattr(getattr(client, "config", None), "base_url", None)},
-        "summary": counts,
+        "summary": {
+            **counts,
+            "runtime_partial_failure_status": runtime_partial_summary["status"],
+            "runtime_failure_count": runtime_partial_summary["failure_count"],
+            "runtime_timeout_count": runtime_partial_summary["timeout_count"],
+            "runtime_skipped_count": runtime_partial_summary["skipped_count"],
+        },
+        "runtime_partial_failure": runtime_partial_failure,
         "capabilities": capabilities,
         "issues": [issue.to_dict() for issue in issues],
     }
@@ -263,6 +302,16 @@ def render_diagnostic_markdown(report: Mapping[str, Any]) -> str:
 
     subject = report.get("subject", {}) if isinstance(report.get("subject"), Mapping) else {}
     summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    runtime_partial = (
+        report.get("runtime_partial_failure")
+        if isinstance(report.get("runtime_partial_failure"), Mapping)
+        else {}
+    )
+    runtime_partial_summary = (
+        runtime_partial.get("summary")
+        if isinstance(runtime_partial.get("summary"), Mapping)
+        else {}
+    )
     lines = [
         "# RAGFlow Diagnostic Report",
         "",
@@ -270,8 +319,18 @@ def render_diagnostic_markdown(report: Mapping[str, Any]) -> str:
         f"- Errors: {summary.get('error', 0)}",
         f"- Warnings: {summary.get('warning', 0)}",
         f"- Infos: {summary.get('info', 0)}",
-        "",
     ]
+    if runtime_partial:
+        lines.extend(
+            [
+                f"- runtime_partial_failure_status: `{runtime_partial_summary.get('status', 'unknown')}`",
+                f"- runtime_partial_failure_partial: `{str(runtime_partial_summary.get('partial', False)).lower()}`",
+                f"- runtime_failures: `{runtime_partial_summary.get('failure_count', 0)}`",
+                f"- runtime_timeouts: `{runtime_partial_summary.get('timeout_count', 0)}`",
+                f"- runtime_skipped: `{runtime_partial_summary.get('skipped_count', 0)}`",
+            ]
+        )
+    lines.append("")
     dataset = subject.get("dataset") if isinstance(subject.get("dataset"), Mapping) else None
     if dataset:
         lines.extend(

@@ -383,12 +383,18 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["rerank_model_count"], 1)
         self.assertEqual(payload["summary"]["configured_adapter_count"], 2)
         self.assertEqual(payload["summary"]["handled_empty_input_adapter_count"], 2)
+        self.assertEqual(payload["summary"]["runtime_partial_failure_status"], "partial")
+        self.assertEqual(payload["runtime_partial_failure"]["schema"], "ragflow_runtime_partial_failure_report_v1")
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["success_count"], 3)
+        self.assertGreaterEqual(payload["runtime_partial_failure"]["summary"]["failure_count"], 1)
         self.assertTrue(all(check["found"] for check in payload["expected_model_checks"]))
         self.assertEqual(report_payload["summary"]["provider_count"], 1)
+        self.assertEqual(report_payload["runtime_partial_failure"]["summary"]["status"], "partial")
         self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
         self.assertGreaterEqual(redaction_payload["target_counts"]["explicit_secrets"], 1)
         self.assertGreaterEqual(redaction_payload["target_counts"]["private_hosts"], 1)
         self.assertIn("RAGFlow Model Provider Probe", markdown)
+        self.assertIn("runtime_partial_failure_status: `partial`", markdown)
 
     def test_inspect_handoff_via_build_subcommand(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1181,6 +1187,113 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(suggest_result.returncode, 0, suggest_result.stdout)
         self.assertIn("ragflow_benchmark_retrieval_suggestion_report_v1", suggest_result.stdout)
         self.assertIn("RAGFlow Benchmark Retrieval Suggestions", suggest_md_text)
+
+    def test_benchmark_import_checkpoint_resume_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            qa = root / "qa.json"
+            benchmark_dir = root / "benchmark"
+            checkpoint = root / "benchmark-import.checkpoint.json"
+            first_report = root / "first_import.json"
+            second_report = root / "second_import.json"
+            queries.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {"id": "q1", "question": "What is supported?", "metadata": {"type": "fact"}},
+                            {"id": "q2", "question": "What resumes?", "metadata": {"type": "workflow"}},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            qrels.write_text(json.dumps({"q1": {"source.md": 1}, "q2": {"resume.md": 1}}), encoding="utf-8")
+            qa.write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {"id": "qa1", "query_id": "q1", "question": "What is supported?", "answer": "Import."},
+                            {"id": "qa2", "query_id": "q2", "question": "What resumes?", "answer": "Checkpoint."},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            first = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "import",
+                    "--queries",
+                    str(queries),
+                    "--qrels",
+                    str(qrels),
+                    "--qa",
+                    str(qa),
+                    "--output",
+                    str(benchmark_dir),
+                    "--checkpoint",
+                    str(checkpoint),
+                    "--batch-size",
+                    "1",
+                    "--report-json",
+                    str(first_report),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            partial_queries = json.loads((benchmark_dir / "queries.json").read_text(encoding="utf-8"))
+
+            second = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "import",
+                    "--queries",
+                    str(queries),
+                    "--qrels",
+                    str(qrels),
+                    "--qa",
+                    str(qa),
+                    "--output",
+                    str(benchmark_dir),
+                    "--checkpoint",
+                    str(checkpoint),
+                    "--resume",
+                    "--batch-size",
+                    "1",
+                    "--report-json",
+                    str(second_report),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            second_payload = json.loads(second_report.read_text(encoding="utf-8"))
+            checkpoint_payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+            final_queries = json.loads((benchmark_dir / "queries.json").read_text(encoding="utf-8"))
+            final_qa = json.loads((benchmark_dir / "qa.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertEqual([item["id"] for item in partial_queries["queries"]], ["q1"])
+        self.assertTrue(second_payload["completed"])
+        self.assertEqual(second_payload["checkpoint"]["resume"], True)
+        self.assertEqual(second_payload["checkpoint"]["processed_query_count"], 2)
+        self.assertEqual(checkpoint_payload["schema"], "ragflow_benchmark_import_checkpoint_v1")
+        self.assertEqual(checkpoint_payload["processed_query_ids"], ["q1", "q2"])
+        self.assertEqual([item["id"] for item in final_queries["queries"]], ["q1", "q2"])
+        self.assertEqual([item["id"] for item in final_qa["items"]], ["qa1", "qa2"])
 
     def test_benchmark_report_surfaces_emit_redaction_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3792,6 +3905,8 @@ class KbBuildCliTests(unittest.TestCase):
                 if report_md:
                     combined_parts.append(report_md.read_text(encoding="utf-8"))
                 combined_parts.append(redaction.read_text(encoding="utf-8"))
+            probe_payload = json.loads(probe_json.read_text(encoding="utf-8"))
+            probe_markdown = probe_md.read_text(encoding="utf-8")
             combined = "\n".join(combined_parts)
 
         for result in results:
@@ -3802,6 +3917,9 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("ragflow_handoff_inspection_v1", inspect_handoff_result.stdout)
         self.assertIn("ragflow_kb_diagnostic_report_v1", diagnose_result.stdout)
         self.assertIn("ragflow_kb_diagnostic_report_v1", probe_result.stdout)
+        self.assertEqual(probe_payload["runtime_partial_failure"]["schema"], "ragflow_runtime_partial_failure_report_v1")
+        self.assertEqual(probe_payload["summary"]["runtime_partial_failure_status"], "completed_with_warnings")
+        self.assertIn("runtime_partial_failure_status: `completed_with_warnings`", probe_markdown)
         self.assertIn("RAGFlow Validation Report", combined)
         self.assertNotIn(fake_host, combined)
         self.assertNotIn(fake_secret, combined)

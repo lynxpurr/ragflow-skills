@@ -1488,8 +1488,30 @@ The same endpoint-report surface now emits `ragflow_runtime_partial_failure_repo
 to summarize timeout, skipped, failed, warning, and partial endpoint outcomes without
 echoing raw URLs, API keys, cache paths, or endpoint reasons. Offline
 `ragflow-query fallback-test` reports now reuse the same runtime schema for non-endpoint
-timeout, malformed, skipped, and partial fallback profiles. Broad checkpoint/resume
-helpers and cross-skill partial-failure rollout remain open Phase 31 work.
+timeout, malformed, skipped, and partial fallback profiles. `ragflow-doc-to-md backend probe`
+also emits the schema for available, missing, wrong-protocol, timeout, and not-configured
+backend readiness profiles without changing its default no-network behavior.
+`ragflow-kb-build model-providers probe` emits the schema for read-only provider endpoint
+candidates and explicit adapter empty-input probes, so default compatibility sweeps can
+report partial endpoint coverage while single-endpoint fake probes can report completed
+coverage. `ragflow-kb-build probe` emits the schema for read-only dataset-list
+diagnostics, including completed-with-warnings reports when reachable endpoints return
+short dataset IDs. Broad checkpoint/resume helpers and cross-skill partial-failure
+rollout remain open Phase 31 work.
+
+`tools/runtime_resilience_inventory.py` now emits
+`ragflow_runtime_resilience_inventory_v1` and is run by release hygiene as a static Phase
+31 governance surface. It reuses the public command inventory and classifies current
+runtime-helper coverage as 10 covered commands, 9 candidate commands, 2 deferred live
+commands, and 58 not-applicable commands with no stale classification findings. Covered
+commands include the endpoint-report helper pilot, query fallback partial-failure reports,
+query-output cache reports, centroid build checkpoints, doc-to-md process cleanup
+reporting, backend probe/warmup reporting, model-provider probe partial-failure reports,
+KB probe partial-failure reports, and offline `ragflow-kb-build benchmark import`
+checkpoint/resume. Candidate commands keep broad checkpoint/resume and broader
+partial-failure rollout explicit without enabling new live mutation; the next lower-risk
+candidates are fake-client partial-failure coverage for `validate` and `snapshot-chunks`,
+followed by broader checkpoint/resume rollout for other bounded offline jobs.
 
 The final generated-Markdown audit is implemented in `tools/generated_markdown_audit.py`.
 It consumes the report-surface inventory, selects covered report surfaces with generated

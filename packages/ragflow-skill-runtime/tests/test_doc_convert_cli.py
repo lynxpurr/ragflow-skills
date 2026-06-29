@@ -1407,8 +1407,14 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(payload["schema"], "ragflow_doc_backend_probe_report_v1")
         self.assertEqual(payload["backends"][0]["backend"], "builtin")
         self.assertEqual(payload["backends"][0]["status"], "available")
+        self.assertEqual(payload["runtime_partial_failure"]["schema"], "ragflow_runtime_partial_failure_report_v1")
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["status"], "completed")
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["success_count"], 1)
         self.assertEqual(report_payload["summary"]["available"], 1)
+        self.assertEqual(report_payload["summary"]["runtime_partial_failure_status"], "completed")
         self.assertIn("RAGFlow Doc Backend Probe", markdown)
+        self.assertIn("runtime_partial_failure_status: `completed`", markdown)
+        self.assertIn("runtime_failures: `0`", markdown)
 
     def test_backend_probe_classifies_remote_config_gaps(self) -> None:
         missing = subprocess.run(
@@ -1438,8 +1444,12 @@ class DocConvertCliTests(unittest.TestCase):
 
         self.assertEqual(missing.returncode, 0, missing.stderr)
         self.assertEqual(wrong_protocol.returncode, 0, wrong_protocol.stderr)
-        self.assertEqual(json.loads(missing.stdout)["backends"][0]["status"], "not_configured")
-        self.assertEqual(json.loads(wrong_protocol.stdout)["backends"][0]["status"], "wrong_protocol")
+        missing_payload = json.loads(missing.stdout)
+        wrong_protocol_payload = json.loads(wrong_protocol.stdout)
+        self.assertEqual(missing_payload["backends"][0]["status"], "not_configured")
+        self.assertEqual(missing_payload["runtime_partial_failure"]["summary"]["status"], "skipped")
+        self.assertEqual(wrong_protocol_payload["backends"][0]["status"], "wrong_protocol")
+        self.assertEqual(wrong_protocol_payload["runtime_partial_failure"]["summary"]["status"], "failed")
 
     def test_backend_probe_writes_redaction_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

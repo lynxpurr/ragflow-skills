@@ -1125,6 +1125,38 @@ def _run_no_network_checks(
         produced.append(backend_probe_md)
     if backend_probe_redaction.exists():
         produced.append(backend_probe_redaction)
+    backend_probe_partial_ok = backend_probe_json.exists()
+    backend_probe_partial_error = ""
+    if backend_probe_partial_ok:
+        try:
+            backend_probe_payload = json.loads(backend_probe_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            backend_probe_partial_ok = False
+            backend_probe_partial_error = f"invalid backend probe JSON: {exc}"
+        else:
+            backend_probe_partial = backend_probe_payload.get("runtime_partial_failure")
+            backend_probe_partial_summary = (
+                backend_probe_partial.get("summary") if isinstance(backend_probe_partial, dict) else {}
+            )
+            backend_probe_partial_ok = (
+                isinstance(backend_probe_partial, dict)
+                and backend_probe_partial.get("schema") == "ragflow_runtime_partial_failure_report_v1"
+                and isinstance(backend_probe_partial_summary, dict)
+                and backend_probe_partial_summary.get("status") == "completed"
+                and backend_probe_partial_summary.get("success_count") == 1
+            )
+            if not backend_probe_partial_ok:
+                backend_probe_partial_error = "missing backend probe runtime partial-failure summary"
+    else:
+        backend_probe_partial_error = f"missing {backend_probe_json}"
+    checks.append(
+        {
+            "name": "doc-to-md backend probe partial failure",
+            "ok": backend_probe_partial_ok,
+            "path": str(backend_probe_json),
+            "error": backend_probe_partial_error,
+        }
+    )
 
     backend_warmup_json = work_root / "backend_warmup.json"
     backend_warmup_md = work_root / "backend_warmup.md"
@@ -2060,6 +2092,39 @@ def _run_no_network_checks(
     for path in (model_provider_json, model_provider_md, model_provider_redaction):
         if path.exists():
             produced.append(path)
+    model_provider_partial_ok = model_provider_json.exists()
+    model_provider_partial_error = ""
+    if model_provider_partial_ok:
+        try:
+            model_provider_payload = json.loads(model_provider_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            model_provider_partial_ok = False
+            model_provider_partial_error = f"invalid model-provider probe JSON: {exc}"
+        else:
+            model_provider_partial = model_provider_payload.get("runtime_partial_failure")
+            model_provider_partial_summary = (
+                model_provider_partial.get("summary") if isinstance(model_provider_partial, dict) else {}
+            )
+            model_provider_partial_ok = (
+                isinstance(model_provider_partial, dict)
+                and model_provider_partial.get("schema") == "ragflow_runtime_partial_failure_report_v1"
+                and isinstance(model_provider_partial_summary, dict)
+                and model_provider_partial_summary.get("status") == "partial"
+                and model_provider_partial_summary.get("success_count") == 3
+                and model_provider_partial_summary.get("failure_count", 0) >= 1
+            )
+            if not model_provider_partial_ok:
+                model_provider_partial_error = "missing model-provider runtime partial-failure summary"
+    else:
+        model_provider_partial_error = f"missing {model_provider_json}"
+    checks.append(
+        {
+            "name": "kb-build model-providers partial failure",
+            "ok": model_provider_partial_ok,
+            "path": str(model_provider_json),
+            "error": model_provider_partial_error,
+        }
+    )
 
     inspect_handoff_json = work_root / "handoff_inspection.json"
     inspect_handoff_report = work_root / "handoff_inspection.md"
@@ -3367,6 +3432,36 @@ raise SystemExit(code)
     for path in (probe_json, probe_md, probe_redaction):
         if path.exists():
             produced.append(path)
+    probe_partial_ok = probe_json.exists()
+    probe_partial_error = ""
+    if probe_partial_ok:
+        try:
+            probe_payload = json.loads(probe_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            probe_partial_ok = False
+            probe_partial_error = f"invalid probe JSON: {exc}"
+        else:
+            probe_partial = probe_payload.get("runtime_partial_failure")
+            probe_partial_summary = probe_partial.get("summary") if isinstance(probe_partial, dict) else {}
+            probe_partial_ok = (
+                isinstance(probe_partial, dict)
+                and probe_partial.get("schema") == "ragflow_runtime_partial_failure_report_v1"
+                and isinstance(probe_partial_summary, dict)
+                and probe_partial_summary.get("status") == "completed_with_warnings"
+                and probe_partial_summary.get("warning_count") == 1
+            )
+            if not probe_partial_ok:
+                probe_partial_error = "missing probe runtime partial-failure summary"
+    else:
+        probe_partial_error = f"missing {probe_json}"
+    checks.append(
+        {
+            "name": "kb-build probe partial failure",
+            "ok": probe_partial_ok,
+            "path": str(probe_json),
+            "error": probe_partial_error,
+        }
+    )
 
     query_script = _skill_path(extract_dir, "ragflow-query", "scripts", "query.py")
     query_help = _run_command([python_executable, str(query_script), "--help"], cwd=work_root, env=env)

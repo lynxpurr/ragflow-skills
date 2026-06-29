@@ -8,6 +8,7 @@ from pathlib import Path
 from ragflow_skill_runtime.benchmark_governance import (
     BENCHMARK_DELTA_REPORT_SCHEMA,
     BENCHMARK_GATE_REPORT_SCHEMA,
+    BENCHMARK_IMPORT_CHECKPOINT_SCHEMA,
     BENCHMARK_IMPORT_REPORT_SCHEMA,
     BENCHMARK_PREFLIGHT_REPORT_SCHEMA,
     BENCHMARK_RETRIEVAL_SUGGESTION_REPORT_SCHEMA,
@@ -62,6 +63,83 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertTrue(import_report["ok"])
         self.assertEqual(import_report["summary"]["query_count"], 1)
         self.assertEqual(preflight["schema"], BENCHMARK_PREFLIGHT_REPORT_SCHEMA)
+        self.assertTrue(preflight["ok"], preflight["issues"])
+
+    def test_import_benchmark_dataset_can_checkpoint_and_resume_batches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            qa = root / "qa.json"
+            output = root / "benchmark"
+            checkpoint = root / "benchmark-import.checkpoint.json"
+            queries.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {"id": "q1", "question": "What is supported?", "metadata": {"type": "fact"}},
+                            {"id": "q2", "question": "What can resume?", "metadata": {"type": "workflow"}},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            qrels.write_text(json.dumps({"q1": {"source.md": 1}, "q2": {"resume.md": 1}}), encoding="utf-8")
+            qa.write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {"id": "qa1", "query_id": "q1", "question": "What is supported?", "answer": "Benchmark import."},
+                            {"id": "qa2", "query_id": "q2", "question": "What can resume?", "answer": "Checkpoint resume."},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            first = import_benchmark_dataset(
+                queries_path=queries,
+                qrels_path=qrels,
+                qa_path=qa,
+                output_dir=output,
+                checkpoint_path=checkpoint,
+                batch_size=1,
+            )
+            partial_queries = json.loads((output / "queries.json").read_text(encoding="utf-8"))
+            partial_qrels = json.loads((output / "qrels.json").read_text(encoding="utf-8"))
+            partial_qa = json.loads((output / "qa.json").read_text(encoding="utf-8"))
+
+            second = import_benchmark_dataset(
+                queries_path=queries,
+                qrels_path=qrels,
+                qa_path=qa,
+                output_dir=output,
+                checkpoint_path=checkpoint,
+                resume=True,
+                batch_size=1,
+            )
+            checkpoint_payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+            final_queries = json.loads((output / "queries.json").read_text(encoding="utf-8"))
+            final_qrels = json.loads((output / "qrels.json").read_text(encoding="utf-8"))
+            final_qa = json.loads((output / "qa.json").read_text(encoding="utf-8"))
+            preflight = preflight_benchmark_dataset(manifest_path=output / "manifest.json")
+
+        self.assertEqual(first["schema"], BENCHMARK_IMPORT_REPORT_SCHEMA)
+        self.assertFalse(first["completed"])
+        self.assertEqual(first["checkpoint"]["new_query_count"], 1)
+        self.assertEqual([item["id"] for item in partial_queries["queries"]], ["q1"])
+        self.assertEqual([item["query_id"] for item in partial_qrels["qrels"]], ["q1"])
+        self.assertEqual([item["id"] for item in partial_qa["items"]], ["qa1"])
+
+        self.assertTrue(second["completed"])
+        self.assertEqual(second["checkpoint"]["resume"], True)
+        self.assertEqual(second["checkpoint"]["processed_query_count"], 2)
+        self.assertEqual(checkpoint_payload["schema"], BENCHMARK_IMPORT_CHECKPOINT_SCHEMA)
+        self.assertTrue(checkpoint_payload["summary"]["completed"])
+        self.assertEqual(checkpoint_payload["processed_query_ids"], ["q1", "q2"])
+        self.assertEqual([item["id"] for item in final_queries["queries"]], ["q1", "q2"])
+        self.assertEqual([item["query_id"] for item in final_qrels["qrels"]], ["q1", "q2"])
+        self.assertEqual([item["id"] for item in final_qa["items"]], ["qa1", "qa2"])
         self.assertTrue(preflight["ok"], preflight["issues"])
 
     def test_snapshot_chunks_from_validation_report(self) -> None:

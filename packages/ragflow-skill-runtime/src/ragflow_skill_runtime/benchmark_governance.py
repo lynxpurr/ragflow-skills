@@ -39,6 +39,7 @@ GROUNDED_QA_VALIDATE_REPORT_SCHEMA = "ragflow_grounded_qa_validate_report_v1"
 GROUNDED_QA_EVIDENCE_MAP_SCHEMA = "ragflow_grounded_qa_evidence_map_v1"
 GROUNDED_QA_EVIDENCE_MAP_REPORT_SCHEMA = "ragflow_grounded_qa_evidence_map_report_v1"
 BENCHMARK_IMPORT_REPORT_SCHEMA = "ragflow_benchmark_import_report_v1"
+BENCHMARK_IMPORT_CHECKPOINT_SCHEMA = "ragflow_benchmark_import_checkpoint_v1"
 BENCHMARK_SAMPLE_REPORT_SCHEMA = "ragflow_benchmark_sample_report_v1"
 BENCHMARK_PREFLIGHT_REPORT_SCHEMA = "ragflow_benchmark_preflight_report_v1"
 BENCHMARK_SUMMARY_REPORT_SCHEMA = "ragflow_benchmark_summary_report_v1"
@@ -1326,6 +1327,77 @@ def _write_benchmark_artifacts(
     }
 
 
+def _source_hash_map(paths: Iterable[str | Path | None]) -> dict[str, str]:
+    return {item["path"]: item["sha256"] for item in _source_hashes(paths)}
+
+
+def _read_benchmark_import_checkpoint(path: Path) -> dict[str, Any]:
+    payload = _read_json(path)
+    if not isinstance(payload, Mapping):
+        raise BenchmarkGovernanceError("benchmark import checkpoint must be a JSON object")
+    if payload.get("schema") != BENCHMARK_IMPORT_CHECKPOINT_SCHEMA:
+        raise BenchmarkGovernanceError(f"benchmark import checkpoint schema must be {BENCHMARK_IMPORT_CHECKPOINT_SCHEMA}")
+    processed = payload.get("processed_query_ids")
+    if not isinstance(processed, list) or not all(isinstance(item, str) for item in processed):
+        raise BenchmarkGovernanceError("benchmark import checkpoint processed_query_ids must be a list of strings")
+    source_hashes = payload.get("source_hashes")
+    if not isinstance(source_hashes, Mapping):
+        raise BenchmarkGovernanceError("benchmark import checkpoint source_hashes must be an object")
+    return dict(payload)
+
+
+def _validate_benchmark_import_checkpoint(
+    checkpoint: Mapping[str, Any],
+    *,
+    source_hashes: Mapping[str, str],
+    output_dir: str | Path,
+    name: str,
+    description: str,
+) -> None:
+    checkpoint_hashes = checkpoint.get("source_hashes")
+    if dict(checkpoint_hashes or {}) != dict(source_hashes):
+        raise BenchmarkGovernanceError("benchmark import checkpoint source hashes do not match current inputs")
+    if str(checkpoint.get("output_dir") or "") != str(Path(output_dir)):
+        raise BenchmarkGovernanceError("benchmark import checkpoint output_dir does not match current output")
+    if str(checkpoint.get("name") or "") != name:
+        raise BenchmarkGovernanceError("benchmark import checkpoint name does not match current name")
+    if str(checkpoint.get("description") or "") != description:
+        raise BenchmarkGovernanceError("benchmark import checkpoint description does not match current description")
+
+
+def _write_benchmark_import_checkpoint(
+    *,
+    checkpoint_path: str | Path,
+    source_hashes: Mapping[str, str],
+    output_dir: str | Path,
+    name: str,
+    description: str,
+    processed_query_ids: Iterable[str],
+    total_query_count: int,
+    completed: bool,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    processed = list(dict.fromkeys(str(item) for item in processed_query_ids))
+    payload = {
+        "schema": BENCHMARK_IMPORT_CHECKPOINT_SCHEMA,
+        "created_at": created_at or _now(),
+        "updated_at": _now(),
+        "source_hashes": dict(source_hashes),
+        "output_dir": str(Path(output_dir)),
+        "name": name,
+        "description": description,
+        "processed_query_ids": processed,
+        "summary": {
+            "processed_query_count": len(processed),
+            "total_query_count": total_query_count,
+            "remaining_query_count": max(total_query_count - len(processed), 0),
+            "completed": bool(completed),
+        },
+    }
+    _write_json(checkpoint_path, payload)
+    return payload
+
+
 def import_benchmark_dataset(
     *,
     queries_path: str | Path,
@@ -1334,26 +1406,100 @@ def import_benchmark_dataset(
     name: str = "benchmark",
     description: str = "",
     qa_path: str | Path | None = None,
+    checkpoint_path: str | Path | None = None,
+    resume: bool = False,
+    batch_size: int | None = None,
 ) -> dict[str, Any]:
     """Normalize user benchmark inputs into a portable benchmark directory."""
+
+    if resume and not checkpoint_path:
+        raise BenchmarkGovernanceError("benchmark import --resume requires --checkpoint")
+    if batch_size is not None and batch_size <= 0:
+        raise BenchmarkGovernanceError("benchmark import batch_size must be positive")
 
     queries = load_validation_queries(queries_path)
     qrels = load_benchmark_qrels(qrels_path)
     qa = _qa_payload(qa_path)
+    source_paths = [queries_path, qrels_path, qa_path]
+    source_hashes = _source_hash_map(source_paths)
+
+    checkpoint: dict[str, Any] | None = None
+    processed_query_ids: list[str] = []
+    checkpoint_created_at: str | None = None
+    if checkpoint_path and resume:
+        checkpoint_file = Path(checkpoint_path)
+        checkpoint = _read_benchmark_import_checkpoint(checkpoint_file)
+        _validate_benchmark_import_checkpoint(
+            checkpoint,
+            source_hashes=source_hashes,
+            output_dir=output_dir,
+            name=name,
+            description=description,
+        )
+        processed_query_ids = list(checkpoint.get("processed_query_ids") or [])
+        checkpoint_created_at = str(checkpoint.get("created_at") or "") or None
+
+    all_query_ids = [query.id for query in queries]
+    known_query_ids = set(all_query_ids)
+    unknown_processed = sorted(set(processed_query_ids) - known_query_ids)
+    if unknown_processed:
+        raise BenchmarkGovernanceError(
+            "benchmark import checkpoint contains query ids that are not present in current queries: "
+            + ", ".join(unknown_processed[:5])
+        )
+
+    processed_set = set(processed_query_ids)
+    remaining_query_ids = [query_id for query_id in all_query_ids if query_id not in processed_set]
+    next_query_ids = remaining_query_ids if batch_size is None else remaining_query_ids[:batch_size]
+    selected_query_ids = set(processed_query_ids) | set(next_query_ids)
+    selected_queries = [query for query in queries if query.id in selected_query_ids]
+    selected_qrels = {query_id: qrels[query_id] for query_id in sorted(qrels) if query_id in selected_query_ids}
+    selected_qa = _filter_qa_payload(qa, selected_query_ids, known_query_ids)
+    completed = len(selected_query_ids) >= len(all_query_ids)
+
     artifacts = _write_benchmark_artifacts(
-        queries=queries,
-        qrels=qrels,
-        qa=qa,
+        queries=selected_queries,
+        qrels=selected_qrels,
+        qa=selected_qa,
         output_dir=output_dir,
         name=name,
         description=description,
-        source_paths=[queries_path, qrels_path, qa_path],
+        source_paths=source_paths,
     )
+    checkpoint_payload = None
+    if checkpoint_path:
+        ordered_processed = [query_id for query_id in all_query_ids if query_id in selected_query_ids]
+        checkpoint_payload = _write_benchmark_import_checkpoint(
+            checkpoint_path=checkpoint_path,
+            source_hashes=source_hashes,
+            output_dir=output_dir,
+            name=name,
+            description=description,
+            processed_query_ids=ordered_processed,
+            total_query_count=len(all_query_ids),
+            completed=completed,
+            created_at=checkpoint_created_at,
+        )
+
+    checkpoint_report = {
+        "enabled": bool(checkpoint_path),
+        "path": str(checkpoint_path) if checkpoint_path else None,
+        "resume": bool(resume),
+        "batch_size": batch_size,
+        "processed_query_count": len(selected_query_ids),
+        "new_query_count": len(next_query_ids),
+        "remaining_query_count": max(len(all_query_ids) - len(selected_query_ids), 0),
+        "completed": completed,
+        "next_query_ids": list(next_query_ids),
+    }
 
     return {
         "ok": True,
         "schema": BENCHMARK_IMPORT_REPORT_SCHEMA,
         **artifacts,
+        "completed": completed,
+        "checkpoint": checkpoint_report,
+        **({"checkpoint_payload": checkpoint_payload} if checkpoint_payload else {}),
     }
 
 

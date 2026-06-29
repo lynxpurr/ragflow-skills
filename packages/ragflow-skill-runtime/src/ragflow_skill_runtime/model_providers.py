@@ -10,6 +10,7 @@ from typing import Any, Mapping
 from urllib.parse import urlparse
 
 from .http import JSONHTTPClient
+from .runtime_resilience import build_runtime_partial_failure_report
 
 
 MODEL_PROVIDER_PROBE_REPORT_SCHEMA = "ragflow_model_provider_probe_report_v1"
@@ -30,6 +31,9 @@ ADAPTER_PROBE_STATUSES = (
     "unauthorized",
     "error",
 )
+MODEL_PROVIDER_RUNTIME_SUCCESS_STATUSES = ("available", "handled_empty_input")
+MODEL_PROVIDER_RUNTIME_FAILURE_STATUSES = ("missing", "wrong_protocol", "timeout", "unauthorized", "error")
+MODEL_PROVIDER_RUNTIME_SKIPPED_STATUSES = ("not_configured",)
 EMBEDDING_ADAPTER_SHAPES = ("openai", "generic")
 RERANK_ADAPTER_SHAPES = ("cohere", "generic")
 DEFAULT_MODEL_PROVIDER_ENDPOINTS = (
@@ -480,6 +484,35 @@ def _probe_endpoint(client: Any, path: str) -> tuple[dict[str, Any], list[Mappin
     return entry, providers
 
 
+def _model_provider_runtime_partial_failure_report(
+    endpoint_entries: list[dict[str, Any]],
+    adapter_probes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    runtime_items = [
+        {
+            "label": entry.get("path") or f"endpoint_{index}",
+            "status": entry.get("status"),
+        }
+        for index, entry in enumerate(endpoint_entries, start=1)
+    ]
+    runtime_items.extend(
+        {
+            "label": f"{probe.get('kind') or f'adapter_{index}'}_adapter",
+            "status": probe.get("status"),
+        }
+        for index, probe in enumerate(adapter_probes, start=1)
+        if probe.get("status") != "not_configured"
+    )
+    return build_runtime_partial_failure_report(
+        MODEL_PROVIDER_PROBE_REPORT_SCHEMA,
+        runtime_items,
+        success_statuses=MODEL_PROVIDER_RUNTIME_SUCCESS_STATUSES,
+        warning_statuses=(),
+        failure_statuses=MODEL_PROVIDER_RUNTIME_FAILURE_STATUSES,
+        skipped_statuses=MODEL_PROVIDER_RUNTIME_SKIPPED_STATUSES,
+    )
+
+
 def _all_models(providers: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     models: list[Mapping[str, Any]] = []
     for provider in providers:
@@ -631,6 +664,8 @@ def probe_model_providers(
     error_count = sum(1 for issue in issues if issue.get("severity") == "error")
     warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
     configured_adapter_count = sum(1 for probe in adapter_probes if probe.get("status") != "not_configured")
+    runtime_partial_failure = _model_provider_runtime_partial_failure_report(endpoint_entries, adapter_probes)
+    runtime_partial_summary = runtime_partial_failure["summary"]
     return {
         "schema": MODEL_PROVIDER_PROBE_REPORT_SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -646,7 +681,12 @@ def probe_model_providers(
             "handled_empty_input_adapter_count": adapter_status_counts.get("handled_empty_input", 0),
             "warning_count": warning_count,
             "error_count": error_count,
+            "runtime_partial_failure_status": runtime_partial_summary["status"],
+            "runtime_failure_count": runtime_partial_summary["failure_count"],
+            "runtime_timeout_count": runtime_partial_summary["timeout_count"],
+            "runtime_skipped_count": runtime_partial_summary["skipped_count"],
         },
+        "runtime_partial_failure": runtime_partial_failure,
         "allowed_statuses": list(MODEL_PROVIDER_PROBE_STATUSES),
         "adapter_allowed_statuses": list(ADAPTER_PROBE_STATUSES),
         "status_counts": status_counts,
@@ -667,6 +707,16 @@ def render_model_provider_probe_markdown(report: Mapping[str, Any]) -> str:
     """Render a compact Markdown model-provider probe report."""
 
     summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    runtime_partial = (
+        report.get("runtime_partial_failure")
+        if isinstance(report.get("runtime_partial_failure"), Mapping)
+        else {}
+    )
+    runtime_partial_summary = (
+        runtime_partial.get("summary")
+        if isinstance(runtime_partial.get("summary"), Mapping)
+        else {}
+    )
     lines = [
         "# RAGFlow Model Provider Probe",
         "",
@@ -679,10 +729,24 @@ def render_model_provider_probe_markdown(report: Mapping[str, Any]) -> str:
         f"- rerank models: `{summary.get('rerank_model_count', 0)}`",
         f"- configured adapters: `{summary.get('configured_adapter_count', 0)}`",
         f"- handled empty-input adapters: `{summary.get('handled_empty_input_adapter_count', 0)}`",
-        "",
-        "| endpoint | status | providers | models |",
-        "| --- | --- | ---: | ---: |",
     ]
+    if runtime_partial:
+        lines.extend(
+            [
+                f"- runtime_partial_failure_status: `{runtime_partial_summary.get('status', 'unknown')}`",
+                f"- runtime_partial_failure_partial: `{str(runtime_partial_summary.get('partial', False)).lower()}`",
+                f"- runtime_failures: `{runtime_partial_summary.get('failure_count', 0)}`",
+                f"- runtime_timeouts: `{runtime_partial_summary.get('timeout_count', 0)}`",
+                f"- runtime_skipped: `{runtime_partial_summary.get('skipped_count', 0)}`",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "| endpoint | status | providers | models |",
+            "| --- | --- | ---: | ---: |",
+        ]
+    )
     for entry in report.get("endpoints", []) if isinstance(report.get("endpoints"), list) else []:
         if not isinstance(entry, Mapping):
             continue

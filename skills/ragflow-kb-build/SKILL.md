@@ -32,6 +32,8 @@ python scripts/build.py tagset lint --tagset ./run/tagset.template.json --report
 python scripts/build.py tagset export --tagset ./run/tagset.template.json --format csv --output ./run/tagset.csv
 python scripts/build.py tagset report --tagset ./run/tagset.template.json --metadata ./run/metadata.merged.json --report-md ./run/tagset_report.md
 python scripts/build.py benchmark import --queries ./templates/benchmark-queries.example.json --qrels ./templates/qrels.example.json --output ./run/benchmark
+python scripts/build.py benchmark import --queries ./templates/benchmark-queries.example.json --qrels ./templates/qrels.example.json --output ./run/benchmark --checkpoint ./run/benchmark-import.checkpoint.json --batch-size 25
+python scripts/build.py benchmark import --queries ./templates/benchmark-queries.example.json --qrels ./templates/qrels.example.json --output ./run/benchmark --checkpoint ./run/benchmark-import.checkpoint.json --resume --batch-size 25
 python scripts/build.py benchmark preflight --manifest ./run/benchmark/manifest.json --gate-config ./templates/benchmark-gate.example.json --report-md ./run/benchmark_preflight.md
 python scripts/build.py benchmark sample --manifest ./run/benchmark/manifest.json --output ./run/benchmark-sample --size 25 --strategy stratified --seed 7 --report-md ./run/benchmark_sample.md
 python scripts/build.py benchmark summarize --report ./run/benchmark_report.json --report-md ./run/benchmark_summary.md
@@ -82,7 +84,7 @@ Notes:
 - Use `model-providers probe` before live builds to check read-only RAGFlow model-provider endpoints, optional expected embedding/rerank model names, explicit adapter empty-input request shapes, and optional `--redaction-report` sidecars without creating datasets.
 - Use `inspect-handoff` before upload when a `ragflow-doc-to-md package --rich` handoff includes optional sidecars.
 - Use `metadata` and `tagset` subcommands to prepare advisory public metadata and tag reports offline. Metadata summaries can be attached to build reports with `--metadata`; default upload behavior is unchanged.
-- Use `benchmark import/sample/preflight/summarize/gate` and `snapshot-chunks` for offline benchmark lifecycle checks around `validate.py --level benchmark`; these commands do not touch RAGFlow.
+- Use `benchmark import/sample/preflight/summarize/gate` and `snapshot-chunks` for offline benchmark lifecycle checks around `validate.py --level benchmark`; these commands do not touch RAGFlow. `benchmark import --checkpoint --batch-size ...` can be resumed with `--resume` when normalizing large local query/qrel sets.
 - Benchmark summarize/gate/trend/delta reports include deterministic root-cause hints for coverage, ranking, pollution, grounding, citation, abstention, and cost/latency regressions when matching metrics are present.
 - Use `benchmark suggest` to derive conservative `top_k` and `similarity_threshold` experiment suggestions from benchmark metrics, optional baseline deltas, and optional gate thresholds.
 - Use `suppression-report` on validation or benchmark reports to review bridge-term, source-boundary, allowed-tag, and unexpected-tag candidates. Run benchmark validation with `--include-raw --max-report-chunks ...` when tag localization needs raw chunk tags; raw payloads are opt-in, and suppression reports are advisory only.

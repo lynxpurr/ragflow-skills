@@ -15,6 +15,8 @@ from ragflow_skill_runtime.doc_convert import (
     extract_markdown_title,
     html_to_markdown,
     make_doc_manifest_payload,
+    probe_conversion_backends,
+    render_backend_probe_markdown,
     safe_markdown_name,
     sha256_file,
     text_to_markdown,
@@ -119,6 +121,27 @@ class DocConvertTests(unittest.TestCase):
             )
 
         self.assertEqual(payload["documents"][0]["markdown_path"], "documents/input.md")
+
+    def test_backend_probe_emits_runtime_partial_failure_summary(self) -> None:
+        report = probe_conversion_backends(
+            backend="auto",
+            remote_url="ftp://converter.example.test/convert",
+            mineru_base_url=None,
+            mineru_api_key=None,
+            mineru_cli_path="/definitely/missing/mineru",
+            network_check=False,
+        )
+        markdown = render_backend_probe_markdown(report)
+
+        self.assertEqual(report["schema"], "ragflow_doc_backend_probe_report_v1")
+        self.assertEqual(report["runtime_partial_failure"]["schema"], "ragflow_runtime_partial_failure_report_v1")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["status"], "partial")
+        self.assertTrue(report["runtime_partial_failure"]["summary"]["partial"])
+        self.assertEqual(report["summary"]["runtime_partial_failure_status"], "partial")
+        self.assertGreaterEqual(report["summary"]["runtime_failure_count"], 1)
+        self.assertGreaterEqual(report["summary"]["runtime_skipped_count"], 1)
+        self.assertIn("runtime_partial_failure_status: `partial`", markdown)
+        self.assertIn("runtime_skipped:", markdown)
 
     def test_quality_report_passes_clean_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

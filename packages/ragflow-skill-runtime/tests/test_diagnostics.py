@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from ragflow_skill_runtime.diagnostics import diagnose_kb_manifest, probe_ragflow_client
+from ragflow_skill_runtime.diagnostics import diagnose_kb_manifest, probe_ragflow_client, render_diagnostic_markdown
 from ragflow_skill_runtime.manifests import KbManifest
 
 
@@ -22,6 +22,13 @@ class FakeProbeClient:
                 ]
             }
         }
+
+
+class FailingProbeClient:
+    config = FakeConfig()
+
+    def list_datasets(self, *, page: int = 1, page_size: int = 50, name: str | None = None):
+        raise RuntimeError("HTTP 503 for GET /datasets: unavailable")
 
 
 class DiagnosticsTests(unittest.TestCase):
@@ -74,11 +81,24 @@ class DiagnosticsTests(unittest.TestCase):
 
     def test_probe_reports_dataset_list_shape_and_short_ids(self) -> None:
         report = probe_ragflow_client(FakeProbeClient())
+        markdown = render_diagnostic_markdown(report)
 
         self.assertTrue(report["ok"])
         self.assertTrue(report["capabilities"]["list_datasets"])
         self.assertEqual(report["capabilities"]["dataset_count_sample"], 2)
+        self.assertEqual(report["summary"]["runtime_partial_failure_status"], "completed_with_warnings")
+        self.assertEqual(report["runtime_partial_failure"]["schema"], "ragflow_runtime_partial_failure_report_v1")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["warning_count"], 1)
+        self.assertIn("runtime_partial_failure_status: `completed_with_warnings`", markdown)
         self.assertIn("dataset_id_short", {issue["issue_type"] for issue in report["issues"]})
+
+    def test_probe_runtime_partial_failure_marks_dataset_list_errors(self) -> None:
+        report = probe_ragflow_client(FailingProbeClient())
+
+        self.assertFalse(report["ok"])
+        self.assertFalse(report["capabilities"]["list_datasets"])
+        self.assertEqual(report["summary"]["runtime_partial_failure_status"], "failed")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["failure_count"], 1)
 
 
 if __name__ == "__main__":

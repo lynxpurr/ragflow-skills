@@ -465,6 +465,39 @@ def _run_mineru_env_check(
         backend_probe_result,
         required_stdout='"schema": "ragflow_doc_backend_probe_report_v1"',
     )
+    backend_probe_json = workspace / "backend_probe.json"
+    backend_probe_partial_ok = backend_probe_json.exists()
+    backend_probe_partial_error = ""
+    if backend_probe_partial_ok:
+        try:
+            backend_probe_payload = json.loads(backend_probe_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            backend_probe_partial_ok = False
+            backend_probe_partial_error = f"invalid backend probe JSON: {exc}"
+        else:
+            backend_probe_partial = backend_probe_payload.get("runtime_partial_failure")
+            backend_probe_partial_summary = (
+                backend_probe_partial.get("summary") if isinstance(backend_probe_partial, dict) else {}
+            )
+            backend_probe_partial_ok = (
+                isinstance(backend_probe_partial, dict)
+                and backend_probe_partial.get("schema") == "ragflow_runtime_partial_failure_report_v1"
+                and isinstance(backend_probe_partial_summary, dict)
+                and backend_probe_partial_summary.get("status") == "completed"
+                and backend_probe_partial_summary.get("success_count") == 1
+            )
+            if not backend_probe_partial_ok:
+                backend_probe_partial_error = "missing backend probe runtime partial-failure summary"
+    else:
+        backend_probe_partial_error = f"missing {backend_probe_json}"
+    checks.append(
+        {
+            "name": "doc-to-md backend probe partial failure",
+            "ok": backend_probe_partial_ok,
+            "returncode": 0 if backend_probe_partial_ok else 1,
+            "error": backend_probe_partial_error,
+        }
+    )
     _record_command_check(
         checks,
         "doc-to-md backend warmup",
@@ -645,6 +678,40 @@ def _run_model_provider_probe_check(
             "kb model-providers probe",
             result,
             required_stdout='"schema": "ragflow_model_provider_probe_report_v1"',
+        )
+        model_provider_json = artifacts_dir / "model_provider_probe.json"
+        model_provider_partial_ok = model_provider_json.exists()
+        model_provider_partial_error = ""
+        if model_provider_partial_ok:
+            try:
+                model_provider_payload = json.loads(model_provider_json.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                model_provider_partial_ok = False
+                model_provider_partial_error = f"invalid model-provider probe JSON: {exc}"
+            else:
+                model_provider_partial = model_provider_payload.get("runtime_partial_failure")
+                model_provider_partial_summary = (
+                    model_provider_partial.get("summary") if isinstance(model_provider_partial, dict) else {}
+                )
+                model_provider_partial_ok = (
+                    isinstance(model_provider_partial, dict)
+                    and model_provider_partial.get("schema") == "ragflow_runtime_partial_failure_report_v1"
+                    and isinstance(model_provider_partial_summary, dict)
+                    and model_provider_partial_summary.get("status") == "partial"
+                    and model_provider_partial_summary.get("success_count") == 3
+                    and model_provider_partial_summary.get("failure_count", 0) >= 1
+                )
+                if not model_provider_partial_ok:
+                    model_provider_partial_error = "missing model-provider runtime partial-failure summary"
+        else:
+            model_provider_partial_error = f"missing {model_provider_json}"
+        checks.append(
+            {
+                "name": "kb model-providers partial failure",
+                "ok": model_provider_partial_ok,
+                "returncode": 0 if model_provider_partial_ok else 1,
+                "error": model_provider_partial_error,
+            }
         )
     finally:
         server.shutdown()

@@ -371,6 +371,7 @@ from .metadata_governance import (
 )
 from .benchmark_governance import (
     BENCHMARK_GATE_REPORT_SCHEMA,
+    BENCHMARK_IMPORT_CHECKPOINT_SCHEMA,
     BENCHMARK_IMPORT_REPORT_SCHEMA,
     BENCHMARK_DELTA_REPORT_SCHEMA,
     BENCHMARK_MANIFEST_SCHEMA,
@@ -695,6 +696,7 @@ __all__ = [
     "estimate_session_tokens",
     "explain_profile",
     "FUSION_TEST_REPORT_SCHEMA",
+    "BENCHMARK_IMPORT_CHECKPOINT_SCHEMA",
     "attach_benchmark_evaluation",
     "gate_benchmark_report",
     "generate_grounded_qa",

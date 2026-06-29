@@ -1025,6 +1025,8 @@ Tasks:
 - [x] Add cache stats and dry-run invalidation reports for local query-output cache stores.
 - [x] Add active query-output cache write and invalidation execution for host-owned cache stores.
 - [x] Add metrics collector for counters, gauges, and latency histograms with p50/p95/p99 summaries.
+- [x] Add a static runtime-resilience inventory that classifies public commands by covered,
+  candidate, deferred, or not-applicable helper coverage.
 - [ ] Add checkpoint/resume helpers for bounded long-running jobs such as centroid build, benchmark import, optimize, and report generation.
 - [ ] Add partial-failure report schemas for timeout, partial, and skipped profiles.
 - [x] Add a shared report sanitizer for API keys, bearer tokens, configured private hosts, home paths, and local config paths.
@@ -1075,6 +1077,17 @@ for raw sensitive literals and validates redaction sidecars; consumer acceptance
 fake generated-report redaction fixture. Public host-agent setup references document where
 sanitized reports and redaction sidecars should be stored and what must stay out of shared
 transcripts.
+`tools/runtime_resilience_inventory.py` now emits
+`ragflow_runtime_resilience_inventory_v1` and is run by release hygiene to track Phase 31
+runtime helper coverage without broadening live behavior. The current inventory names 79
+public commands: 10 `covered`, 9 `candidate`, 2 `deferred`, and 58 `not_applicable`, with
+no stale classification findings. Covered surfaces include `ragflow-query endpoint-report`,
+`ragflow-query fallback-test`, `ragflow-query cache-report`, `ragflow-query centroid build`,
+`ragflow-doc-to-md` process cleanup reporting, `ragflow-doc-to-md backend probe`,
+`ragflow-doc-to-md backend warmup`, `ragflow-kb-build model-providers probe`,
+`ragflow-kb-build probe`, and offline `ragflow-kb-build benchmark import`
+checkpoint/resume; candidate surfaces keep broad checkpoint/resume and broader
+partial-failure rollout visible without marking the Phase 31 umbrella tasks complete.
 
 Recommended next slices:
 
@@ -1089,9 +1102,18 @@ Recommended next slices:
    `ragflow_runtime_partial_failure_report_v1` for endpoint timeout, skipped, failed, and
    partial reachability outcomes without echoing raw URLs or credentials. The same
    partial-failure schema is now also consumed by offline `ragflow-query fallback-test`
-   reports for timeout, malformed, skipped, and partial fallback profiles.
+   reports for timeout, malformed, skipped, and partial fallback profiles, and by
+   `ragflow-doc-to-md backend probe` for available, missing, wrong-protocol, timeout, and
+   not-configured backend readiness profiles. `ragflow-kb-build model-providers probe`
+   now also emits the schema for default candidate endpoint sweeps and explicit adapter
+   empty-input probes. `ragflow-kb-build probe` now emits the schema for read-only dataset
+   list diagnostics, including completed-with-warnings probes when fake or live responses
+   expose short dataset IDs.
 3. Keep broad checkpoint/resume helpers and cross-skill partial-failure rollout as the
-   next Phase 31 resilience work.
+   next Phase 31 resilience work. Offline `ragflow-kb-build benchmark import`
+   checkpoint/resume is now covered; the next lower-risk candidates are fake-client
+   partial-failure coverage for `validate` and `snapshot-chunks`, followed by broader
+   checkpoint/resume rollout for other bounded offline jobs.
 
 Exit criteria:
 
@@ -1380,7 +1402,14 @@ short-circuit, failure, and recovery state while leaving the breaker disabled by
 surface to summarize timeout, skipped, failed, warning, and partial endpoint outcomes
 without echoing raw URLs, API keys, or cache paths. Offline `ragflow-query fallback-test`
 reports now also emit the same schema for non-endpoint timeout, malformed, skipped, and
-partial fallback profiles.
+partial fallback profiles. `ragflow-doc-to-md backend probe` also emits the same schema
+for backend readiness profiles while preserving its default no-network behavior.
+`ragflow-kb-build model-providers probe` emits it for model-provider endpoint candidates
+and explicit adapter empty-input probes, distinguishing completed single-endpoint probes
+from partial default compatibility sweeps.
+`ragflow-kb-build probe` emits it for read-only dataset-list diagnostics, so warning-only
+probe runs are visible as completed-with-warnings instead of being collapsed into a plain
+OK diagnostic report.
 `tools/generated_markdown_audit.py`
 now emits `ragflow_generated_markdown_audit_v1` and is
 run by release hygiene alongside generated-report safety. It audits 62 covered Markdown

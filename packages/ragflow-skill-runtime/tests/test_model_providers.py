@@ -96,8 +96,13 @@ class ModelProviderProbeTests(unittest.TestCase):
         self.assertEqual(report["summary"]["provider_count"], 1)
         self.assertEqual(report["summary"]["embedding_model_count"], 1)
         self.assertEqual(report["summary"]["rerank_model_count"], 1)
+        self.assertEqual(report["summary"]["runtime_partial_failure_status"], "completed")
+        self.assertEqual(report["runtime_partial_failure"]["schema"], "ragflow_runtime_partial_failure_report_v1")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["status"], "completed")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["success_count"], 1)
         self.assertEqual(report["expected_model_checks"][0]["found"], True)
         self.assertIn("RAGFlow Model Provider Probe", markdown)
+        self.assertIn("runtime_partial_failure_status: `completed`", markdown)
         self.assertIn("Built In", markdown)
 
     def test_probe_model_providers_warns_for_missing_expected_model(self) -> None:
@@ -129,6 +134,8 @@ class ModelProviderProbeTests(unittest.TestCase):
 
         self.assertFalse(report["ok"])
         self.assertEqual(report["status_counts"]["missing"], 1)
+        self.assertEqual(report["summary"]["runtime_partial_failure_status"], "failed")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["failure_count"], 1)
         self.assertEqual(report["issues"][0]["code"], "model_provider_endpoint_unavailable")
 
     def test_probe_model_providers_checks_explicit_adapter_empty_input_shapes(self) -> None:
@@ -163,6 +170,8 @@ class ModelProviderProbeTests(unittest.TestCase):
         self.assertTrue(report["ok"])
         self.assertEqual(report["summary"]["configured_adapter_count"], 2)
         self.assertEqual(report["summary"]["handled_empty_input_adapter_count"], 2)
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["status"], "completed")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["success_count"], 3)
         self.assertEqual(report["adapter_status_counts"]["handled_empty_input"], 2)
         self.assertEqual(requests["/embeddings"]["input"], [])
         self.assertEqual(requests["/embeddings"]["model"], "bge-m3")

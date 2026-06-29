@@ -533,12 +533,15 @@ def _run_benchmark_import(args: argparse.Namespace) -> int:
             output_dir=args.output,
             name=args.name,
             description=args.description or "",
+            checkpoint_path=args.checkpoint,
+            resume=args.resume,
+            batch_size=args.batch_size,
         )
         if args.redaction_report:
             report, redaction_report = _sanitize_benchmark_report(
                 report,
                 args,
-                input_paths=[args.queries, args.qrels, args.qa, args.output],
+                input_paths=[args.queries, args.qrels, args.qa, args.output, args.checkpoint],
                 context_json_paths=[args.queries, args.qrels, args.qa],
             )
             _write_json_file(args.redaction_report, redaction_report)
@@ -1357,6 +1360,9 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     import_cmd.add_argument("--output", required=True, help="Output benchmark directory")
     import_cmd.add_argument("--name", default="benchmark", help="Benchmark name recorded in manifest")
     import_cmd.add_argument("--description", help="Optional benchmark description")
+    import_cmd.add_argument("--checkpoint", help="Checkpoint path for resumable benchmark imports")
+    import_cmd.add_argument("--resume", action="store_true", help="Resume from an existing benchmark import checkpoint")
+    import_cmd.add_argument("--batch-size", type=int, help="Import at most this many new queries in this run")
     import_cmd.add_argument("--report-json", help="Optional import report JSON path")
     import_cmd.add_argument("--report-md", help="Optional import report Markdown path")
     import_cmd.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")

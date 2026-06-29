@@ -546,6 +546,15 @@ EXPECTED_IDENTITIES = (
         description="Release governance report for sanitized generated-Markdown report coverage.",
         source_roots=(Path("tools/generated_markdown_audit.py"),),
     ),
+    SchemaIdentity(
+        key="runtime_resilience_inventory",
+        group="runtime",
+        identity="ragflow_runtime_resilience_inventory_v1",
+        source_patterns=("ragflow_runtime_resilience_inventory_v1", "SCHEMA"),
+        coverage_patterns=("ragflow_runtime_resilience_inventory_v1", "run_runtime_resilience_inventory"),
+        description="Release governance inventory for runtime-resilience helper coverage and candidates.",
+        source_roots=(Path("tools/runtime_resilience_inventory.py"),),
+    ),
 )
 
 
