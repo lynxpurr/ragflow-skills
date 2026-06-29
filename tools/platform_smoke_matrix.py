@@ -2828,6 +2828,14 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(endpoint_cache_dir),
             "--cache-ttl-seconds",
             "60",
+            "--rate-limit-per-second",
+            "10",
+            "--rate-limit-burst",
+            "2",
+            "--circuit-breaker-threshold",
+            "1",
+            "--circuit-breaker-recovery-seconds",
+            "60",
             "--report-json",
             str(artifacts_dir / "query_endpoint_report.json"),
             "--report-md",
@@ -2933,6 +2941,70 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "ok": endpoint_cache_ok,
             "returncode": 0 if endpoint_cache_ok else 1,
             "error": endpoint_cache_error,
+        }
+    )
+    endpoint_rate_limit_ok = endpoint_report_json.exists()
+    endpoint_rate_limit_error = ""
+    if endpoint_rate_limit_ok:
+        try:
+            endpoint_payload = json.loads(endpoint_report_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            endpoint_rate_limit_ok = False
+            endpoint_rate_limit_error = f"invalid endpoint report JSON: {exc}"
+        else:
+            endpoint_rate_limit = endpoint_payload.get("runtime_rate_limit")
+            endpoint_rate_limit_summary = (
+                endpoint_rate_limit.get("summary") if isinstance(endpoint_rate_limit, dict) else {}
+            )
+            endpoint_rate_limit_ok = (
+                isinstance(endpoint_rate_limit, dict)
+                and endpoint_rate_limit.get("schema") == "ragflow_runtime_rate_limit_report_v1"
+                and endpoint_rate_limit.get("enabled") is True
+                and isinstance(endpoint_rate_limit_summary, dict)
+                and endpoint_rate_limit_summary.get("acquire_count") == 0
+            )
+            if not endpoint_rate_limit_ok:
+                endpoint_rate_limit_error = "missing endpoint runtime rate limit summary"
+    else:
+        endpoint_rate_limit_error = f"missing {endpoint_report_json}"
+    checks.append(
+        {
+            "name": "query endpoint-report runtime rate limit",
+            "ok": endpoint_rate_limit_ok,
+            "returncode": 0 if endpoint_rate_limit_ok else 1,
+            "error": endpoint_rate_limit_error,
+        }
+    )
+    endpoint_circuit_breaker_ok = endpoint_report_json.exists()
+    endpoint_circuit_breaker_error = ""
+    if endpoint_circuit_breaker_ok:
+        try:
+            endpoint_payload = json.loads(endpoint_report_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            endpoint_circuit_breaker_ok = False
+            endpoint_circuit_breaker_error = f"invalid endpoint report JSON: {exc}"
+        else:
+            endpoint_circuit_breaker = endpoint_payload.get("runtime_circuit_breaker")
+            endpoint_circuit_breaker_summary = (
+                endpoint_circuit_breaker.get("summary") if isinstance(endpoint_circuit_breaker, dict) else {}
+            )
+            endpoint_circuit_breaker_ok = (
+                isinstance(endpoint_circuit_breaker, dict)
+                and endpoint_circuit_breaker.get("schema") == "ragflow_runtime_circuit_breaker_report_v1"
+                and endpoint_circuit_breaker.get("enabled") is True
+                and isinstance(endpoint_circuit_breaker_summary, dict)
+                and endpoint_circuit_breaker_summary.get("short_circuit_count") == 0
+            )
+            if not endpoint_circuit_breaker_ok:
+                endpoint_circuit_breaker_error = "missing endpoint runtime circuit breaker summary"
+    else:
+        endpoint_circuit_breaker_error = f"missing {endpoint_report_json}"
+    checks.append(
+        {
+            "name": "query endpoint-report runtime circuit breaker",
+            "ok": endpoint_circuit_breaker_ok,
+            "returncode": 0 if endpoint_circuit_breaker_ok else 1,
+            "error": endpoint_circuit_breaker_error,
         }
     )
     fallback_test_result = _run_command(

@@ -1018,8 +1018,8 @@ Tasks:
 - [x] Add `ragflow-query fallback-test`.
 - [x] Cover LLM unavailable, malformed LLM JSON, network timeout, partial failure, direct retrieval fallback, and fallback metrics.
 - [x] Add retry/backoff policy helpers with retry budgets recorded in traces.
-- [ ] Add token-bucket rate limiter for RAGFlow and optional LLM calls.
-- [ ] Add circuit-breaker state for repeated service failures during a run.
+- [x] Add token-bucket rate limiter for RAGFlow and optional LLM calls.
+- [x] Add circuit-breaker state for repeated service failures during a run.
 - [x] Add read-only cache helpers for list/probe operations.
 - [ ] Add cache keys that include query text, dataset IDs, route/rewrite/fusion params, top-k, threshold, and relevant config version.
 - [ ] Add cache stats and invalidation reports.
@@ -1080,10 +1080,12 @@ Recommended next slices:
    closed for the current public surface inventory.
 2. `ragflow-query endpoint-report` now pilots the shared `ragflow_runtime_metrics_v1`
    metrics helper, `ragflow_runtime_retry_trace_v1` bounded retry helper, and
-   `ragflow_runtime_cache_report_v1` opt-in read-only endpoint reachability cache.
+   `ragflow_runtime_cache_report_v1` opt-in read-only endpoint reachability cache, plus
+   `ragflow_runtime_rate_limit_report_v1` token-bucket rate limiting for explicit
+   reachability attempts and `ragflow_runtime_circuit_breaker_report_v1` per-run
+   circuit-breaker summaries for repeated reachability failures.
 3. Keep broader cache keys for retrieval/query outputs, explicit invalidation reports,
-   token-bucket rate limiting, circuit breakers, checkpoint/resume, and partial-failure
-   schemas as the next Phase 31 resilience work.
+   checkpoint/resume, and partial-failure schemas as the next Phase 31 resilience work.
 
 Exit criteria:
 
@@ -1281,9 +1283,8 @@ Tasks:
   tests in one read-only probe or report command.
 - [x] Add a minimal metrics summary helper for counters and latency samples in one
   read-only probe or report command.
-- [x] Keep token-bucket rate limiting, circuit breakers, cache invalidation,
-  checkpoint/resume, and broad partial-failure schemas deferred until the helper pilot is
-  covered by tests and release gates.
+- [x] Keep cache invalidation, checkpoint/resume, and broad partial-failure schemas
+  deferred until the helper pilot is covered by tests and release gates.
 
 Status note: `tools/report_surface_inventory.py` now emits
 `ragflow_report_surface_inventory_v1`, dynamically enumerates public argparse command
@@ -1363,7 +1364,14 @@ with explicit retry budget, attempt count, retry count, and final status. It als
 `ragflow_runtime_cache_report_v1` for opt-in read-only reachability cache summaries via
 explicit `--cache-dir` and `--cache-ttl-seconds` settings; cache reports expose digest
 keys and hit/miss/stale/write counters without echoing cache paths, endpoint URLs, or API
-keys. `tools/generated_markdown_audit.py` now emits `ragflow_generated_markdown_audit_v1` and is
+keys. The same command now emits `ragflow_runtime_rate_limit_report_v1` when explicit
+`--rate-limit-per-second` settings are supplied, using a token-bucket limiter around
+read-only RAGFlow/LLM endpoint reachability attempts. It also emits
+`ragflow_runtime_circuit_breaker_report_v1` when explicit
+`--circuit-breaker-threshold` settings are supplied, recording per-run open,
+short-circuit, failure, and recovery state while leaving the breaker disabled by default.
+`tools/generated_markdown_audit.py`
+now emits `ragflow_generated_markdown_audit_v1` and is
 run by release hygiene alongside generated-report safety. It audits 61 covered Markdown
 report surfaces from the report-surface inventory and requires each to have explicit
 sanitized-rendering evidence, with 0 missing and 0 stale entries in the verified suite.
@@ -1385,6 +1393,8 @@ Near-term task list:
   changes from the helper pilot.
 - [x] Run a final generated-Markdown audit before marking the sanitized Markdown umbrella
   task complete.
+- [x] Pilot a default-off circuit breaker in `ragflow-query endpoint-report`, with fake
+  HTTP failure tests and release gate checks that verify no-network short-circuit counts.
 
 Exit criteria:
 

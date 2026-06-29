@@ -1023,9 +1023,10 @@ Post-Phase 35 sequencing should finish generated-report safety before broad runt
 work. First extend `--redaction-report` coverage to remaining report commands that can
 include endpoints, config paths, work paths, or host-supplied sidecar paths. Then add the
 smallest retry/backoff and metrics helpers with retry budgets and latency summaries in one
-or two consuming commands. Rate limiting, circuit breakers, cache invalidation,
-checkpoint/resume, and partial-failure schemas should follow only after the narrow helper
-path is covered by deterministic tests.
+or two consuming commands. Rate limiting and circuit breakers should start only as
+default-off, read-only pilots after that narrow helper path is covered by deterministic
+tests; cache invalidation, checkpoint/resume, and partial-failure schemas should remain
+separate follow-up work.
 
 All reports must redact endpoints according to release settings and must not include real
 API keys or host-specific paths.
@@ -1319,8 +1320,9 @@ Phase 36 should:
   recording retry budgets or latency summaries in the emitted report.
 
 Phase 36 should not add live RAGFlow mutation, script-owned LLM answer generation, private
-DB/Redis repair, broad cache invalidation, circuit breakers, token-bucket rate limiting, or
-checkpoint/resume frameworks before the narrow helper pilot is tested.
+DB/Redis repair, broad cache invalidation, checkpoint/resume frameworks, or broad runtime
+resilience frameworks before the narrow helper pilot is tested. Rate limiting and circuit
+breaker pilots must stay default-off, read-only, and scoped to `endpoint-report`.
 
 ### Implementation Status
 
@@ -1451,8 +1453,24 @@ Cache identity uses stable digests that can include endpoint settings and secret
 fingerprints without echoing raw URLs, API keys, cache paths, or config paths in reports.
 The pilot covers miss/write/hit/stale helper behavior, fake HTTP-server reuse, CLI option
 parsing, consumer acceptance, and platform smoke. Query-output cache keys, explicit
-invalidation reports, rate limiting, circuit breakers, checkpoint/resume, and
-partial-failure schemas remain separate Phase 31 follow-up work.
+invalidation reports, checkpoint/resume, and partial-failure schemas remain separate
+Phase 31 follow-up work.
+
+The token-bucket rate limiter pilot is implemented in the same read-only endpoint-report
+surface. `ragflow_runtime_rate_limit_report_v1` records explicit `--rate-limit-per-second`
+and `--rate-limit-burst` settings, acquire counts, delayed counts, and total planned delay
+without enabling rate limiting by default. Focused helper tests use a fake clock and fake
+sleeper; endpoint-report integration tests use fake HTTP reachability checks.
+
+The circuit-breaker pilot is likewise scoped to `ragflow-query endpoint-report`.
+`ragflow_runtime_circuit_breaker_report_v1` records explicit
+`--circuit-breaker-threshold` and optional recovery settings, current state, failure
+count, open count, short-circuit count, and half-open count. Cache hits still bypass live
+reachability work, while cache misses consult the per-run circuit before making a HEAD
+request. Focused tests use fake clocks and fake HTTP 500 responses to prove the breaker
+opens and short-circuits later endpoints without enabling it by default. Query-output
+cache invalidation, checkpoint/resume, and partial-failure schemas remain open Phase 31
+work.
 
 The final generated-Markdown audit is implemented in `tools/generated_markdown_audit.py`.
 It consumes the report-surface inventory, selects covered report surfaces with generated

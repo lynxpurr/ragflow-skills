@@ -128,6 +128,14 @@ class QueryCliTests(unittest.TestCase):
                         str(cache_dir),
                         "--cache-ttl-seconds",
                         "60",
+                        "--rate-limit-per-second",
+                        "10",
+                        "--rate-limit-burst",
+                        "2",
+                        "--circuit-breaker-threshold",
+                        "1",
+                        "--circuit-breaker-recovery-seconds",
+                        "60",
                         "--report-json",
                         str(report_json),
                         "--report-md",
@@ -154,6 +162,12 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(payload["runtime_cache"]["schema"], "ragflow_runtime_cache_report_v1")
         self.assertTrue(payload["runtime_cache"]["enabled"])
         self.assertEqual(payload["runtime_cache"]["summary"]["lookup_count"], 0)
+        self.assertEqual(payload["runtime_rate_limit"]["schema"], "ragflow_runtime_rate_limit_report_v1")
+        self.assertTrue(payload["runtime_rate_limit"]["enabled"])
+        self.assertEqual(payload["runtime_rate_limit"]["summary"]["acquire_count"], 0)
+        self.assertEqual(payload["runtime_circuit_breaker"]["schema"], "ragflow_runtime_circuit_breaker_report_v1")
+        self.assertTrue(payload["runtime_circuit_breaker"]["enabled"])
+        self.assertEqual(payload["runtime_circuit_breaker"]["summary"]["short_circuit_count"], 0)
         self.assertEqual(payload["runtime_metrics"]["counters"]["endpoint_count"], 2)
         self.assertEqual(payload["runtime_metrics"]["latency_ms"]["sample_count"], 0)
         self.assertEqual(payload["retry_policy"]["retry_budget"], 2)
@@ -169,6 +183,8 @@ class QueryCliTests(unittest.TestCase):
         self.assertIn("retry_budget: `2`", markdown)
         self.assertIn("retry_count: `0`", markdown)
         self.assertIn("cache_enabled: `true`", markdown)
+        self.assertIn("rate_limit_enabled: `true`", markdown)
+        self.assertIn("circuit_breaker_enabled: `true`", markdown)
         self.assertIn("<lan-host>", combined)
         self.assertIn("<vpn-host>", combined)
         self.assertNotIn("192.168.10.20", combined)

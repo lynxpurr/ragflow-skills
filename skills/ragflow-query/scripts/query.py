@@ -1623,6 +1623,10 @@ def _endpoint_report(args: argparse.Namespace) -> int:
             retry_backoff_seconds=args.retry_backoff_seconds,
             cache_dir=args.cache_dir,
             cache_ttl_seconds=args.cache_ttl_seconds,
+            rate_limit_per_second=args.rate_limit_per_second,
+            rate_limit_burst=args.rate_limit_burst,
+            circuit_breaker_failure_threshold=args.circuit_breaker_threshold,
+            circuit_breaker_recovery_seconds=args.circuit_breaker_recovery_seconds,
         )
         report, redaction_report = _sanitize_endpoint_report(report, args, runtime, endpoints)
     except (ConfigError, ValueError) as exc:
@@ -1960,6 +1964,27 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=300.0,
         help="Endpoint reachability cache TTL in seconds when --cache-dir is set; defaults to 300",
+    )
+    endpoint_report.add_argument(
+        "--rate-limit-per-second",
+        type=float,
+        help="Optional token-bucket rate limit for endpoint reachability attempts",
+    )
+    endpoint_report.add_argument(
+        "--rate-limit-burst",
+        type=int,
+        default=1,
+        help="Token-bucket burst size when --rate-limit-per-second is set; defaults to 1",
+    )
+    endpoint_report.add_argument(
+        "--circuit-breaker-threshold",
+        type=int,
+        help="Open the per-run circuit after this many retryable endpoint failures; disabled by default",
+    )
+    endpoint_report.add_argument(
+        "--circuit-breaker-recovery-seconds",
+        type=float,
+        help="Allow a half-open probe after this many seconds; disabled by default",
     )
     endpoint_report.add_argument("--report-json", help="Optional JSON report output path")
     endpoint_report.add_argument("--report-md", help="Optional Markdown report output path")

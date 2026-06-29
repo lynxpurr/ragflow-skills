@@ -9,7 +9,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ragflow_skill_runtime import (
     RUNTIME_CACHE_REPORT_SCHEMA,
+    RUNTIME_CIRCUIT_BREAKER_REPORT_SCHEMA,
     RUNTIME_METRICS_SCHEMA,
+    RUNTIME_RATE_LIMIT_REPORT_SCHEMA,
     RUNTIME_RETRY_TRACE_SCHEMA,
     build_query_endpoint_report,
     classify_endpoint_host,
@@ -83,9 +85,15 @@ class QueryEndpointReportTests(unittest.TestCase):
         self.assertEqual(report["runtime_metrics"]["latency_ms"]["sample_count"], 0)
         self.assertEqual(report["runtime_cache"]["schema"], RUNTIME_CACHE_REPORT_SCHEMA)
         self.assertFalse(report["runtime_cache"]["enabled"])
+        self.assertEqual(report["runtime_rate_limit"]["schema"], RUNTIME_RATE_LIMIT_REPORT_SCHEMA)
+        self.assertFalse(report["runtime_rate_limit"]["enabled"])
+        self.assertEqual(report["runtime_circuit_breaker"]["schema"], RUNTIME_CIRCUIT_BREAKER_REPORT_SCHEMA)
+        self.assertFalse(report["runtime_circuit_breaker"]["enabled"])
         self.assertIn("RAGFlow Query Endpoint Report", markdown)
         self.assertIn("latency_samples: `0`", markdown)
         self.assertIn("cache_enabled: `false`", markdown)
+        self.assertIn("rate_limit_enabled: `false`", markdown)
+        self.assertIn("circuit_breaker_enabled: `false`", markdown)
         self.assertIn("<lan-host>", serialized)
         self.assertIn("<vpn-host>", serialized)
         self.assertNotIn("192.168.10.20", serialized)
@@ -111,6 +119,7 @@ class QueryEndpointReportTests(unittest.TestCase):
         self.assertEqual(report["runtime_metrics"]["latency_ms"]["sample_count"], 1)
         self.assertIsNotNone(report["runtime_metrics"]["latency_ms"]["p95"])
         self.assertEqual(report["runtime_cache"]["summary"]["bypass_count"], 1)
+        self.assertEqual(report["runtime_rate_limit"]["summary"]["acquire_count"], 0)
         self.assertEqual(report["retry_policy"]["retry_budget"], 1)
         self.assertEqual(report["summary"]["network_attempt_count"], 1)
         self.assertEqual(report["summary"]["retry_count"], 0)
@@ -120,6 +129,56 @@ class QueryEndpointReportTests(unittest.TestCase):
         self.assertEqual(EndpointReportHandler.authorization, "Bearer query-test-key")
         self.assertNotIn("query-test-key", serialized)
         self.assertNotIn(base_url, serialized)
+
+    def test_endpoint_report_records_opt_in_rate_limit_acquires(self) -> None:
+        with endpoint_report_server() as base_url:
+            report = build_query_endpoint_report(
+                ragflow_base_url=f"{base_url}/api/v1",
+                extra_endpoints=[
+                    {"label": "llm", "kind": "llm", "url": f"{base_url}/llm/v1"},
+                ],
+                network_check=True,
+                timeout=2.0,
+                rate_limit_per_second=1000,
+                rate_limit_burst=2,
+            )
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(EndpointReportHandler.request_count, 2)
+        self.assertEqual(report["runtime_rate_limit"]["schema"], RUNTIME_RATE_LIMIT_REPORT_SCHEMA)
+        self.assertTrue(report["runtime_rate_limit"]["enabled"])
+        self.assertEqual(report["runtime_rate_limit"]["summary"]["acquire_count"], 2)
+        self.assertEqual(report["runtime_rate_limit"]["summary"]["delayed_count"], 0)
+        self.assertEqual(report["summary"]["rate_limit_acquire_count"], 2)
+        self.assertEqual(report["runtime_metrics"]["counters"]["rate_limit_acquire_count"], 2)
+
+    def test_endpoint_report_short_circuits_after_repeated_failures(self) -> None:
+        with endpoint_report_server(statuses=[500, 200]) as base_url:
+            report = build_query_endpoint_report(
+                ragflow_base_url=f"{base_url}/api/v1",
+                extra_endpoints=[
+                    {"label": "llm", "kind": "llm", "url": f"{base_url}/llm/v1"},
+                ],
+                network_check=True,
+                timeout=2.0,
+                circuit_breaker_failure_threshold=1,
+            )
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(EndpointReportHandler.request_count, 1)
+        self.assertEqual(report["status_counts"]["error"], 1)
+        self.assertEqual(report["status_counts"]["circuit_open"], 1)
+        self.assertEqual(report["summary"]["network_attempt_count"], 1)
+        self.assertEqual(report["summary"]["circuit_breaker_failure_count"], 1)
+        self.assertEqual(report["summary"]["circuit_breaker_open_count"], 1)
+        self.assertEqual(report["summary"]["circuit_breaker_short_circuit_count"], 1)
+        self.assertEqual(report["runtime_circuit_breaker"]["schema"], RUNTIME_CIRCUIT_BREAKER_REPORT_SCHEMA)
+        self.assertTrue(report["runtime_circuit_breaker"]["enabled"])
+        self.assertEqual(report["runtime_circuit_breaker"]["summary"]["state"], "open")
+        self.assertEqual(report["runtime_metrics"]["counters"]["circuit_breaker_short_circuit_count"], 1)
+        self.assertEqual(report["endpoints"][0]["status"], "error")
+        self.assertEqual(report["endpoints"][1]["status"], "circuit_open")
+        self.assertIn("endpoint_circuit_open", {issue["code"] for issue in report["issues"]})
 
     def test_endpoint_report_reuses_cached_reachability_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

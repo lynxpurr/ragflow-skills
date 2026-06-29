@@ -14,7 +14,14 @@ from urllib.parse import urlparse
 
 from .runtime_cache import RuntimeCache, runtime_cache_secret_digest
 from .runtime_metrics import RuntimeMetrics
-from .runtime_resilience import RuntimeRetryPolicy, run_with_retry
+from .runtime_resilience import (
+    RuntimeCircuitBreaker,
+    RuntimeCircuitBreakerPolicy,
+    RuntimeRateLimitPolicy,
+    RuntimeRateLimiter,
+    RuntimeRetryPolicy,
+    run_with_retry,
+)
 
 
 QUERY_ENDPOINT_REPORT_SCHEMA = "ragflow_query_endpoint_report_v1"
@@ -29,6 +36,7 @@ QUERY_ENDPOINT_REACHABILITY_STATUSES = (
     "timeout",
     "unreachable",
     "error",
+    "circuit_open",
 )
 
 _HTTP_URL_RE = re.compile(r"https?://[^\s\"']+")
@@ -234,6 +242,8 @@ def _endpoint_report_entry(
     verify_ssl: bool,
     retry_policy: RuntimeRetryPolicy,
     runtime_cache: RuntimeCache | None = None,
+    rate_limiter: RuntimeRateLimiter | None = None,
+    circuit_breaker: RuntimeCircuitBreaker | None = None,
 ) -> dict[str, Any]:
     summary = endpoint_url_summary(url)
     checks: list[dict[str, Any]] = [
@@ -312,18 +322,41 @@ def _endpoint_report_entry(
                 entry["http_status"] = http_status
             return entry
 
+    if circuit_breaker is not None:
+        circuit_decision = circuit_breaker.before_request()
+        if not circuit_decision.get("allowed"):
+            checks.append({"name": "network_check", "ok": False, "skipped": True, "circuit_open": True})
+            return {
+                "label": label,
+                "kind": kind,
+                "status": "circuit_open",
+                "endpoint": summary,
+                "api_key_configured": bool(api_key_configured),
+                "checks": checks,
+                "circuit_breaker": circuit_decision,
+                "reason": str(circuit_decision.get("reason") or "circuit breaker is open"),
+            }
+
     started = time.monotonic()
-    probe = run_with_retry(
-        lambda: _network_probe(
+
+    def probe_once() -> tuple[str, str, int | None]:
+        if rate_limiter is not None and rate_limiter.enabled:
+            rate_limiter.acquire()
+        return _network_probe(
             str(url),
             api_key=api_key,
             timeout=timeout,
             verify_ssl=verify_ssl,
-        ),
+        )
+
+    probe = run_with_retry(
+        probe_once,
         status_getter=lambda result: str(result[0]),
         policy=retry_policy,
     )
     status, reason, http_status = probe.result
+    if circuit_breaker is not None:
+        circuit_breaker.record_result(status)
     checks.append({"name": "network_check", "ok": status in {"reachable", "unauthorized"}})
     entry: dict[str, Any] = {
         "label": label,
@@ -389,6 +422,13 @@ def _issue_for_entry(entry: Mapping[str, Any]) -> dict[str, Any] | None:
             "message": f"{label} endpoint check failed: {entry.get('reason')}",
             "recommendation": "Check network route, service health, protocol, and timeout settings.",
         }
+    if status == "circuit_open":
+        return {
+            "severity": "error",
+            "code": "endpoint_circuit_open",
+            "message": f"{label} endpoint check was skipped because the circuit breaker is open.",
+            "recommendation": "Inspect earlier endpoint failures or increase the circuit-breaker threshold.",
+        }
     if status in {"missing", "unauthorized"}:
         return {
             "severity": "warning",
@@ -427,6 +467,10 @@ def build_query_endpoint_report(
     retry_backoff_seconds: float = 0.0,
     cache_dir: str | None = None,
     cache_ttl_seconds: float = 300.0,
+    rate_limit_per_second: float | None = None,
+    rate_limit_burst: int = 1,
+    circuit_breaker_failure_threshold: int | None = None,
+    circuit_breaker_recovery_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Build a redaction-safe endpoint report for query workflows."""
 
@@ -441,6 +485,18 @@ def build_query_endpoint_report(
         cache_dir=cache_dir,
         ttl_seconds=cache_ttl_seconds,
         namespace="endpoint-report",
+    )
+    rate_limiter = RuntimeRateLimiter(
+        policy=RuntimeRateLimitPolicy(
+            rate_per_second=rate_limit_per_second,
+            burst=rate_limit_burst,
+        )
+    )
+    circuit_breaker = RuntimeCircuitBreaker(
+        policy=RuntimeCircuitBreakerPolicy(
+            failure_threshold=circuit_breaker_failure_threshold,
+            recovery_seconds=circuit_breaker_recovery_seconds,
+        )
     )
 
     specs = [
@@ -476,6 +532,8 @@ def build_query_endpoint_report(
             verify_ssl=verify_ssl,
             retry_policy=retry_policy,
             runtime_cache=runtime_cache,
+            rate_limiter=rate_limiter,
+            circuit_breaker=circuit_breaker,
         )
         for spec in specs
     ]
@@ -528,6 +586,18 @@ def build_query_endpoint_report(
     cache_summary = runtime_cache_report["summary"]
     for name, value in runtime_cache_report["counters"].items():
         runtime_metrics.increment_counter(f"cache_{name}", value)
+    runtime_rate_limit_report = rate_limiter.to_report()
+    rate_limit_summary = runtime_rate_limit_report["summary"]
+    runtime_metrics.increment_counter("rate_limit_acquire_count", rate_limit_summary["acquire_count"])
+    runtime_metrics.increment_counter("rate_limit_delayed_count", rate_limit_summary["delayed_count"])
+    runtime_circuit_breaker_report = circuit_breaker.to_report()
+    circuit_breaker_summary = runtime_circuit_breaker_report["summary"]
+    runtime_metrics.increment_counter("circuit_breaker_failure_count", circuit_breaker_summary["failure_count"])
+    runtime_metrics.increment_counter("circuit_breaker_open_count", circuit_breaker_summary["open_count"])
+    runtime_metrics.increment_counter(
+        "circuit_breaker_short_circuit_count",
+        circuit_breaker_summary["short_circuit_count"],
+    )
     return {
         "schema": QUERY_ENDPOINT_REPORT_SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -550,11 +620,18 @@ def build_query_endpoint_report(
             "cache_hit_count": cache_summary["hit_count"],
             "cache_miss_count": cache_summary["miss_count"],
             "cache_stale_count": cache_summary["stale_count"],
+            "rate_limit_acquire_count": rate_limit_summary["acquire_count"],
+            "rate_limit_delayed_count": rate_limit_summary["delayed_count"],
+            "circuit_breaker_failure_count": circuit_breaker_summary["failure_count"],
+            "circuit_breaker_open_count": circuit_breaker_summary["open_count"],
+            "circuit_breaker_short_circuit_count": circuit_breaker_summary["short_circuit_count"],
         },
         "status_counts": status_counts,
         "network_zone_counts": zone_counts,
         "runtime_metrics": runtime_metrics.to_report(),
         "runtime_cache": runtime_cache_report,
+        "runtime_rate_limit": runtime_rate_limit_report,
+        "runtime_circuit_breaker": runtime_circuit_breaker_report,
         "endpoints": endpoints,
         "issues": issues,
     }
@@ -569,6 +646,20 @@ def render_query_endpoint_report_markdown(report: Mapping[str, Any]) -> str:
     latency = runtime_metrics.get("latency_ms") if isinstance(runtime_metrics.get("latency_ms"), Mapping) else {}
     runtime_cache = report.get("runtime_cache") if isinstance(report.get("runtime_cache"), Mapping) else {}
     cache_summary = runtime_cache.get("summary") if isinstance(runtime_cache.get("summary"), Mapping) else {}
+    runtime_rate_limit = report.get("runtime_rate_limit") if isinstance(report.get("runtime_rate_limit"), Mapping) else {}
+    rate_limit_summary = (
+        runtime_rate_limit.get("summary") if isinstance(runtime_rate_limit.get("summary"), Mapping) else {}
+    )
+    runtime_circuit_breaker = (
+        report.get("runtime_circuit_breaker")
+        if isinstance(report.get("runtime_circuit_breaker"), Mapping)
+        else {}
+    )
+    circuit_breaker_summary = (
+        runtime_circuit_breaker.get("summary")
+        if isinstance(runtime_circuit_breaker.get("summary"), Mapping)
+        else {}
+    )
     lines = [
         "# RAGFlow Query Endpoint Report",
         "",
@@ -596,6 +687,23 @@ def render_query_endpoint_report_markdown(report: Mapping[str, Any]) -> str:
                 f"- cache_enabled: `{str(runtime_cache.get('enabled', False)).lower()}`",
                 f"- cache_hits: `{cache_summary.get('hit_count', 0)}`",
                 f"- cache_misses: `{cache_summary.get('miss_count', 0)}`",
+            ]
+        )
+    if runtime_rate_limit:
+        lines.extend(
+            [
+                f"- rate_limit_enabled: `{str(runtime_rate_limit.get('enabled', False)).lower()}`",
+                f"- rate_limit_acquires: `{rate_limit_summary.get('acquire_count', 0)}`",
+                f"- rate_limit_delays: `{rate_limit_summary.get('delayed_count', 0)}`",
+            ]
+        )
+    if runtime_circuit_breaker:
+        lines.extend(
+            [
+                f"- circuit_breaker_enabled: `{str(runtime_circuit_breaker.get('enabled', False)).lower()}`",
+                f"- circuit_breaker_state: `{circuit_breaker_summary.get('state', 'closed')}`",
+                f"- circuit_breaker_opens: `{circuit_breaker_summary.get('open_count', 0)}`",
+                f"- circuit_breaker_short_circuits: `{circuit_breaker_summary.get('short_circuit_count', 0)}`",
             ]
         )
     lines.extend(

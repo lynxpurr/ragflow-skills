@@ -220,6 +220,20 @@ EXPECTED_IDENTITIES = (
         coverage_patterns=("ragflow_runtime_cache_report_v1", "RUNTIME_CACHE_REPORT_SCHEMA"),
     ),
     SchemaIdentity(
+        key="runtime_rate_limit",
+        group="runtime",
+        identity="ragflow_runtime_rate_limit_report_v1",
+        source_patterns=("ragflow_runtime_rate_limit_report_v1", "RUNTIME_RATE_LIMIT_REPORT_SCHEMA"),
+        coverage_patterns=("ragflow_runtime_rate_limit_report_v1", "RUNTIME_RATE_LIMIT_REPORT_SCHEMA"),
+    ),
+    SchemaIdentity(
+        key="runtime_circuit_breaker",
+        group="runtime",
+        identity="ragflow_runtime_circuit_breaker_report_v1",
+        source_patterns=("ragflow_runtime_circuit_breaker_report_v1", "RUNTIME_CIRCUIT_BREAKER_REPORT_SCHEMA"),
+        coverage_patterns=("ragflow_runtime_circuit_breaker_report_v1", "RUNTIME_CIRCUIT_BREAKER_REPORT_SCHEMA"),
+    ),
+    SchemaIdentity(
         key="runtime_retry_trace",
         group="runtime",
         identity="ragflow_runtime_retry_trace_v1",
