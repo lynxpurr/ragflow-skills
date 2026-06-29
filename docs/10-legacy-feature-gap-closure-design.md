@@ -1444,6 +1444,16 @@ retry budget remains one attempt for compatibility; explicit `--retry-budget` va
 record retry budget, attempt count, retry count, final status, and per-attempt status in
 the endpoint report without adding live RAGFlow mutation.
 
+The first broader Phase 31 cache pilot is also scoped to `ragflow-query endpoint-report`.
+`ragflow_runtime_cache_report_v1` records opt-in read-only endpoint reachability cache
+stats when `--cache-dir` is supplied, while the command keeps cache disabled by default.
+Cache identity uses stable digests that can include endpoint settings and secret
+fingerprints without echoing raw URLs, API keys, cache paths, or config paths in reports.
+The pilot covers miss/write/hit/stale helper behavior, fake HTTP-server reuse, CLI option
+parsing, consumer acceptance, and platform smoke. Query-output cache keys, explicit
+invalidation reports, rate limiting, circuit breakers, checkpoint/resume, and
+partial-failure schemas remain separate Phase 31 follow-up work.
+
 The final generated-Markdown audit is implemented in `tools/generated_markdown_audit.py`.
 It consumes the report-surface inventory, selects covered report surfaces with generated
 Markdown outputs, and requires each one to have explicit sanitized-rendering evidence.

@@ -213,6 +213,13 @@ EXPECTED_IDENTITIES = (
         coverage_patterns=("ragflow_runtime_metrics_v1", "RUNTIME_METRICS_SCHEMA"),
     ),
     SchemaIdentity(
+        key="runtime_cache",
+        group="runtime",
+        identity="ragflow_runtime_cache_report_v1",
+        source_patterns=("ragflow_runtime_cache_report_v1", "RUNTIME_CACHE_REPORT_SCHEMA"),
+        coverage_patterns=("ragflow_runtime_cache_report_v1", "RUNTIME_CACHE_REPORT_SCHEMA"),
+    ),
+    SchemaIdentity(
         key="runtime_retry_trace",
         group="runtime",
         identity="ragflow_runtime_retry_trace_v1",

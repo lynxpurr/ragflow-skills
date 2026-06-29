@@ -1020,14 +1020,14 @@ Tasks:
 - [x] Add retry/backoff policy helpers with retry budgets recorded in traces.
 - [ ] Add token-bucket rate limiter for RAGFlow and optional LLM calls.
 - [ ] Add circuit-breaker state for repeated service failures during a run.
-- [ ] Add read-only cache helpers for list/probe operations.
+- [x] Add read-only cache helpers for list/probe operations.
 - [ ] Add cache keys that include query text, dataset IDs, route/rewrite/fusion params, top-k, threshold, and relevant config version.
 - [ ] Add cache stats and invalidation reports.
 - [x] Add metrics collector for counters, gauges, and latency histograms with p50/p95/p99 summaries.
 - [ ] Add checkpoint/resume helpers for bounded long-running jobs such as centroid build, benchmark import, optimize, and report generation.
 - [ ] Add partial-failure report schemas for timeout, partial, and skipped profiles.
 - [x] Add a shared report sanitizer for API keys, bearer tokens, configured private hosts, home paths, and local config paths.
-- [ ] Add `--redaction-report` to relevant commands.
+- [x] Add `--redaction-report` to relevant commands.
 - [x] Add `--redaction-report` to `ragflow-query route-test` route fixture reports.
 - [x] Add `--redaction-report` to `ragflow-query route-report` route quality reports.
 - [x] Add `--redaction-report` to `ragflow-query route-diagnose` route diagnosis reports.
@@ -1076,16 +1076,14 @@ transcripts.
 
 Recommended next slices:
 
-1. Use a narrow Phase 36 helper pilot before broader runtime primitives.
-2. Add the smallest shared retry/backoff and metrics helpers first, recording retry budgets
-   and latency summaries in traces or reports where those helpers are used.
-3. `ragflow-query endpoint-report` now pilots the shared `ragflow_runtime_metrics_v1`
-   metrics helper with counters, gauges, and deterministic latency p50/p95/p99 summaries,
-   plus the opt-in `ragflow_runtime_retry_trace_v1` helper for bounded reachability
-   retries.
-4. Defer broader rate limiting, circuit breakers, cache invalidation, checkpoint/resume,
-   and partial-failure schemas until at least one narrow report or probe command consumes
-   the helper with deterministic tests.
+1. Treat Phase 36 generated-report safety and the first metrics/retry helper pilot as
+   closed for the current public surface inventory.
+2. `ragflow-query endpoint-report` now pilots the shared `ragflow_runtime_metrics_v1`
+   metrics helper, `ragflow_runtime_retry_trace_v1` bounded retry helper, and
+   `ragflow_runtime_cache_report_v1` opt-in read-only endpoint reachability cache.
+3. Keep broader cache keys for retrieval/query outputs, explicit invalidation reports,
+   token-bucket rate limiting, circuit breakers, checkpoint/resume, and partial-failure
+   schemas as the next Phase 31 resilience work.
 
 Exit criteria:
 
@@ -1361,8 +1359,11 @@ snapshot/QA/enrichment, and append/cleanup redaction sidecars as artifacts.
 The `ragflow-query endpoint-report` command now pilots shared runtime helpers:
 `ragflow_runtime_metrics_v1` for counters, gauges, and deterministic latency p50/p95/p99
 summaries, and `ragflow_runtime_retry_trace_v1` for opt-in bounded reachability retries
-with explicit retry budget, attempt count, retry count, and final status. The next
-`tools/generated_markdown_audit.py` now emits `ragflow_generated_markdown_audit_v1` and is
+with explicit retry budget, attempt count, retry count, and final status. It also pilots
+`ragflow_runtime_cache_report_v1` for opt-in read-only reachability cache summaries via
+explicit `--cache-dir` and `--cache-ttl-seconds` settings; cache reports expose digest
+keys and hit/miss/stale/write counters without echoing cache paths, endpoint URLs, or API
+keys. `tools/generated_markdown_audit.py` now emits `ragflow_generated_markdown_audit_v1` and is
 run by release hygiene alongside generated-report safety. It audits 61 covered Markdown
 report surfaces from the report-surface inventory and requires each to have explicit
 sanitized-rendering evidence, with 0 missing and 0 stale entries in the verified suite.

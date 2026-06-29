@@ -3415,6 +3415,7 @@ raise SystemExit(code)
     endpoint_report_json = work_root / "query_endpoint_report.json"
     endpoint_report_md = work_root / "query_endpoint_report.md"
     endpoint_redaction_json = work_root / "query_endpoint_redaction.json"
+    endpoint_cache_dir = work_root / "query_endpoint_cache"
     fake_lan_endpoint = "https://" + ".".join(("192", "168", "10", "20")) + ":9380"
     fake_vpn_endpoint = "vpn=http://" + ".".join(("100", "64", "10", "20")) + ":8080/v1?token=fake-secret"
     endpoint_report = _run_command(
@@ -3428,6 +3429,10 @@ raise SystemExit(code)
             "consumer-fake-key",
             "--endpoint",
             fake_vpn_endpoint,
+            "--cache-dir",
+            str(endpoint_cache_dir),
+            "--cache-ttl-seconds",
+            "60",
             "--report-json",
             str(endpoint_report_json),
             "--report-md",
@@ -3502,6 +3507,36 @@ raise SystemExit(code)
             "ok": endpoint_retry_ok,
             "path": str(endpoint_report_json),
             "error": endpoint_retry_error,
+        }
+    )
+    endpoint_cache_ok = endpoint_report_json.exists()
+    endpoint_cache_error = ""
+    if endpoint_cache_ok:
+        try:
+            endpoint_payload = json.loads(endpoint_report_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            endpoint_cache_ok = False
+            endpoint_cache_error = f"invalid endpoint report JSON: {exc}"
+        else:
+            endpoint_cache = endpoint_payload.get("runtime_cache")
+            endpoint_cache_summary = endpoint_cache.get("summary") if isinstance(endpoint_cache, dict) else {}
+            endpoint_cache_ok = (
+                isinstance(endpoint_cache, dict)
+                and endpoint_cache.get("schema") == "ragflow_runtime_cache_report_v1"
+                and endpoint_cache.get("enabled") is True
+                and isinstance(endpoint_cache_summary, dict)
+                and endpoint_cache_summary.get("lookup_count") == 0
+            )
+            if not endpoint_cache_ok:
+                endpoint_cache_error = "missing endpoint runtime cache summary"
+    else:
+        endpoint_cache_error = f"missing {endpoint_report_json}"
+    checks.append(
+        {
+            "name": "query endpoint-report runtime cache",
+            "ok": endpoint_cache_ok,
+            "path": str(endpoint_report_json),
+            "error": endpoint_cache_error,
         }
     )
     for path in (endpoint_report_json, endpoint_report_md, endpoint_redaction_json):

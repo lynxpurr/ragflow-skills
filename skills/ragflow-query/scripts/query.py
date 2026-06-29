@@ -1621,6 +1621,8 @@ def _endpoint_report(args: argparse.Namespace) -> int:
             verify_ssl=True if runtime.verify_ssl is None else bool(runtime.verify_ssl),
             retry_budget=args.retry_budget if args.retry_budget is not None else 1,
             retry_backoff_seconds=args.retry_backoff_seconds,
+            cache_dir=args.cache_dir,
+            cache_ttl_seconds=args.cache_ttl_seconds,
         )
         report, redaction_report = _sanitize_endpoint_report(report, args, runtime, endpoints)
     except (ConfigError, ValueError) as exc:
@@ -1948,6 +1950,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help="Initial retry backoff in seconds for --network-check; defaults to 0",
+    )
+    endpoint_report.add_argument(
+        "--cache-dir",
+        help="Optional directory for read-only endpoint reachability cache entries",
+    )
+    endpoint_report.add_argument(
+        "--cache-ttl-seconds",
+        type=float,
+        default=300.0,
+        help="Endpoint reachability cache TTL in seconds when --cache-dir is set; defaults to 300",
     )
     endpoint_report.add_argument("--report-json", help="Optional JSON report output path")
     endpoint_report.add_argument("--report-md", help="Optional Markdown report output path")

@@ -108,6 +108,7 @@ class QueryCliTests(unittest.TestCase):
             report_json = root / "endpoint_report.json"
             report_md = root / "endpoint_report.md"
             redaction_json = root / "endpoint_redaction.json"
+            cache_dir = root / "endpoint-cache"
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 code = module.main(
@@ -123,6 +124,10 @@ class QueryCliTests(unittest.TestCase):
                         "2",
                         "--retry-backoff-seconds",
                         "0",
+                        "--cache-dir",
+                        str(cache_dir),
+                        "--cache-ttl-seconds",
+                        "60",
                         "--report-json",
                         str(report_json),
                         "--report-md",
@@ -146,6 +151,9 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(file_payload["schema"], "ragflow_query_endpoint_report_v1")
         self.assertEqual(payload["runtime_metrics"]["schema"], "ragflow_runtime_metrics_v1")
         self.assertEqual(file_payload["runtime_metrics"]["schema"], "ragflow_runtime_metrics_v1")
+        self.assertEqual(payload["runtime_cache"]["schema"], "ragflow_runtime_cache_report_v1")
+        self.assertTrue(payload["runtime_cache"]["enabled"])
+        self.assertEqual(payload["runtime_cache"]["summary"]["lookup_count"], 0)
         self.assertEqual(payload["runtime_metrics"]["counters"]["endpoint_count"], 2)
         self.assertEqual(payload["runtime_metrics"]["latency_ms"]["sample_count"], 0)
         self.assertEqual(payload["retry_policy"]["retry_budget"], 2)
@@ -160,12 +168,14 @@ class QueryCliTests(unittest.TestCase):
         self.assertIn("latency_samples: `0`", markdown)
         self.assertIn("retry_budget: `2`", markdown)
         self.assertIn("retry_count: `0`", markdown)
+        self.assertIn("cache_enabled: `true`", markdown)
         self.assertIn("<lan-host>", combined)
         self.assertIn("<vpn-host>", combined)
         self.assertNotIn("192.168.10.20", combined)
         self.assertNotIn("100.64.10.20", combined)
         self.assertNotIn("secret-key", combined)
         self.assertNotIn("fake-secret", combined)
+        self.assertNotIn(str(cache_dir), combined)
 
     def test_evaluate_answer_writes_redacted_report_sidecar(self) -> None:
         module = load_query_module()

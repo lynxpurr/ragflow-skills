@@ -12,6 +12,7 @@ from typing import Any, Mapping, Sequence
 from urllib import error, request
 from urllib.parse import urlparse
 
+from .runtime_cache import RuntimeCache, runtime_cache_secret_digest
 from .runtime_metrics import RuntimeMetrics
 from .runtime_resilience import RuntimeRetryPolicy, run_with_retry
 
@@ -232,6 +233,7 @@ def _endpoint_report_entry(
     timeout: float,
     verify_ssl: bool,
     retry_policy: RuntimeRetryPolicy,
+    runtime_cache: RuntimeCache | None = None,
 ) -> dict[str, Any]:
     summary = endpoint_url_summary(url)
     checks: list[dict[str, Any]] = [
@@ -274,6 +276,42 @@ def _endpoint_report_entry(
             "reason": "network check disabled",
         }
 
+    cache_lookup = None
+    if runtime_cache is not None:
+        cache_lookup = runtime_cache.get(
+            {
+                "label": label,
+                "kind": kind,
+                "url": str(url),
+                "api_key": runtime_cache_secret_digest(api_key),
+                "timeout": float(timeout),
+                "verify_ssl": bool(verify_ssl),
+                "retry_policy": retry_policy.to_report(),
+            }
+        )
+        if cache_lookup.status == "hit" and isinstance(cache_lookup.value, Mapping):
+            cached = cache_lookup.value
+            status = str(cached.get("status") or "error")
+            if status not in QUERY_ENDPOINT_REACHABILITY_STATUSES:
+                status = "error"
+            reason = str(cached.get("reason") or "cached endpoint check result")
+            checks.append({"name": "network_check", "ok": status in {"reachable", "unauthorized"}, "cached": True})
+            entry: dict[str, Any] = {
+                "label": label,
+                "kind": kind,
+                "status": status,
+                "endpoint": summary,
+                "api_key_configured": bool(api_key_configured),
+                "checks": checks,
+                "cache": cache_lookup.to_report(),
+                "cached": True,
+                "reason": reason,
+            }
+            http_status = cached.get("http_status")
+            if isinstance(http_status, int):
+                entry["http_status"] = http_status
+            return entry
+
     started = time.monotonic()
     probe = run_with_retry(
         lambda: _network_probe(
@@ -300,6 +338,18 @@ def _endpoint_report_entry(
     }
     if http_status is not None:
         entry["http_status"] = http_status
+    if runtime_cache is not None and cache_lookup is not None:
+        cache_report = cache_lookup.to_report()
+        store = runtime_cache.put(
+            cache_lookup.cache_key,
+            {
+                "status": entry["status"],
+                "reason": reason,
+                "http_status": http_status,
+            },
+        )
+        cache_report["write_status"] = store.status
+        entry["cache"] = cache_report
     return entry
 
 
@@ -375,6 +425,8 @@ def build_query_endpoint_report(
     verify_ssl: bool = True,
     retry_budget: int = 1,
     retry_backoff_seconds: float = 0.0,
+    cache_dir: str | None = None,
+    cache_ttl_seconds: float = 300.0,
 ) -> dict[str, Any]:
     """Build a redaction-safe endpoint report for query workflows."""
 
@@ -383,6 +435,12 @@ def build_query_endpoint_report(
     retry_policy = RuntimeRetryPolicy(
         retry_budget=retry_budget,
         backoff_seconds=retry_backoff_seconds,
+    )
+    runtime_cache = RuntimeCache(
+        operation=QUERY_ENDPOINT_REPORT_SCHEMA,
+        cache_dir=cache_dir,
+        ttl_seconds=cache_ttl_seconds,
+        namespace="endpoint-report",
     )
 
     specs = [
@@ -417,6 +475,7 @@ def build_query_endpoint_report(
             timeout=timeout,
             verify_ssl=verify_ssl,
             retry_policy=retry_policy,
+            runtime_cache=runtime_cache,
         )
         for spec in specs
     ]
@@ -465,6 +524,10 @@ def build_query_endpoint_report(
         latency = entry.get("latency_ms")
         if isinstance(latency, (int, float)) and not isinstance(latency, bool):
             runtime_metrics.observe_latency_ms(latency)
+    runtime_cache_report = runtime_cache.to_report()
+    cache_summary = runtime_cache_report["summary"]
+    for name, value in runtime_cache_report["counters"].items():
+        runtime_metrics.increment_counter(f"cache_{name}", value)
     return {
         "schema": QUERY_ENDPOINT_REPORT_SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -484,10 +547,14 @@ def build_query_endpoint_report(
             "reachable_endpoint_count": status_counts.get("reachable", 0),
             "warning_count": warning_count,
             "error_count": error_count,
+            "cache_hit_count": cache_summary["hit_count"],
+            "cache_miss_count": cache_summary["miss_count"],
+            "cache_stale_count": cache_summary["stale_count"],
         },
         "status_counts": status_counts,
         "network_zone_counts": zone_counts,
         "runtime_metrics": runtime_metrics.to_report(),
+        "runtime_cache": runtime_cache_report,
         "endpoints": endpoints,
         "issues": issues,
     }
@@ -500,6 +567,8 @@ def render_query_endpoint_report_markdown(report: Mapping[str, Any]) -> str:
     retry_policy = report.get("retry_policy") if isinstance(report.get("retry_policy"), Mapping) else {}
     runtime_metrics = report.get("runtime_metrics") if isinstance(report.get("runtime_metrics"), Mapping) else {}
     latency = runtime_metrics.get("latency_ms") if isinstance(runtime_metrics.get("latency_ms"), Mapping) else {}
+    runtime_cache = report.get("runtime_cache") if isinstance(report.get("runtime_cache"), Mapping) else {}
+    cache_summary = runtime_cache.get("summary") if isinstance(runtime_cache.get("summary"), Mapping) else {}
     lines = [
         "# RAGFlow Query Endpoint Report",
         "",
@@ -519,6 +588,14 @@ def render_query_endpoint_report_markdown(report: Mapping[str, Any]) -> str:
             [
                 f"- latency_samples: `{latency.get('sample_count', 0)}`",
                 f"- latency_p95_ms: `{p95 if p95 is not None else 'n/a'}`",
+            ]
+        )
+    if runtime_cache:
+        lines.extend(
+            [
+                f"- cache_enabled: `{str(runtime_cache.get('enabled', False)).lower()}`",
+                f"- cache_hits: `{cache_summary.get('hit_count', 0)}`",
+                f"- cache_misses: `{cache_summary.get('miss_count', 0)}`",
             ]
         )
     lines.extend(

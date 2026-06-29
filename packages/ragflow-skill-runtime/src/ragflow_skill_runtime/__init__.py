@@ -294,6 +294,14 @@ from .report_sanitizer import (
     configured_private_hosts_from_urls,
     sanitize_report_payload,
 )
+from .runtime_cache import (
+    RUNTIME_CACHE_REPORT_SCHEMA,
+    RuntimeCache,
+    RuntimeCacheLookup,
+    RuntimeCacheStoreResult,
+    runtime_cache_digest,
+    runtime_cache_secret_digest,
+)
 from .runtime_metrics import (
     RUNTIME_METRICS_SCHEMA,
     RuntimeMetrics,
@@ -504,6 +512,9 @@ __all__ = [
     "QualityIssue",
     "RAGFlowClient",
     "RagflowConfig",
+    "RuntimeCache",
+    "RuntimeCacheLookup",
+    "RuntimeCacheStoreResult",
     "RuntimeMetrics",
     "SegmentationPlan",
     "SkillConfig",
@@ -568,6 +579,7 @@ __all__ = [
     "RETRIEVAL_STATUS_SCHEMA",
     "RETRIEVAL_STATUS_VALUES",
     "REPORT_REDACTION_REPORT_SCHEMA",
+    "RUNTIME_CACHE_REPORT_SCHEMA",
     "RUNTIME_METRICS_SCHEMA",
     "RUNTIME_RETRY_TRACE_SCHEMA",
     "METADATA_LINT_REPORT_SCHEMA",
@@ -782,6 +794,8 @@ __all__ = [
     "render_route_diagnose_markdown",
     "render_route_test_markdown",
     "render_route_report_markdown",
+    "runtime_cache_digest",
+    "runtime_cache_secret_digest",
     "run_retrieval_validation",
     "run_with_retry",
     "run_fusion_tests",

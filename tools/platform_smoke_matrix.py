@@ -2812,6 +2812,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     query_script = script_root / "ragflow-query" / "scripts" / "query.py"
     fake_lan_endpoint = "https://" + ".".join(("192", "168", "10", "20")) + ":9380"
     fake_vpn_endpoint = "vpn=http://" + ".".join(("100", "64", "10", "20")) + ":8080/v1?token=fake-secret"
+    endpoint_cache_dir = artifacts_dir / "query_endpoint_cache"
     endpoint_report_result = _run_command(
         [
             sys.executable,
@@ -2823,6 +2824,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "platform-fake-key",
             "--endpoint",
             fake_vpn_endpoint,
+            "--cache-dir",
+            str(endpoint_cache_dir),
+            "--cache-ttl-seconds",
+            "60",
             "--report-json",
             str(artifacts_dir / "query_endpoint_report.json"),
             "--report-md",
@@ -2898,6 +2903,36 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "ok": endpoint_retry_ok,
             "returncode": 0 if endpoint_retry_ok else 1,
             "error": endpoint_retry_error,
+        }
+    )
+    endpoint_cache_ok = endpoint_report_json.exists()
+    endpoint_cache_error = ""
+    if endpoint_cache_ok:
+        try:
+            endpoint_payload = json.loads(endpoint_report_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            endpoint_cache_ok = False
+            endpoint_cache_error = f"invalid endpoint report JSON: {exc}"
+        else:
+            endpoint_cache = endpoint_payload.get("runtime_cache")
+            endpoint_cache_summary = endpoint_cache.get("summary") if isinstance(endpoint_cache, dict) else {}
+            endpoint_cache_ok = (
+                isinstance(endpoint_cache, dict)
+                and endpoint_cache.get("schema") == "ragflow_runtime_cache_report_v1"
+                and endpoint_cache.get("enabled") is True
+                and isinstance(endpoint_cache_summary, dict)
+                and endpoint_cache_summary.get("lookup_count") == 0
+            )
+            if not endpoint_cache_ok:
+                endpoint_cache_error = "missing endpoint runtime cache summary"
+    else:
+        endpoint_cache_error = f"missing {endpoint_report_json}"
+    checks.append(
+        {
+            "name": "query endpoint-report runtime cache",
+            "ok": endpoint_cache_ok,
+            "returncode": 0 if endpoint_cache_ok else 1,
+            "error": endpoint_cache_error,
         }
     )
     fallback_test_result = _run_command(

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import contextlib
 import json
+import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ragflow_skill_runtime import (
+    RUNTIME_CACHE_REPORT_SCHEMA,
     RUNTIME_METRICS_SCHEMA,
     RUNTIME_RETRY_TRACE_SCHEMA,
     build_query_endpoint_report,
@@ -79,8 +81,11 @@ class QueryEndpointReportTests(unittest.TestCase):
         self.assertEqual(report["runtime_metrics"]["counters"]["endpoint_count"], 3)
         self.assertEqual(report["runtime_metrics"]["counters"]["status_not_checked"], 3)
         self.assertEqual(report["runtime_metrics"]["latency_ms"]["sample_count"], 0)
+        self.assertEqual(report["runtime_cache"]["schema"], RUNTIME_CACHE_REPORT_SCHEMA)
+        self.assertFalse(report["runtime_cache"]["enabled"])
         self.assertIn("RAGFlow Query Endpoint Report", markdown)
         self.assertIn("latency_samples: `0`", markdown)
+        self.assertIn("cache_enabled: `false`", markdown)
         self.assertIn("<lan-host>", serialized)
         self.assertIn("<vpn-host>", serialized)
         self.assertNotIn("192.168.10.20", serialized)
@@ -105,6 +110,7 @@ class QueryEndpointReportTests(unittest.TestCase):
         self.assertEqual(report["runtime_metrics"]["counters"]["status_reachable"], 1)
         self.assertEqual(report["runtime_metrics"]["latency_ms"]["sample_count"], 1)
         self.assertIsNotNone(report["runtime_metrics"]["latency_ms"]["p95"])
+        self.assertEqual(report["runtime_cache"]["summary"]["bypass_count"], 1)
         self.assertEqual(report["retry_policy"]["retry_budget"], 1)
         self.assertEqual(report["summary"]["network_attempt_count"], 1)
         self.assertEqual(report["summary"]["retry_count"], 0)
@@ -114,6 +120,41 @@ class QueryEndpointReportTests(unittest.TestCase):
         self.assertEqual(EndpointReportHandler.authorization, "Bearer query-test-key")
         self.assertNotIn("query-test-key", serialized)
         self.assertNotIn(base_url, serialized)
+
+    def test_endpoint_report_reuses_cached_reachability_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with endpoint_report_server() as base_url:
+                first = build_query_endpoint_report(
+                    ragflow_base_url=f"{base_url}/api/v1",
+                    ragflow_api_key="query-test-key",
+                    network_check=True,
+                    timeout=2.0,
+                    cache_dir=tmp,
+                    cache_ttl_seconds=60,
+                )
+                second = build_query_endpoint_report(
+                    ragflow_base_url=f"{base_url}/api/v1",
+                    ragflow_api_key="query-test-key",
+                    network_check=True,
+                    timeout=2.0,
+                    cache_dir=tmp,
+                    cache_ttl_seconds=60,
+                )
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertEqual(EndpointReportHandler.request_count, 1)
+        self.assertEqual(first["runtime_cache"]["summary"]["miss_count"], 1)
+        self.assertEqual(first["runtime_cache"]["summary"]["write_count"], 1)
+        self.assertEqual(first["summary"]["network_attempt_count"], 1)
+        self.assertEqual(second["runtime_cache"]["summary"]["hit_count"], 1)
+        self.assertEqual(second["summary"]["network_attempt_count"], 0)
+        self.assertEqual(second["summary"]["cache_hit_count"], 1)
+        self.assertEqual(second["runtime_metrics"]["counters"]["cache_hit_count"], 1)
+        self.assertEqual(second["status_counts"]["reachable"], 1)
+        self.assertTrue(second["endpoints"][0]["cached"])
+        self.assertEqual(second["endpoints"][0]["cache"]["status"], "hit")
+        self.assertNotIn("retry_trace", second["endpoints"][0])
 
     def test_endpoint_report_default_retry_budget_preserves_single_attempt(self) -> None:
         with endpoint_report_server(statuses=[500, 200]) as base_url:

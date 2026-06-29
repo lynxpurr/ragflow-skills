@@ -99,6 +99,7 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("query endpoint-report", check_names)
         self.assertIn("query endpoint-report runtime metrics", check_names)
         self.assertIn("query endpoint-report retry policy", check_names)
+        self.assertIn("query endpoint-report runtime cache", check_names)
         self.assertIn("query fallback-test", check_names)
         self.assertTrue(
             any(path.endswith("mineru-handoff/doc_manifest.json") for path in profile["artifacts"]),
