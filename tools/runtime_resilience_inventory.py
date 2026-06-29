@@ -56,6 +56,18 @@ _COVERED = {
         rationale="Read-only RAGFlow diagnostics report completed, warning-only, failed, skipped, and timeout dataset-list outcomes.",
         next_action="Keep fake diagnostic probes covered without adding mutation.",
     ),
+    "ragflow-kb-build snapshot-chunks": RuntimeClassification(
+        status="covered",
+        features=("partial_failure",),
+        rationale="Offline chunk snapshot reports summarize snapshotted, duplicate-skipped, and missing-content chunk profiles.",
+        next_action="Evaluate checkpoint/resume later if large snapshot inputs need resumable batching.",
+    ),
+    "ragflow-kb-build validate": RuntimeClassification(
+        status="covered",
+        features=("partial_failure",),
+        rationale="Retrieval validation emits partial-failure reports for passed, semantic-warning, error, and timeout query outcomes.",
+        next_action="Evaluate checkpoint/resume later for very large benchmark validation runs.",
+    ),
     "ragflow-kb-build benchmark import": RuntimeClassification(
         status="covered",
         features=("checkpoint_resume",),
@@ -130,18 +142,6 @@ _CANDIDATES = {
         features=("partial_failure",),
         rationale="Offline QA validation can expose malformed, skipped, and partially validated fixture rows.",
         next_action="Keep validation local and deterministic.",
-    ),
-    "ragflow-kb-build snapshot-chunks": RuntimeClassification(
-        status="candidate",
-        features=("checkpoint_resume", "partial_failure"),
-        rationale="Chunk snapshots are read-only but can span many pages or batches and should eventually report partial retrieval failures.",
-        next_action="Add fake-client pagination coverage before enabling broader live use.",
-    ),
-    "ragflow-kb-build validate": RuntimeClassification(
-        status="candidate",
-        features=("checkpoint_resume", "partial_failure"),
-        rationale="Benchmark validation can run many retrievals and should eventually resume batches and report partial query failures.",
-        next_action="Start with fake-client benchmark fixtures and keep live mutation disabled.",
     ),
 }
 

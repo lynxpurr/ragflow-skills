@@ -25,8 +25,8 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
         self.assertEqual(
             report["summary"]["status_counts"],
             {
-                "candidate": 9,
-                "covered": 10,
+                "candidate": 7,
+                "covered": 12,
                 "deferred": 2,
                 "not_applicable": 58,
             },
@@ -64,8 +64,12 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
         self.assertEqual(benchmark_import["features"], ["checkpoint_resume"])
 
         validate = by_command["ragflow-kb-build validate"]
-        self.assertEqual(validate["status"], "candidate")
-        self.assertEqual(validate["features"], ["checkpoint_resume", "partial_failure"])
+        self.assertEqual(validate["status"], "covered")
+        self.assertEqual(validate["features"], ["partial_failure"])
+
+        snapshot = by_command["ragflow-kb-build snapshot-chunks"]
+        self.assertEqual(snapshot["status"], "covered")
+        self.assertEqual(snapshot["features"], ["partial_failure"])
 
         live_build = by_command["ragflow-kb-build"]
         self.assertEqual(live_build["status"], "deferred")
@@ -85,8 +89,8 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
 
         self.assertIn("# RAGFlow Runtime Resilience Inventory", text)
         self.assertIn("`ragflow-query endpoint-report`", text)
-        self.assertIn("candidate: `9`", text)
-        self.assertIn("`checkpoint_resume`: `10`", text)
+        self.assertIn("candidate: `7`", text)
+        self.assertIn("`checkpoint_resume`: `8`", text)
 
 
 if __name__ == "__main__":

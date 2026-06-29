@@ -26,6 +26,7 @@ from .validation import (
     load_validation_queries,
 )
 from .retrieval import CHUNK_HASH_ALGORITHM, NormalizedChunk, normalize_chunk, normalize_retrieval_response, stable_chunk_hash
+from .runtime_resilience import build_runtime_partial_failure_report
 from .handoff import CJK_PHRASE_RE, STOPWORDS, WORD_RE
 from .metadata_governance import lint_tagset_file, tagset_report_file
 
@@ -1195,15 +1196,24 @@ def snapshot_chunks(
     seen: set[str] = set()
     snapshot_items: list[dict[str, Any]] = []
     unique_chunks: list[NormalizedChunk] = []
+    runtime_items: list[dict[str, Any]] = []
     duplicate_hashes = 0
-    for chunk in chunks:
+    for source_index, chunk in enumerate(chunks, start=1):
         stable_hash = stable_chunk_hash(chunk)
+        label = chunk.chunk_id or f"source_chunk_{source_index}"
         if stable_hash in seen:
             duplicate_hashes += 1
+            runtime_items.append({"label": label, "status": "duplicate_skipped"})
             continue
         seen.add(stable_hash)
         unique_chunks.append(chunk)
         snapshot_items.append(_chunk_snapshot_item(chunk, index=len(snapshot_items), include_content=include_content))
+        runtime_items.append(
+            {
+                "label": label,
+                "status": "snapshotted" if chunk.content.strip() else "missing_content",
+            }
+        )
 
     chunk_count = len(snapshot_items)
     chunks_with_content = sum(1 for chunk in unique_chunks if chunk.content.strip())
@@ -1242,11 +1252,32 @@ def snapshot_chunks(
         "chunks": snapshot_items,
     }
     _write_json(output_path, snapshot)
+    runtime_partial_failure = build_runtime_partial_failure_report(
+        "ragflow-kb-build snapshot-chunks",
+        runtime_items,
+        success_statuses=("snapshotted",),
+        warning_statuses=("missing_content",),
+        failure_statuses=(),
+        skipped_statuses=("duplicate_skipped",),
+        timeout_statuses=(),
+    )
+    runtime_partial_summary = runtime_partial_failure["summary"]
+    report_summary = dict(snapshot["summary"])
+    report_summary.update(
+        {
+            "runtime_partial_failure_status": runtime_partial_summary["status"],
+            "runtime_warning_count": runtime_partial_summary["warning_count"],
+            "runtime_failure_count": runtime_partial_summary["failure_count"],
+            "runtime_timeout_count": runtime_partial_summary["timeout_count"],
+            "runtime_skipped_count": runtime_partial_summary["skipped_count"],
+        }
+    )
     return {
         "ok": True,
         "schema": CHUNK_SNAPSHOT_REPORT_SCHEMA,
         "chunk_snapshot": str(output_path),
-        "summary": dict(snapshot["summary"]),
+        "summary": report_summary,
+        "runtime_partial_failure": runtime_partial_failure,
         "document_coverage": document_coverage,
         "source_hashes": snapshot["source_hashes"],
     }

@@ -1080,14 +1080,15 @@ transcripts.
 `tools/runtime_resilience_inventory.py` now emits
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene to track Phase 31
 runtime helper coverage without broadening live behavior. The current inventory names 79
-public commands: 10 `covered`, 9 `candidate`, 2 `deferred`, and 58 `not_applicable`, with
+public commands: 12 `covered`, 7 `candidate`, 2 `deferred`, and 58 `not_applicable`, with
 no stale classification findings. Covered surfaces include `ragflow-query endpoint-report`,
 `ragflow-query fallback-test`, `ragflow-query cache-report`, `ragflow-query centroid build`,
 `ragflow-doc-to-md` process cleanup reporting, `ragflow-doc-to-md backend probe`,
 `ragflow-doc-to-md backend warmup`, `ragflow-kb-build model-providers probe`,
-`ragflow-kb-build probe`, and offline `ragflow-kb-build benchmark import`
-checkpoint/resume; candidate surfaces keep broad checkpoint/resume and broader
-partial-failure rollout visible without marking the Phase 31 umbrella tasks complete.
+`ragflow-kb-build probe`, `ragflow-kb-build validate`, `ragflow-kb-build snapshot-chunks`,
+and offline `ragflow-kb-build benchmark import` checkpoint/resume. Candidate surfaces keep
+broad checkpoint/resume and the remaining partial-failure rollout visible without marking
+the Phase 31 umbrella tasks complete.
 
 Recommended next slices:
 
@@ -1108,12 +1109,16 @@ Recommended next slices:
    now also emits the schema for default candidate endpoint sweeps and explicit adapter
    empty-input probes. `ragflow-kb-build probe` now emits the schema for read-only dataset
    list diagnostics, including completed-with-warnings probes when fake or live responses
-   expose short dataset IDs.
+   expose short dataset IDs. `ragflow-kb-build validate` now emits the schema for passed,
+   semantic-warning, error, and timeout query outcomes. `ragflow-kb-build snapshot-chunks`
+   now emits the schema for snapshotted, duplicate-skipped, and missing-content chunk
+   profiles.
 3. Keep broad checkpoint/resume helpers and cross-skill partial-failure rollout as the
    next Phase 31 resilience work. Offline `ragflow-kb-build benchmark import`
-   checkpoint/resume is now covered; the next lower-risk candidates are fake-client
-   partial-failure coverage for `validate` and `snapshot-chunks`, followed by broader
-   checkpoint/resume rollout for other bounded offline jobs.
+   checkpoint/resume is now covered, and `validate` plus `snapshot-chunks` now have
+   partial-failure coverage; the next lower-risk candidates are fake-client or offline
+   partial-failure coverage for `inspect-kb`, `qa validate`, and `qa map-evidence`,
+   followed by broader checkpoint/resume rollout for other bounded offline jobs.
 
 Exit criteria:
 
@@ -1410,6 +1415,11 @@ from partial default compatibility sweeps.
 `ragflow-kb-build probe` emits it for read-only dataset-list diagnostics, so warning-only
 probe runs are visible as completed-with-warnings instead of being collapsed into a plain
 OK diagnostic report.
+`ragflow-kb-build validate` emits it for passed, semantic-warning, error, and timeout query
+outcomes, while keeping semantic validation failures separate from runtime failures.
+`ragflow-kb-build snapshot-chunks` emits it for snapshotted, duplicate-skipped, and
+missing-content chunk profiles without changing the raw `ragflow_chunk_snapshot_v1`
+artifact.
 `tools/generated_markdown_audit.py`
 now emits `ragflow_generated_markdown_audit_v1` and is
 run by release hygiene alongside generated-report safety. It audits 62 covered Markdown

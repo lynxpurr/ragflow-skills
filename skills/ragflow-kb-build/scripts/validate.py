@@ -108,6 +108,16 @@ def _as_float(value: Any) -> float:
 def _render_markdown_from_payload(payload: dict[str, Any]) -> str:
     dataset = payload.get("dataset", {}) if isinstance(payload.get("dataset"), dict) else {}
     metrics = payload.get("metrics", {}) if isinstance(payload.get("metrics"), dict) else {}
+    runtime_partial = (
+        payload.get("runtime_partial_failure")
+        if isinstance(payload.get("runtime_partial_failure"), dict)
+        else {}
+    )
+    runtime_partial_summary = (
+        runtime_partial.get("summary")
+        if isinstance(runtime_partial.get("summary"), dict)
+        else {}
+    )
     lines = [
         "# RAGFlow Validation Report",
         "",
@@ -115,6 +125,11 @@ def _render_markdown_from_payload(payload: dict[str, Any]) -> str:
         f"- Dataset: `{dataset.get('name', '')}` (`{dataset.get('id', '')}`)",
         f"- Status: `{'passed' if payload.get('ok') else 'failed'}`",
         f"- Pass rate: `{_as_float(metrics.get('pass_rate')):.2%}`",
+        f"- runtime_partial_failure_status: `{runtime_partial_summary.get('status', 'unknown')}`",
+        f"- runtime_partial_failure_partial: `{str(runtime_partial_summary.get('partial', False)).lower()}`",
+        f"- runtime_partial_failure_failures: `{runtime_partial_summary.get('failure_count', 0)}`",
+        f"- runtime_partial_failure_timeouts: `{runtime_partial_summary.get('timeout_count', 0)}`",
+        f"- runtime_partial_failure_warnings: `{runtime_partial_summary.get('warning_count', 0)}`",
         "",
         "| id | status | chunks | missing terms | missing documents |",
         "|---|---:|---:|---|---|",

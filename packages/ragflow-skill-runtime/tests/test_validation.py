@@ -37,6 +37,13 @@ class FakeValidationClient:
         }
 
 
+class PartialFailureValidationClient(FakeValidationClient):
+    def retrieve(self, *, question, dataset_ids, top_k=3):
+        if "Timeout" in question:
+            raise TimeoutError("timed out retrieving chunks")
+        return super().retrieve(question=question, dataset_ids=dataset_ids, top_k=top_k)
+
+
 class ValidationTests(unittest.TestCase):
     def test_load_validation_queries_from_object(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -97,6 +104,60 @@ class ValidationTests(unittest.TestCase):
         self.assertTrue(report.ok)
         self.assertEqual(report.metrics()["pass_rate"], 1.0)
         self.assertIn("q1", render_markdown_report(report))
+
+    def test_validation_report_marks_semantic_failures_as_runtime_warnings(self) -> None:
+        report = run_retrieval_validation(
+            FakeValidationClient(),
+            level="regression",
+            dataset_id="ds-1",
+            dataset_name="kb:test",
+            queries=[
+                ValidationQuery(
+                    id="q-missing",
+                    question="Known",
+                    expected_terms=["not returned"],
+                    expected_documents=["source.md"],
+                )
+            ],
+            top_k=3,
+        )
+        payload = report.to_dict()
+
+        self.assertFalse(report.ok)
+        self.assertEqual(payload["runtime_partial_failure"]["schema"], "ragflow_runtime_partial_failure_report_v1")
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["status"], "completed_with_warnings")
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["warning_count"], 1)
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["failure_count"], 0)
+        self.assertEqual(payload["metrics"]["runtime_partial_failure_status"], "completed_with_warnings")
+        self.assertIn("runtime_partial_failure_status: `completed_with_warnings`", render_markdown_report(report))
+
+    def test_validation_report_marks_client_timeouts_as_partial_failures(self) -> None:
+        report = run_retrieval_validation(
+            PartialFailureValidationClient(),
+            level="regression",
+            dataset_id="ds-1",
+            dataset_name="kb:test",
+            queries=[
+                ValidationQuery(
+                    id="q-ok",
+                    question="Known",
+                    expected_terms=["known term"],
+                    expected_documents=["source.md"],
+                ),
+                ValidationQuery(id="q-timeout", question="Timeout please"),
+            ],
+            top_k=3,
+        )
+        payload = report.to_dict()
+
+        self.assertFalse(report.ok)
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["status"], "partial")
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["success_count"], 1)
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["failure_count"], 1)
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["timeout_count"], 1)
+        self.assertEqual(payload["runtime_partial_failure"]["status_counts"]["timeout"], 1)
+        self.assertEqual(payload["metrics"]["runtime_timeout_count"], 1)
+        self.assertIn("runtime_partial_failure_status: `partial`", render_markdown_report(report))
 
     def test_validation_report_raw_chunks_are_opt_in(self) -> None:
         chunks = normalize_retrieval_response(

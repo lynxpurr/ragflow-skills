@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .retrieval import CHUNK_HASH_ALGORITHM, NormalizedChunk, normalize_retrieval_response, stable_chunk_hash
+from .runtime_resilience import build_runtime_partial_failure_report
 
 
 class ValidationError(RuntimeError):
@@ -38,6 +39,11 @@ POLLUTION_METRIC_KEYS = (
 )
 BENCHMARK_METRIC_KEYS = METRIC_KEYS + STRICT_CHUNK_METRIC_KEYS + POLLUTION_METRIC_KEYS
 CHUNK_SNAPSHOT_SCHEMA = "ragflow_chunk_snapshot_v1"
+VALIDATION_RUNTIME_SUCCESS_STATUSES = ("passed",)
+VALIDATION_RUNTIME_WARNING_STATUSES = ("failed",)
+VALIDATION_RUNTIME_FAILURE_STATUSES = ("error", "timeout")
+VALIDATION_RUNTIME_SKIPPED_STATUSES = ("skipped",)
+VALIDATION_RUNTIME_TIMEOUT_STATUSES = ("timeout",)
 
 
 def _string_list(value: Any, *, field_name: str) -> list[str]:
@@ -324,6 +330,15 @@ class ValidationCaseResult:
         }
 
 
+def _validation_runtime_status(case: ValidationCaseResult) -> str:
+    if case.error:
+        error_text = case.error.lower()
+        if "timeout" in error_text or "timed out" in error_text:
+            return "timeout"
+        return "error"
+    return "passed" if case.passed else "failed"
+
+
 @dataclass(frozen=True)
 class ValidationReport:
     level: str
@@ -338,6 +353,23 @@ class ValidationReport:
             self.benchmark.ok if self.benchmark else True
         )
 
+    def runtime_partial_failure_report(self) -> dict[str, Any]:
+        return build_runtime_partial_failure_report(
+            "ragflow-kb-build validate",
+            [
+                {
+                    "label": case.query.id,
+                    "status": _validation_runtime_status(case),
+                }
+                for case in self.cases
+            ],
+            success_statuses=VALIDATION_RUNTIME_SUCCESS_STATUSES,
+            warning_statuses=VALIDATION_RUNTIME_WARNING_STATUSES,
+            failure_statuses=VALIDATION_RUNTIME_FAILURE_STATUSES,
+            skipped_statuses=VALIDATION_RUNTIME_SKIPPED_STATUSES,
+            timeout_statuses=VALIDATION_RUNTIME_TIMEOUT_STATUSES,
+        )
+
     def metrics(self) -> dict[str, Any]:
         total = len(self.cases)
         passed = sum(1 for case in self.cases if case.passed)
@@ -346,6 +378,7 @@ class ValidationReport:
         expected_docs = sum(len(case.query.expected_documents) for case in self.cases)
         doc_hits = sum(len(case.document_hits) for case in self.cases)
         chunk_counts = [case.chunk_count for case in self.cases]
+        runtime_partial_summary = self.runtime_partial_failure_report()["summary"]
         return {
             "total": total,
             "passed": passed,
@@ -355,6 +388,11 @@ class ValidationReport:
             "average_chunks": sum(chunk_counts) / total if total else 0.0,
             "term_hit_rate": term_hits / expected_terms if expected_terms else None,
             "document_hit_rate": doc_hits / expected_docs if expected_docs else None,
+            "runtime_partial_failure_status": runtime_partial_summary["status"],
+            "runtime_warning_count": runtime_partial_summary["warning_count"],
+            "runtime_failure_count": runtime_partial_summary["failure_count"],
+            "runtime_timeout_count": runtime_partial_summary["timeout_count"],
+            "runtime_skipped_count": runtime_partial_summary["skipped_count"],
         }
 
     def to_dict(self, *, max_chunks: int = 3, include_raw: bool = False) -> dict[str, Any]:
@@ -363,6 +401,7 @@ class ValidationReport:
             "level": self.level,
             "dataset": {"id": self.dataset_id, "name": self.dataset_name},
             "metrics": self.metrics(),
+            "runtime_partial_failure": self.runtime_partial_failure_report(),
             "cases": [case.to_dict(max_chunks=max_chunks, include_raw=include_raw) for case in self.cases],
             **({"benchmark": self.benchmark.to_dict()} if self.benchmark else {}),
         }
@@ -1288,6 +1327,7 @@ def render_markdown_report(report: ValidationReport) -> str:
     """Render a compact Markdown validation report."""
 
     metrics = report.metrics()
+    runtime_partial_summary = report.runtime_partial_failure_report()["summary"]
     lines = [
         f"# RAGFlow Validation Report",
         "",
@@ -1295,6 +1335,11 @@ def render_markdown_report(report: ValidationReport) -> str:
         f"- Dataset: `{report.dataset_name}` (`{report.dataset_id}`)",
         f"- Status: `{'passed' if report.ok else 'failed'}`",
         f"- Pass rate: `{metrics['pass_rate']:.2%}`",
+        f"- runtime_partial_failure_status: `{runtime_partial_summary.get('status', 'unknown')}`",
+        f"- runtime_partial_failure_partial: `{str(runtime_partial_summary.get('partial', False)).lower()}`",
+        f"- runtime_partial_failure_failures: `{runtime_partial_summary.get('failure_count', 0)}`",
+        f"- runtime_partial_failure_timeouts: `{runtime_partial_summary.get('timeout_count', 0)}`",
+        f"- runtime_partial_failure_warnings: `{runtime_partial_summary.get('warning_count', 0)}`",
         "",
         "| id | status | chunks | missing terms | missing documents |",
         "|---|---:|---:|---|---|",

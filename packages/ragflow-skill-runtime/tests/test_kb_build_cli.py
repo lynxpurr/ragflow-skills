@@ -60,6 +60,13 @@ class FakeValidationClient:
         }
 
 
+class FakePartialValidationClient(FakeValidationClient):
+    def retrieve(self, *, question, dataset_ids, top_k=3):
+        if "Timeout" in question:
+            raise TimeoutError("timed out retrieving chunks")
+        return super().retrieve(question=question, dataset_ids=dataset_ids, top_k=top_k)
+
+
 class ModelProviderHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/api/v1/llm/factories":
@@ -1957,6 +1964,12 @@ class KbBuildCliTests(unittest.TestCase):
                                 "document_name": f"http://{fake_host}:9380/docs/source.md?token={fake_secret}",
                                 "document_id": str(root / "docs" / "source.md"),
                                 "chunk_id": f"chunk-token={fake_secret}",
+                            },
+                            {
+                                "content": source_text,
+                                "document_name": f"http://{fake_host}:9380/docs/source.md?token={fake_secret}",
+                                "document_id": str(root / "docs" / "source.md"),
+                                "chunk_id": f"chunk-token={fake_secret}",
                             }
                         ]
                     }
@@ -2156,6 +2169,7 @@ class KbBuildCliTests(unittest.TestCase):
                 for command in commands
             ]
             sidecars = [json.loads(paths[2].read_text(encoding="utf-8")) for paths in outputs.values()]
+            snapshot_payload = json.loads(outputs["snapshot"][0].read_text(encoding="utf-8"))
             combined_parts = [result.stdout for result in results]
             for report_json, report_md, redaction in outputs.values():
                 combined_parts.append(report_json.read_text(encoding="utf-8"))
@@ -2172,6 +2186,9 @@ class KbBuildCliTests(unittest.TestCase):
             self.assertEqual(sidecar["schema"], "ragflow_report_redaction_report_v1")
             self.assertGreaterEqual(sidecar["summary"]["redaction_count"], 1)
         self.assertIn("ragflow_chunk_snapshot_report_v1", results[0].stdout)
+        self.assertEqual(snapshot_payload["summary"]["runtime_partial_failure_status"], "partial")
+        self.assertEqual(snapshot_payload["runtime_partial_failure"]["summary"]["skipped_count"], 1)
+        self.assertIn("runtime_partial_failure_status: `partial`", combined)
         self.assertIn("ragflow_grounded_qa_generate_report_v1", results[1].stdout)
         self.assertIn("ragflow_grounded_qa_validate_report_v1", results[2].stdout)
         self.assertIn("ragflow_grounded_qa_evidence_map_report_v1", results[3].stdout)
@@ -4714,10 +4731,85 @@ class KbBuildCliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["metrics"]["pass_rate"], 1.0)
+        self.assertEqual(payload["metrics"]["runtime_partial_failure_status"], "completed")
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["status"], "completed")
         self.assertTrue(payload["metadata_summary"]["ok"])
         self.assertEqual(payload["metadata_summary"]["tag_count"], 1)
         self.assertIn("q1", report_text)
+        self.assertIn("runtime_partial_failure_status: `completed`", report_text)
         self.assertIn("Metadata Summary", report_text)
+
+    def test_validate_regression_reports_partial_runtime_failures_via_fake_client(self) -> None:
+        module = load_validate_module()
+        module.RAGFlowClient = FakePartialValidationClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "kb_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-1", "name": "kb:test"},
+                        "documents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            queries = root / "queries.json"
+            queries.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {
+                                "id": "q-ok",
+                                "question": "Known",
+                                "expected_terms": ["known term"],
+                                "expected_documents": ["source.md"],
+                            },
+                            {
+                                "id": "q-timeout",
+                                "question": "Timeout please",
+                                "expected_terms": [],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report_md = root / "report.md"
+            redaction_report = root / "redaction.json"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--kb-manifest",
+                        str(manifest),
+                        "--level",
+                        "regression",
+                        "--queries",
+                        str(queries),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--report-md",
+                        str(report_md),
+                        "--redaction-report",
+                        str(redaction_report),
+                    ]
+                )
+            report_text = report_md.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_report.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 1, stdout.getvalue())
+        payload = json.loads(stdout.getvalue())
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["runtime_partial_failure"]["schema"], "ragflow_runtime_partial_failure_report_v1")
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["status"], "partial")
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["success_count"], 1)
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["timeout_count"], 1)
+        self.assertEqual(payload["metrics"]["runtime_timeout_count"], 1)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertIn("runtime_partial_failure_status: `partial`", report_text)
+        self.assertIn("runtime_partial_failure_timeouts: `1`", report_text)
 
     def test_validate_benchmark_with_qrels_and_gate_via_fake_client(self) -> None:
         module = load_validate_module()
