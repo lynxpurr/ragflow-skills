@@ -26,8 +26,18 @@ class QueryFallbackTests(unittest.TestCase):
         self.assertEqual(report["summary"]["malformed_llm_json_count"], 1)
         self.assertEqual(report["summary"]["partial_failure_count"], 1)
         self.assertEqual(report["summary"]["llm_unavailable_count"], 1)
+        self.assertEqual(report["summary"]["runtime_partial_failure_status"], "partial")
+        self.assertEqual(report["summary"]["runtime_failure_count"], 1)
+        self.assertEqual(report["summary"]["runtime_timeout_count"], 1)
+        self.assertEqual(report["summary"]["runtime_skipped_count"], 2)
+        self.assertEqual(report["runtime_partial_failure"]["schema"], "ragflow_runtime_partial_failure_report_v1")
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["status"], "partial")
+        self.assertEqual(report["runtime_partial_failure"]["status_counts"]["malformed_json"], 1)
+        self.assertEqual(report["runtime_partial_failure"]["status_counts"]["skipped"], 2)
         self.assertFalse(report["coverage"]["missing_required_failure_modes"])
         self.assertIn("RAGFlow Query Fallback Test Report", markdown)
+        self.assertIn("runtime_partial_failure_status: `partial`", markdown)
+        self.assertIn("runtime_timeouts: `1`", markdown)
         self.assertIn("direct_retrieval", markdown)
 
     def test_custom_cases_report_missing_required_coverage(self) -> None:

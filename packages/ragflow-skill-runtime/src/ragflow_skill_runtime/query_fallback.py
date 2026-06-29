@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .runtime_resilience import build_runtime_partial_failure_report
+
 
 QUERY_FALLBACK_TEST_REPORT_SCHEMA = "ragflow_query_fallback_test_report_v1"
 FALLBACK_FAILURE_MODES = (
@@ -17,6 +19,9 @@ FALLBACK_FAILURE_MODES = (
     "direct_retrieval_fallback",
 )
 FALLBACK_SUCCESS_STATUSES = ("success", "partial")
+FALLBACK_RUNTIME_SUCCESS_STATUSES = ("success", "partial")
+FALLBACK_RUNTIME_FAILURE_STATUSES = ("error", "malformed_json", "unavailable")
+FALLBACK_RUNTIME_SKIPPED_STATUSES = ("skipped",)
 
 DEFAULT_FALLBACK_TEST_CASES = (
     {
@@ -239,6 +244,45 @@ def _rate(numerator: int, denominator: int) -> float:
     return round(numerator / denominator, 4)
 
 
+def _runtime_status_for_case(case: Mapping[str, Any]) -> str:
+    if not case.get("passed"):
+        return "error"
+    failure_mode = str(case.get("failure_mode") or "")
+    metrics = case.get("metrics") if isinstance(case.get("metrics"), Mapping) else {}
+    if int(metrics.get("timeout", 0) or 0) > 0:
+        return "timeout"
+    if int(metrics.get("partial_failure", 0) or 0) > 0:
+        return "partial"
+    if failure_mode == "malformed_llm_json":
+        return "malformed_json"
+    if failure_mode in {"llm_unavailable", "direct_retrieval_fallback"}:
+        return "skipped"
+    fallback = case.get("fallback") if isinstance(case.get("fallback"), Mapping) else {}
+    if fallback.get("success"):
+        status = str(fallback.get("status") or "success")
+        return status if status in FALLBACK_RUNTIME_SUCCESS_STATUSES else "success"
+    return "error"
+
+
+def _fallback_runtime_partial_failure_report(case_results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    runtime_items = [
+        {
+            "label": case.get("id") or f"fallback_case_{index}",
+            "status": _runtime_status_for_case(case),
+        }
+        for index, case in enumerate(case_results, start=1)
+        if isinstance(case, Mapping)
+    ]
+    return build_runtime_partial_failure_report(
+        QUERY_FALLBACK_TEST_REPORT_SCHEMA,
+        runtime_items,
+        success_statuses=FALLBACK_RUNTIME_SUCCESS_STATUSES,
+        warning_statuses=(),
+        failure_statuses=FALLBACK_RUNTIME_FAILURE_STATUSES,
+        skipped_statuses=FALLBACK_RUNTIME_SKIPPED_STATUSES,
+    )
+
+
 def run_query_fallback_tests(cases: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Run offline fallback fixture coverage checks."""
 
@@ -288,6 +332,8 @@ def run_query_fallback_tests(cases: Sequence[Mapping[str, Any]]) -> dict[str, An
     failed = total - passed
     error_count = sum(1 for issue in issues if issue.get("severity") == "error")
     warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
+    runtime_partial_failure = _fallback_runtime_partial_failure_report(case_results)
+    runtime_partial_summary = runtime_partial_failure["summary"]
     return {
         "ok": error_count == 0,
         "schema": QUERY_FALLBACK_TEST_REPORT_SCHEMA,
@@ -312,8 +358,13 @@ def run_query_fallback_tests(cases: Sequence[Mapping[str, Any]]) -> dict[str, An
             "issue_count": len(issues),
             "errors": error_count,
             "warnings": warning_count,
+            "runtime_partial_failure_status": runtime_partial_summary["status"],
+            "runtime_failure_count": runtime_partial_summary["failure_count"],
+            "runtime_timeout_count": runtime_partial_summary["timeout_count"],
+            "runtime_skipped_count": runtime_partial_summary["skipped_count"],
         },
         "failure_mode_counts": failure_mode_counts,
+        "runtime_partial_failure": runtime_partial_failure,
         "coverage": {
             "missing_required_failure_modes": missing_modes,
             "covered_required_failure_modes": [
@@ -334,6 +385,16 @@ def render_query_fallback_test_markdown(report: Mapping[str, Any]) -> str:
     """Render a compact Markdown fallback coverage report."""
 
     summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    runtime_partial = (
+        report.get("runtime_partial_failure")
+        if isinstance(report.get("runtime_partial_failure"), Mapping)
+        else {}
+    )
+    runtime_partial_summary = (
+        runtime_partial.get("summary")
+        if isinstance(runtime_partial.get("summary"), Mapping)
+        else {}
+    )
     lines = [
         "# RAGFlow Query Fallback Test Report",
         "",
@@ -344,12 +405,26 @@ def render_query_fallback_test_markdown(report: Mapping[str, Any]) -> str:
         f"- failed: `{summary.get('failed', 0)}`",
         f"- fallback_success_rate: `{summary.get('fallback_success_rate', 0)}`",
         f"- covered_required_modes: `{summary.get('covered_required_mode_count', 0)}` / `{summary.get('required_mode_count', 0)}`",
-        "",
-        "## Cases",
-        "",
-        "| id | failure mode | fallback | status | chunks |",
-        "| --- | --- | --- | --- | ---: |",
     ]
+    if runtime_partial:
+        lines.extend(
+            [
+                f"- runtime_partial_failure_status: `{runtime_partial_summary.get('status', 'unknown')}`",
+                f"- runtime_partial_failure_partial: `{str(runtime_partial_summary.get('partial', False)).lower()}`",
+                f"- runtime_failures: `{runtime_partial_summary.get('failure_count', 0)}`",
+                f"- runtime_timeouts: `{runtime_partial_summary.get('timeout_count', 0)}`",
+                f"- runtime_skipped: `{runtime_partial_summary.get('skipped_count', 0)}`",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Cases",
+            "",
+            "| id | failure mode | fallback | status | chunks |",
+            "| --- | --- | --- | --- | ---: |",
+        ]
+    )
     for case in report.get("cases", []) if isinstance(report.get("cases"), list) else []:
         if not isinstance(case, Mapping):
             continue

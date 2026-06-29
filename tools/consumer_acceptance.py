@@ -4722,6 +4722,39 @@ raise SystemExit(code)
     _record_file_check(checks, "query fallback test redaction", query_fallback_test_redaction)
     if query_fallback_test_redaction.exists():
         produced.append(query_fallback_test_redaction)
+    query_fallback_partial_ok = query_fallback_test_json.exists()
+    query_fallback_partial_error = ""
+    if query_fallback_partial_ok:
+        try:
+            query_fallback_payload = json.loads(query_fallback_test_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            query_fallback_partial_ok = False
+            query_fallback_partial_error = f"invalid fallback-test JSON: {exc}"
+        else:
+            query_fallback_partial = query_fallback_payload.get("runtime_partial_failure")
+            query_fallback_partial_summary = (
+                query_fallback_partial.get("summary") if isinstance(query_fallback_partial, dict) else {}
+            )
+            query_fallback_partial_ok = (
+                isinstance(query_fallback_partial, dict)
+                and query_fallback_partial.get("schema") == "ragflow_runtime_partial_failure_report_v1"
+                and isinstance(query_fallback_partial_summary, dict)
+                and query_fallback_partial_summary.get("status") == "partial"
+                and query_fallback_partial_summary.get("timeout_count") == 1
+                and query_fallback_partial_summary.get("skipped_count") == 2
+            )
+            if not query_fallback_partial_ok:
+                query_fallback_partial_error = "missing fallback-test runtime partial-failure summary"
+    else:
+        query_fallback_partial_error = f"missing {query_fallback_test_json}"
+    checks.append(
+        {
+            "name": "query fallback test partial failure",
+            "ok": query_fallback_partial_ok,
+            "path": str(query_fallback_test_json),
+            "error": query_fallback_partial_error,
+        }
+    )
 
     query_rewrite = _run_command(
         [

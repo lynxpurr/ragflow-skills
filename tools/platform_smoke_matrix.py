@@ -3119,6 +3119,40 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         fallback_test_result,
         required_stdout='"schema": "ragflow_query_fallback_test_report_v1"',
     )
+    fallback_test_json = artifacts_dir / "query_fallback_test.json"
+    fallback_partial_ok = fallback_test_json.exists()
+    fallback_partial_error = ""
+    if fallback_partial_ok:
+        try:
+            fallback_payload = json.loads(fallback_test_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            fallback_partial_ok = False
+            fallback_partial_error = f"invalid fallback-test JSON: {exc}"
+        else:
+            fallback_partial = fallback_payload.get("runtime_partial_failure")
+            fallback_partial_summary = (
+                fallback_partial.get("summary") if isinstance(fallback_partial, dict) else {}
+            )
+            fallback_partial_ok = (
+                isinstance(fallback_partial, dict)
+                and fallback_partial.get("schema") == "ragflow_runtime_partial_failure_report_v1"
+                and isinstance(fallback_partial_summary, dict)
+                and fallback_partial_summary.get("status") == "partial"
+                and fallback_partial_summary.get("timeout_count") == 1
+                and fallback_partial_summary.get("skipped_count") == 2
+            )
+            if not fallback_partial_ok:
+                fallback_partial_error = "missing fallback-test runtime partial-failure summary"
+    else:
+        fallback_partial_error = f"missing {fallback_test_json}"
+    checks.append(
+        {
+            "name": "query fallback-test partial failure",
+            "ok": fallback_partial_ok,
+            "returncode": 0 if fallback_partial_ok else 1,
+            "error": fallback_partial_error,
+        }
+    )
     assistant_profile_recommendation_result = _run_command(
         [
             sys.executable,

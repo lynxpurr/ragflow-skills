@@ -1486,8 +1486,10 @@ request. Focused tests use fake clocks and fake HTTP 500 responses to prove the 
 opens and short-circuits later endpoints without enabling it by default.
 The same endpoint-report surface now emits `ragflow_runtime_partial_failure_report_v1`
 to summarize timeout, skipped, failed, warning, and partial endpoint outcomes without
-echoing raw URLs, API keys, cache paths, or endpoint reasons. Broad checkpoint/resume
-helpers and non-endpoint partial-failure schemas remain open Phase 31 work.
+echoing raw URLs, API keys, cache paths, or endpoint reasons. Offline
+`ragflow-query fallback-test` reports now reuse the same runtime schema for non-endpoint
+timeout, malformed, skipped, and partial fallback profiles. Broad checkpoint/resume
+helpers and cross-skill partial-failure rollout remain open Phase 31 work.
 
 The final generated-Markdown audit is implemented in `tools/generated_markdown_audit.py`.
 It consumes the report-surface inventory, selects covered report surfaces with generated

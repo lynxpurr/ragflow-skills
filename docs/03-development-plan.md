@@ -1087,8 +1087,10 @@ Recommended next slices:
    reachability attempts and `ragflow_runtime_circuit_breaker_report_v1` per-run
    circuit-breaker summaries for repeated reachability failures. It also pilots
    `ragflow_runtime_partial_failure_report_v1` for endpoint timeout, skipped, failed, and
-   partial reachability outcomes without echoing raw URLs or credentials.
-3. Keep broad checkpoint/resume helpers and non-endpoint partial-failure schemas as the
+   partial reachability outcomes without echoing raw URLs or credentials. The same
+   partial-failure schema is now also consumed by offline `ragflow-query fallback-test`
+   reports for timeout, malformed, skipped, and partial fallback profiles.
+3. Keep broad checkpoint/resume helpers and cross-skill partial-failure rollout as the
    next Phase 31 resilience work.
 
 Exit criteria:
@@ -1376,7 +1378,9 @@ read-only RAGFlow/LLM endpoint reachability attempts. It also emits
 short-circuit, failure, and recovery state while leaving the breaker disabled by default.
 `ragflow_runtime_partial_failure_report_v1` is now emitted by the same endpoint report
 surface to summarize timeout, skipped, failed, warning, and partial endpoint outcomes
-without echoing raw URLs, API keys, or cache paths.
+without echoing raw URLs, API keys, or cache paths. Offline `ragflow-query fallback-test`
+reports now also emit the same schema for non-endpoint timeout, malformed, skipped, and
+partial fallback profiles.
 `tools/generated_markdown_audit.py`
 now emits `ragflow_generated_markdown_audit_v1` and is
 run by release hygiene alongside generated-report safety. It audits 62 covered Markdown

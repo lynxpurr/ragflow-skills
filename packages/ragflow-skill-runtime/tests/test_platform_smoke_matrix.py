@@ -104,6 +104,7 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("query endpoint-report runtime circuit breaker", check_names)
         self.assertIn("query endpoint-report partial failure", check_names)
         self.assertIn("query fallback-test", check_names)
+        self.assertIn("query fallback-test partial failure", check_names)
         self.assertTrue(
             any(path.endswith("mineru-handoff/doc_manifest.json") for path in profile["artifacts"]),
             profile["artifacts"],
