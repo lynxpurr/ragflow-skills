@@ -495,6 +495,15 @@ EXPECTED_IDENTITIES = (
         description="Release governance report for generated-report and example redaction safety.",
         source_roots=(Path("tools/release_hygiene_check.py"),),
     ),
+    SchemaIdentity(
+        key="generated_markdown_audit",
+        group="release",
+        identity="ragflow_generated_markdown_audit_v1",
+        source_patterns=("ragflow_generated_markdown_audit_v1", "SCHEMA"),
+        coverage_patterns=("ragflow_generated_markdown_audit_v1", "run_generated_markdown_audit"),
+        description="Release governance report for sanitized generated-Markdown report coverage.",
+        source_roots=(Path("tools/generated_markdown_audit.py"),),
+    ),
 )
 
 

@@ -1275,7 +1275,7 @@ Tasks:
 - [x] Add `--redaction-report` coverage to `ragflow-doc-to-md postprocess`,
   `ragflow-doc-to-md segment-plan`, and `ragflow-doc-to-md split`, including sanitized
   JSON stdout and plan/report artifacts.
-- [ ] Ensure every redacted Markdown report is rendered from the sanitized JSON payload,
+- [x] Ensure every redacted Markdown report is rendered from the sanitized JSON payload,
   not from the raw pre-redaction report.
 - [x] Add consumer acceptance or platform smoke coverage for at least one newly redacted
   non-query report family with fake secrets, fake endpoints, and fake host paths.
@@ -1283,7 +1283,7 @@ Tasks:
   tests in one read-only probe or report command.
 - [x] Add a minimal metrics summary helper for counters and latency samples in one
   read-only probe or report command.
-- [ ] Keep token-bucket rate limiting, circuit breakers, cache invalidation,
+- [x] Keep token-bucket rate limiting, circuit breakers, cache invalidation,
   checkpoint/resume, and broad partial-failure schemas deferred until the helper pilot is
   covered by tests and release gates.
 
@@ -1362,7 +1362,11 @@ The `ragflow-query endpoint-report` command now pilots shared runtime helpers:
 `ragflow_runtime_metrics_v1` for counters, gauges, and deterministic latency p50/p95/p99
 summaries, and `ragflow_runtime_retry_trace_v1` for opt-in bounded reachability retries
 with explicit retry budget, attempt count, retry count, and final status. The next
-recommended Phase 36 task is the final generated Markdown audit.
+`tools/generated_markdown_audit.py` now emits `ragflow_generated_markdown_audit_v1` and is
+run by release hygiene alongside generated-report safety. It audits 61 covered Markdown
+report surfaces from the report-surface inventory and requires each to have explicit
+sanitized-rendering evidence, with 0 missing and 0 stale entries in the verified suite.
+Broader runtime primitives remain deferred outside Phase 36.
 
 Near-term task list:
 
@@ -1378,7 +1382,7 @@ Near-term task list:
   final status in the emitted report without adding live RAGFlow mutation.
 - [x] Keep consumer acceptance and platform smoke changes scoped to schema or CLI-surface
   changes from the helper pilot.
-- [ ] Run a final generated-Markdown audit before marking the sanitized Markdown umbrella
+- [x] Run a final generated-Markdown audit before marking the sanitized Markdown umbrella
   task complete.
 
 Exit criteria:

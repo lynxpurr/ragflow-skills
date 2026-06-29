@@ -1442,8 +1442,15 @@ coverage and fake HTTP-server unit coverage. It also adds an opt-in
 `ragflow_runtime_retry_trace_v1` helper for bounded reachability retries. The default
 retry budget remains one attempt for compatibility; explicit `--retry-budget` values
 record retry budget, attempt count, retry count, final status, and per-attempt status in
-the endpoint report without adding live RAGFlow mutation. The next implementation order
-should keep a small generated-Markdown audit as the final report-safety closeout.
+the endpoint report without adding live RAGFlow mutation.
+
+The final generated-Markdown audit is implemented in `tools/generated_markdown_audit.py`.
+It consumes the report-surface inventory, selects covered report surfaces with generated
+Markdown outputs, and requires each one to have explicit sanitized-rendering evidence.
+The current audit emits `ragflow_generated_markdown_audit_v1`, verifies 61 Markdown report
+surfaces with 0 missing and 0 stale entries, and runs from release hygiene together with
+generated-report safety. This closes the Phase 36 report-safety audit without broadening
+the runtime helper scope.
 
 ## Implementation Notes And Pitfalls
 

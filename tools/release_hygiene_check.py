@@ -14,6 +14,7 @@ from typing import Any, Iterable
 
 from build_release import DIST_DIR, PUBLIC_SKILLS, ROOT, build_release
 from forward_test_prompt_check import run_forward_test_prompt_check
+from generated_markdown_audit import run_generated_markdown_audit
 from rename_governance_check import run_rename_governance_check
 from schema_identity_check import run_schema_identity_check
 from version_date_drift_check import run_version_date_drift_check
@@ -848,6 +849,9 @@ def run_hygiene_check(
         generated_report_payload = run_generated_report_safety_check(root=ROOT)
         payload["generated_report_safety"] = generated_report_payload
         payload["ok"] = bool(payload["ok"] and generated_report_payload["ok"])
+        generated_markdown_payload = run_generated_markdown_audit(root=ROOT)
+        payload["generated_markdown_audit"] = generated_markdown_payload
+        payload["ok"] = bool(payload["ok"] and generated_markdown_payload["ok"])
     return payload
 
 
