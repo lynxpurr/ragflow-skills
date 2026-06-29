@@ -280,6 +280,7 @@ class QueryCliTests(unittest.TestCase):
             report_json = root / "cache_report.json"
             report_md = root / "cache_report.md"
             redaction_json = root / "cache_redaction.json"
+            cache_dir = root / "query-output-cache"
             private_host = ".".join(["192", "168", "77", "88"])
             fake_token = "fake-cache-token"
             home_path = str(Path.home() / ".ragflow" / "cache.local.yaml")
@@ -338,6 +339,10 @@ class QueryCliTests(unittest.TestCase):
                         "retrieval-v2",
                         "--route-config-version",
                         "routes-v1",
+                        "--cache-dir",
+                        str(cache_dir),
+                        "--cache-ttl-seconds",
+                        "60",
                         "--report-json",
                         str(report_json),
                         "--report-md",
@@ -360,15 +365,20 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(payload["schema"], "ragflow_query_output_cache_report_v1")
         self.assertEqual(payload["invalidation"]["status"], "invalidate")
         self.assertIn("config", payload["invalidation"]["changed_fields"])
+        self.assertEqual(payload["cache_store"]["schema"], "ragflow_query_output_cache_store_report_v1")
+        self.assertEqual(payload["cache_store"]["entry"]["status"], "miss")
+        self.assertEqual(payload["cache_store"]["write"]["status"], "would_store")
         self.assertIn("RAGFlow Query Output Cache Report", markdown)
         self.assertIn("invalidation_status: `invalidate`", markdown)
+        self.assertIn("cache_store_status: `miss`", markdown)
         self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
-        self.assertGreaterEqual(redaction_payload["target_counts"]["config_paths"], 5)
+        self.assertGreaterEqual(redaction_payload["target_counts"]["config_paths"], 6)
         self.assertNotIn(question, combined)
         self.assertNotIn(private_host, combined)
         self.assertNotIn(fake_token, combined)
         self.assertNotIn(home_path, combined)
         self.assertNotIn(str(query_output), combined)
+        self.assertNotIn(str(cache_dir), combined)
 
     def test_diagnose_result_writes_redacted_report_sidecar(self) -> None:
         module = load_query_module()

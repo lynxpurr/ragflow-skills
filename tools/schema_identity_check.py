@@ -213,6 +213,13 @@ EXPECTED_IDENTITIES = (
         coverage_patterns=("ragflow_query_output_cache_report_v1", "QUERY_OUTPUT_CACHE_REPORT_SCHEMA"),
     ),
     SchemaIdentity(
+        key="query_output_cache_store_report",
+        group="query",
+        identity="ragflow_query_output_cache_store_report_v1",
+        source_patterns=("ragflow_query_output_cache_store_report_v1", "QUERY_OUTPUT_CACHE_STORE_REPORT_SCHEMA"),
+        coverage_patterns=("ragflow_query_output_cache_store_report_v1", "QUERY_OUTPUT_CACHE_STORE_REPORT_SCHEMA"),
+    ),
+    SchemaIdentity(
         key="runtime_metrics",
         group="runtime",
         identity="ragflow_runtime_metrics_v1",

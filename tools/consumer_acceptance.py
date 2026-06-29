@@ -4146,6 +4146,7 @@ raise SystemExit(code)
     query_cache_json = work_root / "query_cache_report.json"
     query_cache_md = work_root / "query_cache_report.md"
     query_cache_redaction = work_root / "query_cache_redaction.json"
+    query_cache_dir = work_root / "query_output_cache_store"
     query_fallback_test_json = work_root / "query_fallback_test.json"
     query_fallback_test_md = work_root / "query_fallback_test.md"
     query_fallback_test_redaction = work_root / "query_fallback_test_redaction.json"
@@ -4281,6 +4282,10 @@ raise SystemExit(code)
             "retrieval-v2",
             "--route-config-version",
             "routes-v1",
+            "--cache-dir",
+            str(query_cache_dir),
+            "--cache-ttl-seconds",
+            "60",
             "--report-json",
             str(query_cache_json),
             "--report-md",
@@ -4308,16 +4313,24 @@ raise SystemExit(code)
             query_cache_error = f"invalid query cache report JSON: {exc}"
         else:
             invalidation = query_cache_payload.get("invalidation")
+            cache_store = query_cache_payload.get("cache_store")
             changed_fields = invalidation.get("changed_fields") if isinstance(invalidation, dict) else []
+            cache_store_summary = cache_store.get("summary") if isinstance(cache_store, dict) else {}
             query_cache_ok = (
                 query_cache_payload.get("schema") == "ragflow_query_output_cache_report_v1"
                 and isinstance(invalidation, dict)
                 and invalidation.get("status") == "invalidate"
                 and isinstance(changed_fields, list)
                 and "config" in changed_fields
+                and isinstance(cache_store, dict)
+                and cache_store.get("schema") == "ragflow_query_output_cache_store_report_v1"
+                and cache_store.get("enabled") is True
+                and cache_store.get("dry_run") is True
+                and isinstance(cache_store_summary, dict)
+                and cache_store_summary.get("would_write_count") == 1
             )
             if not query_cache_ok:
-                query_cache_error = "missing query cache invalidation summary"
+                query_cache_error = "missing query cache invalidation or store dry-run summary"
     else:
         query_cache_error = f"missing {query_cache_json}"
     checks.append(

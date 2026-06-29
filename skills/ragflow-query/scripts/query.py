@@ -1554,6 +1554,7 @@ def _sanitize_query_cache_report(
         config_paths=[
             args.query_output,
             args.baseline_report,
+            args.cache_dir,
             args.report_json,
             args.report_md,
             args.redaction_report,
@@ -1575,6 +1576,9 @@ def _cache_report(args: argparse.Namespace) -> int:
             baseline_report=baseline_report,
             config_version=args.config_version,
             route_config_version=args.route_config_version,
+            cache_dir=args.cache_dir,
+            cache_ttl_seconds=args.cache_ttl_seconds,
+            cache_namespace=args.cache_namespace,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _error(str(exc), json_output=args.json)
@@ -1980,6 +1984,17 @@ def build_parser() -> argparse.ArgumentParser:
     cache_report.add_argument("--baseline-report", help="Previous cache-report JSON to compare for invalidation")
     cache_report.add_argument("--config-version", help="Retrieval config version label included in cache identity")
     cache_report.add_argument("--route-config-version", help="Route config version label included in cache identity")
+    cache_report.add_argument("--cache-dir", help="Optional local query-output cache ledger directory for dry-run stats")
+    cache_report.add_argument(
+        "--cache-ttl-seconds",
+        type=float,
+        help="Query-output cache ledger TTL in seconds when --cache-dir is set; defaults to 3600",
+    )
+    cache_report.add_argument(
+        "--cache-namespace",
+        default="query-output",
+        help="Query-output cache ledger namespace under --cache-dir; defaults to query-output",
+    )
     cache_report.add_argument("--report-json", help="Optional JSON report output path")
     cache_report.add_argument("--report-md", help="Optional Markdown report output path")
     cache_report.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")

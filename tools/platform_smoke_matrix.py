@@ -1511,6 +1511,10 @@ with contextlib.redirect_stdout(stdout):
         "retrieval-v2",
         "--route-config-version",
         "routes-v1",
+        "--cache-dir",
+        str(artifacts_dir / "query_output_cache_store"),
+        "--cache-ttl-seconds",
+        "60",
         "--report-json",
         str(artifacts_dir / "query_cache_report.json"),
         "--report-md",
@@ -1526,6 +1530,11 @@ if cache_report_payload.get("schema") != "ragflow_query_output_cache_report_v1":
     raise SystemExit(15)
 if cache_report_payload.get("invalidation", {{}}).get("status") != "invalidate":
     raise SystemExit(16)
+cache_store_payload = cache_report_payload.get("cache_store", {{}})
+if cache_store_payload.get("schema") != "ragflow_query_output_cache_store_report_v1":
+    raise SystemExit(17)
+if cache_store_payload.get("summary", {{}}).get("would_write_count") != 1:
+    raise SystemExit(18)
 
 stdout = StringIO()
 with contextlib.redirect_stdout(stdout):

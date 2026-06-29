@@ -1461,9 +1461,13 @@ route/rewrite/fusion parameters, top-k, similarity threshold, and explicit confi
 labels, and emits only digests plus safe summaries. When a previous cache report is
 provided, it compares field fingerprints and reports changed fields such as retrieval,
 route, rewrite, fusion, or config so host workflows can decide when a query-output cache
-entry should be invalidated. Actual query-output cache stores, cache statistics, active
-invalidation execution, checkpoint/resume, and partial-failure schemas remain separate
-Phase 31 follow-up work.
+entry should be invalidated. It now also supports an explicit `--cache-dir` dry-run store
+report for local query-output cache ledgers. The store report reads digest-addressed
+metadata entries, reports hit, miss, stale, malformed-entry, would-store, and
+would-invalidate counts, and keeps query output storage host-owned by emitting only entry
+digests and safe summaries. Active query-output cache writes, active invalidation
+execution, checkpoint/resume, and partial-failure schemas remain separate Phase 31
+follow-up work.
 
 The token-bucket rate limiter pilot is implemented in the same read-only endpoint-report
 surface. `ragflow_runtime_rate_limit_report_v1` records explicit `--rate-limit-per-second`
@@ -1477,14 +1481,14 @@ The circuit-breaker pilot is likewise scoped to `ragflow-query endpoint-report`.
 count, open count, short-circuit count, and half-open count. Cache hits still bypass live
 reachability work, while cache misses consult the per-run circuit before making a HEAD
 request. Focused tests use fake clocks and fake HTTP 500 responses to prove the breaker
-opens and short-circuits later endpoints without enabling it by default. Actual
-query-output cache stores, cache statistics, active invalidation execution,
-checkpoint/resume, and partial-failure schemas remain open Phase 31 work.
+opens and short-circuits later endpoints without enabling it by default. Active
+query-output cache writes/invalidation execution, checkpoint/resume, and partial-failure
+schemas remain open Phase 31 work.
 
 The final generated-Markdown audit is implemented in `tools/generated_markdown_audit.py`.
 It consumes the report-surface inventory, selects covered report surfaces with generated
 Markdown outputs, and requires each one to have explicit sanitized-rendering evidence.
-The current audit emits `ragflow_generated_markdown_audit_v1`, verifies 61 Markdown report
+The current audit emits `ragflow_generated_markdown_audit_v1`, verifies 62 Markdown report
 surfaces with 0 missing and 0 stale entries, and runs from release hygiene together with
 generated-report safety. This closes the Phase 36 report-safety audit without broadening
 the runtime helper scope.

@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from datetime import datetime, timezone
+import json
+import math
+from pathlib import Path
+import time
 from typing import Any
 
 from .runtime_cache import CACHE_KEY_ALGORITHM, runtime_cache_digest, runtime_cache_secret_digest
 
 
+QUERY_OUTPUT_CACHE_ENTRY_SCHEMA = "ragflow_query_output_cache_entry_v1"
 QUERY_OUTPUT_CACHE_REPORT_SCHEMA = "ragflow_query_output_cache_report_v1"
+QUERY_OUTPUT_CACHE_STORE_REPORT_SCHEMA = "ragflow_query_output_cache_store_report_v1"
 QUERY_OUTPUT_CACHE_OPERATION = "ragflow_query_output"
+DEFAULT_QUERY_OUTPUT_CACHE_TTL_SECONDS = 3600.0
 
 
 def _utc_now() -> str:
@@ -62,6 +69,41 @@ def _float_or_none(value: Any) -> float | None:
 
 def _digest(value: Any, *, field: str) -> str:
     return runtime_cache_digest(f"{QUERY_OUTPUT_CACHE_OPERATION}:{field}", {"value": value})
+
+
+def _rounded(value: float | int | None) -> float | None:
+    if value is None:
+        return None
+    return round(float(value), 3)
+
+
+def _sanitize_namespace(value: str | None) -> str:
+    namespace = str(value or "query-output").strip() or "query-output"
+    namespace = "".join(char if char.isalnum() or char in "._-" else "_" for char in namespace)
+    return namespace or "query-output"
+
+
+def _cache_entry_path(cache_dir: str | Path, namespace: str, cache_key: str) -> Path:
+    digest = cache_key.replace(":", "-")
+    return Path(cache_dir) / namespace / f"{digest}.json"
+
+
+def _cache_path_digest(path: str | Path | None) -> str | None:
+    if path is None:
+        return None
+    return runtime_cache_secret_digest(str(Path(path).expanduser()))
+
+
+def _positive_ttl(value: float | int | str | None) -> float:
+    if value is None:
+        return DEFAULT_QUERY_OUTPUT_CACHE_TTL_SECONDS
+    try:
+        ttl = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("cache ttl seconds must be a number") from exc
+    if not math.isfinite(ttl) or ttl <= 0:
+        raise ValueError("cache ttl seconds must be finite and greater than zero")
+    return ttl
 
 
 def _query_text(payload: Mapping[str, Any]) -> str:
@@ -271,12 +313,243 @@ def _invalidation_report(cache_key: str, fingerprints: Mapping[str, str], baseli
     }
 
 
+def _query_output_cache_entry(
+    *,
+    cache_key: str,
+    field_fingerprints: Mapping[str, str],
+    key_parts: Mapping[str, Any],
+    query_output_digest: str,
+    ttl_seconds: float,
+    now_epoch: float,
+) -> dict[str, Any]:
+    return {
+        "schema": QUERY_OUTPUT_CACHE_ENTRY_SCHEMA,
+        "operation": QUERY_OUTPUT_CACHE_OPERATION,
+        "cache_key": cache_key,
+        "created_at_epoch": float(now_epoch),
+        "ttl_seconds": float(ttl_seconds),
+        "cache_key_algorithm": CACHE_KEY_ALGORITHM,
+        "query_output_digest": query_output_digest,
+        "field_fingerprints": dict(field_fingerprints),
+        "key_parts": dict(key_parts),
+    }
+
+
+def _read_cache_entry(path: Path) -> tuple[Mapping[str, Any] | None, str]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError:
+        return None, "read_error"
+    except json.JSONDecodeError:
+        return None, "read_error"
+    if not isinstance(payload, Mapping):
+        return None, "invalid_entry"
+    return payload, ""
+
+
+def _entry_lookup(
+    *,
+    path: Path,
+    cache_key: str,
+    ttl_seconds: float,
+    now_epoch: float,
+    field_fingerprints: Mapping[str, str] | None = None,
+) -> tuple[dict[str, Any], dict[str, int]]:
+    counters = {
+        "lookup_count": 1,
+        "hit_count": 0,
+        "miss_count": 0,
+        "stale_count": 0,
+        "invalid_entry_count": 0,
+        "read_error_count": 0,
+        "mismatch_count": 0,
+    }
+    lookup = {
+        "cache_key": cache_key,
+        "path_digest": _cache_path_digest(path),
+        "status": "miss",
+        "age_seconds": None,
+        "changed_fields": [],
+        "changed_field_count": 0,
+    }
+    if not path.exists():
+        counters["miss_count"] = 1
+        return lookup, counters
+    entry, error = _read_cache_entry(path)
+    if error:
+        lookup["status"] = error
+        counters["read_error_count" if error == "read_error" else "invalid_entry_count"] = 1
+        return lookup, counters
+    if entry is None or entry.get("schema") != QUERY_OUTPUT_CACHE_ENTRY_SCHEMA or entry.get("cache_key") != cache_key:
+        lookup["status"] = "invalid_entry"
+        counters["invalid_entry_count"] = 1
+        return lookup, counters
+    created_at_epoch = entry.get("created_at_epoch")
+    if isinstance(created_at_epoch, bool) or not isinstance(created_at_epoch, (int, float)):
+        lookup["status"] = "invalid_entry"
+        counters["invalid_entry_count"] = 1
+        return lookup, counters
+    age_seconds = max(0.0, float(now_epoch) - float(created_at_epoch))
+    lookup["age_seconds"] = _rounded(age_seconds)
+    if age_seconds > ttl_seconds:
+        lookup["status"] = "stale"
+        counters["stale_count"] = 1
+        return lookup, counters
+    if field_fingerprints is not None:
+        entry_fingerprints = _mapping(entry.get("field_fingerprints"))
+        changed_fields = [
+            field
+            for field, fingerprint in sorted(field_fingerprints.items())
+            if str(entry_fingerprints.get(field) or "") != str(fingerprint)
+        ]
+        if changed_fields:
+            lookup["status"] = "mismatch"
+            lookup["changed_fields"] = changed_fields
+            lookup["changed_field_count"] = len(changed_fields)
+            counters["mismatch_count"] = 1
+            return lookup, counters
+    lookup["status"] = "hit"
+    counters["hit_count"] = 1
+    return lookup, counters
+
+
+def _empty_store_summary() -> dict[str, int]:
+    return {
+        "lookup_count": 0,
+        "hit_count": 0,
+        "miss_count": 0,
+        "stale_count": 0,
+        "invalid_entry_count": 0,
+        "read_error_count": 0,
+        "mismatch_count": 0,
+        "would_write_count": 0,
+        "write_count": 0,
+        "would_invalidate_count": 0,
+    }
+
+
+def _query_output_cache_store_report(
+    *,
+    cache_key: str,
+    field_fingerprints: Mapping[str, str],
+    key_parts: Mapping[str, Any],
+    query_output_digest: str,
+    invalidation: Mapping[str, Any],
+    baseline_report: Mapping[str, Any] | None,
+    cache_dir: str | Path | None,
+    cache_ttl_seconds: float | int | str | None,
+    cache_namespace: str | None,
+    dry_run: bool,
+    now_epoch: float,
+) -> dict[str, Any]:
+    ttl_seconds = _positive_ttl(cache_ttl_seconds)
+    namespace = _sanitize_namespace(cache_namespace)
+    summary = _empty_store_summary()
+    if cache_dir is None:
+        return {
+            "schema": QUERY_OUTPUT_CACHE_STORE_REPORT_SCHEMA,
+            "enabled": False,
+            "dry_run": True,
+            "namespace": namespace,
+            "ttl_seconds": _rounded(ttl_seconds),
+            "cache_key_algorithm": CACHE_KEY_ALGORITHM,
+            "cache_dir_digest": None,
+            "entry": {"status": "disabled", "cache_key": cache_key, "path_digest": None, "age_seconds": None},
+            "baseline_entry": None,
+            "write": {"status": "disabled", "reason": "cache directory not provided"},
+            "invalidation": {
+                "status": invalidation.get("status", "not_evaluated"),
+                "changed_fields": list(invalidation.get("changed_fields", [])),
+                "would_invalidate": False,
+            },
+            "summary": summary,
+        }
+
+    cache_root = Path(cache_dir)
+    entry_path = _cache_entry_path(cache_root, namespace, cache_key)
+    entry, counters = _entry_lookup(
+        path=entry_path,
+        cache_key=cache_key,
+        ttl_seconds=ttl_seconds,
+        now_epoch=now_epoch,
+        field_fingerprints=field_fingerprints,
+    )
+    for key, value in counters.items():
+        summary[key] = summary.get(key, 0) + value
+
+    needs_write = entry["status"] in {"miss", "stale", "invalid_entry", "read_error", "mismatch"}
+    baseline_entry: dict[str, Any] | None = None
+    would_invalidate = False
+    baseline_cache_key = baseline_report.get("cache_key") if isinstance(baseline_report, Mapping) else None
+    if baseline_cache_key and baseline_cache_key != cache_key and invalidation.get("status") == "invalidate":
+        baseline_path = _cache_entry_path(cache_root, namespace, str(baseline_cache_key))
+        baseline_entry, baseline_counters = _entry_lookup(
+            path=baseline_path,
+            cache_key=str(baseline_cache_key),
+            ttl_seconds=ttl_seconds,
+            now_epoch=now_epoch,
+            field_fingerprints=None,
+        )
+        for key, value in baseline_counters.items():
+            summary[key] = summary.get(key, 0) + value
+        would_invalidate = baseline_entry["status"] in {"hit", "stale", "mismatch", "invalid_entry", "read_error"}
+        if would_invalidate:
+            summary["would_invalidate_count"] = 1
+
+    if needs_write:
+        summary["would_write_count"] = 1
+    write_status = "would_store" if needs_write and dry_run else "not_needed"
+    write_reason = "entry absent or stale" if needs_write else "fresh entry already present"
+    if not dry_run and needs_write:
+        write_status = "not_implemented"
+        write_reason = "query-output cache writes are intentionally dry-run only"
+    return {
+        "schema": QUERY_OUTPUT_CACHE_STORE_REPORT_SCHEMA,
+        "enabled": True,
+        "dry_run": dry_run,
+        "namespace": namespace,
+        "ttl_seconds": _rounded(ttl_seconds),
+        "cache_key_algorithm": CACHE_KEY_ALGORITHM,
+        "cache_dir_digest": _cache_path_digest(cache_root),
+        "entry": entry,
+        "baseline_entry": baseline_entry,
+        "write": {
+            "status": write_status,
+            "reason": write_reason,
+            "entry_schema": QUERY_OUTPUT_CACHE_ENTRY_SCHEMA,
+            "entry_digest": _digest(
+                _query_output_cache_entry(
+                    cache_key=cache_key,
+                    field_fingerprints=field_fingerprints,
+                    key_parts=key_parts,
+                    query_output_digest=query_output_digest,
+                    ttl_seconds=ttl_seconds,
+                    now_epoch=now_epoch,
+                ),
+                field="cache_entry",
+            ),
+        },
+        "invalidation": {
+            "status": invalidation.get("status", "not_evaluated"),
+            "changed_fields": list(invalidation.get("changed_fields", [])),
+            "would_invalidate": would_invalidate,
+            "baseline_cache_key": baseline_cache_key,
+        },
+        "summary": summary,
+    }
+
+
 def build_query_output_cache_report(
     query_payload: Mapping[str, Any],
     *,
     baseline_report: Mapping[str, Any] | None = None,
     config_version: str | None = None,
     route_config_version: str | None = None,
+    cache_dir: str | Path | None = None,
+    cache_ttl_seconds: float | int | str | None = None,
+    cache_namespace: str | None = None,
+    cache_dry_run: bool = True,
+    now_epoch: float | None = None,
 ) -> dict[str, Any]:
     """Build an offline cache-key and invalidation report for saved query output."""
 
@@ -290,6 +563,20 @@ def build_query_output_cache_report(
     invalidation = _invalidation_report(cache_key, fingerprints, baseline_report)
     ok = invalidation["status"] != "invalid_baseline"
     key_parts = _safe_key_parts(material)
+    query_output_digest = _digest(query_payload, field="query_output")
+    store_report = _query_output_cache_store_report(
+        cache_key=cache_key,
+        field_fingerprints=fingerprints,
+        key_parts=key_parts,
+        query_output_digest=query_output_digest,
+        invalidation=invalidation,
+        baseline_report=baseline_report,
+        cache_dir=cache_dir,
+        cache_ttl_seconds=cache_ttl_seconds,
+        cache_namespace=cache_namespace,
+        dry_run=cache_dry_run,
+        now_epoch=float(time.time() if now_epoch is None else now_epoch),
+    )
     return {
         "ok": ok,
         "schema": QUERY_OUTPUT_CACHE_REPORT_SCHEMA,
@@ -297,14 +584,19 @@ def build_query_output_cache_report(
         "operation": QUERY_OUTPUT_CACHE_OPERATION,
         "cache_key_algorithm": CACHE_KEY_ALGORITHM,
         "cache_key": cache_key,
+        "query_output_digest": query_output_digest,
         "key_parts": key_parts,
         "field_fingerprints": fingerprints,
         "invalidation": invalidation,
+        "cache_store": store_report,
         "summary": {
             "dataset_count": len(key_parts["dataset_ids"]),
             "retrieval_query_count": key_parts["rewrite"]["retrieval_query_count"],
             "invalidation_status": invalidation["status"],
             "changed_field_count": invalidation["changed_field_count"],
+            "cache_store_status": store_report["entry"]["status"],
+            "cache_store_would_write_count": store_report["summary"]["would_write_count"],
+            "cache_store_would_invalidate_count": store_report["summary"]["would_invalidate_count"],
         },
     }
 
@@ -317,6 +609,9 @@ def render_query_output_cache_markdown(report: Mapping[str, Any]) -> str:
     retrieval = key_parts.get("retrieval") if isinstance(key_parts.get("retrieval"), Mapping) else {}
     rewrite = key_parts.get("rewrite") if isinstance(key_parts.get("rewrite"), Mapping) else {}
     invalidation = report.get("invalidation") if isinstance(report.get("invalidation"), Mapping) else {}
+    cache_store = report.get("cache_store") if isinstance(report.get("cache_store"), Mapping) else {}
+    cache_store_summary = cache_store.get("summary") if isinstance(cache_store.get("summary"), Mapping) else {}
+    cache_store_entry = cache_store.get("entry") if isinstance(cache_store.get("entry"), Mapping) else {}
     changed_fields = invalidation.get("changed_fields") if isinstance(invalidation.get("changed_fields"), list) else []
     lines = [
         "# RAGFlow Query Output Cache Report",
@@ -331,6 +626,11 @@ def render_query_output_cache_markdown(report: Mapping[str, Any]) -> str:
         f"- top_k: `{retrieval.get('top_k', '')}`",
         f"- similarity_threshold: `{retrieval.get('similarity_threshold', '')}`",
         f"- retrieval_query_count: `{rewrite.get('retrieval_query_count', 0)}`",
+        f"- cache_store_enabled: `{str(cache_store.get('enabled', False)).lower()}`",
+        f"- cache_store_dry_run: `{str(cache_store.get('dry_run', True)).lower()}`",
+        f"- cache_store_status: `{cache_store_entry.get('status', 'disabled')}`",
+        f"- cache_store_would_write_count: `{cache_store_summary.get('would_write_count', 0)}`",
+        f"- cache_store_would_invalidate_count: `{cache_store_summary.get('would_invalidate_count', 0)}`",
     ]
     if changed_fields:
         lines.extend(["", "## Changed Fields", ""])

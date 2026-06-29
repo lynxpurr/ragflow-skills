@@ -1022,7 +1022,8 @@ Tasks:
 - [x] Add circuit-breaker state for repeated service failures during a run.
 - [x] Add read-only cache helpers for list/probe operations.
 - [x] Add query-output cache-key reports that include query text, dataset IDs, route/rewrite/fusion params, top-k, threshold, and relevant config version.
-- [ ] Add cache stats and invalidation reports for actual query-output cache stores.
+- [x] Add cache stats and dry-run invalidation reports for local query-output cache stores.
+- [ ] Add active query-output cache write and invalidation execution for host-owned cache stores.
 - [x] Add metrics collector for counters, gauges, and latency histograms with p50/p95/p99 summaries.
 - [ ] Add checkpoint/resume helpers for bounded long-running jobs such as centroid build, benchmark import, optimize, and report generation.
 - [ ] Add partial-failure report schemas for timeout, partial, and skipped profiles.
@@ -1085,8 +1086,8 @@ Recommended next slices:
    `ragflow_runtime_rate_limit_report_v1` token-bucket rate limiting for explicit
    reachability attempts and `ragflow_runtime_circuit_breaker_report_v1` per-run
    circuit-breaker summaries for repeated reachability failures.
-3. Keep actual query-output cache stores, cache statistics, active invalidation execution,
-   checkpoint/resume, and partial-failure schemas as the next Phase 31 resilience work.
+3. Keep active query-output cache writes/invalidation execution, checkpoint/resume, and
+   partial-failure schemas as the next Phase 31 resilience work.
 
 Exit criteria:
 
