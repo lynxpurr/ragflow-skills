@@ -83,6 +83,7 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("kb optimize cleanup-plan redaction", check_names)
         self.assertIn("kb optimize summarize redaction", check_names)
         self.assertIn("kb profile lint redaction", check_names)
+        self.assertIn("kb profile experiment resume", check_names)
         self.assertIn("kb profile experiment redaction", check_names)
         self.assertIn("kb benchmark import redaction", check_names)
         self.assertIn("kb benchmark preflight redaction", check_names)
@@ -210,6 +211,10 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("profile_experiment_matrix_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("profile_experiment.checkpoint.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
         self.assertTrue(

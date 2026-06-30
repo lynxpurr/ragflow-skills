@@ -2240,6 +2240,7 @@ def _run_no_network_checks(
     profile_experiment_json = work_root / "profile_experiment_matrix.json"
     profile_experiment_md = work_root / "profile_experiment_matrix.md"
     profile_experiment_redaction = work_root / "profile_experiment_matrix_redaction.json"
+    profile_experiment_checkpoint = work_root / "profile_experiment.checkpoint.json"
     profile_experiment_result = _run_command(
         [
             python_executable,
@@ -2255,6 +2256,10 @@ def _run_no_network_checks(
             "retrieval.top_k=3,5",
             "--candidate-set",
             str(profile_experiment_candidate_set),
+            "--checkpoint",
+            str(profile_experiment_checkpoint),
+            "--batch-size",
+            "2",
             "--report-json",
             str(profile_experiment_json),
             "--report-md",
@@ -2271,15 +2276,50 @@ def _run_no_network_checks(
         profile_experiment_result,
         required_output='"schema": "ragflow_enrichment_experiment_report_v1"',
     )
+    profile_experiment_resume_result = _run_command(
+        [
+            python_executable,
+            str(profile_script),
+            "experiment",
+            "--base-profile",
+            str(profile),
+            "--set",
+            "auto_keywords=0,3",
+            "--set",
+            "auto_questions=0",
+            "--set",
+            "retrieval.top_k=3,5",
+            "--candidate-set",
+            str(profile_experiment_candidate_set),
+            "--checkpoint",
+            str(profile_experiment_checkpoint),
+            "--resume",
+            "--report-json",
+            str(profile_experiment_json),
+            "--report-md",
+            str(profile_experiment_md),
+            "--redaction-report",
+            str(profile_experiment_redaction),
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build profile experiment resume",
+        profile_experiment_resume_result,
+        required_output='"resume": true',
+    )
     _record_redaction_sidecar_check(
         checks,
         "kb-build profile experiment redaction",
         profile_experiment_redaction,
-        result=profile_experiment_result,
+        result=profile_experiment_resume_result,
         checked_paths=(profile_experiment_json, profile_experiment_md),
     )
     for path in (
         profile_experiment_candidate_set,
+        profile_experiment_checkpoint,
         profile_experiment_json,
         profile_experiment_md,
         profile_experiment_redaction,

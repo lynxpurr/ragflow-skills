@@ -2936,6 +2936,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     profile_experiment_json = artifacts_dir / "profile_experiment_matrix.json"
     profile_experiment_md = artifacts_dir / "profile_experiment_matrix.md"
     profile_experiment_redaction = artifacts_dir / "profile_experiment_matrix_redaction.json"
+    profile_experiment_checkpoint = artifacts_dir / "profile_experiment.checkpoint.json"
     profile_experiment_result = _run_command(
         [
             sys.executable,
@@ -2951,6 +2952,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "retrieval.top_k=3,5",
             "--candidate-set",
             str(profile_experiment_candidate_set),
+            "--checkpoint",
+            str(profile_experiment_checkpoint),
+            "--batch-size",
+            "2",
             "--report-json",
             str(profile_experiment_json),
             "--report-md",
@@ -2966,6 +2971,40 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         "kb profile experiment",
         profile_experiment_result,
         required_stdout='"schema": "ragflow_enrichment_experiment_report_v1"',
+    )
+    profile_experiment_resume_result = _run_command(
+        [
+            sys.executable,
+            str(profile_script),
+            "experiment",
+            "--base-profile",
+            str(PROFILE_PATH),
+            "--set",
+            "auto_keywords=0,3",
+            "--set",
+            "auto_questions=0",
+            "--set",
+            "retrieval.top_k=3,5",
+            "--candidate-set",
+            str(profile_experiment_candidate_set),
+            "--checkpoint",
+            str(profile_experiment_checkpoint),
+            "--resume",
+            "--report-json",
+            str(profile_experiment_json),
+            "--report-md",
+            str(profile_experiment_md),
+            "--redaction-report",
+            str(profile_experiment_redaction),
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb profile experiment resume",
+        profile_experiment_resume_result,
+        required_stdout='"resume": true',
     )
     _record_redaction_sidecar_check(checks, "kb profile experiment redaction", profile_experiment_redaction)
 
@@ -3834,6 +3873,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "profile_lint.md",
         artifacts_dir / "profile_lint_redaction.json",
         artifacts_dir / "candidate_profile_set.json",
+        artifacts_dir / "profile_experiment.checkpoint.json",
         artifacts_dir / "profile_experiment_matrix.json",
         artifacts_dir / "profile_experiment_matrix.md",
         artifacts_dir / "profile_experiment_matrix_redaction.json",

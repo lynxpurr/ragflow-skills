@@ -49,8 +49,8 @@ Partially completed and still active:
     remain future adapters.
 - Phase 31 runtime resilience
   - Report redaction and generated-report safety are closed for the current inventory.
-  - Runtime helper coverage currently tracks 79 public command surfaces: 16 `covered`,
-    3 `candidate`, 2 `deferred`, and 58 `not_applicable`.
+  - Runtime helper coverage currently tracks 79 public command surfaces: 17 `covered`,
+    2 `candidate`, 2 `deferred`, and 58 `not_applicable`.
   - The remaining actionable work is checkpoint/resume and partial-failure coverage for
     bounded offline jobs, not broad live mutation.
 
@@ -68,7 +68,7 @@ Deferred or outside the active public-suite completion path:
 Completion priorities:
 
 1. Close Phase 31 candidate runtime coverage with small offline slices:
-   `profile experiment`, `optimize`, then `doc-to-md split`.
+   `optimize`, then `doc-to-md split`.
 2. Revisit live disposable optimization execution only after the offline resume and
    partial-failure reports are stable.
 3. Add optional LLM adapters only after deterministic artifacts, redaction, and
@@ -93,14 +93,13 @@ remain in their owning phases below.
 
 Recommended completion queue:
 
-1. Add checkpoint/resume and partial-run summaries for offline `ragflow-kb-build profile experiment`.
-2. Add resumable plan-only execution records for `ragflow-kb-build optimize` without live KB creation.
-3. Add resumable `ragflow-doc-to-md split`, then revisit optional manifest rewrite/package mode.
-4. Re-run the runtime inventory; only then close the broad Phase 31 checkpoint/resume and partial-failure umbrellas.
-5. Add command-manifest dry-runs for live disposable optimization before any new live mutation.
-6. Implement live disposable build/benchmark/cleanup execution with exact confirmation and retained cleanup artifacts.
-7. Add optional LLM adapters in this order: metadata suggestions, grounded QA generation, agentic answer synthesis, LLM/RAGAS evaluator.
-8. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients, and web/API wrappers as post-CLI product adapters.
+1. Add resumable plan-only execution records for `ragflow-kb-build optimize` without live KB creation.
+2. Add resumable `ragflow-doc-to-md split`, then revisit optional manifest rewrite/package mode.
+3. Re-run the runtime inventory; only then close the broad Phase 31 checkpoint/resume and partial-failure umbrellas.
+4. Add command-manifest dry-runs for live disposable optimization before any new live mutation.
+5. Implement live disposable build/benchmark/cleanup execution with exact confirmation and retained cleanup artifacts.
+6. Add optional LLM adapters in this order: metadata suggestions, grounded QA generation, agentic answer synthesis, LLM/RAGAS evaluator.
+7. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients, and web/API wrappers as post-CLI product adapters.
 
 ## Phase 0: Architecture Skeleton
 
@@ -1129,7 +1128,7 @@ transcripts.
 `tools/runtime_resilience_inventory.py` now emits
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene to track Phase 31
 runtime helper coverage without broadening live behavior. The current inventory names 79
-public commands: 16 `covered`, 3 `candidate`, 2 `deferred`, and 58 `not_applicable`, with
+public commands: 17 `covered`, 2 `candidate`, 2 `deferred`, and 58 `not_applicable`, with
 no stale classification findings. Covered surfaces include `ragflow-query endpoint-report`,
 `ragflow-query fallback-test`, `ragflow-query cache-report`, `ragflow-query centroid build`,
 `ragflow-doc-to-md` process cleanup reporting, `ragflow-doc-to-md backend probe`,
@@ -1137,7 +1136,8 @@ no stale classification findings. Covered surfaces include `ragflow-query endpoi
 `ragflow-kb-build probe`, `ragflow-kb-build inspect-kb`, `ragflow-kb-build validate`,
 `ragflow-kb-build snapshot-chunks`, `ragflow-kb-build qa validate`,
 `ragflow-kb-build qa map-evidence`, offline `ragflow-kb-build benchmark import`
-checkpoint/resume, and deterministic `ragflow-kb-build qa generate` checkpoint/resume.
+checkpoint/resume, deterministic `ragflow-kb-build qa generate` checkpoint/resume, and
+offline `ragflow-kb-build profile experiment` checkpoint/resume.
 Candidate surfaces keep broad checkpoint/resume and the remaining
 partial-failure rollout visible without marking the Phase 31 umbrella tasks complete.
 
@@ -1170,12 +1170,12 @@ Recommended next slices:
    the schema for mapped, unmapped, partially mapped, invalid, and warning evidence-map
    rows.
 3. Keep broad checkpoint/resume helpers and cross-skill partial-failure rollout as the
-   next Phase 31 resilience work. Offline `ragflow-kb-build benchmark import` and
-   `ragflow-kb-build qa generate` checkpoint/resume are now covered, and `inspect-kb`,
-   `validate`, `snapshot-chunks`,
+   next Phase 31 resilience work. Offline `ragflow-kb-build benchmark import`,
+   `ragflow-kb-build qa generate`, and `ragflow-kb-build profile experiment`
+   checkpoint/resume are now covered, and `inspect-kb`, `validate`, `snapshot-chunks`,
    `qa validate`, plus `qa map-evidence` now have partial-failure coverage; the next
    lower-risk candidates are checkpoint/resume and partial-run coverage for bounded
-   offline `profile experiment`, `optimize`, and `doc-to-md split` jobs.
+   offline `optimize` and `doc-to-md split` jobs.
    The Phase 31 closure target is 19 `covered`, 0 `candidate`, 2 explicitly `deferred`,
    and 58 `not_applicable` public command surfaces in
    `ragflow_runtime_resilience_inventory_v1`.

@@ -242,6 +242,10 @@ class ConsumerAcceptanceTests(unittest.TestCase):
             payload["produced_artifacts"],
         )
         self.assertTrue(
+            any(path.endswith("profile_experiment.checkpoint.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
             any(path.endswith("handoff_inspection_redaction.json") for path in payload["produced_artifacts"]),
             payload["produced_artifacts"],
         )

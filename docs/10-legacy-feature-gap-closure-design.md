@@ -1513,7 +1513,7 @@ remain open Phase 31 work.
 `tools/runtime_resilience_inventory.py` now emits
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene as a static Phase
 31 governance surface. It reuses the public command inventory and classifies current
-runtime-helper coverage as 16 covered commands, 3 candidate commands, 2 deferred live
+runtime-helper coverage as 17 covered commands, 2 candidate commands, 2 deferred live
 commands, and 58 not-applicable commands with no stale classification findings. Covered
 commands include the endpoint-report helper pilot, query fallback partial-failure reports,
 query-output cache reports, centroid build checkpoints, doc-to-md process cleanup
@@ -1521,10 +1521,11 @@ reporting, backend probe/warmup reporting, model-provider probe partial-failure 
 KB probe and inspect partial-failure reports, validate and snapshot-chunks partial-failure
 reports, grounded-QA validation and evidence-map partial-failure reports, and offline
 `ragflow-kb-build benchmark import` plus deterministic `ragflow-kb-build qa generate`
-checkpoint/resume. Candidate commands keep broad checkpoint/resume and the remaining
-partial-failure rollout explicit without enabling new live mutation; the next lower-risk
-candidates are checkpoint/resume and partial-run coverage for bounded offline
-`profile experiment`, `optimize`, and `doc-to-md split` jobs.
+checkpoint/resume plus offline `ragflow-kb-build profile experiment` checkpoint/resume.
+Candidate commands keep broad checkpoint/resume and the remaining partial-failure rollout
+explicit without enabling new live mutation; the next lower-risk candidates are
+checkpoint/resume and partial-run coverage for bounded offline `optimize` and
+`doc-to-md split` jobs.
 
 The final generated-Markdown audit is implemented in `tools/generated_markdown_audit.py`.
 It consumes the report-surface inventory, selects covered report surfaces with generated
@@ -1544,25 +1545,23 @@ acceptance or platform smoke coverage when release artifacts change, and generat
 hygiene.
 
 The active runtime gap has moved back to Phase 31. The runtime-resilience inventory is the
-authoritative ledger: 16 command surfaces are currently `covered`, 3 are `candidate`, 2 are
+authoritative ledger: 17 command surfaces are currently `covered`, 2 are `candidate`, 2 are
 intentionally `deferred` live surfaces, and 58 are `not_applicable`. The completion target
 for the active non-live scope is 19 `covered`, 0 `candidate`, 2 `deferred`, and 58
 `not_applicable`.
 
 Finish the remaining work in this order:
 
-1. Add checkpoint/resume and partial-run summaries for offline `ragflow-kb-build profile
-   experiment`.
-2. Add resumable plan-only execution records for `ragflow-kb-build optimize`, keeping live
+1. Add resumable plan-only execution records for `ragflow-kb-build optimize`, keeping live
    disposable KB creation deferred.
-3. Add resumable `ragflow-doc-to-md split`; then revisit the optional split manifest
+2. Add resumable `ragflow-doc-to-md split`; then revisit the optional split manifest
    rewrite/package mode from Phase 16.
-4. Re-run the runtime inventory and close the Phase 31 checkpoint/resume and
+3. Re-run the runtime inventory and close the Phase 31 checkpoint/resume and
    partial-failure umbrella tasks only when the candidate count reaches zero.
-5. Add command-manifest dry-runs before any live disposable optimization execution.
-6. Add live disposable build, benchmark validation, and cleanup execution only behind
+4. Add command-manifest dry-runs before any live disposable optimization execution.
+5. Add live disposable build, benchmark validation, and cleanup execution only behind
    credentials, explicit confirmation, exact cleanup matching, and retained dataset IDs.
-7. Add optional LLM adapters after deterministic artifacts already cover the workflow:
+6. Add optional LLM adapters after deterministic artifacts already cover the workflow:
    metadata suggestions, grounded QA generation, agentic answer synthesis, then an
    LLM/RAGAS-style evaluator.
 8. Treat `serve`, wheel packaging, provider abstractions, remote conversion clients, and

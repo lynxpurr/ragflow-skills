@@ -4635,6 +4635,95 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("llm_backed_enrichment_enabled", {issue["code"] for issue in payload["issues"]})
         self.assertIn("RAGFlow Enrichment Experiment Matrix", report_text)
 
+    def test_profile_experiment_checkpoint_resume_via_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            matrix = root / "matrix.json"
+            candidate_set = root / "candidate_profile_set.json"
+            checkpoint = root / "profile_experiment.checkpoint.json"
+            first_report = root / "first_experiment.json"
+            second_report = root / "second_experiment.json"
+            matrix.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_enrichment_experiment_matrix_v1",
+                        "name": "phase31-resume-smoke",
+                        "dimensions": {
+                            "auto_keywords": [0, 3],
+                            "auto_questions": [0],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            first = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROFILE_SCRIPT),
+                    "experiment",
+                    "--base-profile",
+                    str(PROFILE_PATH),
+                    "--matrix",
+                    str(matrix),
+                    "--candidate-set",
+                    str(candidate_set),
+                    "--checkpoint",
+                    str(checkpoint),
+                    "--batch-size",
+                    "1",
+                    "--report-json",
+                    str(first_report),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            partial_candidate_set = json.loads(candidate_set.read_text(encoding="utf-8"))
+
+            second = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROFILE_SCRIPT),
+                    "experiment",
+                    "--base-profile",
+                    str(PROFILE_PATH),
+                    "--matrix",
+                    str(matrix),
+                    "--candidate-set",
+                    str(candidate_set),
+                    "--checkpoint",
+                    str(checkpoint),
+                    "--resume",
+                    "--batch-size",
+                    "1",
+                    "--report-json",
+                    str(second_report),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            final_candidate_set = json.loads(candidate_set.read_text(encoding="utf-8"))
+            first_payload = json.loads(first_report.read_text(encoding="utf-8"))
+            second_payload = json.loads(second_report.read_text(encoding="utf-8"))
+            checkpoint_payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertEqual(len(partial_candidate_set["profiles"]), 1)
+        self.assertEqual(len(final_candidate_set["profiles"]), 2)
+        self.assertFalse(first_payload["completed"])
+        self.assertTrue(second_payload["completed"])
+        self.assertEqual(second_payload["checkpoint"]["resume"], True)
+        self.assertEqual(second_payload["checkpoint"]["processed_profile_count"], 2)
+        self.assertEqual(second_payload["checkpoint"]["new_profile_count"], 1)
+        self.assertEqual(checkpoint_payload["schema"], "ragflow_enrichment_experiment_checkpoint_v1")
+        self.assertEqual(len(checkpoint_payload["processed_profile_ids"]), 2)
+        self.assertTrue(checkpoint_payload["summary"]["completed"])
+
     def test_profile_surfaces_emit_redaction_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
