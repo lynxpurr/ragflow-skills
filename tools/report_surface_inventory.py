@@ -79,6 +79,8 @@ class DiscoveredCommand:
 
 
 QUERY_COVERED_COMMANDS = (
+    "ragflow-query agentic-answer request",
+    "ragflow-query agentic-answer review",
     "ragflow-query agentic-plan",
     "ragflow-query assistant-profile recommend",
     "ragflow-query assistant-test-plan",

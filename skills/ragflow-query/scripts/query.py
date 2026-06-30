@@ -47,6 +47,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     build_centroid_index,
     build_centroid_plan,
     build_host_synthesis_contract,
+    create_agentic_answer_request,
     build_query_rewrite_plan,
     build_query_output_cache_report,
     classify_query_intent,
@@ -80,6 +81,8 @@ from ragflow_skill_runtime import (  # noqa: E402
     query_rerank_ab_report,
     render_citation_audit_markdown,
     render_answer_evaluation_markdown,
+    render_agentic_answer_request_markdown,
+    render_agentic_answer_review_markdown,
     render_assistant_profile_recommendation_markdown,
     render_assistant_test_plan_review_markdown,
     render_agentic_plan_markdown,
@@ -107,6 +110,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     run_fusion_tests,
     run_query_fallback_tests,
     recommend_assistant_profile,
+    review_agentic_answer,
     review_assistant_test_plan,
     resolve_dataset_ids,
     route_question,
@@ -1104,6 +1108,152 @@ def _agentic_plan(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _sanitize_agentic_answer_request(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _agentic_answer_request(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        report = create_agentic_answer_request(
+            query_payload,
+            model_label=args.model_label,
+            provider_label=args.provider_label,
+            include_evidence_previews=args.include_evidence_previews,
+            max_evidence_chars=args.max_evidence_chars,
+            require_citations=args.require_citations,
+            allow_abstain=args.allow_abstain,
+        )
+    except (AgenticPlanError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_agentic_answer_request(report, args, query_payload)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_agentic_answer_request_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _answer_from_candidate_path(path: str) -> tuple[dict[str, Any], str]:
+    raw = _read_json(path)
+    if not isinstance(raw, dict):
+        raise ValueError("candidate answer must be a JSON object")
+    answer = raw.get("answer")
+    if isinstance(answer, str):
+        return raw, answer
+    if isinstance(answer, dict):
+        for key in ("text", "content", "message"):
+            value = answer.get(key)
+            if isinstance(value, str) and value.strip():
+                return raw, value
+    for key in ("text", "content", "message", "response", "output"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            return raw, value
+    raise ValueError("candidate answer must include answer text")
+
+
+def _sanitize_agentic_answer_review(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+    request_payload: dict[str, Any] | None,
+    candidate_payload: dict[str, Any] | None,
+    answer: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(request_payload or {}),
+        *_collect_urls(candidate_payload or {}),
+        *_collect_urls(answer),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.request,
+            args.candidate,
+            args.answer_file,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _agentic_answer_review(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        request_payload = _read_json(args.request) if args.request else None
+        if request_payload is not None and not isinstance(request_payload, dict):
+            raise ValueError("request must be a JSON object")
+        candidate_payload = None
+        if args.candidate:
+            candidate_payload, answer = _answer_from_candidate_path(args.candidate)
+        else:
+            answer = args.answer
+            if args.answer_file:
+                answer = Path(args.answer_file).read_text(encoding="utf-8")
+            if not answer or not answer.strip():
+                raise ValueError("answer text is required")
+        report = review_agentic_answer(
+            query_payload,
+            answer or "",
+            candidate=candidate_payload,
+            request=request_payload,
+            expected_terms=args.expected_term,
+            require_citation=args.require_citation,
+            allow_abstain=args.allow_abstain,
+            min_cited_evidence_score=args.min_cited_evidence_score,
+            require_advisory=args.require_advisory,
+            require_generated=args.require_generated,
+        )
+    except (AgenticPlanError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_agentic_answer_review(
+            report,
+            args,
+            query_payload,
+            request_payload,
+            candidate_payload,
+            answer or "",
+        )
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_agentic_answer_review_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _audit_citations(args: argparse.Namespace) -> int:
     try:
         query_payload = _read_json(args.query_output)
@@ -1881,6 +2031,69 @@ def build_parser() -> argparse.ArgumentParser:
     agentic_plan.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     agentic_plan.add_argument("--json", action="store_true", help="Emit JSON report")
     agentic_plan.set_defaults(func=_agentic_plan, require_citations=True)
+
+    agentic_answer = sub.add_parser("agentic-answer", help="Request or review external agentic answers")
+    agentic_answer_sub = agentic_answer.add_subparsers(dest="agentic_answer_command", required=True)
+    agentic_answer_request = agentic_answer_sub.add_parser(
+        "request",
+        help="Create a no-LLM agentic answer request artifact",
+        description="Create a no-LLM agentic answer request artifact",
+    )
+    agentic_answer_request.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    agentic_answer_request.add_argument("--provider-label", help="Optional external provider label")
+    agentic_answer_request.add_argument("--model-label", help="Optional external model label")
+    agentic_answer_request.add_argument("--max-evidence-chars", type=int, default=1200)
+    agentic_answer_request.add_argument(
+        "--no-evidence-previews",
+        dest="include_evidence_previews",
+        action="store_false",
+        help="Do not include bounded evidence previews in the request",
+    )
+    agentic_answer_request.add_argument("--no-require-citations", dest="require_citations", action="store_false")
+    agentic_answer_request.add_argument("--no-allow-abstain", dest="allow_abstain", action="store_false")
+    agentic_answer_request.add_argument("--report-json", help="Optional JSON report output path")
+    agentic_answer_request.add_argument("--report-md", help="Optional Markdown report output path")
+    agentic_answer_request.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    agentic_answer_request.add_argument("--json", action="store_true", help="Emit JSON report")
+    agentic_answer_request.set_defaults(
+        func=_agentic_answer_request,
+        include_evidence_previews=True,
+        require_citations=True,
+        allow_abstain=True,
+    )
+
+    agentic_answer_review = agentic_answer_sub.add_parser(
+        "review",
+        help="Review an external agentic answer against retrieved evidence",
+        description="Review an external agentic answer against retrieved evidence",
+    )
+    agentic_answer_review.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    agentic_answer_review.add_argument("--request", help="Optional ragflow_agentic_answer_request_v1 JSON")
+    agentic_answer_review_group = agentic_answer_review.add_mutually_exclusive_group(required=True)
+    agentic_answer_review_group.add_argument("--candidate", help="External agentic answer candidate JSON")
+    agentic_answer_review_group.add_argument("--answer", help="External or host-generated answer text")
+    agentic_answer_review_group.add_argument("--answer-file", help="File containing external or host-generated answer text")
+    agentic_answer_review.add_argument("--expected-term", action="append", default=[], help="Expected term; repeatable")
+    agentic_answer_review.add_argument(
+        "--no-require-citation",
+        dest="require_citation",
+        action="store_false",
+        help="Do not fail when evidence exists but answer lacks citations",
+    )
+    agentic_answer_review.add_argument("--allow-abstain", action="store_true", help="Allow no-evidence abstention wording")
+    agentic_answer_review.add_argument("--min-cited-evidence-score", type=float)
+    agentic_answer_review.add_argument("--no-require-advisory", dest="require_advisory", action="store_false")
+    agentic_answer_review.add_argument("--no-require-generated", dest="require_generated", action="store_false")
+    agentic_answer_review.add_argument("--report-json", help="Optional JSON report output path")
+    agentic_answer_review.add_argument("--report-md", help="Optional Markdown report output path")
+    agentic_answer_review.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    agentic_answer_review.add_argument("--json", action="store_true", help="Emit JSON report")
+    agentic_answer_review.set_defaults(
+        func=_agentic_answer_review,
+        require_citation=True,
+        require_advisory=True,
+        require_generated=True,
+    )
 
     audit = sub.add_parser("audit-citations", help="Audit host-generated answer citations")
     audit.add_argument("--query-output", required=True, help="JSON output from query.py ask")

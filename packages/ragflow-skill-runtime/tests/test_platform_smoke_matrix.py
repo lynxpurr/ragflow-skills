@@ -348,6 +348,14 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
             profile["artifacts"],
         )
         self.assertTrue(
+            any(path.endswith("query_agentic_answer_request_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_agentic_answer_review_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
             any(path.endswith("citation_audit_redaction.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )

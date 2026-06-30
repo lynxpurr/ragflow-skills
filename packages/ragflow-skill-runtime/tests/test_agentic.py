@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 
 from ragflow_skill_runtime.agentic import (
+    AGENTIC_ANSWER_REQUEST_SCHEMA,
+    AGENTIC_ANSWER_REVIEW_REPORT_SCHEMA,
     AGENTIC_PLAN_SCHEMA,
     AGENTIC_TRACE_SCHEMA,
     AgenticPlanError,
@@ -10,7 +12,11 @@ from ragflow_skill_runtime.agentic import (
     build_agentic_execution_trace,
     build_agentic_plan,
     build_host_synthesis_contract,
+    create_agentic_answer_request,
+    render_agentic_answer_request_markdown,
+    render_agentic_answer_review_markdown,
     render_agentic_plan_markdown,
+    review_agentic_answer,
 )
 
 
@@ -92,6 +98,115 @@ class AgenticPlanTests(unittest.TestCase):
         self.assertEqual(contract["citation_policy"]["valid_citation_ids"], ["[1]", "[2]"])
         self.assertEqual(contract["citation_policy"]["valid_ranks"], [1, 2])
         self.assertFalse(contract["evidence_policy"]["allow_external_facts"])
+
+    def test_agentic_answer_request_packages_evidence_without_llm(self) -> None:
+        query_payload = {
+            "ok": True,
+            "question": "What is portable?",
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "content": "Portable release artifacts include vendored runtime files.",
+                    "similarity": 0.9,
+                    "document_name": "sample.md",
+                    "dataset_id": "ds-1",
+                }
+            ],
+            "agentic_plan": build_agentic_plan("What is portable?"),
+        }
+
+        request = create_agentic_answer_request(
+            query_payload,
+            provider_label="external",
+            model_label="review-model",
+            max_evidence_chars=24,
+        )
+        markdown = render_agentic_answer_request_markdown(request)
+
+        self.assertEqual(request["schema"], AGENTIC_ANSWER_REQUEST_SCHEMA)
+        self.assertTrue(request["ok"])
+        self.assertTrue(request["advisory"])
+        self.assertFalse(request["llm_invoked"])
+        self.assertEqual(request["model"]["script_owned_llm_calls"], 0)
+        self.assertEqual(request["summary"]["evidence_count"], 1)
+        self.assertTrue(request["citation_policy"]["required"])
+        self.assertEqual(request["citation_policy"]["valid_citation_ids"], ["[1]"])
+        self.assertLessEqual(len(request["evidence"][0]["content_preview"]), 24)
+        self.assertIn("ragflow-query agentic-answer review", request["instructions"]["review_command"])
+        self.assertIn("RAGFlow Agentic Answer Request", markdown)
+
+    def test_agentic_answer_review_validates_external_candidate(self) -> None:
+        query_payload = {
+            "ok": True,
+            "question": "What is portable?",
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "content": "Portable release artifacts include vendored runtime files.",
+                    "similarity": 0.9,
+                    "document_name": "sample.md",
+                    "dataset_id": "ds-1",
+                }
+            ],
+        }
+        request = create_agentic_answer_request(query_payload)
+        candidate = {
+            "schema": "ragflow_agentic_answer_candidate_v1",
+            "advisory": True,
+            "generated": True,
+            "answer": "Portable release artifacts include vendored runtime files [1].",
+        }
+
+        report = review_agentic_answer(
+            query_payload,
+            candidate["answer"],
+            candidate=candidate,
+            request=request,
+            expected_terms=["portable"],
+        )
+        markdown = render_agentic_answer_review_markdown(report)
+
+        self.assertEqual(report["schema"], AGENTIC_ANSWER_REVIEW_REPORT_SCHEMA)
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["summary"]["citation_count"], 1)
+        self.assertEqual(report["summary"]["invalid_citation_count"], 0)
+        self.assertTrue(report["summary"]["advisory"])
+        self.assertTrue(report["summary"]["generated"])
+        self.assertEqual(report["summary"]["script_owned_llm_calls"], 0)
+        self.assertEqual(report["issues"], [])
+        self.assertIn("RAGFlow Agentic Answer Review", markdown)
+
+    def test_agentic_answer_review_rejects_missing_candidate_markers_and_bad_request(self) -> None:
+        query_payload = {
+            "ok": True,
+            "question": "What is portable?",
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "content": "Portable release artifacts include vendored runtime files.",
+                    "similarity": 0.9,
+                }
+            ],
+        }
+        other_query_payload = {
+            "ok": True,
+            "question": "Different question",
+            "chunks": [{"content": "Different evidence.", "similarity": 0.9}],
+        }
+        request = create_agentic_answer_request(other_query_payload)
+
+        report = review_agentic_answer(
+            query_payload,
+            "Portable release artifacts include vendored runtime files [1].",
+            candidate={"answer": "Portable release artifacts include vendored runtime files [1]."},
+            request=request,
+        )
+        codes = {issue["code"] for issue in report["issues"]}
+
+        self.assertFalse(report["ok"])
+        self.assertIn("agentic_answer_not_advisory", codes)
+        self.assertIn("agentic_answer_not_generated", codes)
+        self.assertIn("agentic_answer_request_query_mismatch", codes)
 
     def test_agentic_plan_stops_for_clarification(self) -> None:
         plan = build_agentic_plan("What about it?")

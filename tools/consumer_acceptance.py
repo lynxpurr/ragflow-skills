@@ -4691,6 +4691,13 @@ raise SystemExit(code)
     query_agentic_plan_json = work_root / "query_agentic_plan.json"
     query_agentic_plan_md = work_root / "query_agentic_plan.md"
     query_agentic_plan_redaction = work_root / "query_agentic_plan_redaction.json"
+    query_agentic_answer_request_json = work_root / "query_agentic_answer_request.json"
+    query_agentic_answer_request_md = work_root / "query_agentic_answer_request.md"
+    query_agentic_answer_request_redaction = work_root / "query_agentic_answer_request_redaction.json"
+    query_agentic_answer_candidate_json = work_root / "query_agentic_answer_candidate.json"
+    query_agentic_answer_review_json = work_root / "query_agentic_answer_review.json"
+    query_agentic_answer_review_md = work_root / "query_agentic_answer_review.md"
+    query_agentic_answer_review_redaction = work_root / "query_agentic_answer_review_redaction.json"
     query_output.write_text(
         json.dumps(
             {
@@ -5445,6 +5452,97 @@ raise SystemExit(code)
     _record_file_check(checks, "query agentic plan redaction", query_agentic_plan_redaction)
     if query_agentic_plan_redaction.exists():
         produced.append(query_agentic_plan_redaction)
+
+    query_agentic_answer_request = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "agentic-answer",
+            "request",
+            "--query-output",
+            str(query_output),
+            "--provider-label",
+            "external",
+            "--model-label",
+            "consumer-review-model",
+            "--report-json",
+            str(query_agentic_answer_request_json),
+            "--report-md",
+            str(query_agentic_answer_request_md),
+            "--redaction-report",
+            str(query_agentic_answer_request_redaction),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query agentic-answer request",
+        query_agentic_answer_request,
+        required_output='"schema": "ragflow_agentic_answer_request_v1"',
+    )
+    if query_agentic_answer_request_json.exists():
+        produced.append(query_agentic_answer_request_json)
+    if query_agentic_answer_request_md.exists():
+        produced.append(query_agentic_answer_request_md)
+    _record_file_check(checks, "query agentic-answer request redaction", query_agentic_answer_request_redaction)
+    if query_agentic_answer_request_redaction.exists():
+        produced.append(query_agentic_answer_request_redaction)
+
+    query_agentic_answer_candidate_json.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_agentic_answer_candidate_v1",
+                "advisory": True,
+                "generated": True,
+                "answer": "The release artifact can run without repository source context [1].",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    query_agentic_answer_review = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "agentic-answer",
+            "review",
+            "--query-output",
+            str(query_output),
+            "--request",
+            str(query_agentic_answer_request_json),
+            "--candidate",
+            str(query_agentic_answer_candidate_json),
+            "--expected-term",
+            "release",
+            "--report-json",
+            str(query_agentic_answer_review_json),
+            "--report-md",
+            str(query_agentic_answer_review_md),
+            "--redaction-report",
+            str(query_agentic_answer_review_redaction),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query agentic-answer review",
+        query_agentic_answer_review,
+        required_output='"schema": "ragflow_agentic_answer_review_report_v1"',
+    )
+    if query_agentic_answer_candidate_json.exists():
+        produced.append(query_agentic_answer_candidate_json)
+    if query_agentic_answer_review_json.exists():
+        produced.append(query_agentic_answer_review_json)
+    if query_agentic_answer_review_md.exists():
+        produced.append(query_agentic_answer_review_md)
+    _record_file_check(checks, "query agentic-answer review redaction", query_agentic_answer_review_redaction)
+    if query_agentic_answer_review_redaction.exists():
+        produced.append(query_agentic_answer_review_redaction)
 
     missing_config = _run_command(
         [

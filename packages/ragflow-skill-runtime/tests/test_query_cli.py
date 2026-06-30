@@ -1059,6 +1059,157 @@ class QueryCliTests(unittest.TestCase):
         self.assertNotIn(fake_key, combined)
         self.assertNotIn(home_path, combined)
 
+    def test_agentic_answer_request_and_review_write_redacted_reports(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            query_output = root / "query.json"
+            request_json = root / "agentic_answer_request.json"
+            request_md = root / "agentic_answer_request.md"
+            request_redaction = root / "agentic_answer_request_redaction.json"
+            candidate_json = root / "agentic_answer_candidate.json"
+            review_json = root / "agentic_answer_review.json"
+            review_md = root / "agentic_answer_review.md"
+            review_redaction = root / "agentic_answer_review_redaction.json"
+            private_host = ".".join(["192", "168", "72", "94"])
+            fake_token = "fake-agentic-answer-token"
+            fake_key = "fake-agentic-answer-secret"
+            home_path = str(Path.home() / ".ragflow" / "agentic-answer.local.yaml")
+            query_output.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "question": (
+                            f"What is supported via http://{private_host}:9380/v1?token={fake_token} "
+                            f"from {home_path}?"
+                        ),
+                        "chunks": [
+                            {
+                                "chunk_id": "answer-chunk",
+                                "content": f"Supported evidence is available for answer review api_key={fake_key}.",
+                                "similarity": 0.91,
+                                "document_name": home_path,
+                                "dataset_id": "ds-agentic-answer",
+                            }
+                        ],
+                        "agentic_plan": {"schema": "ragflow_agentic_plan_v1", "status": "planned"},
+                        "agentic_trace": {"schema": "ragflow_agentic_trace_v1", "llm_calls": 0},
+                        "host_synthesis_contract": {
+                            "schema": "ragflow_host_synthesis_contract_v1",
+                            "citation_policy": {"required": True},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                request_code = module.main(
+                    [
+                        "agentic-answer",
+                        "request",
+                        "--query-output",
+                        str(query_output),
+                        "--provider-label",
+                        "external",
+                        "--model-label",
+                        "review-model",
+                        "--report-json",
+                        str(request_json),
+                        "--report-md",
+                        str(request_md),
+                        "--redaction-report",
+                        str(request_redaction),
+                        "--json",
+                    ]
+                )
+            request_output = stdout.getvalue()
+            request_payload = json.loads(request_output)
+            candidate_json.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_agentic_answer_candidate_v1",
+                        "advisory": True,
+                        "generated": True,
+                        "answer": (
+                            f"Supported evidence is available for answer review [1]. "
+                            f"Debug http://{private_host}:9380/api?token={fake_token} api_key={fake_key} from {home_path}."
+                        ),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                review_code = module.main(
+                    [
+                        "agentic-answer",
+                        "review",
+                        "--query-output",
+                        str(query_output),
+                        "--request",
+                        str(request_json),
+                        "--candidate",
+                        str(candidate_json),
+                        "--expected-term",
+                        "Supported evidence",
+                        "--report-json",
+                        str(review_json),
+                        "--report-md",
+                        str(review_md),
+                        "--redaction-report",
+                        str(review_redaction),
+                        "--json",
+                    ]
+                )
+            review_output = stdout.getvalue()
+            review_payload = json.loads(review_output)
+            request_text = request_json.read_text(encoding="utf-8")
+            request_markdown = request_md.read_text(encoding="utf-8")
+            request_redaction_text = request_redaction.read_text(encoding="utf-8")
+            review_text = review_json.read_text(encoding="utf-8")
+            review_markdown = review_md.read_text(encoding="utf-8")
+            review_redaction_text = review_redaction.read_text(encoding="utf-8")
+            request_redaction_payload = json.loads(request_redaction_text)
+            review_redaction_payload = json.loads(review_redaction_text)
+
+        combined = "\n".join(
+            [
+                request_output,
+                request_text,
+                request_markdown,
+                request_redaction_text,
+                review_output,
+                review_text,
+                review_markdown,
+                review_redaction_text,
+            ]
+        )
+        self.assertEqual(request_code, 0, request_output)
+        self.assertEqual(request_payload["schema"], "ragflow_agentic_answer_request_v1")
+        self.assertFalse(request_payload["llm_invoked"])
+        self.assertEqual(request_payload["model"]["script_owned_llm_calls"], 0)
+        self.assertEqual(request_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertEqual(review_code, 0, review_output)
+        self.assertEqual(review_payload["schema"], "ragflow_agentic_answer_review_report_v1")
+        self.assertEqual(review_payload["summary"]["script_owned_llm_calls"], 0)
+        self.assertEqual(review_payload["summary"]["invalid_citation_count"], 0)
+        self.assertEqual(review_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(request_redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(request_redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(request_redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(request_redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertGreaterEqual(review_redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(review_redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(review_redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(review_redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertIn("RAGFlow Agentic Answer Request", request_markdown)
+        self.assertIn("RAGFlow Agentic Answer Review", review_markdown)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
+
     def test_ask_rewrite_and_multi_query_record_trace_and_retrievals(self) -> None:
         class RewriteClient(FakeQueryClient):
             def retrieve(self, *, question, dataset_ids, top_k=5, similarity_threshold=None):

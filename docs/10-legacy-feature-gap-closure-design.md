@@ -628,13 +628,15 @@ from returned evidence and use numeric `[n]` citations that can be checked by
 `audit-citations`. It still does not run reflection or synthesize an answer; host-owned
 synthesis remains the required final step.
 
-The next safe adapter step is not a script-owned model call. It should first add an
-agentic-answer request/review boundary: a request artifact packages evidence, citation
-rules, trace context, model/provider labels, and redaction metadata for a host-approved
-model call; a review command validates an externally produced answer against retrieved
-evidence and numeric citations before it can be treated as accepted output. Script-owned
-`agentic-answer` execution should remain disabled until that boundary, deterministic
-fixtures, explicit LLM config, redaction sidecars, and release gates all exist.
+The first safe adapter step is now a no-LLM request/review boundary rather than a
+script-owned model call. `ragflow-query agentic-answer request` packages saved query
+output, retrieved evidence, citation rules, trace context, model/provider labels, and
+redaction metadata for a host-approved external model call. `ragflow-query agentic-answer
+review` validates an externally produced answer against retrieved evidence, numeric
+citations, advisory/generated markers, deterministic `evaluate-answer` checks, Markdown
+rendering, redaction sidecars, consumer acceptance, and platform smoke coverage.
+Script-owned `agentic-answer` execution remains disabled until explicit LLM config,
+deterministic fixtures, redaction sidecars, and release gates all exist.
 
 ## Feature Design 10: Generation Evaluation
 
@@ -1366,8 +1368,8 @@ breaker pilots must stay default-off, read-only, and scoped to `endpoint-report`
 Inventory implemented. `tools/report_surface_inventory.py` emits
 `ragflow_report_surface_inventory_v1`, imports the public CLI parsers offline, and fails
 the inventory when a public command lacks an explicit `covered`, `not_applicable`, or
-`needs_redaction` classification. The current verified inventory names 81 public commands:
-72 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
+`needs_redaction` classification. The current verified inventory names 85 public commands:
+76 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
 classification findings.
 
 `ragflow-kb-build parse-report` and `ragflow-kb-build health-report` now support
@@ -1551,7 +1553,7 @@ remain open Phase 31 work.
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene as a static Phase
 31 governance surface. It reuses the public command inventory and classifies current
 runtime-helper coverage as 19 covered commands, 0 candidate commands, 2 deferred live
-commands, and 60 not-applicable commands with no stale classification findings. Covered
+commands, and 64 not-applicable commands with no stale classification findings. Covered
 commands include the endpoint-report helper pilot, query fallback partial-failure reports,
 query-output cache reports, centroid build checkpoints, doc-to-md process cleanup
 reporting, backend probe/warmup reporting, bounded offline `doc-to-md split`
@@ -1567,7 +1569,7 @@ mutation or future optional adapter scope.
 The final generated-Markdown audit is implemented in `tools/generated_markdown_audit.py`.
 It consumes the report-surface inventory, selects covered report surfaces with generated
 Markdown outputs, and requires each one to have explicit sanitized-rendering evidence.
-The current audit emits `ragflow_generated_markdown_audit_v1`, verifies 62 Markdown report
+The current audit emits `ragflow_generated_markdown_audit_v1`, verifies 68 Markdown report
 surfaces with 0 missing and 0 stale entries, and runs from release hygiene together with
 generated-report safety. This closes the Phase 36 report-safety audit without broadening
 the runtime helper scope.
@@ -1583,15 +1585,15 @@ hygiene.
 
 The active non-live Phase 31 candidate inventory is closed. The runtime-resilience
 inventory is the authoritative ledger: 19 command surfaces are currently `covered`, 0 are
-`candidate`, 2 are intentionally `deferred` live surfaces, and 60 are `not_applicable`.
+`candidate`, 2 are intentionally `deferred` live surfaces, and 64 are `not_applicable`.
 
 Finish the remaining work in this order:
 
 1. Keep the portable archive release path green while new work keeps deterministic,
    no-network defaults.
 2. Add optional LLM adapters as request/review boundaries before any script-owned model
-   calls: grounded QA suggestions, agentic answer synthesis, then an LLM/RAGAS-style
-   evaluator.
+   calls. Metadata, grounded-QA, and agentic-answer boundaries are complete; the remaining
+   deferred boundary is the LLM/RAGAS-style evaluator.
 3. Add live disposable tests only in credentialed environments with exact confirmation,
    retained cleanup artifacts, and explicit approval.
 4. Treat `serve`, wheel packaging, provider abstractions, remote conversion clients, and
@@ -1671,6 +1673,6 @@ Recommended implementation order is the Phase 24-36 task list in
 This order kept the foundation document-centric before adding more complex query-time and
 LLM-assisted behavior, then closed release governance, post-ingest operational guidance,
 and generated-report safety. After the current Phase 36 closure, remaining completion work
-should prioritize optional request/review adapter boundaries for LLM-assisted workflows,
-then explicitly gated live validation, then local service, packaging, provider, and
-web/API product adapters.
+should prioritize the remaining LLM/RAGAS evaluator request/review boundary, then
+explicitly gated live validation, then local service, packaging, provider, and web/API
+product adapters.

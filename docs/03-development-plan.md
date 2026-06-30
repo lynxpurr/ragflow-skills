@@ -48,12 +48,14 @@ Partially completed and still active:
 - Phase 30 query orchestration
   - Deterministic planning, session handling, citation audit, and answer evaluation
     are implemented.
+  - Agentic-answer request/review now packages host or external answer synthesis
+    requests and validates returned answers without script-owned model calls.
   - Optional script-owned answer synthesis, reflection, and LLM/RAGAS-style evaluation
     remain future adapters.
 - Phase 31 runtime resilience
   - Report redaction and generated-report safety are closed for the current inventory.
-  - Runtime helper coverage currently tracks 81 public command surfaces: 19 `covered`,
-    0 `candidate`, 2 `deferred`, and 60 `not_applicable`.
+  - Runtime helper coverage currently tracks 85 public command surfaces: 19 `covered`,
+    0 `candidate`, 2 `deferred`, and 64 `not_applicable`.
   - The bounded non-live checkpoint/resume and partial-failure candidate inventory is
     closed; remaining resilience work is explicitly gated live mutation or future
     adapter scope.
@@ -61,10 +63,10 @@ Partially completed and still active:
 Deferred or outside the active public-suite completion path:
 
 - Private dedao bridging stays out of public skills unless a private adapter is needed.
-- Optional LLM-assisted grounded-QA generation, agentic answers, reflection, and
+- Optional LLM-assisted grounded-QA generation, script-owned agentic answers, reflection, and
   LLM/RAGAS evaluators must stay disabled until explicit LLM config and deterministic
-  fixtures exist. Metadata suggestions now have a no-LLM request/review boundary, but no
-  script-owned model call.
+  fixtures exist. Metadata suggestions, grounded-QA suggestions, and agentic-answer
+  synthesis now have no-LLM request/review boundaries, but no script-owned model call.
 - Live disposable KB optimization, cleanup execution, and live tests remain gated by
   credentials plus explicit user approval.
 - Wheel packaging, web/UI wrappers, provider abstractions, and hosted service clients are
@@ -75,7 +77,8 @@ Completion priorities:
 1. Keep the portable archive release path green while new work is added behind
    deterministic, no-network defaults.
 2. Add optional LLM adapters as request/review boundaries before any script-owned model
-   call: grounded QA suggestions, agentic answers, then LLM/RAGAS-style evaluation.
+   call. Metadata, grounded-QA, and agentic-answer boundaries are complete; the remaining
+   request/review boundary is LLM/RAGAS-style evaluation.
 3. Add live disposable tests only when credentials, exact confirmation, retained cleanup
    artifacts, and explicit approval are present.
 4. Consider `serve`, wheel packaging, provider abstractions, remote conversion clients,
@@ -88,23 +91,20 @@ remain in their owning phases below.
 
 | Track | Existing open items | Current status | Completion rule |
 | --- | --- | --- | --- |
-| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory closed | Runtime inventory stays at 19 `covered`, 0 `candidate`, 2 intentionally `deferred`, and 60 `not_applicable` command surfaces. |
+| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory closed | Runtime inventory stays at 19 `covered`, 0 `candidate`, 2 intentionally `deferred`, and 64 `not_applicable` command surfaces. |
 | Document split packaging | Phase 16 optional manifest rewrite/package mode | Complete for current CLI scope | Split outputs can be resumed and optionally repackaged without breaking existing segment-directory ingestion. |
-| Query service and agentic adapters | Phase 3 `serve`, Phase 21/30 script-owned synthesis and reflection | Host-assisted agentic retrieval complete; local service and answer synthesis deferred | Implement only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
+| Query service and agentic adapters | Phase 3 `serve`, Phase 21/30 script-owned synthesis and reflection | Host-assisted agentic retrieval and agentic-answer request/review complete; local service and script-owned answer synthesis deferred | Implement script-owned synthesis only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
 | Live disposable optimization | Phase 17 live probe tests, Phase 26 live disposable tests, Phase 27 live enrichment tests | Build, validation, and cleanup execution gates complete for current CLI scope; live tests deferred | Requires credentials, explicit confirmation, exact cleanup confirmation, retained dataset IDs, and user approval. |
-| Optional LLM-assisted adapters | Phase 26 grounded QA, Phase 30 agentic answer synthesis, Phase 30 LLM/RAGAS-style evaluator | Metadata suggestion boundary complete; remaining adapters deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
+| Optional LLM-assisted adapters | Phase 26 grounded QA, Phase 30 agentic answer synthesis, Phase 30 LLM/RAGAS-style evaluator | Metadata, grounded-QA, and agentic-answer request/review boundaries complete; LLM/RAGAS evaluator boundary remains deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
 | Packaging and platform adapters | Backlog wheel path, remote conversion service client, provider abstractions, web/API wrapper | Post-CLI backlog | Start only after the portable archive release path remains green and users need a non-archive deployment model. |
 | Private dedao bridge | Deferred private adapter tasks | Outside public release scope | Keep private examples and adapter logic outside public `skills/`; consume only public handoff shapes. |
 
 Recommended completion queue:
 
-1. Add a grounded-QA suggestion request/review adapter boundary without script-owned LLM calls.
-2. Add an agentic-answer request/review adapter boundary that validates host or external
-   answers against returned evidence and `audit-citations`.
-3. Add an LLM/RAGAS-style evaluator request/review boundary after deterministic
+1. Add an LLM/RAGAS-style evaluator request/review boundary after deterministic
    `evaluate-answer` remains the default gate.
-4. Add live disposable optimization tests only in an approved credentialed environment.
-5. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients,
+2. Add live disposable optimization tests only in an approved credentialed environment.
+3. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients,
    and web/API wrappers as post-CLI product adapters.
 
 ## Phase 0: Architecture Skeleton
@@ -1059,9 +1059,9 @@ Tasks:
 - [x] Implement bounded query decomposition and sub-query retrieval.
 - [ ] Implement optional reflection with a strict iteration budget.
 - [ ] Synthesize answers only from retrieved evidence.
-- [ ] Add an agentic-answer request artifact that packages evidence, citation rules,
+- [x] Add an agentic-answer request artifact that packages evidence, citation rules,
   trace context, model config labels, and redaction metadata without calling an LLM.
-- [ ] Add an agentic-answer review gate that validates host or external answers against
+- [x] Add an agentic-answer review gate that validates host or external answers against
   returned evidence and numeric citations before acceptance.
 - [ ] Add script-owned agentic-answer execution only after the request/review boundary,
   explicit LLM config, deterministic fixtures, redaction, and release gates exist.
@@ -1072,6 +1072,14 @@ Tasks:
 - [ ] Add optional LLM/RAGAS-style backend as a deferred adapter.
 - [ ] Add an LLM/RAGAS evaluator request/review boundary before any backend invocation.
 - [x] Add offline unit tests and fixture traces.
+
+MVP note: `agentic-answer request` creates a no-LLM advisory request artifact from a
+saved query output, retrieved evidence, citation policy, model/provider labels, and
+redaction metadata for a host-approved external model call. `agentic-answer review`
+checks an external candidate answer with deterministic citation audit and
+`evaluate-answer` compatibility, advisory/generated markings, Markdown, redaction
+sidecars, consumer acceptance, and platform smoke coverage. The public script still does
+not invoke a model or synthesize answers itself.
 
 Exit criteria:
 
@@ -1168,8 +1176,8 @@ sanitized reports and redaction sidecars should be stored and what must stay out
 transcripts.
 `tools/runtime_resilience_inventory.py` now emits
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene to track Phase 31
-runtime helper coverage without broadening live behavior. The current inventory names 81
-public commands: 19 `covered`, 0 `candidate`, 2 `deferred`, and 60 `not_applicable`, with
+runtime helper coverage without broadening live behavior. The current inventory names 85
+public commands: 19 `covered`, 0 `candidate`, 2 `deferred`, and 64 `not_applicable`, with
 no stale classification findings. Covered surfaces include `ragflow-query endpoint-report`,
 `ragflow-query fallback-test`, `ragflow-query cache-report`, `ragflow-query centroid build`,
 `ragflow-doc-to-md` process cleanup reporting, `ragflow-doc-to-md backend probe`,
@@ -1425,7 +1433,7 @@ Tasks:
 Status note: `tools/report_surface_inventory.py` now emits
 `ragflow_report_surface_inventory_v1`, dynamically enumerates public argparse command
 leaves, and overlays an explicit Phase 36 classification. The verified inventory currently
-names 81 public commands: 72 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with
+names 85 public commands: 76 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with
 no uncatalogued or stale classification findings. Generated-report redaction coverage is
 now closed across inventoried public command surfaces; `ragflow-doc-to-md`
 and `ragflow-query` report commands are currently classified as covered or not applicable.

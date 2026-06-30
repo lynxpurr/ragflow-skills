@@ -1224,6 +1224,73 @@ agentic_plan_payload = json.loads(stdout.getvalue())
 if agentic_plan_payload.get("schema") != "ragflow_agentic_plan_v1":
     raise SystemExit(17)
 
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    agentic_answer_request_code = module.main([
+        "agentic-answer",
+        "request",
+        "--query-output",
+        str(artifacts_dir / "query_host_assisted.json"),
+        "--provider-label",
+        "external",
+        "--model-label",
+        "smoke-review-model",
+        "--report-json",
+        str(artifacts_dir / "query_agentic_answer_request.json"),
+        "--report-md",
+        str(artifacts_dir / "query_agentic_answer_request.md"),
+        "--redaction-report",
+        str(artifacts_dir / "query_agentic_answer_request_redaction.json"),
+        "--json",
+    ])
+if agentic_answer_request_code != 0:
+    raise SystemExit(agentic_answer_request_code)
+agentic_answer_request_payload = json.loads(stdout.getvalue())
+if agentic_answer_request_payload.get("schema") != "ragflow_agentic_answer_request_v1":
+    raise SystemExit(30)
+
+agentic_answer_candidate_path = artifacts_dir / "query_agentic_answer_candidate.json"
+agentic_answer_candidate_path.write_text(
+    json.dumps(
+        {{
+            "schema": "ragflow_agentic_answer_candidate_v1",
+            "advisory": True,
+            "generated": True,
+            "answer": "The known term is present in the portable validation chunk [1].",
+        }},
+        ensure_ascii=False,
+        indent=2,
+    )
+    + "\\n",
+    encoding="utf-8",
+)
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    agentic_answer_review_code = module.main([
+        "agentic-answer",
+        "review",
+        "--query-output",
+        str(artifacts_dir / "query_host_assisted.json"),
+        "--request",
+        str(artifacts_dir / "query_agentic_answer_request.json"),
+        "--candidate",
+        str(agentic_answer_candidate_path),
+        "--expected-term",
+        "known term",
+        "--report-json",
+        str(artifacts_dir / "query_agentic_answer_review.json"),
+        "--report-md",
+        str(artifacts_dir / "query_agentic_answer_review.md"),
+        "--redaction-report",
+        str(artifacts_dir / "query_agentic_answer_review_redaction.json"),
+        "--json",
+    ])
+if agentic_answer_review_code != 0:
+    raise SystemExit(agentic_answer_review_code)
+agentic_answer_review_payload = json.loads(stdout.getvalue())
+if agentic_answer_review_payload.get("schema") != "ragflow_agentic_answer_review_report_v1":
+    raise SystemExit(31)
+
 multi_query_path = artifacts_dir / "query_multi_input.json"
 multi_query_path.write_text(
     json.dumps({{"queries": [{{"id": "rewrite-cn", "query": "运行时 配置"}}]}}, ensure_ascii=False, indent=2)
@@ -4092,6 +4159,13 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_agentic_plan.json",
         artifacts_dir / "query_agentic_plan.md",
         artifacts_dir / "query_agentic_plan_redaction.json",
+        artifacts_dir / "query_agentic_answer_request.json",
+        artifacts_dir / "query_agentic_answer_request.md",
+        artifacts_dir / "query_agentic_answer_request_redaction.json",
+        artifacts_dir / "query_agentic_answer_candidate.json",
+        artifacts_dir / "query_agentic_answer_review.json",
+        artifacts_dir / "query_agentic_answer_review.md",
+        artifacts_dir / "query_agentic_answer_review_redaction.json",
         artifacts_dir / "query_multi.json",
         artifacts_dir / "query_multi_trace.json",
         artifacts_dir / "citation_audit.json",

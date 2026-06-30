@@ -339,6 +339,20 @@ EXPECTED_IDENTITIES = (
         coverage_patterns=("ragflow_host_synthesis_contract_v1", "HOST_SYNTHESIS_CONTRACT_SCHEMA"),
     ),
     SchemaIdentity(
+        key="agentic_answer_request",
+        group="query",
+        identity="ragflow_agentic_answer_request_v1",
+        source_patterns=("ragflow_agentic_answer_request_v1",),
+        coverage_patterns=("ragflow_agentic_answer_request_v1", "AGENTIC_ANSWER_REQUEST_SCHEMA"),
+    ),
+    SchemaIdentity(
+        key="agentic_answer_review_report",
+        group="query",
+        identity="ragflow_agentic_answer_review_report_v1",
+        source_patterns=("ragflow_agentic_answer_review_report_v1",),
+        coverage_patterns=("ragflow_agentic_answer_review_report_v1", "AGENTIC_ANSWER_REVIEW_REPORT_SCHEMA"),
+    ),
+    SchemaIdentity(
         key="citation_audit",
         group="query",
         identity="ragflow_citation_audit_v1",

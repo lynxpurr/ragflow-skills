@@ -153,6 +153,8 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("query session inspect redaction", check_names)
         self.assertIn("query session enrich redaction", check_names)
         self.assertIn("query agentic plan redaction", check_names)
+        self.assertIn("query agentic-answer request redaction", check_names)
+        self.assertIn("query agentic-answer review redaction", check_names)
         self.assertIn("query endpoint-report", check_names)
         self.assertIn("query endpoint-report runtime metrics", check_names)
         self.assertIn("query endpoint-report retry policy", check_names)
@@ -411,6 +413,14 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("query_agentic_plan_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_agentic_answer_request_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("query_agentic_answer_review_redaction.json") for path in payload["produced_artifacts"]),
             payload["produced_artifacts"],
         )
         self.assertTrue(

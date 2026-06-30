@@ -2,6 +2,8 @@
 
 from .auth import AuthError, load_api_key
 from .agentic import (
+    AGENTIC_ANSWER_REQUEST_SCHEMA,
+    AGENTIC_ANSWER_REVIEW_REPORT_SCHEMA,
     AGENTIC_PLAN_SCHEMA,
     AGENTIC_TRACE_SCHEMA,
     AgenticPlanError,
@@ -9,7 +11,11 @@ from .agentic import (
     build_agentic_execution_trace,
     build_agentic_plan,
     build_host_synthesis_contract,
+    create_agentic_answer_request,
+    render_agentic_answer_request_markdown,
+    render_agentic_answer_review_markdown,
     render_agentic_plan_markdown,
+    review_agentic_answer,
 )
 from .config import (
     ConfigError,
@@ -550,6 +556,8 @@ __all__ = [
     "BenchmarkGovernanceError",
     "BenchmarkGate",
     "BenchmarkQrel",
+    "AGENTIC_ANSWER_REQUEST_SCHEMA",
+    "AGENTIC_ANSWER_REVIEW_REPORT_SCHEMA",
     "AGENTIC_PLAN_SCHEMA",
     "AGENTIC_TRACE_SCHEMA",
     "BACKEND_PROBE_REPORT_SCHEMA",
@@ -666,6 +674,7 @@ __all__ = [
     "build_agentic_execution_trace",
     "build_agentic_plan",
     "build_host_synthesis_contract",
+    "create_agentic_answer_request",
     "build_query_endpoint_report",
     "build_query_output_cache_report",
     "build_query_trace",
@@ -791,6 +800,8 @@ __all__ = [
     "render_enrichment_experiment_markdown",
     "render_benchmark_governance_markdown",
     "render_suppression_report_markdown",
+    "render_agentic_answer_request_markdown",
+    "render_agentic_answer_review_markdown",
     "render_agentic_plan_markdown",
     "render_assistant_profile_recommendation_markdown",
     "render_assistant_test_plan_review_markdown",
@@ -830,6 +841,7 @@ __all__ = [
     "review_metadata_suggestions",
     "recommend_assistant_profile",
     "review_assistant_test_plan",
+    "review_agentic_answer",
     "recommend_profile",
     "render_profile_compare_markdown",
     "render_profile_lint_markdown",

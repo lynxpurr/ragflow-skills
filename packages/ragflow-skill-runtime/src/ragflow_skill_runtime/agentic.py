@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
+from .observability import audit_citations, evaluate_answer, evidence_from_query_payload
 from .query_intent import (
     QueryIntentError,
     classify_query_intent,
@@ -16,6 +20,8 @@ from .query_intent import (
 AGENTIC_PLAN_SCHEMA = "ragflow_agentic_plan_v1"
 AGENTIC_TRACE_SCHEMA = "ragflow_agentic_trace_v1"
 HOST_SYNTHESIS_CONTRACT_SCHEMA = "ragflow_host_synthesis_contract_v1"
+AGENTIC_ANSWER_REQUEST_SCHEMA = "ragflow_agentic_answer_request_v1"
+AGENTIC_ANSWER_REVIEW_REPORT_SCHEMA = "ragflow_agentic_answer_review_report_v1"
 
 
 class AgenticPlanError(ValueError):
@@ -106,6 +112,123 @@ def _retrieval_query_token_count(retrieval_queries: Any) -> int:
         if isinstance(item, Mapping):
             total += len(tokenize_query_text(str(item.get("query") or "")))
     return total
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _stable_digest(value: Any) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _clean_string(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _preview_text(value: Any, *, limit: int) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _issue_counts(issues: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    return {
+        "errors": sum(1 for issue in issues if issue.get("severity") == "error"),
+        "warnings": sum(1 for issue in issues if issue.get("severity") == "warning"),
+        "infos": sum(1 for issue in issues if issue.get("severity") == "info"),
+    }
+
+
+def _issues_ok(issues: Sequence[Mapping[str, Any]]) -> bool:
+    return not any(issue.get("severity") == "error" for issue in issues)
+
+
+def _append_issue(
+    issues: list[dict[str, Any]],
+    *,
+    severity: str,
+    code: str,
+    message: str,
+    field: str | None = None,
+    recommendation: str | None = None,
+) -> None:
+    issue = {"severity": severity, "code": code, "message": message}
+    if field:
+        issue["field"] = field
+    if recommendation:
+        issue["recommendation"] = recommendation
+    issues.append(issue)
+
+
+def _query_payload_hash(query_payload: Mapping[str, Any]) -> str:
+    hash_input = {
+        "question": query_payload.get("question"),
+        "dataset_ids": query_payload.get("dataset_ids"),
+        "retrieval_status": query_payload.get("retrieval_status"),
+        "agentic_plan": query_payload.get("agentic_plan"),
+        "agentic_trace": query_payload.get("agentic_trace"),
+        "host_synthesis_contract": query_payload.get("host_synthesis_contract"),
+        "evidence": evidence_from_query_payload(query_payload),
+    }
+    return _stable_digest(hash_input)
+
+
+def _agentic_context_from_query_payload(query_payload: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = query_payload.get("metadata") if isinstance(query_payload.get("metadata"), Mapping) else {}
+    trace = query_payload.get("trace") if isinstance(query_payload.get("trace"), Mapping) else {}
+    return {
+        "agentic_plan": query_payload.get("agentic_plan") or metadata.get("agentic_plan") or trace.get("agentic_plan"),
+        "agentic_trace": query_payload.get("agentic_trace") or metadata.get("agentic_trace") or trace.get("agentic_trace"),
+        "host_synthesis_contract": (
+            query_payload.get("host_synthesis_contract")
+            or metadata.get("host_synthesis_contract")
+            or trace.get("host_synthesis_contract")
+        ),
+        "retrieval_status_report": query_payload.get("retrieval_status_report")
+        or metadata.get("retrieval_status_report")
+        or trace.get("retrieval", {}).get("status_report")
+        if isinstance(trace.get("retrieval"), Mapping)
+        else query_payload.get("retrieval_status_report") or metadata.get("retrieval_status_report"),
+    }
+
+
+def _answer_text_from_candidate(candidate: Mapping[str, Any]) -> str | None:
+    raw_answer = candidate.get("answer")
+    if isinstance(raw_answer, str):
+        return raw_answer
+    if isinstance(raw_answer, Mapping):
+        for key in ("text", "content", "message"):
+            value = _clean_string(raw_answer.get(key))
+            if value:
+                return value
+    for key in ("text", "content", "message", "response", "output"):
+        value = _clean_string(candidate.get(key))
+        if value:
+            return value
+    return None
+
+
+def _answer_review_issue_from_report(*, prefix: str, raw_issue: Mapping[str, Any]) -> dict[str, Any]:
+    issue = {
+        "severity": str(raw_issue.get("severity") or "warning"),
+        "code": f"{prefix}_{raw_issue.get('code', 'issue')}",
+        "message": str(raw_issue.get("message") or ""),
+    }
+    field = raw_issue.get("field")
+    if isinstance(field, str):
+        issue["field"] = field
+    detail = raw_issue.get("detail")
+    if isinstance(detail, Mapping):
+        issue["detail"] = dict(detail)
+    return issue
 
 
 def _evidence_citation_ids(evidence: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -496,6 +619,399 @@ def build_host_synthesis_contract(
             "ragflow_mutation": "disabled",
         },
     }
+
+
+def create_agentic_answer_request(
+    query_payload: Mapping[str, Any],
+    *,
+    model_label: str | None = None,
+    provider_label: str | None = None,
+    include_evidence_previews: bool = True,
+    max_evidence_chars: int = 1200,
+    require_citations: bool = True,
+    allow_abstain: bool = True,
+) -> dict[str, Any]:
+    """Create a no-LLM request artifact for external agentic answer synthesis."""
+
+    if not isinstance(query_payload, Mapping):
+        raise AgenticPlanError("query payload must be a JSON object")
+    if max_evidence_chars < 0:
+        raise AgenticPlanError("max_evidence_chars must be non-negative")
+    evidence = evidence_from_query_payload(query_payload)
+    context = _agentic_context_from_query_payload(query_payload)
+    issues: list[dict[str, Any]] = []
+    if not evidence:
+        _append_issue(
+            issues,
+            severity="warning",
+            code="agentic_answer_request_no_evidence",
+            message="query payload does not contain retrievable evidence; external answer should abstain",
+            field="evidence",
+        )
+    contract = context.get("host_synthesis_contract")
+    if isinstance(contract, Mapping):
+        policy = contract.get("citation_policy") if isinstance(contract.get("citation_policy"), Mapping) else {}
+        if require_citations and policy.get("required") is False and evidence:
+            _append_issue(
+                issues,
+                severity="warning",
+                code="agentic_answer_request_citation_policy_relaxed",
+                message="request requires citations but host synthesis contract does not mark citations required",
+                field="host_synthesis_contract.citation_policy.required",
+            )
+    else:
+        _append_issue(
+            issues,
+            severity="warning",
+            code="agentic_answer_request_contract_missing",
+            message="query payload does not contain ragflow_host_synthesis_contract_v1; request will include a conservative citation policy",
+            field="host_synthesis_contract",
+        )
+
+    evidence_items: list[dict[str, Any]] = []
+    for item in evidence:
+        evidence_item = {
+            "rank": item.get("rank"),
+            "citation_id": item.get("citation_id"),
+            "score": item.get("score"),
+            "document_name": item.get("document_name"),
+            "document_id": item.get("document_id"),
+            "dataset_id": item.get("dataset_id"),
+            "chunk_id": item.get("chunk_id"),
+        }
+        if include_evidence_previews:
+            evidence_item["content_preview"] = _preview_text(item.get("content_preview"), limit=max_evidence_chars)
+            evidence_item["preview_truncated"] = len(str(item.get("content_preview") or "")) > max_evidence_chars
+            evidence_item["max_evidence_chars"] = max_evidence_chars
+        evidence_items.append(evidence_item)
+
+    request_core = {
+        "schema": AGENTIC_ANSWER_REQUEST_SCHEMA,
+        "question": query_payload.get("question"),
+        "query_payload_hash": _query_payload_hash(query_payload),
+        "model_label": model_label,
+        "provider_label": provider_label,
+        "evidence": evidence_items,
+        "require_citations": require_citations,
+        "allow_abstain": allow_abstain,
+    }
+    return {
+        "ok": _issues_ok(issues),
+        "schema": AGENTIC_ANSWER_REQUEST_SCHEMA,
+        "created_at": _now(),
+        "advisory": True,
+        "llm_invoked": False,
+        "request_hash": _stable_digest(request_core),
+        "query_payload_hash": request_core["query_payload_hash"],
+        "question": query_payload.get("question"),
+        "model": {
+            "provider_label": provider_label,
+            "model_label": model_label,
+            "script_owned_llm_calls": 0,
+        },
+        "summary": {
+            **_issue_counts(issues),
+            "evidence_count": len(evidence_items),
+            "include_evidence_previews": include_evidence_previews,
+            "max_evidence_chars": max_evidence_chars,
+            "require_citations": require_citations,
+            "allow_abstain": allow_abstain,
+            "llm_invoked": False,
+        },
+        "redaction": {
+            "evidence_previews_included": include_evidence_previews,
+            "document_ids_included": True,
+            "dataset_ids_included": True,
+            "review_redaction_report_recommended": True,
+            "notes": [
+                "Run review commands with --redaction-report before sharing request, review, or Markdown outputs externally.",
+                "Do not include credentials, private endpoints, or authorization material in external answer candidates.",
+            ],
+        },
+        "instructions": {
+            "purpose": "Synthesize an advisory answer grounded only in the listed retrieved evidence.",
+            "required_output_shape": {
+                "schema": "ragflow_agentic_answer_candidate_v1",
+                "advisory": True,
+                "generated": True,
+                "answer": "string with numeric citations such as [1]",
+            },
+            "requirements": [
+                "Return JSON only unless the host explicitly requests plain text.",
+                "Set advisory to true when returning JSON.",
+                "Set generated to true when returning JSON.",
+                "Use only evidence items listed in this request.",
+                "Use numeric bracket citations that match available evidence ranks.",
+                "Do not invent facts, credentials, private endpoints, or authorization material.",
+                "Abstain or ask for clarification when evidence is missing or insufficient.",
+                "Generated answers are advisory and must pass ragflow-query agentic-answer review before acceptance.",
+            ],
+            "review_command": "ragflow-query agentic-answer review --query-output QUERY.json --candidate CANDIDATE.json",
+        },
+        "citation_policy": {
+            "compatible_with": "audit-citations",
+            "format": "numeric_bracket",
+            "pattern": r"\[\d+\]",
+            "required": bool(require_citations and evidence_items),
+            "valid_ranks": [item.get("rank") for item in evidence_items if isinstance(item.get("rank"), int)],
+            "valid_citation_ids": [
+                item.get("citation_id") for item in evidence_items if isinstance(item.get("citation_id"), str)
+            ],
+            "no_evidence_behavior": "abstain_or_ask_clarification",
+        },
+        "answer_policy": {
+            "source": "retrieved_evidence_only",
+            "allow_external_facts": False,
+            "allow_uncited_claims": False,
+            "allow_abstain": allow_abstain,
+        },
+        "agentic_context": {
+            key: value
+            for key, value in context.items()
+            if isinstance(value, Mapping)
+        },
+        "evidence": evidence_items,
+        "issues": issues,
+    }
+
+
+def review_agentic_answer(
+    query_payload: Mapping[str, Any],
+    answer: str,
+    *,
+    candidate: Mapping[str, Any] | None = None,
+    request: Mapping[str, Any] | None = None,
+    expected_terms: Sequence[str] | None = None,
+    require_citation: bool = True,
+    allow_abstain: bool = True,
+    min_cited_evidence_score: float | None = None,
+    require_advisory: bool = True,
+    require_generated: bool = True,
+) -> dict[str, Any]:
+    """Review an externally synthesized agentic answer with deterministic gates."""
+
+    if not isinstance(query_payload, Mapping):
+        raise AgenticPlanError("query payload must be a JSON object")
+    answer_text = str(answer or "")
+    issues: list[dict[str, Any]] = []
+    candidate_schema = candidate.get("schema") if isinstance(candidate, Mapping) else None
+    if candidate is not None:
+        if not isinstance(candidate, Mapping):
+            _append_issue(
+                issues,
+                severity="error",
+                code="agentic_answer_candidate_invalid",
+                message="candidate answer must be a JSON object when supplied",
+                field="candidate",
+            )
+        else:
+            if candidate_schema not in {None, "ragflow_agentic_answer_candidate_v1"}:
+                _append_issue(
+                    issues,
+                    severity="warning",
+                    code="agentic_answer_candidate_schema_unrecognized",
+                    message="candidate schema is not ragflow_agentic_answer_candidate_v1",
+                    field="candidate.schema",
+                )
+            if require_advisory and candidate.get("advisory") is not True:
+                _append_issue(
+                    issues,
+                    severity="error",
+                    code="agentic_answer_not_advisory",
+                    message="external agentic answers must set advisory to true",
+                    field="candidate.advisory",
+                )
+            if require_generated and candidate.get("generated") is not True:
+                _append_issue(
+                    issues,
+                    severity="error",
+                    code="agentic_answer_not_generated",
+                    message="external agentic answers must set generated to true",
+                    field="candidate.generated",
+                )
+
+    request_hash = None
+    if request is not None:
+        if not isinstance(request, Mapping):
+            _append_issue(
+                issues,
+                severity="error",
+                code="agentic_answer_request_invalid",
+                message="agentic answer request must be a JSON object",
+                field="request",
+            )
+        elif request.get("schema") != AGENTIC_ANSWER_REQUEST_SCHEMA:
+            _append_issue(
+                issues,
+                severity="error",
+                code="agentic_answer_request_schema_invalid",
+                message=f"request schema must be {AGENTIC_ANSWER_REQUEST_SCHEMA}",
+                field="request.schema",
+            )
+        else:
+            request_hash = _clean_string(request.get("request_hash"))
+            query_hash = _query_payload_hash(query_payload)
+            request_query_hash = _clean_string(request.get("query_payload_hash"))
+            if request_query_hash and request_query_hash != query_hash:
+                _append_issue(
+                    issues,
+                    severity="error",
+                    code="agentic_answer_request_query_mismatch",
+                    message="request was built from a different query output",
+                    field="request.query_payload_hash",
+                )
+            request_policy = request.get("citation_policy")
+            if isinstance(request_policy, Mapping) and request_policy.get("required") is False and require_citation:
+                _append_issue(
+                    issues,
+                    severity="warning",
+                    code="agentic_answer_review_citation_policy_stricter_than_request",
+                    message="review requires citations while the original request did not",
+                    field="request.citation_policy.required",
+                )
+
+    evidence = evidence_from_query_payload(query_payload)
+    citation_audit = audit_citations(answer_text, evidence)
+    evaluation_report = evaluate_answer(
+        query_payload,
+        answer_text,
+        expected_terms=expected_terms,
+        require_citation=require_citation,
+        allow_abstain=allow_abstain,
+        min_cited_evidence_score=min_cited_evidence_score,
+        citation_audit=citation_audit,
+    )
+    for raw_issue in citation_audit.get("issues", []):
+        if isinstance(raw_issue, Mapping):
+            issues.append(_answer_review_issue_from_report(prefix="citation_audit", raw_issue=raw_issue))
+    for raw_issue in evaluation_report.get("issues", []):
+        if isinstance(raw_issue, Mapping):
+            prefixed = _answer_review_issue_from_report(prefix="answer_evaluation", raw_issue=raw_issue)
+            if prefixed not in issues:
+                issues.append(prefixed)
+
+    summary = evaluation_report.get("summary") if isinstance(evaluation_report.get("summary"), Mapping) else {}
+    return {
+        "ok": _issues_ok(issues),
+        "schema": AGENTIC_ANSWER_REVIEW_REPORT_SCHEMA,
+        "created_at": _now(),
+        "candidate_schema": candidate_schema,
+        "request_schema": AGENTIC_ANSWER_REQUEST_SCHEMA if request is not None else None,
+        "request_hash": request_hash,
+        "query_payload_hash": _query_payload_hash(query_payload),
+        "summary": {
+            **_issue_counts(issues),
+            "evidence_count": len(evidence),
+            "citation_count": int(summary.get("citation_count") or 0),
+            "invalid_citation_count": int(summary.get("invalid_citation_count") or 0),
+            "unsupported_uncited_statement_count": int(summary.get("unsupported_uncited_statement_count") or 0),
+            "expected_term_count": int(summary.get("expected_term_count") or 0),
+            "missing_expected_term_count": int(summary.get("missing_expected_term_count") or 0),
+            "abstained": bool(summary.get("abstained")),
+            "answer_evaluation_ok": bool(evaluation_report.get("ok")),
+            "citation_audit_ok": bool(citation_audit.get("ok")),
+            "advisory": candidate.get("advisory") is True if isinstance(candidate, Mapping) else None,
+            "generated": candidate.get("generated") is True if isinstance(candidate, Mapping) else None,
+            "script_owned_llm_calls": 0,
+        },
+        "answer": {
+            "chars": len(answer_text),
+            "preview": _preview_text(answer_text, limit=220),
+        },
+        "policy": {
+            "require_citation": require_citation,
+            "allow_abstain": allow_abstain,
+            "min_cited_evidence_score": min_cited_evidence_score,
+            "require_advisory": require_advisory,
+            "require_generated": require_generated,
+            "script_owned_llm_calls": 0,
+        },
+        "issues": issues,
+        "citation_audit": citation_audit,
+        "answer_evaluation": evaluation_report,
+        "candidate_preview": (
+            {
+                "schema": candidate.get("schema"),
+                "advisory": candidate.get("advisory"),
+                "generated": candidate.get("generated"),
+                "answer_chars": len(answer_text),
+            }
+            if isinstance(candidate, Mapping)
+            else None
+        ),
+        "recommendations": [
+            "Accept external agentic answers only after this review passes without errors.",
+            "Keep answer synthesis host-owned until explicit LLM configuration and release gates are added.",
+            "Use ragflow-query audit-citations or evaluate-answer for additional manual review when warnings remain.",
+        ],
+    }
+
+
+def render_agentic_answer_request_markdown(request: Mapping[str, Any]) -> str:
+    """Render a compact Markdown agentic-answer request."""
+
+    summary = request.get("summary", {}) if isinstance(request.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Agentic Answer Request",
+        "",
+        f"- schema: `{request.get('schema', AGENTIC_ANSWER_REQUEST_SCHEMA)}`",
+        f"- llm_invoked: `{str(bool(request.get('llm_invoked'))).lower()}`",
+        f"- evidence_count: `{summary.get('evidence_count', 0)}`",
+        f"- require_citations: `{str(bool(summary.get('require_citations'))).lower()}`",
+        "",
+        "## Evidence",
+        "",
+    ]
+    evidence = request.get("evidence", []) if isinstance(request.get("evidence"), list) else []
+    if evidence:
+        lines.extend(["| Rank | Citation | Document | Preview |", "| ---: | --- | --- | --- |"])
+        for item in evidence:
+            if not isinstance(item, Mapping):
+                continue
+            preview = str(item.get("content_preview") or "").replace("|", "\\|")
+            document = str(item.get("document_name") or item.get("document_id") or "").replace("|", "\\|")
+            lines.append(f"| {item.get('rank', '')} | `{item.get('citation_id', '')}` | {document} | {preview} |")
+    else:
+        lines.append("- None")
+    issues = request.get("issues", []) if isinstance(request.get("issues"), list) else []
+    if issues:
+        lines.extend(["", "## Issues", ""])
+        for issue in issues:
+            if isinstance(issue, Mapping):
+                lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    return "\n".join(lines) + "\n"
+
+
+def render_agentic_answer_review_markdown(report: Mapping[str, Any]) -> str:
+    """Render a compact Markdown agentic-answer review report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    answer = report.get("answer", {}) if isinstance(report.get("answer"), Mapping) else {}
+    lines = [
+        "# RAGFlow Agentic Answer Review",
+        "",
+        f"- ok: `{str(bool(report.get('ok'))).lower()}`",
+        f"- schema: `{report.get('schema', AGENTIC_ANSWER_REVIEW_REPORT_SCHEMA)}`",
+        f"- evidence_count: `{summary.get('evidence_count', 0)}`",
+        f"- citation_count: `{summary.get('citation_count', 0)}`",
+        f"- invalid_citation_count: `{summary.get('invalid_citation_count', 0)}`",
+        f"- errors: `{summary.get('errors', 0)}`",
+        f"- warnings: `{summary.get('warnings', 0)}`",
+        "",
+        "## Issues",
+        "",
+    ]
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    if not issues:
+        lines.append("- None")
+    else:
+        for issue in issues:
+            if isinstance(issue, Mapping):
+                lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    preview = answer.get("preview")
+    if isinstance(preview, str) and preview:
+        lines.extend(["", "## Answer Preview", "", preview])
+    return "\n".join(lines) + "\n"
 
 
 def render_agentic_plan_markdown(plan: Mapping[str, Any]) -> str:

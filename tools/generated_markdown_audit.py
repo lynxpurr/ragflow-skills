@@ -62,6 +62,8 @@ SANITIZED_MARKDOWN_VERIFIED_COMMANDS = (
     "ragflow-kb-build topology advise",
     "ragflow-kb-build topology split-plan",
     "ragflow-kb-build validate",
+    "ragflow-query agentic-answer request",
+    "ragflow-query agentic-answer review",
     "ragflow-query agentic-plan",
     "ragflow-query assistant-profile recommend",
     "ragflow-query assistant-test-plan",
