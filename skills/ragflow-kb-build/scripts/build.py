@@ -92,6 +92,7 @@ from ragflow_skill_runtime.health_report import HealthReportError  # noqa: E402
 from ragflow_skill_runtime.kb_build import extract_dataset_id, extract_uploaded_document_id  # noqa: E402
 from ragflow_skill_runtime.metadata_governance import MetadataGovernanceError  # noqa: E402
 from ragflow_skill_runtime.parse_report import ParseReportError  # noqa: E402
+from ragflow_skill_runtime.profiles import ChunkProfile  # noqa: E402
 from ragflow_skill_runtime.profiles import ProfileError  # noqa: E402
 from ragflow_skill_runtime.topology import TopologyError  # noqa: E402
 
@@ -413,6 +414,94 @@ def _build_optimization_command_manifest(plan: Mapping[str, Any], *, output_path
         },
     }
     return manifest
+
+
+def _require_optimize_execute_confirmation(args: argparse.Namespace, plan: Mapping[str, Any]) -> None:
+    if not args.confirm_live_build:
+        raise ProfileError("optimize --execute requires --confirm-live-build")
+    if args.confirm_kb_name != plan.get("base_kb_name"):
+        raise ProfileError("optimize --execute requires --confirm-kb-name to match --kb-name exactly")
+    if args.confirm_run_id != plan.get("run_id"):
+        raise ProfileError("optimize --execute requires --confirm-run-id to match the planned run_id exactly")
+
+
+def _build_candidate_kb(
+    *,
+    candidate: Mapping[str, Any],
+    docs: list[Any],
+    config: Any,
+    client: Any,
+    metadata_summary: dict[str, Any] | None,
+    parse_timeout: float,
+    poll_interval: float,
+    no_parse: bool,
+    no_wait: bool,
+) -> dict[str, Any]:
+    profile_payload = candidate.get("profile") if isinstance(candidate.get("profile"), Mapping) else None
+    if profile_payload is None:
+        raise ProfileError(f"candidate {candidate.get('profile_id') or '<unknown>'} is missing profile payload")
+    profile = ChunkProfile.from_dict(profile_payload)
+    kb_name = str(candidate.get("disposable_kb_name") or "")
+    if not kb_name:
+        raise ProfileError(f"candidate {candidate.get('profile_id') or '<unknown>'} is missing disposable_kb_name")
+    artifacts = candidate.get("artifacts") if isinstance(candidate.get("artifacts"), Mapping) else {}
+    manifest_path = artifacts.get("kb_manifest")
+    if not isinstance(manifest_path, str) or not manifest_path:
+        raise ProfileError(f"candidate {candidate.get('profile_id') or '<unknown>'} is missing artifacts.kb_manifest")
+
+    dataset_response = client.create_dataset(kb_name, profile=profile.to_dataset_payload())
+    dataset_id = extract_dataset_id(dataset_response)
+    uploaded = []
+    document_ids: list[str] = []
+    for doc in docs:
+        response = client.upload_document(dataset_id, doc.path)
+        document_id = extract_uploaded_document_id(response)
+        document_ids.append(document_id)
+        uploaded.append((doc, document_id, "uploaded", None))
+
+    parse_response = None
+    live_states = {}
+    if document_ids and not no_parse:
+        parse_response = client.trigger_parse(dataset_id, document_ids)
+        if not no_wait:
+            live_states = wait_for_document_states(
+                client,
+                dataset_id=dataset_id,
+                document_ids=document_ids,
+                timeout=parse_timeout,
+                poll_interval=poll_interval,
+            )
+            uploaded = [
+                (
+                    doc,
+                    document_id,
+                    live_states.get(document_id, {}).get("status", status),
+                    live_states.get(document_id, {}).get("chunk_count", chunk_count),
+                )
+                for doc, document_id, status, chunk_count in uploaded
+            ]
+
+    payload = make_kb_manifest_payload(
+        base_url=config.base_url,
+        dataset_id=dataset_id,
+        dataset_name=kb_name,
+        profile=profile,
+        documents=uploaded,
+    )
+    if metadata_summary:
+        payload["metadata_summary"] = metadata_summary
+    _write_json_file(manifest_path, payload)
+    return {
+        "profile_id": candidate.get("profile_id"),
+        "disposable_kb_name": kb_name,
+        "kb_manifest": manifest_path,
+        "dataset_id": dataset_id,
+        "document_count": len(uploaded),
+        "parse_triggered": bool(document_ids and not no_parse),
+        "parse_waited": bool(document_ids and not no_parse and not no_wait),
+        "parse_response": parse_response,
+        "cleanup_required": True,
+    }
 
 
 def _collect_urls(value: Any) -> list[str]:
@@ -1330,10 +1419,12 @@ def _run_segment_metadata_report(args: argparse.Namespace) -> int:
 
 def _run_optimize(args: argparse.Namespace) -> int:
     try:
-        if args.execute:
-            raise ProfileError("optimize --execute is not implemented yet; use --plan-only for offline planning")
-        if not args.plan_only:
-            raise ProfileError("optimize currently requires --plan-only")
+        if args.execute and args.plan_only:
+            raise ProfileError("optimize --execute cannot be combined with --plan-only")
+        if not args.plan_only and not args.execute:
+            raise ProfileError("optimize requires --plan-only or --execute")
+        if args.execute and args.command_manifest_output:
+            raise ProfileError("optimize --command-manifest-output is for --plan-only dry-run review; omit it with --execute")
         if args.resume and not args.checkpoint:
             raise ProfileError("optimize --resume requires --checkpoint")
         if args.batch_size is not None and not args.checkpoint:
@@ -1397,6 +1488,73 @@ def _run_optimize(args: argparse.Namespace) -> int:
             output_path=args.output,
             artifact_dir=args.artifact_dir,
         )
+        execution_report = None
+        if args.execute:
+            _require_optimize_execute_confirmation(args, plan)
+            if not plan.get("ok"):
+                raise ProfileError("optimize --execute requires a valid optimization plan with ok=true")
+            config = _load_config(args)
+            client = RAGFlowClient(config)
+            metadata_summary = summarize_metadata_for_documents(args.metadata, [doc.path for doc in docs])
+            if metadata_summary and not metadata_summary.get("ok", False):
+                raise BuildError("metadata lint failed; run metadata lint for details")
+            results = []
+            for candidate in plan.get("candidates", []):
+                if not isinstance(candidate, Mapping):
+                    continue
+                results.append(
+                    _build_candidate_kb(
+                        candidate=candidate,
+                        docs=docs,
+                        config=config,
+                        client=client,
+                        metadata_summary=metadata_summary,
+                        parse_timeout=args.parse_timeout,
+                        poll_interval=args.poll_interval,
+                        no_parse=args.no_parse,
+                        no_wait=args.no_wait,
+                    )
+                )
+            execution_report = {
+                "schema": "ragflow_optimization_execute_report_v1",
+                "created_at": _utc_now(),
+                "mode": "execute-build",
+                "run_id": plan.get("run_id"),
+                "base_kb_name": plan.get("base_kb_name"),
+                "confirmation": {
+                    "confirm_live_build": True,
+                    "confirm_kb_name": args.confirm_kb_name,
+                    "confirm_run_id": args.confirm_run_id,
+                },
+                "summary": {
+                    "candidate_count": len(plan.get("candidates", [])) if isinstance(plan.get("candidates"), list) else 0,
+                    "built_candidate_count": len(results),
+                    "dataset_count": len(results),
+                    "document_count": sum(int(item.get("document_count") or 0) for item in results),
+                    "cleanup_required_count": sum(1 for item in results if item.get("cleanup_required")),
+                    "benchmark_validation_executed": False,
+                    "cleanup_executed": False,
+                },
+                "results": results,
+                "next_steps": [
+                    "Run optimize summarize after benchmark validation reports exist.",
+                    "Run optimize cleanup-plan before deleting disposable KBs.",
+                    "Delete disposable KBs only with exact dataset id and KB name confirmation.",
+                ],
+            }
+            plan["mode"] = "execute-build"
+            plan["mutation_allowed"] = True
+            plan["execution"] = execution_report
+            plan_summary = dict(plan.get("summary") if isinstance(plan.get("summary"), Mapping) else {})
+            plan_summary.update(
+                {
+                    "built_candidate_count": len(results),
+                    "cleanup_required_count": execution_report["summary"]["cleanup_required_count"],
+                    "benchmark_validation_executed": False,
+                    "cleanup_executed": False,
+                }
+            )
+            plan["summary"] = plan_summary
         command_manifest = None
         if args.command_manifest_output:
             command_manifest = _build_optimization_command_manifest(plan, output_path=args.output)
@@ -1430,9 +1588,12 @@ def _run_optimize(args: argparse.Namespace) -> int:
                     args.artifact_dir,
                     args.checkpoint,
                     args.command_manifest_output,
+                    args.config,
                     *_collect_path_like_literals(plan),
                 ],
                 output_paths=[args.output, args.checkpoint, args.command_manifest_output],
+                extra_secret_literals=[getattr(args, "api_key", None)],
+                extra_private_hosts=configured_private_hosts_from_urls([getattr(args, "base_url", None)]),
             )
             if command_manifest:
                 plan = sanitized["plan"]
@@ -2044,7 +2205,7 @@ def build_segment_metadata_parser() -> argparse.ArgumentParser:
 def build_optimize_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Plan RAGFlow profile optimization experiments")
     parser.add_argument("--plan-only", action="store_true", help="Create an offline optimization plan without mutating RAGFlow")
-    parser.add_argument("--execute", action="store_true", help="Reserved for future live optimization execution")
+    parser.add_argument("--execute", action="store_true", help="Build selected disposable KBs after exact live confirmation")
     parser.add_argument("--input", help="Markdown file or directory")
     parser.add_argument("--doc-manifest", help="Path to doc_manifest.json")
     parser.add_argument("--kb-name", required=True, help="Base RAGFlow dataset name used for disposable KB naming")
@@ -2069,6 +2230,16 @@ def build_optimize_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint", help="Checkpoint path for resumable offline optimization planning")
     parser.add_argument("--resume", action="store_true", help="Resume from an existing optimization planning checkpoint")
     parser.add_argument("--batch-size", type=int, help="Emit at most this many new optimization candidates in this run")
+    parser.add_argument("--config", help="Runtime config file used only with --execute")
+    parser.add_argument("--base-url", help="RAGFlow base URL used only with --execute")
+    parser.add_argument("--api-key", help="RAGFlow API key used only with --execute")
+    parser.add_argument("--confirm-live-build", action="store_true", help="Required with --execute to create disposable KBs")
+    parser.add_argument("--confirm-kb-name", help="Required with --execute; must exactly match --kb-name")
+    parser.add_argument("--confirm-run-id", help="Required with --execute; must exactly match the planned run_id")
+    parser.add_argument("--no-parse", action="store_true", help="With --execute, upload documents without triggering parse")
+    parser.add_argument("--no-wait", action="store_true", help="With --execute, do not wait for parse completion")
+    parser.add_argument("--parse-timeout", type=float, default=300.0, help="With --execute, maximum seconds to wait for parse completion")
+    parser.add_argument("--poll-interval", type=float, default=2.0, help="With --execute, polling interval while waiting for parse completion")
     parser.add_argument("--output", default="optimization_plan.json", help="Output ragflow_optimization_plan_v1 JSON")
     parser.add_argument("--report-md", help="Optional optimization plan Markdown path")
     parser.add_argument("--command-manifest-output", help="Optional dry-run command manifest for future live optimization execution")

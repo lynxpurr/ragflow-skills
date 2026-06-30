@@ -42,6 +42,47 @@ def load_validate_module():
     return module
 
 
+def load_build_module():
+    spec = importlib.util.spec_from_file_location("ragflow_kb_build_cli", BUILD_SCRIPT)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class FakeOptimizeBuildClient:
+    instances: list["FakeOptimizeBuildClient"] = []
+
+    def __init__(self, config):
+        self.config = config
+        self.created: list[tuple[str, dict[str, object]]] = []
+        self.uploads: list[tuple[str, str]] = []
+        self.parsed: list[tuple[str, list[str]]] = []
+        self.documents: dict[str, list[dict[str, object]]] = {}
+        FakeOptimizeBuildClient.instances.append(self)
+
+    def create_dataset(self, name, *, profile=None):
+        dataset_id = f"ds-{len(self.created) + 1}"
+        self.created.append((name, dict(profile or {})))
+        self.documents[dataset_id] = []
+        return {"data": {"id": dataset_id}}
+
+    def upload_document(self, dataset_id, file_path):
+        document_id = f"doc-{dataset_id}-{len(self.uploads) + 1}"
+        self.uploads.append((dataset_id, str(file_path)))
+        self.documents.setdefault(dataset_id, []).append(
+            {"id": document_id, "name": Path(file_path).name, "run": "DONE", "chunk_count": 2}
+        )
+        return {"data": [{"id": document_id}]}
+
+    def trigger_parse(self, dataset_id, document_ids):
+        self.parsed.append((dataset_id, list(document_ids)))
+        return {"data": {"document_ids": document_ids}}
+
+    def list_documents(self, dataset_id, *, page=1, page_size=200):
+        return {"data": {"docs": self.documents.get(dataset_id, [])}}
+
+
 class FakeValidationClient:
     def __init__(self, config):
         self.config = config
@@ -3680,6 +3721,154 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertNotIn(fake_host, combined)
         self.assertNotIn(fake_secret, combined)
         self.assertNotIn(str(root), combined)
+
+    def test_optimize_execute_requires_exact_live_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "sample.md").write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "candidate-a",
+                        "chunk_size": 512,
+                        "parser_config": {"chunk_token_num": 512},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            output = root / "optimization_execute_plan.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "--execute",
+                    "--input",
+                    str(docs),
+                    "--kb-name",
+                    "kb:optimize-execute",
+                    "--profile",
+                    str(profile),
+                    "--queries",
+                    str(queries),
+                    "--qrels",
+                    str(qrels),
+                    "--run-id",
+                    "execute",
+                    "--artifact-dir",
+                    str(root / "opt-artifacts"),
+                    "--output",
+                    str(output),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env={**_env(), "RAGFLOW_BASE_URL": "https://ragflow.example.test", "RAGFLOW_API_KEY": "fake-key"},
+            )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertIn("--confirm-live-build", payload["error"])
+        self.assertFalse(output.exists())
+
+    def test_optimize_execute_builds_candidate_with_fake_client(self) -> None:
+        module = load_build_module()
+        FakeOptimizeBuildClient.instances = []
+        module.RAGFlowClient = FakeOptimizeBuildClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "sample.md").write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "candidate-a",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                        "parser_config": {
+                            "chunk_token_num": 512,
+                            "auto_keywords": 0,
+                            "auto_questions": 0,
+                            "__language__": "English",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            output = root / "optimization_execute_plan.json"
+            artifact_dir = root / "opt-artifacts"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "optimize",
+                        "--execute",
+                        "--input",
+                        str(docs),
+                        "--kb-name",
+                        "kb:optimize-execute",
+                        "--profile",
+                        str(profile),
+                        "--queries",
+                        str(queries),
+                        "--qrels",
+                        str(qrels),
+                        "--run-id",
+                        "execute",
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--output",
+                        str(output),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "fake-key",
+                        "--confirm-live-build",
+                        "--confirm-kb-name",
+                        "kb:optimize-execute",
+                        "--confirm-run-id",
+                        "execute",
+                        "--poll-interval",
+                        "0",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            candidate_manifest = artifact_dir / "candidate-a" / "kb_manifest.json"
+            candidate_payload = json.loads(candidate_manifest.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(payload["schema"], "ragflow_optimization_plan_v1")
+        self.assertEqual(payload["mode"], "execute-build")
+        self.assertTrue(payload["mutation_allowed"])
+        self.assertEqual(payload["execution"]["schema"], "ragflow_optimization_execute_report_v1")
+        self.assertEqual(payload["execution"]["summary"]["built_candidate_count"], 1)
+        self.assertEqual(payload["execution"]["summary"]["cleanup_required_count"], 1)
+        self.assertFalse(payload["execution"]["summary"]["benchmark_validation_executed"])
+        self.assertFalse(payload["execution"]["summary"]["cleanup_executed"])
+        self.assertEqual(candidate_payload["dataset"]["id"], "ds-1")
+        self.assertEqual(candidate_payload["dataset"]["name"], "kb:optimize-execute__opt__execute__candidate-a")
+        self.assertEqual(candidate_payload["documents"][0]["status"], "done")
+        self.assertEqual(candidate_payload["documents"][0]["chunk_count"], 2)
+        self.assertEqual(len(FakeOptimizeBuildClient.instances), 1)
+        self.assertEqual(len(FakeOptimizeBuildClient.instances[0].created), 1)
+        self.assertEqual(len(FakeOptimizeBuildClient.instances[0].uploads), 1)
+        self.assertEqual(len(FakeOptimizeBuildClient.instances[0].parsed), 1)
 
     def test_optimize_cleanup_plan_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
