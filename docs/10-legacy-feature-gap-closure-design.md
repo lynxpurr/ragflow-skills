@@ -385,6 +385,11 @@ names, and reports naming collisions before any live execution is allowed.
 Plan-only output includes disabled mutation command templates under `mutation_commands`;
 ordinary `commands` do not contain an enabled disposable-KB build command, so experiment
 KB creation remains gated on a future explicit `optimize --execute` path.
+`--command-manifest-output` additionally emits
+`ragflow_optimization_command_manifest_v1`, a redaction-compatible dry-run manifest that
+lists the planned disposable build, benchmark validation, diagnostic, and cleanup-preview
+commands without enabling mutation. It is the review artifact that must exist before any
+future live disposable optimization execution.
 MVP `optimize summarize` then reads the plan plus existing validation reports and
 produces `ragflow_profile_experiment_results_v1` plus a Markdown best-profile report with
 metric tradeoffs and recommendation rationale. When a candidate validation report is
@@ -1550,13 +1555,12 @@ inventory is the authoritative ledger: 19 command surfaces are currently `covere
 
 Finish the remaining work in this order:
 
-1. Add command-manifest dry-runs before any live disposable optimization execution.
-2. Add live disposable build, benchmark validation, and cleanup execution only behind
+1. Add live disposable build, benchmark validation, and cleanup execution only behind
    credentials, explicit confirmation, exact cleanup matching, and retained dataset IDs.
-3. Add optional LLM adapters after deterministic artifacts already cover the workflow:
+2. Add optional LLM adapters after deterministic artifacts already cover the workflow:
    metadata suggestions, grounded QA generation, agentic answer synthesis, then an
    LLM/RAGAS-style evaluator.
-4. Treat `serve`, wheel packaging, provider abstractions, remote conversion clients, and
+3. Treat `serve`, wheel packaging, provider abstractions, remote conversion clients, and
    web/API wrappers as post-CLI adapters instead of blockers for the portable public skill
    suite.
 

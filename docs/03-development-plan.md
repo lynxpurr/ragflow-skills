@@ -85,17 +85,16 @@ remain in their owning phases below.
 | Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory closed | Runtime inventory stays at 19 `covered`, 0 `candidate`, 2 intentionally `deferred`, and 58 `not_applicable` command surfaces. |
 | Document split packaging | Phase 16 optional manifest rewrite/package mode | Complete for current CLI scope | Split outputs can be resumed and optionally repackaged without breaking existing segment-directory ingestion. |
 | Query service and agentic adapters | Phase 3 `serve`, Phase 3 agentic retrieval, Phase 21/30 script-owned synthesis and reflection | Deferred | Implement only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
-| Live disposable optimization | Phase 17 live probe tests, Phase 26 disposable KB build/validation/cleanup execution/live tests, Phase 27 live enrichment tests | Gated | Requires credentials, explicit confirmation, non-mutating command manifests, exact cleanup confirmation, and retained dataset IDs. |
+| Live disposable optimization | Phase 17 live probe tests, Phase 26 disposable KB build/validation/cleanup execution/live tests, Phase 27 live enrichment tests | Command-manifest dry-run complete; live execution gated | Requires credentials, explicit confirmation, exact cleanup confirmation, and retained dataset IDs. |
 | Optional LLM-assisted adapters | Phase 25 metadata, Phase 26 grounded QA, Phase 30 LLM/RAGAS-style evaluator | Deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
 | Packaging and platform adapters | Backlog wheel path, remote conversion service client, provider abstractions, web/API wrapper | Post-CLI backlog | Start only after the portable archive release path remains green and users need a non-archive deployment model. |
 | Private dedao bridge | Deferred private adapter tasks | Outside public release scope | Keep private examples and adapter logic outside public `skills/`; consume only public handoff shapes. |
 
 Recommended completion queue:
 
-1. Add command-manifest dry-runs for live disposable optimization before any new live mutation.
-2. Implement live disposable build/benchmark/cleanup execution with exact confirmation and retained cleanup artifacts.
-3. Add optional LLM adapters in this order: metadata suggestions, grounded QA generation, agentic answer synthesis, LLM/RAGAS evaluator.
-4. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients, and web/API wrappers as post-CLI product adapters.
+1. Implement live disposable build/benchmark/cleanup execution with exact confirmation and retained cleanup artifacts.
+2. Add optional LLM adapters in this order: metadata suggestions, grounded QA generation, agentic answer synthesis, LLM/RAGAS evaluator.
+3. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients, and web/API wrappers as post-CLI product adapters.
 
 ## Phase 0: Architecture Skeleton
 
@@ -883,6 +882,7 @@ Tasks:
 - [x] Add candidate profile set loading from files, directories, and generated recommendations.
 - [x] Add disposable KB naming conventions and collision checks.
 - [x] Require `--execute` before creating any experiment KB.
+- [x] Add command-manifest dry-run output before live disposable optimization execution.
 - [ ] Build each candidate profile into an isolated disposable KB.
 - [ ] Run benchmark validation for each candidate.
 - [x] Run `diagnose` automatically for failed builds or zero-chunk cases.

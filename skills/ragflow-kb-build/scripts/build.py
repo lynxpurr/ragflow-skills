@@ -101,6 +101,7 @@ _ASSIGNMENT_SECRET_VALUE_RE = re.compile(
     r"(?i)\b(?:api[_-]?key|token|secret|password|authorization)\s*[:=]\s*([^\s,;\"']+)"
 )
 OPTIMIZATION_PLAN_CHECKPOINT_SCHEMA = "ragflow_optimization_plan_checkpoint_v1"
+OPTIMIZATION_COMMAND_MANIFEST_SCHEMA = "ragflow_optimization_command_manifest_v1"
 
 
 def _dump_json(data: Any) -> None:
@@ -200,6 +201,218 @@ def _source_hash_map(paths: list[str | None]) -> dict[str, str]:
 def _stable_digest(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _manifest_path_token(path: Any, *, artifact_dir: str | Path | None) -> str:
+    text = str(path)
+    if not text:
+        return text
+    if artifact_dir:
+        artifact_root = Path(artifact_dir)
+        try:
+            relative = Path(text).relative_to(artifact_root)
+            return f"<artifact-dir>/{relative.as_posix()}"
+        except ValueError:
+            pass
+    if "://" in text:
+        return text
+    path_obj = Path(text)
+    if path_obj.is_absolute():
+        try:
+            return f"<cwd>/{path_obj.relative_to(Path.cwd()).as_posix()}"
+        except ValueError:
+            return f"<path>/{path_obj.name}"
+    return path_obj.as_posix()
+
+
+def _manifest_command_tokens(command: list[Any] | None, *, artifact_dir: str | Path | None) -> list[str]:
+    if not command:
+        return []
+    tokens: list[str] = []
+    for token in command:
+        text = str(token)
+        if "/" in text or "\\" in text or text.endswith((".json", ".md", ".yaml", ".yml", ".py", ".txt")):
+            tokens.append(_manifest_path_token(text, artifact_dir=artifact_dir))
+        else:
+            tokens.append(text)
+    return tokens
+
+
+def _command_entry(
+    *,
+    command_id: str,
+    label: str,
+    command: list[Any] | None,
+    mutates_ragflow: bool,
+    mutation_label: str,
+    required_config: list[str],
+    expected_artifacts: list[Any],
+    cleanup_notes: list[str],
+    artifact_dir: str | Path | None,
+    enabled: bool = True,
+    requires_execute: bool = False,
+    source_profile_id: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": command_id,
+        "label": label,
+        "profile_id": source_profile_id,
+        "enabled": bool(enabled),
+        "requires_execute": bool(requires_execute),
+        "command": _manifest_command_tokens(command, artifact_dir=artifact_dir),
+        "mutates_ragflow": bool(mutates_ragflow),
+        "mutation_label": mutation_label,
+        "required_config": required_config,
+        "missing_config": list(required_config),
+        "expected_artifacts": [
+            {
+                "path": _manifest_path_token(path, artifact_dir=artifact_dir),
+                "when": "on_success",
+            }
+            for path in expected_artifacts
+            if path
+        ],
+        "cleanup_notes": cleanup_notes,
+    }
+
+
+def _build_optimization_command_manifest(plan: Mapping[str, Any], *, output_path: str | Path | None = None) -> dict[str, Any]:
+    candidates = plan.get("candidates") if isinstance(plan.get("candidates"), list) else []
+    inputs = plan.get("inputs") if isinstance(plan.get("inputs"), Mapping) else {}
+    documents = inputs.get("documents") if isinstance(inputs.get("documents"), list) else []
+    artifact_dir = None
+    if candidates:
+        first = candidates[0]
+        if isinstance(first, Mapping):
+            artifacts = first.get("artifacts") if isinstance(first.get("artifacts"), Mapping) else {}
+            kb_manifest = artifacts.get("kb_manifest")
+            if kb_manifest:
+                artifact_dir = Path(str(kb_manifest)).parent.parent
+    commands: list[dict[str, Any]] = []
+    for index, candidate in enumerate(candidates):
+        if not isinstance(candidate, Mapping):
+            continue
+        profile_id = str(candidate.get("profile_id") or f"candidate-{index + 1}")
+        artifacts = candidate.get("artifacts") if isinstance(candidate.get("artifacts"), Mapping) else {}
+        planned = candidate.get("commands") if isinstance(candidate.get("commands"), Mapping) else {}
+        mutation_commands = candidate.get("mutation_commands") if isinstance(candidate.get("mutation_commands"), Mapping) else {}
+        build = mutation_commands.get("build") if isinstance(mutation_commands.get("build"), Mapping) else {}
+        commands.append(
+            _command_entry(
+                command_id=f"{profile_id}:build-disposable-kb",
+                label=f"Build disposable KB for {profile_id}",
+                command=build.get("command") if isinstance(build.get("command"), list) else [],
+                mutates_ragflow=True,
+                mutation_label="creates_dataset_uploads_documents_and_triggers_parse",
+                required_config=["RAGFLOW_BASE_URL", "RAGFLOW_API_KEY"],
+                expected_artifacts=[artifacts.get("kb_manifest")],
+                cleanup_notes=[
+                    "Disabled in command-manifest dry-run.",
+                    "Requires future optimize --execute support and explicit user confirmation before mutation.",
+                    "After live execution, retain the generated kb_manifest.json so cleanup can confirm the exact dataset id and KB name.",
+                ],
+                artifact_dir=artifact_dir,
+                enabled=bool(build.get("enabled")),
+                requires_execute=bool(build.get("requires_execute", True)),
+                source_profile_id=profile_id,
+            )
+        )
+        commands.append(
+            _command_entry(
+                command_id=f"{profile_id}:benchmark-validation",
+                label=f"Run benchmark validation for {profile_id}",
+                command=planned.get("validate") if isinstance(planned.get("validate"), list) else [],
+                mutates_ragflow=False,
+                mutation_label="read_only_benchmark_validation",
+                required_config=["RAGFLOW_BASE_URL", "RAGFLOW_API_KEY"],
+                expected_artifacts=[artifacts.get("validation_report"), artifacts.get("validation_report_md")],
+                cleanup_notes=["No cleanup is required for read-only validation."],
+                artifact_dir=artifact_dir,
+                enabled=False,
+                source_profile_id=profile_id,
+            )
+        )
+        commands.append(
+            _command_entry(
+                command_id=f"{profile_id}:diagnose",
+                label=f"Diagnose failed or zero-chunk result for {profile_id}",
+                command=planned.get("diagnose") if isinstance(planned.get("diagnose"), list) else [],
+                mutates_ragflow=False,
+                mutation_label="local_or_read_only_diagnostics",
+                required_config=[],
+                expected_artifacts=[artifacts.get("diagnostic_report")],
+                cleanup_notes=["Diagnostics are advisory and do not create or delete RAGFlow datasets."],
+                artifact_dir=artifact_dir,
+                enabled=False,
+                source_profile_id=profile_id,
+            )
+        )
+        commands.append(
+            _command_entry(
+                command_id=f"{profile_id}:cleanup-preview",
+                label=f"Create cleanup preview for {profile_id}",
+                command=planned.get("cleanup_preview") if isinstance(planned.get("cleanup_preview"), list) else [],
+                mutates_ragflow=False,
+                mutation_label="local_cleanup_plan",
+                required_config=[],
+                expected_artifacts=[artifacts.get("cleanup_plan")],
+                cleanup_notes=["Cleanup preview does not delete RAGFlow datasets."],
+                artifact_dir=artifact_dir,
+                enabled=False,
+                source_profile_id=profile_id,
+            )
+        )
+
+    manifest = {
+        "ok": bool(plan.get("ok")),
+        "schema": OPTIMIZATION_COMMAND_MANIFEST_SCHEMA,
+        "created_at": _utc_now(),
+        "mode": "dry_run",
+        "source": "ragflow-kb-build optimize --plan-only",
+        "plan_schema": plan.get("schema"),
+        "plan_output": _manifest_path_token(output_path, artifact_dir=artifact_dir) if output_path else None,
+        "run_id": plan.get("run_id"),
+        "base_kb_name": plan.get("base_kb_name"),
+        "mutation_guard": {
+            "mutation_allowed": False,
+            "execute_required": True,
+            "execute_flag": "--execute",
+            "cleanup_confirmation_required": True,
+            "cleanup_confirmation_flags": ["--confirm-dataset-id", "--confirm-kb-name"],
+            "live_execution_status": "not_implemented",
+        },
+        "inputs": {
+            "input": _manifest_path_token(inputs.get("input"), artifact_dir=artifact_dir) if inputs.get("input") else None,
+            "doc_manifest": _manifest_path_token(inputs.get("doc_manifest"), artifact_dir=artifact_dir)
+            if inputs.get("doc_manifest")
+            else None,
+            "documents": [_manifest_path_token(item, artifact_dir=artifact_dir) for item in documents],
+        },
+        "commands": commands,
+        "expected_artifacts": [
+            artifact
+            for command in commands
+            for artifact in command["expected_artifacts"]
+        ],
+        "cleanup": {
+            "required_after_live_execution": any(command["mutates_ragflow"] for command in commands),
+            "notes": [
+                "Review this manifest before enabling any future live optimization execution.",
+                "Do not run mutating commands without credentials, explicit confirmation, and a cleanup plan.",
+                "Retain candidate kb_manifest.json files after live execution; cleanup needs exact dataset ids and KB names.",
+            ],
+        },
+        "summary": {
+            "candidate_count": len(candidates),
+            "command_count": len(commands),
+            "mutating_command_count": sum(1 for command in commands if command["mutates_ragflow"]),
+            "enabled_mutating_command_count": sum(
+                1 for command in commands if command["mutates_ragflow"] and command["enabled"]
+            ),
+            "expected_artifact_count": sum(len(command["expected_artifacts"]) for command in commands),
+        },
+    }
+    return manifest
 
 
 def _collect_urls(value: Any) -> list[str]:
@@ -1184,9 +1397,20 @@ def _run_optimize(args: argparse.Namespace) -> int:
             output_path=args.output,
             artifact_dir=args.artifact_dir,
         )
+        command_manifest = None
+        if args.command_manifest_output:
+            command_manifest = _build_optimization_command_manifest(plan, output_path=args.output)
+            plan["command_manifest"] = {
+                "path": args.command_manifest_output,
+                "schema": command_manifest["schema"],
+                "command_count": command_manifest["summary"]["command_count"],
+                "mutating_command_count": command_manifest["summary"]["mutating_command_count"],
+                "enabled_mutating_command_count": command_manifest["summary"]["enabled_mutating_command_count"],
+            }
         if args.redaction_report:
-            plan, redaction_report = _sanitize_governance_report(
-                plan,
+            report_payload = {"plan": plan, "command_manifest": command_manifest} if command_manifest else plan
+            sanitized, redaction_report = _sanitize_governance_report(
+                report_payload,
                 args,
                 input_paths=[
                     args.input,
@@ -1205,11 +1429,19 @@ def _run_optimize(args: argparse.Namespace) -> int:
                     args.baseline_report,
                     args.artifact_dir,
                     args.checkpoint,
+                    args.command_manifest_output,
                     *_collect_path_like_literals(plan),
                 ],
-                output_paths=[args.output, args.checkpoint],
+                output_paths=[args.output, args.checkpoint, args.command_manifest_output],
             )
+            if command_manifest:
+                plan = sanitized["plan"]
+                command_manifest = sanitized["command_manifest"]
+            else:
+                plan = sanitized
             _write_json_file(args.redaction_report, redaction_report)
+        if args.command_manifest_output and command_manifest:
+            _write_json_file(args.command_manifest_output, command_manifest)
         _write_json_file(args.output, plan)
         _write_text_file(args.report_md, render_optimization_plan_markdown(plan))
         _dump_json(plan)
@@ -1839,6 +2071,7 @@ def build_optimize_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, help="Emit at most this many new optimization candidates in this run")
     parser.add_argument("--output", default="optimization_plan.json", help="Output ragflow_optimization_plan_v1 JSON")
     parser.add_argument("--report-md", help="Optional optimization plan Markdown path")
+    parser.add_argument("--command-manifest-output", help="Optional dry-run command manifest for future live optimization execution")
     parser.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     parser.set_defaults(func=_run_optimize)

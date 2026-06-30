@@ -3585,6 +3585,102 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(checkpoint_payload["summary"]["processed_profile_count"], 2)
         self.assertTrue(checkpoint_payload["summary"]["completed"])
 
+    def test_optimize_plan_only_writes_command_manifest_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_host = "optimize-command.local"
+            fake_secret = "optimize-command-secret"
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "sample.md").write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "candidate-a",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                        "parser_config": {
+                            "chunk_token_num": 512,
+                            "auto_keywords": 0,
+                            "auto_questions": 0,
+                            "__language__": "English",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            output = root / "optimization_plan.json"
+            command_manifest = root / "optimization_command_manifest.json"
+            redaction_report = root / "optimization_command_manifest_redaction.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "--plan-only",
+                    "--input",
+                    str(docs),
+                    "--kb-name",
+                    f"kb:http://{fake_host}:9380?token={fake_secret}",
+                    "--profile",
+                    str(profile),
+                    "--queries",
+                    str(queries),
+                    "--qrels",
+                    str(qrels),
+                    "--run-id",
+                    "command-manifest",
+                    "--artifact-dir",
+                    str(root / "opt-artifacts"),
+                    "--output",
+                    str(output),
+                    "--command-manifest-output",
+                    str(command_manifest),
+                    "--redaction-report",
+                    str(redaction_report),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            plan_payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+            manifest_payload = json.loads(command_manifest.read_text(encoding="utf-8")) if command_manifest.exists() else {}
+            redaction_payload = json.loads(redaction_report.read_text(encoding="utf-8")) if redaction_report.exists() else {}
+            combined = (
+                json.dumps(plan_payload, ensure_ascii=False)
+                + json.dumps(manifest_payload, ensure_ascii=False)
+                + json.dumps(redaction_payload, ensure_ascii=False)
+                + result.stdout
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(manifest_payload["schema"], "ragflow_optimization_command_manifest_v1")
+        self.assertEqual(manifest_payload["mode"], "dry_run")
+        self.assertEqual(manifest_payload["summary"]["candidate_count"], 1)
+        self.assertEqual(manifest_payload["summary"]["mutating_command_count"], 1)
+        self.assertEqual(manifest_payload["summary"]["enabled_mutating_command_count"], 0)
+        self.assertFalse(manifest_payload["mutation_guard"]["mutation_allowed"])
+        self.assertTrue(manifest_payload["mutation_guard"]["cleanup_confirmation_required"])
+        build_command = next(command for command in manifest_payload["commands"] if command["id"].endswith(":build-disposable-kb"))
+        self.assertTrue(build_command["mutates_ragflow"])
+        self.assertFalse(build_command["enabled"])
+        self.assertTrue(build_command["requires_execute"])
+        self.assertIn("<artifact-dir>/candidate-a/kb_manifest.json", json.dumps(build_command, ensure_ascii=False))
+        self.assertEqual(plan_payload["command_manifest"]["schema"], "ragflow_optimization_command_manifest_v1")
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["summary"]["redaction_count"], 1)
+        self.assertNotIn(fake_host, combined)
+        self.assertNotIn(fake_secret, combined)
+        self.assertNotIn(str(root), combined)
+
     def test_optimize_cleanup_plan_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

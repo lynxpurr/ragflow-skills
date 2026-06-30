@@ -2726,6 +2726,7 @@ raise SystemExit(code)
     optimization_plan_md = work_root / "optimization_plan.md"
     optimization_plan_checkpoint = work_root / "optimization_plan.checkpoint.json"
     optimization_plan_redaction = work_root / "optimization_plan_redaction.json"
+    optimization_command_manifest = work_root / "optimization_command_manifest.json"
     optimization_cleanup_plan = work_root / "optimization_cleanup_plan.json"
     optimization_cleanup_plan_md = work_root / "optimization_cleanup_plan.md"
     optimization_cleanup_plan_redaction = work_root / "optimization_cleanup_plan_redaction.json"
@@ -2970,6 +2971,8 @@ raise SystemExit(code)
             str(optimization_plan),
             "--report-md",
             str(optimization_plan_md),
+            "--command-manifest-output",
+            str(optimization_command_manifest),
             "--redaction-report",
             str(optimization_plan_redaction),
             "--json",
@@ -3016,6 +3019,8 @@ raise SystemExit(code)
             str(optimization_plan),
             "--report-md",
             str(optimization_plan_md),
+            "--command-manifest-output",
+            str(optimization_command_manifest),
             "--redaction-report",
             str(optimization_plan_redaction),
             "--json",
@@ -3029,12 +3034,13 @@ raise SystemExit(code)
         optimize_plan_resume_result,
         required_output='"resume": true',
     )
+    _record_file_check(checks, "kb-build optimize command manifest dry-run", optimization_command_manifest)
     _record_redaction_sidecar_check(
         checks,
         "kb-build optimize plan-only redaction",
         optimization_plan_redaction,
         result=optimize_plan_resume_result,
-        checked_paths=(optimization_plan, optimization_plan_md),
+        checked_paths=(optimization_plan, optimization_plan_md, optimization_command_manifest),
     )
     optimize_cleanup_plan_result = _run_command(
         [
@@ -3369,6 +3375,7 @@ raise SystemExit(code)
         optimization_plan_md,
         optimization_plan_checkpoint,
         optimization_plan_redaction,
+        optimization_command_manifest,
         optimization_cleanup_plan,
         optimization_cleanup_plan_md,
         optimization_cleanup_plan_redaction,

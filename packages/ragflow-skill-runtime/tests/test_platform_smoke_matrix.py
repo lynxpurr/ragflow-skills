@@ -84,6 +84,7 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("kb topology split-plan redaction", check_names)
         self.assertIn("kb activation-plan redaction", check_names)
         self.assertIn("kb optimize plan-only resume", check_names)
+        self.assertIn("kb optimize command manifest dry-run", check_names)
         self.assertIn("kb optimize plan-only redaction", check_names)
         self.assertIn("kb optimize cleanup-plan redaction", check_names)
         self.assertIn("kb optimize summarize redaction", check_names)
@@ -216,6 +217,10 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("optimization_plan.checkpoint.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("optimization_command_manifest.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
         self.assertTrue(

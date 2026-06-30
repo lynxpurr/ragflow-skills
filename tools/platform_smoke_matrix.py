@@ -2773,6 +2773,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     optimization_plan = artifacts_dir / "optimization_plan.json"
     optimization_plan_checkpoint = artifacts_dir / "optimization_plan.checkpoint.json"
     optimization_plan_redaction = artifacts_dir / "optimization_plan_redaction.json"
+    optimization_command_manifest = artifacts_dir / "optimization_command_manifest.json"
     optimize_plan_result = _run_command(
         [
             sys.executable,
@@ -2801,6 +2802,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "1",
             "--output",
             str(optimization_plan),
+            "--command-manifest-output",
+            str(optimization_command_manifest),
             "--redaction-report",
             str(optimization_plan_redaction),
             "--json",
@@ -2841,6 +2844,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "--resume",
             "--output",
             str(optimization_plan),
+            "--command-manifest-output",
+            str(optimization_command_manifest),
             "--redaction-report",
             str(optimization_plan_redaction),
             "--json",
@@ -2853,6 +2858,14 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         "kb optimize plan-only resume",
         optimize_plan_resume_result,
         required_stdout='"resume": true',
+    )
+    checks.append(
+        {
+            "name": "kb optimize command manifest dry-run",
+            "ok": optimization_command_manifest.exists(),
+            "returncode": 0 if optimization_command_manifest.exists() else 1,
+            "error": "" if optimization_command_manifest.exists() else f"missing {optimization_command_manifest}",
+        }
     )
     _record_redaction_sidecar_check(checks, "kb optimize plan-only redaction", optimization_plan_redaction)
     optimization_cleanup_plan = artifacts_dir / "optimization_cleanup_plan.json"
@@ -4027,6 +4040,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "optimization_plan.json",
         artifacts_dir / "optimization_plan.checkpoint.json",
         artifacts_dir / "optimization_plan_redaction.json",
+        artifacts_dir / "optimization_command_manifest.json",
         artifacts_dir / "optimization_cleanup_plan.json",
         artifacts_dir / "optimization_cleanup_plan.md",
         artifacts_dir / "optimization_cleanup_plan_redaction.json",
