@@ -96,6 +96,7 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("doc-to-md segment plan", check_names)
         self.assertIn("doc-to-md segment plan redaction", check_names)
         self.assertIn("doc-to-md split", check_names)
+        self.assertIn("doc-to-md split resume", check_names)
         self.assertIn("doc-to-md split redaction", check_names)
         self.assertIn("doc-to-md postprocess redaction", check_names)
         self.assertIn("profile api payload filters internal metadata", check_names)
@@ -360,6 +361,10 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("split_plan_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("split.checkpoint.json") for path in payload["produced_artifacts"]),
             payload["produced_artifacts"],
         )
         self.assertTrue(

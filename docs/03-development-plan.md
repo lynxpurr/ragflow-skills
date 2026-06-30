@@ -49,10 +49,11 @@ Partially completed and still active:
     remain future adapters.
 - Phase 31 runtime resilience
   - Report redaction and generated-report safety are closed for the current inventory.
-  - Runtime helper coverage currently tracks 79 public command surfaces: 18 `covered`,
-    1 `candidate`, 2 `deferred`, and 58 `not_applicable`.
-  - The remaining actionable work is checkpoint/resume and partial-failure coverage for
-    bounded offline jobs, not broad live mutation.
+  - Runtime helper coverage currently tracks 79 public command surfaces: 19 `covered`,
+    0 `candidate`, 2 `deferred`, and 58 `not_applicable`.
+  - The bounded non-live checkpoint/resume and partial-failure candidate inventory is
+    closed; remaining resilience work is explicitly gated live mutation or future
+    adapter scope.
 
 Deferred or outside the active public-suite completion path:
 
@@ -67,10 +68,10 @@ Deferred or outside the active public-suite completion path:
 
 Completion priorities:
 
-1. Close Phase 31 candidate runtime coverage with small offline slices:
-   `doc-to-md split`.
-2. Revisit live disposable optimization execution only after the offline resume and
-   partial-failure reports are stable.
+1. Revisit the optional split manifest rewrite/package mode now that `doc-to-md split`
+   can resume bounded offline runs.
+2. Revisit live disposable optimization execution only behind explicit dry-run,
+   credential, confirmation, and cleanup gates.
 3. Add optional LLM adapters only after deterministic artifacts, redaction, and
    acceptance gates already cover the same workflow.
 4. Consider `serve`, wheel packaging, and web/hosted wrappers only as post-CLI product
@@ -83,8 +84,8 @@ remain in their owning phases below.
 
 | Track | Existing open items | Current status | Completion rule |
 | --- | --- | --- | --- |
-| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Active next work | Runtime inventory reaches 19 `covered`, 0 `candidate`, 2 intentionally `deferred`, and 58 `not_applicable` command surfaces. |
-| Document split packaging | Phase 16 optional manifest rewrite/package mode | Wait for `doc-to-md split` resume work | Split outputs can be resumed and optionally repackaged without breaking existing segment-directory ingestion. |
+| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory closed | Runtime inventory stays at 19 `covered`, 0 `candidate`, 2 intentionally `deferred`, and 58 `not_applicable` command surfaces. |
+| Document split packaging | Phase 16 optional manifest rewrite/package mode | Ready to revisit | Split outputs can be resumed and optionally repackaged without breaking existing segment-directory ingestion. |
 | Query service and agentic adapters | Phase 3 `serve`, Phase 3 agentic retrieval, Phase 21/30 script-owned synthesis and reflection | Deferred | Implement only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
 | Live disposable optimization | Phase 17 live probe tests, Phase 26 disposable KB build/validation/cleanup execution/live tests, Phase 27 live enrichment tests | Gated | Requires credentials, explicit confirmation, non-mutating command manifests, exact cleanup confirmation, and retained dataset IDs. |
 | Optional LLM-assisted adapters | Phase 25 metadata, Phase 26 grounded QA, Phase 30 LLM/RAGAS-style evaluator | Deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
@@ -93,12 +94,11 @@ remain in their owning phases below.
 
 Recommended completion queue:
 
-1. Add resumable `ragflow-doc-to-md split`, then revisit optional manifest rewrite/package mode.
-2. Re-run the runtime inventory; only then close the broad Phase 31 checkpoint/resume and partial-failure umbrellas.
-3. Add command-manifest dry-runs for live disposable optimization before any new live mutation.
-4. Implement live disposable build/benchmark/cleanup execution with exact confirmation and retained cleanup artifacts.
-5. Add optional LLM adapters in this order: metadata suggestions, grounded QA generation, agentic answer synthesis, LLM/RAGAS evaluator.
-6. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients, and web/API wrappers as post-CLI product adapters.
+1. Revisit optional split manifest rewrite/package mode.
+2. Add command-manifest dry-runs for live disposable optimization before any new live mutation.
+3. Implement live disposable build/benchmark/cleanup execution with exact confirmation and retained cleanup artifacts.
+4. Add optional LLM adapters in this order: metadata suggestions, grounded QA generation, agentic answer synthesis, LLM/RAGAS evaluator.
+5. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients, and web/API wrappers as post-CLI product adapters.
 
 ## Phase 0: Architecture Skeleton
 
@@ -1127,19 +1127,20 @@ transcripts.
 `tools/runtime_resilience_inventory.py` now emits
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene to track Phase 31
 runtime helper coverage without broadening live behavior. The current inventory names 79
-public commands: 18 `covered`, 1 `candidate`, 2 `deferred`, and 58 `not_applicable`, with
+public commands: 19 `covered`, 0 `candidate`, 2 `deferred`, and 58 `not_applicable`, with
 no stale classification findings. Covered surfaces include `ragflow-query endpoint-report`,
 `ragflow-query fallback-test`, `ragflow-query cache-report`, `ragflow-query centroid build`,
 `ragflow-doc-to-md` process cleanup reporting, `ragflow-doc-to-md backend probe`,
-`ragflow-doc-to-md backend warmup`, `ragflow-kb-build model-providers probe`,
+`ragflow-doc-to-md backend warmup`, `ragflow-doc-to-md split` checkpoint/resume,
+`ragflow-kb-build model-providers probe`,
 `ragflow-kb-build probe`, `ragflow-kb-build inspect-kb`, `ragflow-kb-build validate`,
 `ragflow-kb-build snapshot-chunks`, `ragflow-kb-build qa validate`,
 `ragflow-kb-build qa map-evidence`, offline `ragflow-kb-build benchmark import`
 checkpoint/resume, deterministic `ragflow-kb-build qa generate` checkpoint/resume, and
 offline `ragflow-kb-build profile experiment` and `ragflow-kb-build optimize --plan-only`
 checkpoint/resume.
-Candidate surfaces keep broad checkpoint/resume and the remaining
-partial-failure rollout visible without marking the Phase 31 umbrella tasks complete.
+No public command surface remains in candidate status; the remaining Phase 31 work is
+gated live mutation or future optional adapter scope.
 
 Recommended next slices:
 
@@ -1169,16 +1170,15 @@ Recommended next slices:
    warning, and skipped source-check rows. `ragflow-kb-build qa map-evidence` now emits
    the schema for mapped, unmapped, partially mapped, invalid, and warning evidence-map
    rows.
-3. Keep broad checkpoint/resume helpers and cross-skill partial-failure rollout as the
-   next Phase 31 resilience work. Offline `ragflow-kb-build benchmark import`,
+3. Keep broad checkpoint/resume helpers and cross-skill partial-failure rollout bounded
+   to the verified non-live Phase 31 surfaces. Offline `ragflow-kb-build benchmark import`,
    `ragflow-kb-build qa generate`, `ragflow-kb-build profile experiment`, and
    `ragflow-kb-build optimize --plan-only`
-   checkpoint/resume are now covered, and `inspect-kb`, `validate`, `snapshot-chunks`,
-   `qa validate`, plus `qa map-evidence` now have partial-failure coverage; the next
-   lower-risk candidate is checkpoint/resume and partial-run coverage for bounded
-   offline `doc-to-md split` jobs.
-   The Phase 31 closure target is 19 `covered`, 0 `candidate`, 2 explicitly `deferred`,
-   and 58 `not_applicable` public command surfaces in
+   checkpoint/resume are now covered, `ragflow-doc-to-md split` now supports bounded
+   checkpoint/resume, and `inspect-kb`, `validate`, `snapshot-chunks`, `qa validate`,
+   plus `qa map-evidence` now have partial-failure coverage. The Phase 31 non-live
+   inventory now records 19 `covered`, 0 `candidate`, 2 explicitly `deferred`, and 58
+   `not_applicable` public command surfaces in
    `ragflow_runtime_resilience_inventory_v1`.
 
 Exit criteria:

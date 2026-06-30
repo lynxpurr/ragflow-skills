@@ -206,6 +206,49 @@ def _write_input_doc(workspace: Path) -> Path:
     return input_dir
 
 
+def _run_doc_split_resume_check(
+    *,
+    convert_script: Path,
+    workspace: Path,
+    artifacts_dir: Path,
+    checks: list[dict[str, Any]],
+    env: dict[str, str],
+) -> None:
+    markdown = workspace / "long-doc.md"
+    markdown.write_text("# One\n" + ("a" * 70) + "\n# Two\n" + ("b" * 70) + "\n", encoding="utf-8")
+    segments_dir = artifacts_dir / "doc_split_segments"
+    split_plan = artifacts_dir / "doc_split_plan.json"
+    split_redaction = artifacts_dir / "doc_split_redaction.json"
+    split_checkpoint = artifacts_dir / "doc_split.checkpoint.json"
+    base_args = [
+        sys.executable,
+        str(convert_script),
+        "split",
+        "--markdown",
+        str(markdown),
+        "--output",
+        str(segments_dir),
+        "--plan-output",
+        str(split_plan),
+        "--redaction-report",
+        str(split_redaction),
+        "--checkpoint",
+        str(split_checkpoint),
+        "--soft-max-chars",
+        "50",
+        "--hard-max-chars",
+        "90",
+        "--min-segment-chars",
+        "20",
+        "--json",
+    ]
+    split_result = _run_command([*base_args, "--batch-size", "1"], cwd=workspace, env=env)
+    _record_command_check(checks, "doc-to-md split checkpoint", split_result, required_stdout='"completed": false')
+    split_resume_result = _run_command([*base_args, "--resume"], cwd=workspace, env=env)
+    _record_command_check(checks, "doc-to-md split resume", split_resume_result, required_stdout='"resume": true')
+    _record_redaction_sidecar_check(checks, "doc-to-md split redaction", split_redaction)
+
+
 def _write_fake_mineru_cli(path: Path) -> Path:
     path.write_text(
         "#!/usr/bin/env python3\n"
@@ -1906,6 +1949,13 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "returncode": 0 if postprocess_report.exists() else 1,
             "error": "" if postprocess_report.exists() else f"missing {postprocess_report}",
         }
+    )
+    _run_doc_split_resume_check(
+        convert_script=convert_script,
+        workspace=workspace,
+        artifacts_dir=artifacts_dir,
+        checks=checks,
+        env=env,
     )
     mineru_doc_manifest = _run_mineru_env_check(
         profile=profile,
@@ -3807,6 +3857,9 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         workspace / "backend_warmup.md",
         workspace / "backend_warmup_redaction.json",
         workspace / "postprocess_redaction.json",
+        artifacts_dir / "doc_split_plan.json",
+        artifacts_dir / "doc_split_redaction.json",
+        artifacts_dir / "doc_split.checkpoint.json",
         artifacts_dir / "handoff_inspection.json",
         artifacts_dir / "handoff_inspection.md",
         artifacts_dir / "handoff_inspection_redaction.json",

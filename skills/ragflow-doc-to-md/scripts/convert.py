@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+from datetime import datetime, timezone
+import hashlib
 import json
 import os
 import re
@@ -80,10 +82,20 @@ _URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 _ASSIGNMENT_SECRET_VALUE_RE = re.compile(
     r"(?i)\b(?:api[_-]?key|token|secret|password|authorization)\s*[:=]\s*([^\s,;\"']+)"
 )
+DOC_SPLIT_CHECKPOINT_SCHEMA = "ragflow_doc_split_checkpoint_v1"
 
 
 def _dump_json(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _stable_digest(data: Any) -> str:
+    payload = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _error(message: str, *, json_output: bool) -> int:
@@ -233,6 +245,282 @@ def _sanitize_output_payload(
         config_paths=config_paths,
     )
     return sanitized
+
+
+def _split_source_hashes(markdown_path: str | Path) -> dict[str, str]:
+    path = Path(markdown_path)
+    return {str(path): sha256_file(path)}
+
+
+def _split_request_hash(
+    *,
+    plan,
+    markdown_path: str | Path,
+    output_dir: str | Path,
+    plan_output: str | Path | None,
+    soft_max_chars: int,
+    hard_max_chars: int,
+    min_segment_chars: int,
+    source_hashes: dict[str, str],
+) -> str:
+    payload = {
+        "schema": DOC_SPLIT_CHECKPOINT_SCHEMA,
+        "markdown_path": str(Path(markdown_path)),
+        "output_dir": str(Path(output_dir)),
+        "plan_output": str(Path(plan_output)) if plan_output else None,
+        "soft_max_chars": soft_max_chars,
+        "hard_max_chars": hard_max_chars,
+        "min_segment_chars": min_segment_chars,
+        "source_hashes": source_hashes,
+        "plan": {
+            "schema": "doc_segmentation_plan_v1",
+            "strategy": "heading_boundary_v1",
+            "document_name": plan.document_name,
+            "recommended": plan.recommended,
+            "reason": plan.reason,
+            "totals": {
+                "chars": plan.total_chars,
+                "lines": plan.total_lines,
+                "images": plan.total_images,
+                "chunk_markers": plan.total_chunk_markers,
+            },
+            "segments": [
+                {
+                    "index": segment.index,
+                    "title": segment.title,
+                    "start_line": segment.start_line,
+                    "end_line": segment.end_line,
+                    "char_count": segment.char_count,
+                    "image_count": segment.image_count,
+                    "chunk_marker_count": segment.chunk_marker_count,
+                    "suggested_markdown_path": segment.suggested_markdown_path,
+                }
+                for segment in plan.segments
+            ],
+            "warnings": plan.warnings,
+        },
+    }
+    return _stable_digest(payload)
+
+
+def _read_split_checkpoint(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise DocSegmentError(f"split checkpoint is not valid JSON: {path}") from exc
+    if not isinstance(payload, dict):
+        raise DocSegmentError("split checkpoint must be a JSON object")
+    if payload.get("schema") != DOC_SPLIT_CHECKPOINT_SCHEMA:
+        raise DocSegmentError(f"split checkpoint schema must be {DOC_SPLIT_CHECKPOINT_SCHEMA}")
+    processed = payload.get("processed_segment_ids")
+    if not isinstance(processed, list) or not all(isinstance(item, str) for item in processed):
+        raise DocSegmentError("split checkpoint processed_segment_ids must be a list of strings")
+    source_hashes = payload.get("source_hashes")
+    if not isinstance(source_hashes, dict):
+        raise DocSegmentError("split checkpoint source_hashes must be an object")
+    return dict(payload)
+
+
+def _validate_split_checkpoint(
+    checkpoint: dict[str, Any],
+    *,
+    source_hashes: dict[str, str],
+    request_hash: str,
+    markdown_path: str | Path,
+    output_dir: str | Path,
+    plan_output: str | Path | None,
+    soft_max_chars: int,
+    hard_max_chars: int,
+    min_segment_chars: int,
+) -> None:
+    if dict(checkpoint.get("source_hashes") or {}) != dict(source_hashes):
+        raise DocSegmentError("split checkpoint source hashes do not match current inputs")
+    if str(checkpoint.get("request_hash") or "") != request_hash:
+        raise DocSegmentError("split checkpoint request hash does not match current request")
+    expected_markdown = str(Path(markdown_path))
+    if (checkpoint.get("markdown_path") or None) != expected_markdown:
+        raise DocSegmentError("split checkpoint markdown path does not match current request")
+    expected_output = str(Path(output_dir))
+    if (checkpoint.get("output_dir") or None) != expected_output:
+        raise DocSegmentError("split checkpoint output_dir does not match current request")
+    expected_plan = str(Path(plan_output)) if plan_output else None
+    if (checkpoint.get("plan_output") or None) != expected_plan:
+        raise DocSegmentError("split checkpoint plan_output does not match current request")
+    parameters = checkpoint.get("parameters")
+    expected_parameters = {
+        "soft_max_chars": soft_max_chars,
+        "hard_max_chars": hard_max_chars,
+        "min_segment_chars": min_segment_chars,
+    }
+    if not isinstance(parameters, dict) or parameters != expected_parameters:
+        raise DocSegmentError("split checkpoint parameters do not match current request")
+
+
+def _write_split_checkpoint(
+    *,
+    checkpoint_path: str | Path,
+    markdown_path: str | Path,
+    output_dir: str | Path,
+    plan_output: str | Path | None,
+    soft_max_chars: int,
+    hard_max_chars: int,
+    min_segment_chars: int,
+    source_hashes: dict[str, str],
+    request_hash: str,
+    processed_segment_ids: list[str],
+    total_segment_count: int,
+    completed: bool,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    processed = list(dict.fromkeys(str(item) for item in processed_segment_ids))
+    payload = {
+        "schema": DOC_SPLIT_CHECKPOINT_SCHEMA,
+        "created_at": created_at or _utc_now(),
+        "updated_at": _utc_now(),
+        "markdown_path": str(Path(markdown_path)),
+        "output_dir": str(Path(output_dir)),
+        "plan_output": str(Path(plan_output)) if plan_output else None,
+        "parameters": {
+            "soft_max_chars": soft_max_chars,
+            "hard_max_chars": hard_max_chars,
+            "min_segment_chars": min_segment_chars,
+        },
+        "source_hashes": dict(source_hashes),
+        "request_hash": request_hash,
+        "processed_segment_ids": processed,
+        "summary": {
+            "processed_segment_count": len(processed),
+            "total_segment_count": total_segment_count,
+            "remaining_segment_count": max(total_segment_count - len(processed), 0),
+            "completed": bool(completed),
+        },
+    }
+    checkpoint_file = Path(checkpoint_path)
+    checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
+
+
+def _apply_split_checkpoint(
+    *,
+    plan,
+    checkpoint_path: str | None,
+    resume: bool,
+    batch_size: int | None,
+    markdown_path: str | Path,
+    output_dir: str | Path,
+    plan_output: str | Path | None,
+    soft_max_chars: int,
+    hard_max_chars: int,
+    min_segment_chars: int,
+    force: bool,
+) -> dict[str, Any]:
+    source_hashes = _split_source_hashes(markdown_path)
+    request_hash = _split_request_hash(
+        plan=plan,
+        markdown_path=markdown_path,
+        output_dir=output_dir,
+        plan_output=plan_output,
+        soft_max_chars=soft_max_chars,
+        hard_max_chars=hard_max_chars,
+        min_segment_chars=min_segment_chars,
+        source_hashes=source_hashes,
+    )
+    processed_segment_ids: list[str] = []
+    checkpoint_created_at: str | None = None
+    if checkpoint_path and resume:
+        checkpoint = _read_split_checkpoint(Path(checkpoint_path))
+        _validate_split_checkpoint(
+            checkpoint,
+            source_hashes=source_hashes,
+            request_hash=request_hash,
+            markdown_path=markdown_path,
+            output_dir=output_dir,
+            plan_output=plan_output,
+            soft_max_chars=soft_max_chars,
+            hard_max_chars=hard_max_chars,
+            min_segment_chars=min_segment_chars,
+        )
+        processed_segment_ids = list(checkpoint.get("processed_segment_ids") or [])
+        checkpoint_created_at = str(checkpoint.get("created_at") or "") or None
+
+    segment_ids = [f"segment-{segment.index:03d}" for segment in plan.segments]
+    unknown_processed = sorted(set(processed_segment_ids) - set(segment_ids))
+    if unknown_processed:
+        raise DocSegmentError(
+            "split checkpoint contains segment ids that are not present in current plan: "
+            + ", ".join(unknown_processed[:5])
+        )
+
+    processed_set = set(processed_segment_ids)
+    remaining_segment_ids = [segment_id for segment_id in segment_ids if segment_id not in processed_set]
+    next_segment_ids = remaining_segment_ids if batch_size is None else remaining_segment_ids[:batch_size]
+    selected_segment_ids = set(processed_segment_ids) | set(next_segment_ids)
+    completed = len(selected_segment_ids) >= len(segment_ids)
+    segment_lookup = {f"segment-{segment.index:03d}": segment for segment in plan.segments}
+    selected_segments = [segment_lookup[segment_id] for segment_id in segment_ids if segment_id in selected_segment_ids]
+    next_segments = [segment_lookup[segment_id] for segment_id in next_segment_ids]
+
+    output = Path(output_dir)
+    if output.exists() and any(output.iterdir()) and not (force or resume):
+        raise DocSegmentError(f"segment output directory is not empty: {output}")
+    output.mkdir(parents=True, exist_ok=True)
+    if resume:
+        for segment_id in processed_segment_ids:
+            segment = segment_lookup[segment_id]
+            target = output / Path(segment.suggested_markdown_path).name
+            if not target.exists():
+                raise DocSegmentError(f"split checkpoint processed segment output is missing: {target}")
+    source_lines = plan.markdown_path.read_text(encoding="utf-8").splitlines(keepends=True) or [""]
+    written_paths: list[Path] = []
+    for segment in next_segments:
+        target = output / Path(segment.suggested_markdown_path).name
+        text = "".join(source_lines[segment.start_line - 1:segment.end_line])
+        target.write_text(text, encoding="utf-8")
+        written_paths.append(target)
+
+    checkpoint_payload = None
+    if checkpoint_path:
+        checkpoint_payload = _write_split_checkpoint(
+            checkpoint_path=checkpoint_path,
+            markdown_path=markdown_path,
+            output_dir=output_dir,
+            plan_output=plan_output,
+            soft_max_chars=soft_max_chars,
+            hard_max_chars=hard_max_chars,
+            min_segment_chars=min_segment_chars,
+            source_hashes=source_hashes,
+            request_hash=request_hash,
+            processed_segment_ids=[segment_id for segment_id in segment_ids if segment_id in selected_segment_ids],
+            total_segment_count=len(segment_ids),
+            completed=completed,
+            created_at=checkpoint_created_at,
+        )
+
+    materialized = {
+        "ok": True,
+        "segmentation_plan": plan.to_dict(),
+        "output_dir": str(output),
+        "segment_paths": [str(output / Path(segment.suggested_markdown_path).name) for segment in selected_segments],
+        "segment_count": len(selected_segments),
+        "checkpoint": {
+            "enabled": bool(checkpoint_path),
+            "path": str(checkpoint_path) if checkpoint_path else None,
+            "resume": bool(resume),
+            "batch_size": batch_size,
+            "processed_segment_count": len(selected_segments),
+            "new_segment_count": len(next_segments),
+            "remaining_segment_count": max(len(segment_ids) - len(selected_segments), 0),
+            "total_segment_count": len(segment_ids),
+            "completed": completed,
+            "next_segment_ids": list(next_segment_ids),
+        },
+    }
+    if checkpoint_payload:
+        materialized["checkpoint_payload"] = checkpoint_payload
+    if written_paths:
+        materialized["written_segment_paths"] = [str(path) for path in written_paths]
+    return materialized
 
 
 def _postprocess_report_path(args: argparse.Namespace) -> Path:
@@ -684,22 +972,49 @@ def _run_segment_plan(args: argparse.Namespace) -> int:
 
 def _run_split(args: argparse.Namespace) -> int:
     try:
-        materialized = materialize_segments(
-            args.markdown,
-            output_dir=args.output,
-            plan_output=None,
-            soft_max_chars=args.soft_max_chars,
-            hard_max_chars=args.hard_max_chars,
-            min_segment_chars=args.min_segment_chars,
-            force=args.force,
-        )
-        payload = materialized.to_dict()
+        if args.resume and not args.checkpoint:
+            raise DocSegmentError("split --resume requires --checkpoint")
+        if args.batch_size is not None and not args.checkpoint:
+            raise DocSegmentError("split --batch-size requires --checkpoint")
+        if args.batch_size is not None and args.batch_size <= 0:
+            raise DocSegmentError("split --batch-size must be greater than zero")
+        if args.checkpoint:
+            plan = plan_markdown_segmentation(
+                args.markdown,
+                soft_max_chars=args.soft_max_chars,
+                hard_max_chars=args.hard_max_chars,
+                min_segment_chars=args.min_segment_chars,
+            )
+            payload = _apply_split_checkpoint(
+                plan=plan,
+                checkpoint_path=args.checkpoint,
+                resume=args.resume,
+                batch_size=args.batch_size,
+                markdown_path=args.markdown,
+                output_dir=args.output,
+                plan_output=args.plan_output,
+                soft_max_chars=args.soft_max_chars,
+                hard_max_chars=args.hard_max_chars,
+                min_segment_chars=args.min_segment_chars,
+                force=args.force,
+            )
+        else:
+            materialized = materialize_segments(
+                args.markdown,
+                output_dir=args.output,
+                plan_output=None,
+                soft_max_chars=args.soft_max_chars,
+                hard_max_chars=args.hard_max_chars,
+                min_segment_chars=args.min_segment_chars,
+                force=args.force,
+            )
+            payload = materialized.to_dict()
         if args.redaction_report:
             payload = _sanitize_generated_report(
                 payload,
                 args.redaction_report,
-                home_paths=[args.markdown, args.output, args.plan_output],
-                config_paths=[args.markdown, args.output, args.plan_output, args.redaction_report],
+                home_paths=[args.markdown, args.output, args.plan_output, args.checkpoint],
+                config_paths=[args.markdown, args.output, args.plan_output, args.checkpoint, args.redaction_report],
             )
         if args.plan_output:
             plan_output = Path(args.plan_output)
@@ -976,6 +1291,9 @@ def build_split_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, help="Output directory for segment Markdown files")
     parser.add_argument("--plan-output", help="Optional segmentation_plan.json output path")
     parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    parser.add_argument("--checkpoint", help="Checkpoint path for resumable bounded split execution")
+    parser.add_argument("--resume", action="store_true", help="Resume from an existing split checkpoint")
+    parser.add_argument("--batch-size", type=int, help="Write at most this many new segments in this run")
     parser.add_argument("--force", action="store_true", help="Allow writing into a non-empty output directory")
     _add_segmentation_threshold_args(parser)
     return parser

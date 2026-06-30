@@ -44,6 +44,12 @@ _COVERED = {
         rationale="Warmup reports process-backed conversion attempts and cleanup state for tiny approved fixtures.",
         next_action="Keep no-daemon fake CLI fixtures in acceptance and smoke checks.",
     ),
+    "ragflow-doc-to-md split": RuntimeClassification(
+        status="covered",
+        features=("checkpoint_resume",),
+        rationale="Large offline Markdown split jobs can batch segment materialization with checkpoints and resume without touching RAGFlow.",
+        next_action="Keep split checkpoint/resume covered in CLI, acceptance, and platform smoke checks.",
+    ),
     "ragflow-kb-build model-providers probe": RuntimeClassification(
         status="covered",
         features=("partial_failure",),
@@ -136,14 +142,7 @@ _COVERED = {
     ),
 }
 
-_CANDIDATES = {
-    "ragflow-doc-to-md split": RuntimeClassification(
-        status="candidate",
-        features=("checkpoint_resume",),
-        rationale="Large document split jobs are offline and could reuse bounded checkpoint semantics if split plans become batch-executed.",
-        next_action="Defer until users need resume for multi-document split execution.",
-    ),
-}
+_CANDIDATES: dict[str, RuntimeClassification] = {}
 
 _DEFERRED = {
     "ragflow-kb-build": RuntimeClassification(

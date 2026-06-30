@@ -26,6 +26,8 @@ python scripts/convert.py --config /path/to/ragflow-config.local.yaml --input ./
 python scripts/convert.py inspect --doc-manifest ./handoff/doc_manifest.json --report-md ./handoff/quality_report.md
 python scripts/convert.py segment-plan --markdown ./handoff/documents/book.md --output ./handoff/segmentation_plan.json
 python scripts/convert.py split --markdown ./handoff/documents/book.md --output ./handoff/segments --plan-output ./handoff/segmentation_plan.json
+python scripts/convert.py split --markdown ./handoff/documents/book.md --output ./handoff/segments --checkpoint ./run/split.checkpoint.json --batch-size 10 --plan-output ./handoff/segmentation_plan.json
+python scripts/convert.py split --markdown ./handoff/documents/book.md --output ./handoff/segments --checkpoint ./run/split.checkpoint.json --resume --plan-output ./handoff/segmentation_plan.json
 python scripts/convert.py package --handoff ./handoff --rich
 python scripts/convert.py postprocess --doc-manifest ./handoff/doc_manifest.json --profile safe --output ./handoff-clean
 ```
@@ -82,7 +84,7 @@ Notes:
 - Image inputs fall back to Markdown with the source image copied into `documents/images/` when OCR/conversion is unavailable; this sets `quality_gate.status` to `PASS_WITH_REVIEW`. Use `--no-image-fallback` to skip that behavior.
 - When a local process-backed converter such as `mineru-cli` runs, `runtime_report.json` records process attempt status, timeout cleanup, and leftover process counts. Use `--runtime-report-md` for a Markdown copy.
 - Use `inspect` to regenerate a quality report from an existing handoff.
-- Use `segment-plan` before splitting long Markdown; use `split` when the user wants materialized `segments/*.md` that can be ingested as an ordinary Markdown directory.
+- Use `segment-plan` before splitting long Markdown; use `split` when the user wants materialized `segments/*.md` that can be ingested as an ordinary Markdown directory. For large split jobs, add `--checkpoint` plus `--batch-size`, then rerun with `--resume` until `checkpoint.completed` is true.
 - The `mineru-cli` backend runs a local MinerU executable as `mineru -b <backend> -p <source> -o <temp-output>` and reads the Markdown file it produces. Set the path with `MINERU_CLI_PATH`, `mineru.cli_path`, or `--mineru-cli-path`; default CLI backend is `pipeline`.
 - The `mineru` and `mineru-agent` backends use the Agent parsing API shape: create parse task at `/parse/file`, upload to signed URL, poll `/parse/{task_id}`, then download Markdown.
 - The `mineru-sync` and `mineru-local` backends post multipart form data to `/parse` and expect Markdown text or JSON containing `markdown`, `content`, `text`, `result`, or `markdown_url`.

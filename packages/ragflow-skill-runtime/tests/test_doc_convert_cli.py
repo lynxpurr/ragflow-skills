@@ -1112,6 +1112,70 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(split_payload["segment_count"], 2)
         self.assertTrue(first_segment_exists)
 
+    def test_split_checkpoint_resume_via_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "long.md"
+            segments = root / "segments"
+            checkpoint = root / "split.checkpoint.json"
+            split_plan = root / "split_plan.json"
+            markdown.write_text("# One\n" + ("a" * 70) + "\n# Two\n" + ("b" * 70) + "\n", encoding="utf-8")
+
+            base_args = [
+                sys.executable,
+                str(CONVERT_SCRIPT),
+                "split",
+                "--markdown",
+                str(markdown),
+                "--output",
+                str(segments),
+                "--plan-output",
+                str(split_plan),
+                "--checkpoint",
+                str(checkpoint),
+                "--soft-max-chars",
+                "50",
+                "--hard-max-chars",
+                "90",
+                "--min-segment-chars",
+                "20",
+            ]
+            first_result = subprocess.run(
+                [*base_args, "--batch-size", "1"],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            second_result = subprocess.run(
+                [*base_args, "--resume"],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+            first_payload = json.loads(first_result.stdout)
+            second_payload = json.loads(second_result.stdout)
+            checkpoint_payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+            first_segment_exists = (segments / "long.part-001.md").exists()
+            second_segment_exists = (segments / "long.part-002.md").exists()
+
+        self.assertEqual(first_result.returncode, 0, first_result.stderr)
+        self.assertEqual(second_result.returncode, 0, second_result.stderr)
+        self.assertEqual(first_payload["segment_count"], 1)
+        self.assertFalse(first_payload["checkpoint"]["completed"])
+        self.assertEqual(first_payload["checkpoint"]["new_segment_count"], 1)
+        self.assertEqual(second_payload["segment_count"], 2)
+        self.assertTrue(second_payload["checkpoint"]["resume"])
+        self.assertTrue(second_payload["checkpoint"]["completed"])
+        self.assertEqual(second_payload["checkpoint"]["new_segment_count"], 1)
+        self.assertEqual(checkpoint_payload["schema"], "ragflow_doc_split_checkpoint_v1")
+        self.assertEqual(checkpoint_payload["processed_segment_ids"], ["segment-001", "segment-002"])
+        self.assertTrue(checkpoint_payload["summary"]["completed"])
+        self.assertTrue(first_segment_exists)
+        self.assertTrue(second_segment_exists)
+
     def test_postprocess_writes_redaction_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

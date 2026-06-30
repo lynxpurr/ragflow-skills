@@ -1393,6 +1393,7 @@ def _run_no_network_checks(
     segments_dir = work_root / "segments"
     split_plan = work_root / "split_plan.json"
     split_redaction = work_root / "split_plan_redaction.json"
+    split_checkpoint = work_root / "split.checkpoint.json"
     split_result = _run_command(
         [
             python_executable,
@@ -1406,6 +1407,10 @@ def _run_no_network_checks(
             str(split_plan),
             "--redaction-report",
             str(split_redaction),
+            "--checkpoint",
+            str(split_checkpoint),
+            "--batch-size",
+            "1",
             "--soft-max-chars",
             "50",
             "--hard-max-chars",
@@ -1416,16 +1421,46 @@ def _run_no_network_checks(
         cwd=work_root,
         env=env,
     )
-    _record_command_check(checks, "doc-to-md split", split_result, required_output='"segment_count": 2')
+    _record_command_check(checks, "doc-to-md split", split_result, required_output='"completed": false')
+    split_resume_result = _run_command(
+        [
+            python_executable,
+            str(convert_script),
+            "split",
+            "--markdown",
+            str(long_markdown),
+            "--output",
+            str(segments_dir),
+            "--plan-output",
+            str(split_plan),
+            "--redaction-report",
+            str(split_redaction),
+            "--checkpoint",
+            str(split_checkpoint),
+            "--resume",
+            "--soft-max-chars",
+            "50",
+            "--hard-max-chars",
+            "90",
+            "--min-segment-chars",
+            "20",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(checks, "doc-to-md split resume", split_resume_result, required_output='"resume": true')
     if split_plan.exists():
         produced.append(split_plan)
+    if split_checkpoint.exists():
+        produced.append(split_checkpoint)
     if split_redaction.exists():
         produced.append(split_redaction)
         redaction_payload = json.loads(split_redaction.read_text(encoding="utf-8"))
         combined = "\n".join(
             [
-                split_result.get("stdout", ""),
+                split_resume_result.get("stdout", ""),
                 split_plan.read_text(encoding="utf-8") if split_plan.exists() else "",
+                split_checkpoint.read_text(encoding="utf-8") if split_checkpoint.exists() else "",
                 split_redaction.read_text(encoding="utf-8"),
             ]
         )
