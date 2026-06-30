@@ -21,6 +21,7 @@ from ragflow_skill_runtime.benchmark_governance import (
     GROUNDED_QA_GENERATE_REPORT_SCHEMA,
     GROUNDED_QA_VALIDATE_REPORT_SCHEMA,
     SUPPRESSION_REPORT_SCHEMA,
+    BenchmarkGovernanceError,
     delta_benchmark_reports,
     gate_benchmark_report,
     generate_grounded_qa,
@@ -250,6 +251,25 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertEqual(qa_payload["schema"], "ragflow_grounded_qa_v1")
         self.assertEqual(qa_payload["items"][0]["answer"], qa_payload["items"][0]["evidence"][0]["text"])
         self.assertTrue(validate_report["ok"], validate_report["issues"])
+
+    def test_generate_grounded_qa_requires_checkpoint_for_batch_size(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "sources"
+            source_dir.mkdir()
+            (source_dir / "source.md").write_text(
+                "The deterministic generator can resume batches only when a checkpoint is configured.\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(BenchmarkGovernanceError, "--batch-size requires --checkpoint"):
+                generate_grounded_qa(
+                    source_dir=source_dir,
+                    output_path=root / "qa.json",
+                    count=1,
+                    min_span_chars=20,
+                    batch_size=1,
+                )
 
     def test_validate_grounded_qa_rejects_missing_or_unmatched_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

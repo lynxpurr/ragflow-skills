@@ -2444,6 +2444,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     )
     _record_redaction_sidecar_check(checks, "kb benchmark import redaction", benchmark_import_redaction)
     qa_generated = artifacts_dir / "qa.generated.json"
+    qa_generate_checkpoint = artifacts_dir / "qa_generate.checkpoint.json"
     qa_generate_result = _run_command(
         [
             sys.executable,
@@ -2458,6 +2459,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "1",
             "--min-span-chars",
             "20",
+            "--checkpoint",
+            str(qa_generate_checkpoint),
+            "--batch-size",
+            "1",
             "--json",
         ],
         cwd=workspace,
@@ -2468,6 +2473,34 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         "kb qa generate",
         qa_generate_result,
         required_stdout='"schema": "ragflow_grounded_qa_generate_report_v1"',
+    )
+    qa_generate_resume_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "qa",
+            "generate",
+            "--source-dir",
+            str(input_dir),
+            "--output",
+            str(qa_generated),
+            "--count",
+            "1",
+            "--min-span-chars",
+            "20",
+            "--checkpoint",
+            str(qa_generate_checkpoint),
+            "--resume",
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb qa generate resume",
+        qa_generate_resume_result,
+        required_stdout='"resume": true',
     )
     qa_generate_redaction = artifacts_dir / "qa_generate_redaction.json"
     qa_generate_redaction_result = _run_command(
@@ -3831,6 +3864,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "benchmark_sample_redaction.json",
         artifacts_dir / "chunk_snapshot_redaction.json",
         artifacts_dir / "qa.generated.json",
+        artifacts_dir / "qa_generate.checkpoint.json",
         artifacts_dir / "qa.generated.redaction.raw.json",
         artifacts_dir / "qa_generate_redaction.json",
         artifacts_dir / "qa_validate_redaction.json",

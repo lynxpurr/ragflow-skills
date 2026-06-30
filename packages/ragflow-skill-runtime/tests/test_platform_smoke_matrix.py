@@ -90,6 +90,7 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("kb benchmark delta redaction", check_names)
         self.assertIn("kb benchmark suggest redaction", check_names)
         self.assertIn("kb validation redaction", check_names)
+        self.assertIn("kb qa generate resume", check_names)
         self.assertIn("kb qa generate redaction", check_names)
         self.assertIn("kb qa generate redaction sidecar", check_names)
         self.assertIn("kb qa validate redaction", check_names)
@@ -241,6 +242,10 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("qa_generate_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("qa_generate.checkpoint.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
         self.assertTrue(

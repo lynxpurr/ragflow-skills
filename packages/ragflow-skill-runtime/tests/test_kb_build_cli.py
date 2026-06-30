@@ -1920,6 +1920,101 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(evidence_map_payload["summary"]["evidence_mapping_coverage"], 1.0)
         self.assertEqual(evidence_map_payload["summary"]["evidence_mapping_confidence"], 1.0)
 
+    def test_qa_generate_checkpoint_resume_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "sources"
+            source_dir.mkdir()
+            (source_dir / "source.md").write_text(
+                "\n".join(
+                    [
+                        "Alpha guidance keeps deterministic QA generation grounded in one source sentence.",
+                        "Beta resume checkpoint lets deterministic QA generation continue without duplicates.",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            output = root / "generated_qa.json"
+            checkpoint = root / "qa-generate.checkpoint.json"
+            first_report = root / "first_generate.json"
+            second_report = root / "second_generate.json"
+
+            first = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "qa",
+                    "generate",
+                    "--source-dir",
+                    str(source_dir),
+                    "--output",
+                    str(output),
+                    "--count",
+                    "2",
+                    "--min-span-chars",
+                    "20",
+                    "--checkpoint",
+                    str(checkpoint),
+                    "--batch-size",
+                    "1",
+                    "--report-json",
+                    str(first_report),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            partial_payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+
+            second = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "qa",
+                    "generate",
+                    "--source-dir",
+                    str(source_dir),
+                    "--output",
+                    str(output),
+                    "--count",
+                    "2",
+                    "--min-span-chars",
+                    "20",
+                    "--checkpoint",
+                    str(checkpoint),
+                    "--resume",
+                    "--batch-size",
+                    "1",
+                    "--report-json",
+                    str(second_report),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            final_payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+            first_payload = json.loads(first_report.read_text(encoding="utf-8"))
+            second_payload = json.loads(second_report.read_text(encoding="utf-8"))
+            checkpoint_payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertEqual([item["id"] for item in partial_payload["items"]], ["qa-0001"])
+        self.assertEqual([item["id"] for item in final_payload["items"]], ["qa-0001", "qa-0002"])
+        self.assertFalse(first_payload["completed"])
+        self.assertTrue(second_payload["completed"])
+        self.assertEqual(second_payload["checkpoint"]["resume"], True)
+        self.assertEqual(second_payload["checkpoint"]["processed_item_count"], 2)
+        self.assertEqual(second_payload["checkpoint"]["new_item_count"], 1)
+        self.assertEqual(checkpoint_payload["schema"], "ragflow_grounded_qa_generate_checkpoint_v1")
+        self.assertEqual(checkpoint_payload["processed_item_ids"], ["qa-0001", "qa-0002"])
+        self.assertTrue(checkpoint_payload["summary"]["completed"])
+
     def test_segment_metadata_report_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

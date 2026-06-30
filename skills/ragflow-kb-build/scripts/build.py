@@ -805,12 +805,15 @@ def _run_qa_generate(args: argparse.Namespace) -> int:
             seed=args.seed,
             min_span_chars=args.min_span_chars,
             max_span_chars=args.max_span_chars,
+            checkpoint_path=args.checkpoint,
+            resume=args.resume,
+            batch_size=args.batch_size,
         )
         if args.redaction_report:
             report, redaction_report = _sanitize_benchmark_report(
                 report,
                 args,
-                input_paths=[args.sources, args.source_dir, args.output],
+                input_paths=[args.sources, args.source_dir, args.output, args.checkpoint],
                 context_json_paths=[args.sources],
             )
             _write_json_file(args.redaction_report, redaction_report)
@@ -1478,6 +1481,9 @@ def build_qa_parser() -> argparse.ArgumentParser:
     generate.add_argument("--seed", type=int, default=0, help="Deterministic seed for random strategy")
     generate.add_argument("--min-span-chars", type=int, default=40, help="Minimum evidence span length")
     generate.add_argument("--max-span-chars", type=int, default=240, help="Maximum evidence span length")
+    generate.add_argument("--checkpoint", help="Checkpoint path for resumable deterministic QA generation")
+    generate.add_argument("--resume", action="store_true", help="Resume from an existing QA generation checkpoint")
+    generate.add_argument("--batch-size", type=int, help="Generate at most this many new QA items in this run")
     generate.add_argument("--report-json", help="Optional generate report JSON path")
     generate.add_argument("--report-md", help="Optional generate report Markdown path")
     generate.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")

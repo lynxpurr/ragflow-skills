@@ -92,6 +92,12 @@ _COVERED = {
         rationale="Offline benchmark imports can batch query normalization with checkpoints and resume without touching RAGFlow.",
         next_action="Keep import checkpoint coverage deterministic and local; do not extend this to live KB mutation.",
     ),
+    "ragflow-kb-build qa generate": RuntimeClassification(
+        status="covered",
+        features=("checkpoint_resume",),
+        rationale="Deterministic, script-owned QA generation over snapshots can batch source-span generation with checkpoints and resume without LLM calls.",
+        next_action="Keep generation deterministic; do not add script-owned LLM QA.",
+    ),
     "ragflow-query cache-report": RuntimeClassification(
         status="covered",
         features=("query_output_cache",),
@@ -136,12 +142,6 @@ _CANDIDATES = {
         features=("checkpoint_resume", "partial_failure"),
         rationale="Offline profile experiment matrices can grow large enough to benefit from resumable batches and partial result summaries.",
         next_action="Keep it offline and fixture-driven when implemented.",
-    ),
-    "ragflow-kb-build qa generate": RuntimeClassification(
-        status="candidate",
-        features=("checkpoint_resume",),
-        rationale="Deterministic, script-owned QA generation over snapshots can be batched and resumed without LLM calls.",
-        next_action="Keep generation deterministic; do not add script-owned LLM QA.",
     ),
 }
 

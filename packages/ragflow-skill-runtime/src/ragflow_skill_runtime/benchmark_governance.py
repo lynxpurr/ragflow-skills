@@ -36,6 +36,7 @@ BENCHMARK_QUERIES_SCHEMA = "ragflow_benchmark_queries_v1"
 BENCHMARK_QRELS_SCHEMA = "ragflow_benchmark_qrels_v1"
 GROUNDED_QA_SCHEMA = "ragflow_grounded_qa_v1"
 GROUNDED_QA_GENERATE_REPORT_SCHEMA = "ragflow_grounded_qa_generate_report_v1"
+GROUNDED_QA_GENERATE_CHECKPOINT_SCHEMA = "ragflow_grounded_qa_generate_checkpoint_v1"
 GROUNDED_QA_VALIDATE_REPORT_SCHEMA = "ragflow_grounded_qa_validate_report_v1"
 GROUNDED_QA_EVIDENCE_MAP_SCHEMA = "ragflow_grounded_qa_evidence_map_v1"
 GROUNDED_QA_EVIDENCE_MAP_REPORT_SCHEMA = "ragflow_grounded_qa_evidence_map_report_v1"
@@ -395,6 +396,116 @@ def _qa_candidate_spans(
     return candidates
 
 
+def _qa_generate_item(candidate: Mapping[str, Any], *, item_id: str, strategy: str) -> dict[str, Any]:
+    source = candidate["source"]
+    span = str(candidate["span"])
+    return {
+        "id": item_id,
+        "query_id": item_id,
+        "question": _generate_question(source=source, span=span),
+        "answer": span,
+        "evidence": [
+            {
+                "document": source.name,
+                "text": span,
+            }
+        ],
+        "metadata": {
+            "generator": "deterministic_source_span_v1",
+            "source": source.name,
+            "source_path": source.path,
+            "strategy": strategy,
+        },
+    }
+
+
+def _read_qa_generate_checkpoint(path: Path) -> dict[str, Any]:
+    payload = _read_json(path)
+    if not isinstance(payload, Mapping):
+        raise BenchmarkGovernanceError("QA generate checkpoint must be a JSON object")
+    if payload.get("schema") != GROUNDED_QA_GENERATE_CHECKPOINT_SCHEMA:
+        raise BenchmarkGovernanceError(
+            f"QA generate checkpoint schema must be {GROUNDED_QA_GENERATE_CHECKPOINT_SCHEMA}"
+        )
+    processed = payload.get("processed_item_ids")
+    if not isinstance(processed, list) or not all(isinstance(item, str) for item in processed):
+        raise BenchmarkGovernanceError("QA generate checkpoint processed_item_ids must be a list of strings")
+    source_hashes = payload.get("source_hashes")
+    if not isinstance(source_hashes, Mapping):
+        raise BenchmarkGovernanceError("QA generate checkpoint source_hashes must be an object")
+    parameters = payload.get("parameters")
+    if not isinstance(parameters, Mapping):
+        raise BenchmarkGovernanceError("QA generate checkpoint parameters must be an object")
+    return dict(payload)
+
+
+def _validate_qa_generate_checkpoint(
+    checkpoint: Mapping[str, Any],
+    *,
+    source_hashes: Mapping[str, str],
+    output_path: str | Path,
+    count: int,
+    strategy: str,
+    seed: int,
+    min_span_chars: int,
+    max_span_chars: int,
+) -> None:
+    if dict(checkpoint.get("source_hashes") or {}) != dict(source_hashes):
+        raise BenchmarkGovernanceError("QA generate checkpoint source hashes do not match current inputs")
+    if str(checkpoint.get("output") or "") != str(Path(output_path)):
+        raise BenchmarkGovernanceError("QA generate checkpoint output does not match current output")
+    expected_parameters = {
+        "count": count,
+        "strategy": strategy,
+        "seed": seed,
+        "min_span_chars": min_span_chars,
+        "max_span_chars": max_span_chars,
+    }
+    if dict(checkpoint.get("parameters") or {}) != expected_parameters:
+        raise BenchmarkGovernanceError("QA generate checkpoint parameters do not match current request")
+
+
+def _write_qa_generate_checkpoint(
+    *,
+    checkpoint_path: str | Path,
+    source_hashes: Mapping[str, str],
+    output_path: str | Path,
+    count: int,
+    strategy: str,
+    seed: int,
+    min_span_chars: int,
+    max_span_chars: int,
+    processed_item_ids: Iterable[str],
+    total_item_count: int,
+    completed: bool,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    processed = list(dict.fromkeys(str(item) for item in processed_item_ids))
+    payload = {
+        "schema": GROUNDED_QA_GENERATE_CHECKPOINT_SCHEMA,
+        "created_at": created_at or _now(),
+        "updated_at": _now(),
+        "source_hashes": dict(source_hashes),
+        "output": str(Path(output_path)),
+        "parameters": {
+            "count": count,
+            "strategy": strategy,
+            "seed": seed,
+            "min_span_chars": min_span_chars,
+            "max_span_chars": max_span_chars,
+        },
+        "processed_item_ids": processed,
+        "summary": {
+            "processed_item_count": len(processed),
+            "total_item_count": total_item_count,
+            "remaining_item_count": max(total_item_count - len(processed), 0),
+            "completed": bool(completed),
+        },
+    }
+    _write_json(checkpoint_path, payload)
+    return payload
+
+
 def generate_grounded_qa(
     *,
     output_path: str | Path,
@@ -405,8 +516,18 @@ def generate_grounded_qa(
     seed: int = 0,
     min_span_chars: int = 40,
     max_span_chars: int = 240,
+    checkpoint_path: str | Path | None = None,
+    resume: bool = False,
+    batch_size: int | None = None,
 ) -> dict[str, Any]:
     """Generate a deterministic, offline grounded QA scaffold from source spans."""
+
+    if resume and not checkpoint_path:
+        raise BenchmarkGovernanceError("QA generate --resume requires --checkpoint")
+    if batch_size is not None and not checkpoint_path:
+        raise BenchmarkGovernanceError("QA generate --batch-size requires --checkpoint")
+    if batch_size is not None and batch_size <= 0:
+        raise BenchmarkGovernanceError("QA generate batch_size must be positive")
 
     issues: list[BenchmarkGovernanceIssue] = []
     if not sources_path and not source_dir:
@@ -455,32 +576,44 @@ def generate_grounded_qa(
         rng = random.Random(seed)
         rng.shuffle(candidates)
 
-    selected = candidates[: max(0, count)]
-    items = []
-    for index, candidate in enumerate(selected, start=1):
-        source = candidate["source"]
-        span = str(candidate["span"])
-        item_id = f"qa-{index:04d}"
-        items.append(
-            {
-                "id": item_id,
-                "query_id": item_id,
-                "question": _generate_question(source=source, span=span),
-                "answer": span,
-                "evidence": [
-                    {
-                        "document": source.name,
-                        "text": span,
-                    }
-                ],
-                "metadata": {
-                    "generator": "deterministic_source_span_v1",
-                    "source": source.name,
-                    "source_path": source.path,
-                    "strategy": strategy,
-                },
-            }
+    source_hashes = _source_hash_map([sources_path, source_dir])
+    checkpoint: dict[str, Any] | None = None
+    processed_item_ids: list[str] = []
+    checkpoint_created_at: str | None = None
+    if checkpoint_path and resume:
+        checkpoint = _read_qa_generate_checkpoint(Path(checkpoint_path))
+        _validate_qa_generate_checkpoint(
+            checkpoint,
+            source_hashes=source_hashes,
+            output_path=output_path,
+            count=count,
+            strategy=strategy,
+            seed=seed,
+            min_span_chars=min_span_chars,
+            max_span_chars=max_span_chars,
         )
+        processed_item_ids = list(checkpoint.get("processed_item_ids") or [])
+        checkpoint_created_at = str(checkpoint.get("created_at") or "") or None
+
+    target_candidates = candidates[: max(0, count)]
+    item_ids = [f"qa-{index:04d}" for index in range(1, len(target_candidates) + 1)]
+    unknown_processed = sorted(set(processed_item_ids) - set(item_ids))
+    if unknown_processed:
+        raise BenchmarkGovernanceError(
+            "QA generate checkpoint contains item ids that are not present in current candidates: "
+            + ", ".join(unknown_processed[:5])
+        )
+
+    processed_set = set(processed_item_ids)
+    remaining_item_ids = [item_id for item_id in item_ids if item_id not in processed_set]
+    next_item_ids = remaining_item_ids if batch_size is None else remaining_item_ids[:batch_size]
+    selected_item_ids = set(processed_item_ids) | set(next_item_ids)
+    items = [
+        _qa_generate_item(candidate, item_id=item_id, strategy=strategy)
+        for candidate, item_id in zip(target_candidates, item_ids, strict=True)
+        if item_id in selected_item_ids
+    ]
+    completed = _ok(issues) and len(selected_item_ids) >= len(item_ids)
 
     qa_payload = {
         "schema": GROUNDED_QA_SCHEMA,
@@ -497,27 +630,65 @@ def generate_grounded_qa(
     }
     _write_json(output_path, qa_payload)
 
+    checkpoint_payload = None
+    if checkpoint_path and _ok(issues):
+        ordered_processed = [item_id for item_id in item_ids if item_id in selected_item_ids]
+        checkpoint_payload = _write_qa_generate_checkpoint(
+            checkpoint_path=checkpoint_path,
+            source_hashes=source_hashes,
+            output_path=output_path,
+            count=count,
+            strategy=strategy,
+            seed=seed,
+            min_span_chars=min_span_chars,
+            max_span_chars=max_span_chars,
+            processed_item_ids=ordered_processed,
+            total_item_count=len(item_ids),
+            completed=completed,
+            created_at=checkpoint_created_at,
+        )
+
+    checkpoint_report = {
+        "enabled": bool(checkpoint_path),
+        "path": str(checkpoint_path) if checkpoint_path else None,
+        "resume": bool(resume),
+        "batch_size": batch_size,
+        "processed_item_count": len(selected_item_ids),
+        "new_item_count": len(next_item_ids),
+        "remaining_item_count": max(len(item_ids) - len(selected_item_ids), 0),
+        "completed": completed,
+        "next_item_ids": list(next_item_ids),
+    }
+
     summary = {
         **_issue_counts(issues),
         "source_count": len(sources),
         "candidate_span_count": len(candidates),
         "item_count": len(items),
         "requested_count": count,
+        "completed": completed,
         "strategy": strategy,
         "seed": seed,
         "min_span_chars": min_span_chars,
         "max_span_chars": max_span_chars,
+        "checkpoint_enabled": bool(checkpoint_path),
+        "checkpoint_resume": bool(resume),
+        "checkpoint_new_item_count": len(next_item_ids),
+        "checkpoint_remaining_item_count": max(len(item_ids) - len(selected_item_ids), 0),
     }
     return {
         "ok": _ok(issues),
         "schema": GROUNDED_QA_GENERATE_REPORT_SCHEMA,
         "grounded_qa": str(output_path),
+        "completed": completed,
         "artifacts": {
             "sources": str(sources_path) if sources_path else None,
             "source_dir": str(source_dir) if source_dir else None,
             "output": str(output_path),
         },
         "summary": summary,
+        "checkpoint": checkpoint_report,
+        **({"checkpoint_payload": checkpoint_payload} if checkpoint_payload else {}),
         "issues": [issue.to_dict() for issue in issues],
     }
 

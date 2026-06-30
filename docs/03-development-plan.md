@@ -1,7 +1,7 @@
 # RAGFlow Skills Phased Development Plan
 
 Status: active roadmap
-Date: 2026-06-24
+Date: 2026-06-30
 
 ## Objective
 
@@ -18,41 +18,89 @@ Commercial SaaS agent sandboxes are excluded from the active public-skill roadma
 
 ## Current Snapshot
 
-Completed foundations:
+Completed or closed for the current public command surface:
 
-- Phase 0 architecture skeleton
-- Phase 1 runtime foundation
-- Phase 2 release vendoring
-- Phase 4 `ragflow-kb-build` MVP
-- Phase 5 `ragflow-doc-to-md` MVP
-- Phase 6 validation command consolidation
-- Phase 8 cross-platform smoke matrix
-- Phase 9 release hardening
-- Phase 10 first release candidate validation and GitHub prerelease publication
-- Phase 12 CLI agent integration polish, including host-agent config templates and MinerU service backend
-- High-value roadmap Phase 13 document quality and segmentation MVP
-- High-value roadmap Phase 14 read-only RAGFlow diagnostics MVP
-- High-value roadmap Phase 15 benchmark validation MVP
-- High-value roadmap Phase 16 profile engineering MVP
-- High-value roadmap Phase 17 neutral routing MVP
-- High-value roadmap Phase 18 agentic observability MVP
-- High-value roadmap Phase 19 query diagnostics MVP
+- Phase 0-2 architecture, runtime foundation, and release vendoring.
+- Phase 4-12 core public skill MVPs, validation, cross-platform smoke, release hardening,
+  stable v0.1.0 promotion, and CLI-agent integration polish.
+- Phase 13-23 release-candidate repair, host-agent onboarding, document quality,
+  read-only diagnostics, benchmark validation, profile engineering, routing,
+  observability, query diagnostics, and MinerU local CLI support.
+- Phase 24-29 rich handoffs, metadata/tagset governance, benchmark lifecycle,
+  grounded QA validation, evidence mapping, optimization planning, retrieval
+  enrichment reports, fusion/rewrite, and routing quality upgrades.
+- Phase 32-36 skill-suite drift control, contract/package gates, topology and
+  assistant review reports, parser/KB health telemetry, generated-report safety,
+  and the first read-only runtime helper pilots.
 
-Partially completed:
+Partially completed and still active:
 
 - Phase 3 `ragflow-query`
-  - Direct retrieval CLI exists.
-  - `--mode auto` now uses user-owned routing config when provided; without routing config or with explicit KB inputs, it remains direct retrieval.
-  - Host-assisted evidence return includes evidence weights and optional trace reports.
-  - V1 scope is CLI-only; `serve` and script-owned agentic planning/synthesis are deferred.
+  - Direct, auto, host-assisted, routing, fusion, rewrite, session, and agentic
+    planning paths exist as CLI surfaces.
+  - V1 remains CLI-first; a local/OpenClaw `serve` command is still deferred until a
+    real host workflow needs it.
+  - Script-owned agentic answer generation remains gated behind future explicit LLM
+    configuration.
+- Phase 30 query orchestration
+  - Deterministic planning, session handling, citation audit, and answer evaluation
+    are implemented.
+  - Optional script-owned answer synthesis, reflection, and LLM/RAGAS-style evaluation
+    remain future adapters.
+- Phase 31 runtime resilience
+  - Report redaction and generated-report safety are closed for the current inventory.
+  - Runtime helper coverage currently tracks 79 public command surfaces: 16 `covered`,
+    3 `candidate`, 2 `deferred`, and 58 `not_applicable`.
+  - The remaining actionable work is checkpoint/resume and partial-failure coverage for
+    bounded offline jobs, not broad live mutation.
 
-Near-term priority correction:
+Deferred or outside the active public-suite completion path:
 
-- The next public-suite milestone is not private dedao bridging.
-- RC2 validated the CLI-agent target-scope changes and unified service config hardening.
-- The next milestone is RC3 with the default profile API-payload fix discovered during Hermes live E2E.
-- Platform work should stay focused on Hermes, OpenClaw, Claude Code, opencode, and CLI-style runners.
-- Post-v0.1 high-value feature work is tracked in `docs/09-high-value-feature-roadmap.md`, beginning with Phase 13 document quality and segmentation.
+- Private dedao bridging stays out of public skills unless a private adapter is needed.
+- Optional LLM-assisted metadata, grounded-QA generation, agentic answers, reflection,
+  and LLM/RAGAS evaluators must stay disabled until explicit LLM config and deterministic
+  fixtures exist.
+- Live disposable KB optimization, cleanup execution, and live tests remain gated by
+  credentials plus explicit user approval.
+- Wheel packaging, web/UI wrappers, provider abstractions, and hosted service clients are
+  backlog items after the portable CLI suite is complete.
+
+Completion priorities:
+
+1. Close Phase 31 candidate runtime coverage with small offline slices:
+   `profile experiment`, `optimize`, then `doc-to-md split`.
+2. Revisit live disposable optimization execution only after the offline resume and
+   partial-failure reports are stable.
+3. Add optional LLM adapters only after deterministic artifacts, redaction, and
+   acceptance gates already cover the same workflow.
+4. Consider `serve`, wheel packaging, and web/hosted wrappers only as post-CLI product
+   adapters.
+
+## Remaining Work Ledger
+
+This ledger reviews the open task list without duplicating it. The authoritative checkboxes
+remain in their owning phases below.
+
+| Track | Existing open items | Current status | Completion rule |
+| --- | --- | --- | --- |
+| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Active next work | Runtime inventory reaches 19 `covered`, 0 `candidate`, 2 intentionally `deferred`, and 58 `not_applicable` command surfaces. |
+| Document split packaging | Phase 16 optional manifest rewrite/package mode | Wait for `doc-to-md split` resume work | Split outputs can be resumed and optionally repackaged without breaking existing segment-directory ingestion. |
+| Query service and agentic adapters | Phase 3 `serve`, Phase 3 agentic retrieval, Phase 21/30 script-owned synthesis and reflection | Deferred | Implement only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
+| Live disposable optimization | Phase 17 live probe tests, Phase 26 disposable KB build/validation/cleanup execution/live tests, Phase 27 live enrichment tests | Gated | Requires credentials, explicit confirmation, non-mutating command manifests, exact cleanup confirmation, and retained dataset IDs. |
+| Optional LLM-assisted adapters | Phase 25 metadata, Phase 26 grounded QA, Phase 30 LLM/RAGAS-style evaluator | Deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
+| Packaging and platform adapters | Backlog wheel path, remote conversion service client, provider abstractions, web/API wrapper | Post-CLI backlog | Start only after the portable archive release path remains green and users need a non-archive deployment model. |
+| Private dedao bridge | Deferred private adapter tasks | Outside public release scope | Keep private examples and adapter logic outside public `skills/`; consume only public handoff shapes. |
+
+Recommended completion queue:
+
+1. Add checkpoint/resume and partial-run summaries for offline `ragflow-kb-build profile experiment`.
+2. Add resumable plan-only execution records for `ragflow-kb-build optimize` without live KB creation.
+3. Add resumable `ragflow-doc-to-md split`, then revisit optional manifest rewrite/package mode.
+4. Re-run the runtime inventory; only then close the broad Phase 31 checkpoint/resume and partial-failure umbrellas.
+5. Add command-manifest dry-runs for live disposable optimization before any new live mutation.
+6. Implement live disposable build/benchmark/cleanup execution with exact confirmation and retained cleanup artifacts.
+7. Add optional LLM adapters in this order: metadata suggestions, grounded QA generation, agentic answer synthesis, LLM/RAGAS evaluator.
+8. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients, and web/API wrappers as post-CLI product adapters.
 
 ## Phase 0: Architecture Skeleton
 
@@ -720,17 +768,18 @@ Phase dependency groups:
   may echo host inputs, and only then pilot small retry/backoff or metrics helpers in one
   read-only command before broader runtime primitives are attempted.
 
-Per-phase implementation checklist:
+Reusable implementation gate for future phases. These are standing rules, not
+task-completion status:
 
-- [ ] Add or update versioned runtime schemas and dataclasses first.
-- [ ] Add neutral fixtures with placeholder KB names, placeholder endpoints, and fake keys only.
-- [ ] Add CLI command surfaces with `--help`, JSON output, and report file options when relevant.
-- [ ] Add non-mutating plan/dry-run behavior before any live RAGFlow mutation.
-- [ ] Add deterministic unit tests and CLI tests before live-service tests.
-- [ ] Add or update consumer acceptance and platform smoke checks when command surfaces or release artifacts change.
-- [ ] Update `SKILL.md` only with concise routing instructions; put detailed workflows in `references/` or repo docs.
-- [ ] Update shared templates/references in all three skills when a shared config or onboarding rule changes.
-- [ ] Run `git diff --check`, `tools/release_hygiene_check.py`, and a sensitive-pattern scan for public-release safety.
+- Add or update versioned runtime schemas and dataclasses first.
+- Add neutral fixtures with placeholder KB names, placeholder endpoints, and fake keys only.
+- Add CLI command surfaces with `--help`, JSON output, and report file options when relevant.
+- Add non-mutating plan/dry-run behavior before any live RAGFlow mutation.
+- Add deterministic unit tests and CLI tests before live-service tests.
+- Add or update consumer acceptance and platform smoke checks when command surfaces or release artifacts change.
+- Update `SKILL.md` only with concise routing instructions; put detailed workflows in `references/` or repo docs.
+- Update shared templates/references in all three skills when a shared config or onboarding rule changes.
+- Run `git diff --check`, `tools/release_hygiene_check.py`, and a sensitive-pattern scan for public-release safety.
 
 Consistency rules:
 
@@ -1080,15 +1129,16 @@ transcripts.
 `tools/runtime_resilience_inventory.py` now emits
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene to track Phase 31
 runtime helper coverage without broadening live behavior. The current inventory names 79
-public commands: 15 `covered`, 4 `candidate`, 2 `deferred`, and 58 `not_applicable`, with
+public commands: 16 `covered`, 3 `candidate`, 2 `deferred`, and 58 `not_applicable`, with
 no stale classification findings. Covered surfaces include `ragflow-query endpoint-report`,
 `ragflow-query fallback-test`, `ragflow-query cache-report`, `ragflow-query centroid build`,
 `ragflow-doc-to-md` process cleanup reporting, `ragflow-doc-to-md backend probe`,
 `ragflow-doc-to-md backend warmup`, `ragflow-kb-build model-providers probe`,
 `ragflow-kb-build probe`, `ragflow-kb-build inspect-kb`, `ragflow-kb-build validate`,
 `ragflow-kb-build snapshot-chunks`, `ragflow-kb-build qa validate`,
-`ragflow-kb-build qa map-evidence`, and offline `ragflow-kb-build benchmark import`
-checkpoint/resume. Candidate surfaces keep broad checkpoint/resume and the remaining
+`ragflow-kb-build qa map-evidence`, offline `ragflow-kb-build benchmark import`
+checkpoint/resume, and deterministic `ragflow-kb-build qa generate` checkpoint/resume.
+Candidate surfaces keep broad checkpoint/resume and the remaining
 partial-failure rollout visible without marking the Phase 31 umbrella tasks complete.
 
 Recommended next slices:
@@ -1120,11 +1170,15 @@ Recommended next slices:
    the schema for mapped, unmapped, partially mapped, invalid, and warning evidence-map
    rows.
 3. Keep broad checkpoint/resume helpers and cross-skill partial-failure rollout as the
-   next Phase 31 resilience work. Offline `ragflow-kb-build benchmark import`
-   checkpoint/resume is now covered, and `inspect-kb`, `validate`, `snapshot-chunks`,
+   next Phase 31 resilience work. Offline `ragflow-kb-build benchmark import` and
+   `ragflow-kb-build qa generate` checkpoint/resume are now covered, and `inspect-kb`,
+   `validate`, `snapshot-chunks`,
    `qa validate`, plus `qa map-evidence` now have partial-failure coverage; the next
-   lower-risk candidates are checkpoint/resume coverage for bounded offline `qa generate`,
-   `profile experiment`, `optimize`, and `doc-to-md split` jobs.
+   lower-risk candidates are checkpoint/resume and partial-run coverage for bounded
+   offline `profile experiment`, `optimize`, and `doc-to-md split` jobs.
+   The Phase 31 closure target is 19 `covered`, 0 `candidate`, 2 explicitly `deferred`,
+   and 58 `not_applicable` public command surfaces in
+   `ragflow_runtime_resilience_inventory_v1`.
 
 Exit criteria:
 

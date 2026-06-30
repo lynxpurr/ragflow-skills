@@ -2607,6 +2607,7 @@ raise SystemExit(code)
     benchmark_delta_redaction = work_root / "benchmark_delta_redaction.json"
     benchmark_suggest_redaction = work_root / "benchmark_suggest_redaction.json"
     qa_generated = work_root / "qa.generated.json"
+    qa_generate_checkpoint = work_root / "qa_generate.checkpoint.json"
     qa_generate_md = work_root / "qa_generate.md"
     qa_validate_md = work_root / "qa_validate.md"
     qa_evidence_map = work_root / "qa_evidence_map.json"
@@ -2675,6 +2676,10 @@ raise SystemExit(code)
             "1",
             "--min-span-chars",
             "20",
+            "--checkpoint",
+            str(qa_generate_checkpoint),
+            "--batch-size",
+            "1",
             "--report-md",
             str(qa_generate_md),
             "--redaction-report",
@@ -2696,6 +2701,34 @@ raise SystemExit(code)
         qa_generate_redaction,
         result=qa_generate_result,
         checked_paths=(qa_generate_md,),
+    )
+    qa_generate_resume_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "qa",
+            "generate",
+            "--source-dir",
+            str(input_dir),
+            "--output",
+            str(qa_generated),
+            "--count",
+            "1",
+            "--min-span-chars",
+            "20",
+            "--checkpoint",
+            str(qa_generate_checkpoint),
+            "--resume",
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build qa generate resume",
+        qa_generate_resume_result,
+        required_output='"resume": true',
     )
     qa_validate_result = _run_command(
         [
@@ -3166,6 +3199,7 @@ raise SystemExit(code)
         benchmark_import_md,
         benchmark_import_redaction,
         qa_generated,
+        qa_generate_checkpoint,
         qa_generate_md,
         qa_generate_redaction,
         qa_validate_md,
