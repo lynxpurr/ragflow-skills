@@ -185,6 +185,20 @@ EXPECTED_IDENTITIES = (
         coverage_patterns=("ragflow_grounded_qa_evidence_map_report_v1", "GROUNDED_QA_EVIDENCE_MAP_REPORT_SCHEMA"),
     ),
     SchemaIdentity(
+        key="grounded_qa_suggestion_request",
+        group="benchmark",
+        identity="ragflow_grounded_qa_suggestion_request_v1",
+        source_patterns=("ragflow_grounded_qa_suggestion_request_v1",),
+        coverage_patterns=("ragflow_grounded_qa_suggestion_request_v1", "GROUNDED_QA_SUGGESTION_REQUEST_SCHEMA"),
+    ),
+    SchemaIdentity(
+        key="grounded_qa_suggestion_review_report",
+        group="benchmark",
+        identity="ragflow_grounded_qa_suggestion_review_report_v1",
+        source_patterns=("ragflow_grounded_qa_suggestion_review_report_v1",),
+        coverage_patterns=("ragflow_grounded_qa_suggestion_review_report_v1", "GROUNDED_QA_SUGGESTION_REVIEW_REPORT_SCHEMA"),
+    ),
+    SchemaIdentity(
         key="suppression_report",
         group="benchmark",
         identity="ragflow_suppression_report_v1",

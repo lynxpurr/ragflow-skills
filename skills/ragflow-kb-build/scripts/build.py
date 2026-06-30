@@ -33,6 +33,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     HandoffError,
     RAGFlowClient,
     attach_benchmark_evaluation,
+    create_grounded_qa_suggestion_request,
     create_metadata_suggestion_request,
     create_optimization_cleanup_plan,
     create_optimization_plan,
@@ -81,6 +82,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_split_plan_markdown,
     render_topology_advice_markdown,
     render_optimization_plan_markdown,
+    review_grounded_qa_suggestions,
     snapshot_chunks,
     suggest_benchmark_retrieval_parameters,
     summarize_optimization_results,
@@ -1539,6 +1541,68 @@ def _run_qa_map_evidence(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_qa_suggest_request(args: argparse.Namespace) -> int:
+    try:
+        report = create_grounded_qa_suggestion_request(
+            sources_path=args.sources,
+            source_dir=args.source_dir,
+            target_count=args.target_count,
+            question_types=args.question_type,
+            include_excerpts=args.include_excerpts,
+            max_excerpt_chars=args.max_excerpt_chars,
+            min_evidence_chars=args.min_evidence_chars,
+            max_evidence_chars=args.max_evidence_chars,
+        )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.sources, args.source_dir, args.output],
+                context_json_paths=[args.sources],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.output, report)
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow Grounded QA Suggestion Request"))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (BenchmarkGovernanceError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
+def _run_qa_suggest_review(args: argparse.Namespace) -> int:
+    try:
+        report = review_grounded_qa_suggestions(
+            candidate_path=args.candidate,
+            request_path=args.request,
+            sources_path=args.sources,
+            source_dir=args.source_dir,
+            chunk_snapshot_path=args.chunk_snapshot,
+            evidence_map_output_path=args.evidence_map_output,
+            require_answer=not args.allow_missing_answer,
+            require_advisory=not args.allow_non_advisory,
+            require_generated=not args.allow_non_generated,
+        )
+        if args.redaction_report:
+            context_paths = [args.candidate, args.request, args.sources, args.chunk_snapshot, args.evidence_map_output]
+            context_secrets, context_hosts, _context_config_paths = _collect_redaction_context_from_json_paths(context_paths)
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[args.candidate, args.request, args.sources, args.source_dir, args.chunk_snapshot, args.evidence_map_output],
+                output_paths=[args.report_json, args.report_md, args.redaction_report, *_collect_path_like_literals(report)],
+                extra_secret_literals=context_secrets,
+                extra_private_hosts=context_hosts,
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_benchmark_governance_markdown(report, title="RAGFlow Grounded QA Suggestion Review"))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (BenchmarkGovernanceError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _run_segment_metadata_report(args: argparse.Namespace) -> int:
     try:
         report = segment_metadata_report_file(
@@ -2511,6 +2575,49 @@ def build_qa_parser() -> argparse.ArgumentParser:
     map_evidence.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     map_evidence.add_argument("--json", action="store_true", help="Emit JSON errors")
     map_evidence.set_defaults(func=_run_qa_map_evidence)
+
+    suggest_request = subparsers.add_parser(
+        "suggest-request",
+        help="Create an advisory grounded-QA request for an external LLM",
+    )
+    suggest_request.add_argument("--sources", help="Optional source text JSON/Markdown file")
+    suggest_request.add_argument("--source-dir", help="Optional directory of source text files")
+    suggest_request.add_argument("--output", required=True, help="Output grounded-QA suggestion request JSON")
+    suggest_request.add_argument("--target-count", type=int, default=20, help="Requested candidate QA item count")
+    suggest_request.add_argument(
+        "--question-type",
+        action="append",
+        default=[],
+        help="Requested question type; repeatable",
+    )
+    suggest_request.add_argument("--include-excerpts", action="store_true", help="Include truncated source excerpts for host-approved LLM context")
+    suggest_request.add_argument("--max-excerpt-chars", type=int, default=1200, help="Maximum excerpt characters per source")
+    suggest_request.add_argument("--min-evidence-chars", type=int, default=20, help="Minimum exact evidence span length")
+    suggest_request.add_argument("--max-evidence-chars", type=int, default=240, help="Maximum exact evidence span length")
+    suggest_request.add_argument("--report-json", help="Optional request report JSON path")
+    suggest_request.add_argument("--report-md", help="Optional request report Markdown path")
+    suggest_request.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
+    suggest_request.add_argument("--json", action="store_true", help="Emit JSON errors")
+    suggest_request.set_defaults(func=_run_qa_suggest_request)
+
+    suggest_review = subparsers.add_parser(
+        "suggest-review",
+        help="Review external grounded-QA suggestions before benchmark use",
+    )
+    suggest_review.add_argument("--candidate", required=True, help="Candidate ragflow_grounded_qa_v1 JSON from an external LLM")
+    suggest_review.add_argument("--request", help="Optional grounded-QA suggestion request JSON")
+    suggest_review.add_argument("--sources", help="Optional source text JSON/Markdown file for exact evidence checks")
+    suggest_review.add_argument("--source-dir", help="Optional directory of source text files for exact evidence checks")
+    suggest_review.add_argument("--chunk-snapshot", help="Optional ragflow_chunk_snapshot_v1 JSON for evidence-map compatibility")
+    suggest_review.add_argument("--evidence-map-output", help="Output ragflow_grounded_qa_evidence_map_v1 JSON when --chunk-snapshot is supplied")
+    suggest_review.add_argument("--allow-missing-answer", action="store_true", help="Allow QA items without answers")
+    suggest_review.add_argument("--allow-non-advisory", action="store_true", help="Allow candidates that do not set advisory=true")
+    suggest_review.add_argument("--allow-non-generated", action="store_true", help="Allow candidates that do not set generated=true")
+    suggest_review.add_argument("--report-json", help="Optional review report JSON path")
+    suggest_review.add_argument("--report-md", help="Optional review report Markdown path")
+    suggest_review.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
+    suggest_review.add_argument("--json", action="store_true", help="Emit JSON errors")
+    suggest_review.set_defaults(func=_run_qa_suggest_review)
 
     return parser
 

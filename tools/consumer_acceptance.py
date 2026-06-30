@@ -2824,11 +2824,19 @@ raise SystemExit(code)
     qa_generated = work_root / "qa.generated.json"
     qa_generate_checkpoint = work_root / "qa_generate.checkpoint.json"
     qa_generate_md = work_root / "qa_generate.md"
+    qa_suggestion_request = work_root / "qa_suggestion_request.json"
+    qa_suggestion_request_md = work_root / "qa_suggestion_request.md"
+    qa_suggestion_candidate = work_root / "qa_suggestion_candidate.json"
+    qa_suggestion_review_json = work_root / "qa_suggestion_review.json"
+    qa_suggestion_review_md = work_root / "qa_suggestion_review.md"
+    qa_suggestion_evidence_map = work_root / "qa_suggestion_evidence_map.json"
     qa_validate_md = work_root / "qa_validate.md"
     qa_evidence_map = work_root / "qa_evidence_map.json"
     qa_evidence_map_md = work_root / "qa_evidence_map.md"
     segment_metadata_md = work_root / "segment_metadata.md"
     qa_generate_redaction = work_root / "qa_generate_redaction.json"
+    qa_suggestion_request_redaction = work_root / "qa_suggestion_request_redaction.json"
+    qa_suggestion_review_redaction = work_root / "qa_suggestion_review_redaction.json"
     qa_validate_redaction = work_root / "qa_validate_redaction.json"
     qa_evidence_map_redaction = work_root / "qa_evidence_map_redaction.json"
     segment_metadata_redaction = work_root / "segment_metadata_redaction.json"
@@ -2946,6 +2954,87 @@ raise SystemExit(code)
         "kb-build qa generate resume",
         qa_generate_resume_result,
         required_output='"resume": true',
+    )
+    qa_suggestion_request_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "qa",
+            "suggest-request",
+            "--source-dir",
+            str(input_dir),
+            "--output",
+            str(qa_suggestion_request),
+            "--target-count",
+            "1",
+            "--question-type",
+            "direct_fact",
+            "--report-md",
+            str(qa_suggestion_request_md),
+            "--redaction-report",
+            str(qa_suggestion_request_redaction),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build qa suggest-request",
+        qa_suggestion_request_result,
+        required_output='"schema": "ragflow_grounded_qa_suggestion_request_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build qa suggest-request redaction",
+        qa_suggestion_request_redaction,
+        result=qa_suggestion_request_result,
+        checked_paths=(qa_suggestion_request_md,),
+    )
+    qa_suggestion_payload = json.loads(benchmark_qa.read_text(encoding="utf-8"))
+    qa_suggestion_payload["advisory"] = True
+    qa_suggestion_payload["generated"] = True
+    qa_suggestion_payload.setdefault("metadata", {})["generator"] = "external_fixture_for_consumer_acceptance"
+    qa_suggestion_candidate.write_text(json.dumps(qa_suggestion_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    qa_suggestion_review_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "qa",
+            "suggest-review",
+            "--candidate",
+            str(qa_suggestion_candidate),
+            "--request",
+            str(qa_suggestion_request),
+            "--source-dir",
+            str(input_dir),
+            "--chunk-snapshot",
+            str(benchmark_chunk_snapshot),
+            "--evidence-map-output",
+            str(qa_suggestion_evidence_map),
+            "--report-json",
+            str(qa_suggestion_review_json),
+            "--report-md",
+            str(qa_suggestion_review_md),
+            "--redaction-report",
+            str(qa_suggestion_review_redaction),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build qa suggest-review",
+        qa_suggestion_review_result,
+        required_output='"schema": "ragflow_grounded_qa_suggestion_review_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build qa suggest-review redaction",
+        qa_suggestion_review_redaction,
+        result=qa_suggestion_review_result,
+        checked_paths=(qa_suggestion_review_json, qa_suggestion_review_md),
     )
     qa_validate_result = _run_command(
         [

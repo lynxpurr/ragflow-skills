@@ -823,12 +823,14 @@ MVP `segment-metadata report` measures document metadata matches, segment-like d
 paths, explicit segment hints, and segmentation-plan coverage in chunk snapshots. It is an
 offline report and does not mutate RAGFlow.
 
-Future LLM-assisted QA generation should mirror the metadata suggestion adapter boundary.
-The first increment should create a no-LLM request artifact for an external or host-owned
-model call, then review candidate QA with deterministic `qa validate`, evidence-map
-compatibility checks, advisory/generated markings, redaction sidecars, and acceptance or
-platform smoke coverage. Script-owned QA generation remains out of scope until that
-request/review path is verified.
+LLM-assisted QA generation now mirrors the metadata suggestion adapter boundary for the
+safe first increment. `qa suggest-request` creates a no-LLM request artifact for an
+external or host-owned model call, with source hashes, QA policy, optional bounded
+excerpts, and redaction metadata. `qa suggest-review` reviews external candidate QA with
+deterministic `qa validate`, optional evidence-map compatibility checks,
+advisory/generated markings, generated Markdown reports, redaction sidecars, and
+acceptance/platform smoke coverage. Script-owned QA generation remains out of scope until
+explicit LLM config, deterministic fixtures, and release gates exist.
 
 ## Feature Design 15: Retrieval Pollution And Suppression Diagnostics
 

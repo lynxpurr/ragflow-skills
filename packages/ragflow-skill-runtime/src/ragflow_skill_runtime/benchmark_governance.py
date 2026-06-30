@@ -40,6 +40,8 @@ GROUNDED_QA_GENERATE_CHECKPOINT_SCHEMA = "ragflow_grounded_qa_generate_checkpoin
 GROUNDED_QA_VALIDATE_REPORT_SCHEMA = "ragflow_grounded_qa_validate_report_v1"
 GROUNDED_QA_EVIDENCE_MAP_SCHEMA = "ragflow_grounded_qa_evidence_map_v1"
 GROUNDED_QA_EVIDENCE_MAP_REPORT_SCHEMA = "ragflow_grounded_qa_evidence_map_report_v1"
+GROUNDED_QA_SUGGESTION_REQUEST_SCHEMA = "ragflow_grounded_qa_suggestion_request_v1"
+GROUNDED_QA_SUGGESTION_REVIEW_REPORT_SCHEMA = "ragflow_grounded_qa_suggestion_review_report_v1"
 BENCHMARK_IMPORT_REPORT_SCHEMA = "ragflow_benchmark_import_report_v1"
 BENCHMARK_IMPORT_CHECKPOINT_SCHEMA = "ragflow_benchmark_import_checkpoint_v1"
 BENCHMARK_SAMPLE_REPORT_SCHEMA = "ragflow_benchmark_sample_report_v1"
@@ -690,6 +692,456 @@ def generate_grounded_qa(
         "checkpoint": checkpoint_report,
         **({"checkpoint_payload": checkpoint_payload} if checkpoint_payload else {}),
         "issues": [issue.to_dict() for issue in issues],
+    }
+
+
+def _stable_digest(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _source_request_item(source: _SourceText, *, index: int, include_excerpts: bool, max_excerpt_chars: int) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "id": f"source-{index:04d}",
+        "name": source.name,
+        "path": source.path,
+        "aliases": list(source.aliases),
+        "text_sha256": hashlib.sha256(source.text.encode("utf-8")).hexdigest(),
+        "char_count": len(source.text),
+        "line_count": len(source.text.splitlines()),
+    }
+    if include_excerpts:
+        excerpt = source.text[: max(0, max_excerpt_chars)]
+        item["excerpt"] = excerpt
+        item["excerpt_truncated"] = len(source.text) > len(excerpt)
+        item["max_excerpt_chars"] = max_excerpt_chars
+    return {key: value for key, value in item.items() if value not in (None, [], "")}
+
+
+def create_grounded_qa_suggestion_request(
+    *,
+    sources_path: str | Path | None = None,
+    source_dir: str | Path | None = None,
+    target_count: int = 20,
+    question_types: Iterable[str] | None = None,
+    include_excerpts: bool = False,
+    max_excerpt_chars: int = 1200,
+    min_evidence_chars: int = 20,
+    max_evidence_chars: int = 240,
+) -> dict[str, Any]:
+    """Create a no-LLM grounded-QA request artifact for an external model.
+
+    The request packages source identity, hashes, policy, and exact evidence
+    requirements. It never invokes an LLM and never mutates RAGFlow.
+    """
+
+    issues: list[BenchmarkGovernanceIssue] = []
+    if not sources_path and not source_dir:
+        issues.append(
+            BenchmarkGovernanceIssue(
+                "error",
+                "qa_suggestion_sources_missing",
+                "provide --sources or --source-dir so external QA suggestions can be grounded",
+                "sources",
+            )
+        )
+        sources: list[_SourceText] = []
+    else:
+        sources = _load_source_texts(sources_path=sources_path, source_dir=source_dir)
+
+    if target_count <= 0:
+        issues.append(
+            BenchmarkGovernanceIssue(
+                "error",
+                "qa_suggestion_target_count_invalid",
+                "target count must be positive",
+                "target_count",
+            )
+        )
+    if max_excerpt_chars < 0:
+        issues.append(
+            BenchmarkGovernanceIssue(
+                "error",
+                "qa_suggestion_max_excerpt_chars_invalid",
+                "max excerpt chars must not be negative",
+                "max_excerpt_chars",
+            )
+        )
+    if min_evidence_chars <= 0:
+        issues.append(
+            BenchmarkGovernanceIssue(
+                "error",
+                "qa_suggestion_min_evidence_chars_invalid",
+                "minimum evidence chars must be positive",
+                "min_evidence_chars",
+            )
+        )
+    if max_evidence_chars < min_evidence_chars:
+        issues.append(
+            BenchmarkGovernanceIssue(
+                "error",
+                "qa_suggestion_evidence_range_invalid",
+                "maximum evidence chars must be greater than or equal to minimum evidence chars",
+                "max_evidence_chars",
+            )
+        )
+
+    normalized_question_types = [
+        str(item).strip()
+        for item in (question_types or ("direct_fact", "short_query", "negative_control"))
+        if str(item).strip()
+    ]
+    if not normalized_question_types:
+        issues.append(
+            BenchmarkGovernanceIssue(
+                "error",
+                "qa_suggestion_question_types_empty",
+                "at least one question type must be supplied",
+                "question_types",
+            )
+        )
+
+    source_items = [
+        _source_request_item(
+            source,
+            index=index,
+            include_excerpts=include_excerpts,
+            max_excerpt_chars=max_excerpt_chars,
+        )
+        for index, source in enumerate(sources, start=1)
+    ]
+    source_hashes = _source_hashes([sources_path, source_dir])
+    policy = {
+        "target_count": target_count,
+        "question_types": normalized_question_types,
+        "min_evidence_chars": min_evidence_chars,
+        "max_evidence_chars": max_evidence_chars,
+        "require_answer": True,
+        "require_exact_evidence_spans": True,
+        "require_evidence_document": True,
+        "require_advisory_marker": True,
+        "require_generated_marker": True,
+    }
+    request_core = {
+        "schema": GROUNDED_QA_SUGGESTION_REQUEST_SCHEMA,
+        "grounded_qa_schema": GROUNDED_QA_SCHEMA,
+        "source_hashes": source_hashes,
+        "policy": policy,
+        "sources": source_items,
+    }
+
+    return {
+        "ok": _ok(issues),
+        "schema": GROUNDED_QA_SUGGESTION_REQUEST_SCHEMA,
+        "created_at": _now(),
+        "grounded_qa_schema": GROUNDED_QA_SCHEMA,
+        "advisory": True,
+        "llm_invoked": False,
+        "request_hash": _stable_digest(request_core),
+        "artifacts": {
+            "sources": str(sources_path) if sources_path else None,
+            "source_dir": str(source_dir) if source_dir else None,
+        },
+        "summary": {
+            **_issue_counts(issues),
+            "source_count": len(source_items),
+            "source_hash_count": len(source_hashes),
+            "target_count": target_count,
+            "question_type_count": len(normalized_question_types),
+            "include_excerpts": include_excerpts,
+            "max_excerpt_chars": max_excerpt_chars,
+            "llm_invoked": False,
+        },
+        "redaction": {
+            "source_excerpts_included": include_excerpts,
+            "source_paths_included": True,
+            "review_redaction_report_recommended": True,
+            "notes": [
+                "Run review commands with --redaction-report before sharing request, review, or Markdown outputs externally.",
+                "Do not include credentials, private endpoints, or authorization material in candidate QA.",
+            ],
+        },
+        "instructions": {
+            "purpose": "Suggest advisory ragflow_grounded_qa_v1 items grounded only in the listed sources.",
+            "required_output_schema": GROUNDED_QA_SCHEMA,
+            "requirements": [
+                "Return JSON only.",
+                "Set top-level advisory to true.",
+                "Set top-level generated to true.",
+                "Use only source documents listed in this request.",
+                "Every QA item must include question, answer, and evidence.",
+                "Every evidence item must include document and exact text copied from a listed source.",
+                "Do not invent facts, source hashes, credentials, private endpoints, or authorization material.",
+                "Generated QA is advisory and must pass ragflow-kb-build qa suggest-review before benchmark use.",
+            ],
+            "review_command": (
+                "ragflow-kb-build qa suggest-review --candidate CANDIDATE.json --request REQUEST.json "
+                "--sources SOURCES_OR --source-dir SOURCE_DIR"
+            ),
+        },
+        "policy": policy,
+        "source_hashes": source_hashes,
+        "sources": source_items,
+        "issues": [issue.to_dict() for issue in issues],
+    }
+
+
+def _request_source_aliases(request: Mapping[str, Any]) -> set[str]:
+    aliases: set[str] = set()
+    raw_sources = request.get("sources")
+    sources = raw_sources if isinstance(raw_sources, list) else []
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        for key in ("name", "path"):
+            value = source.get(key)
+            if isinstance(value, str) and not value.startswith("<redacted:"):
+                aliases.update(_source_ref_keys(value))
+        raw_aliases = source.get("aliases")
+        if isinstance(raw_aliases, list):
+            for alias in raw_aliases:
+                if isinstance(alias, str) and not alias.startswith("<redacted:"):
+                    aliases.update(_source_ref_keys(alias))
+    return {alias for alias in aliases if alias}
+
+
+def _review_issue_from_report(*, prefix: str, raw_issue: Mapping[str, Any]) -> BenchmarkGovernanceIssue:
+    return BenchmarkGovernanceIssue(
+        severity=str(raw_issue.get("severity", "warning")),
+        code=f"{prefix}_{raw_issue.get('code', 'issue')}",
+        message=str(raw_issue.get("message", "")),
+        field=raw_issue.get("field") if isinstance(raw_issue.get("field"), str) else None,
+        recommendation=raw_issue.get("recommendation") if isinstance(raw_issue.get("recommendation"), str) else None,
+    )
+
+
+def _candidate_grounded_qa_items(candidate: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    raw_items = candidate.get("items")
+    if not isinstance(raw_items, list):
+        return []
+    return [item for item in raw_items if isinstance(item, Mapping)]
+
+
+def _append_suggestion_evidence_policy_issues(
+    *,
+    candidate: Mapping[str, Any],
+    request_aliases: set[str],
+    issues: list[BenchmarkGovernanceIssue],
+) -> None:
+    for item_index, item in enumerate(_candidate_grounded_qa_items(candidate)):
+        item_id = _qa_item_identifier(item, item_index)
+        evidence_items = _qa_evidence_items(item)
+        for evidence_index, evidence in enumerate(evidence_items):
+            field = f"items[{item_index}].evidence[{evidence_index}]"
+            document_ref = _evidence_document_ref(evidence)
+            if not document_ref:
+                issues.append(
+                    BenchmarkGovernanceIssue(
+                        "error",
+                        "qa_suggestion_evidence_document_missing",
+                        "external QA suggestions must include a document reference for every evidence span",
+                        field,
+                        f"Add a document value for QA item {item_id}.",
+                    )
+                )
+                continue
+            if request_aliases and not _source_ref_keys(document_ref).intersection(request_aliases):
+                issues.append(
+                    BenchmarkGovernanceIssue(
+                        "error",
+                        "qa_suggestion_unknown_source_document",
+                        "candidate evidence references a document that is not present in the suggestion request",
+                        field,
+                    )
+                )
+
+
+def review_grounded_qa_suggestions(
+    *,
+    candidate_path: str | Path,
+    request_path: str | Path | None = None,
+    sources_path: str | Path | None = None,
+    source_dir: str | Path | None = None,
+    chunk_snapshot_path: str | Path | None = None,
+    evidence_map_output_path: str | Path | None = None,
+    require_answer: bool = True,
+    require_advisory: bool = True,
+    require_generated: bool = True,
+) -> dict[str, Any]:
+    """Review external grounded-QA suggestions with deterministic gates."""
+
+    raw_candidate = _read_json(candidate_path)
+    if not isinstance(raw_candidate, Mapping):
+        raise BenchmarkGovernanceError("candidate grounded QA must be a JSON object")
+    candidate = dict(raw_candidate)
+
+    issues: list[BenchmarkGovernanceIssue] = []
+    if candidate.get("schema") != GROUNDED_QA_SCHEMA:
+        issues.append(
+            BenchmarkGovernanceIssue(
+                "error",
+                "qa_suggestion_candidate_schema_invalid",
+                f"candidate schema must be {GROUNDED_QA_SCHEMA}",
+                "schema",
+            )
+        )
+    if require_advisory and candidate.get("advisory") is not True:
+        issues.append(
+            BenchmarkGovernanceIssue(
+                "error",
+                "qa_suggestion_not_advisory",
+                "external grounded-QA suggestions must set advisory to true",
+                "advisory",
+            )
+        )
+    if require_generated and candidate.get("generated") is not True:
+        issues.append(
+            BenchmarkGovernanceIssue(
+                "error",
+                "qa_suggestion_not_generated",
+                "external grounded-QA suggestions must set generated to true",
+                "generated",
+            )
+        )
+    if chunk_snapshot_path and not evidence_map_output_path:
+        issues.append(
+            BenchmarkGovernanceIssue(
+                "error",
+                "qa_suggestion_evidence_map_output_missing",
+                "--chunk-snapshot review requires --evidence-map-output so compatibility can be audited",
+                "evidence_map_output",
+            )
+        )
+    if evidence_map_output_path and not chunk_snapshot_path:
+        issues.append(
+            BenchmarkGovernanceIssue(
+                "error",
+                "qa_suggestion_chunk_snapshot_missing",
+                "--evidence-map-output requires --chunk-snapshot",
+                "chunk_snapshot",
+            )
+        )
+
+    request_document_count = 0
+    request_hash = None
+    request_aliases: set[str] = set()
+    if request_path:
+        request = _read_json(request_path)
+        if not isinstance(request, Mapping):
+            issues.append(
+                BenchmarkGovernanceIssue(
+                    "error",
+                    "qa_suggestion_request_invalid",
+                    "suggestion request must be a JSON object",
+                    "request",
+                )
+            )
+        elif request.get("schema") != GROUNDED_QA_SUGGESTION_REQUEST_SCHEMA:
+            issues.append(
+                BenchmarkGovernanceIssue(
+                    "error",
+                    "qa_suggestion_request_schema_invalid",
+                    f"request schema must be {GROUNDED_QA_SUGGESTION_REQUEST_SCHEMA}",
+                    "request.schema",
+                )
+            )
+        else:
+            raw_sources = request.get("sources")
+            request_sources = [item for item in raw_sources if isinstance(item, Mapping)] if isinstance(raw_sources, list) else []
+            request_document_count = len(request_sources)
+            request_hash = str(request.get("request_hash") or "") or None
+            request_aliases = _request_source_aliases(request)
+    _append_suggestion_evidence_policy_issues(
+        candidate=candidate,
+        request_aliases=request_aliases,
+        issues=issues,
+    )
+
+    validate_report = validate_grounded_qa(
+        qa_path=candidate_path,
+        sources_path=sources_path,
+        source_dir=source_dir,
+        require_answer=require_answer,
+    )
+    for raw_issue in validate_report.get("issues", []):
+        if isinstance(raw_issue, Mapping):
+            issues.append(_review_issue_from_report(prefix="qa_validate", raw_issue=raw_issue))
+
+    evidence_map_report = None
+    if chunk_snapshot_path and evidence_map_output_path:
+        evidence_map_report = map_grounded_qa_evidence(
+            qa_path=candidate_path,
+            chunk_snapshot_path=chunk_snapshot_path,
+            output_path=evidence_map_output_path,
+        )
+        for raw_issue in evidence_map_report.get("issues", []):
+            if isinstance(raw_issue, Mapping):
+                issues.append(_review_issue_from_report(prefix="qa_map_evidence", raw_issue=raw_issue))
+
+    candidate_items = _candidate_grounded_qa_items(candidate)
+    validate_summary = validate_report.get("summary") if isinstance(validate_report.get("summary"), Mapping) else {}
+    evidence_map_summary = (
+        evidence_map_report.get("summary")
+        if isinstance(evidence_map_report, Mapping) and isinstance(evidence_map_report.get("summary"), Mapping)
+        else {}
+    )
+    return {
+        "ok": _ok(issues),
+        "schema": GROUNDED_QA_SUGGESTION_REVIEW_REPORT_SCHEMA,
+        "created_at": _now(),
+        "grounded_qa_schema": GROUNDED_QA_SCHEMA,
+        "candidate_schema": candidate.get("schema"),
+        "request_schema": GROUNDED_QA_SUGGESTION_REQUEST_SCHEMA if request_path else None,
+        "request_hash": request_hash,
+        "summary": {
+            **_issue_counts(issues),
+            "candidate_item_count": len(candidate_items),
+            "request_source_count": request_document_count,
+            "advisory": candidate.get("advisory") is True,
+            "generated": candidate.get("generated") is True,
+            "validation_ok": bool(validate_report.get("ok")),
+            "validation_checked_span_count": int(validate_summary.get("checked_span_count") or 0),
+            "validation_grounded_span_count": int(validate_summary.get("grounded_span_count") or 0),
+            "evidence_map_checked": evidence_map_report is not None,
+            "evidence_map_ok": bool(evidence_map_report.get("ok")) if evidence_map_report else None,
+            "mapped_span_count": int(evidence_map_summary.get("mapped_span_count") or 0),
+        },
+        "artifacts": {
+            "candidate": str(candidate_path),
+            "request": str(request_path) if request_path else None,
+            "sources": str(sources_path) if sources_path else None,
+            "source_dir": str(source_dir) if source_dir else None,
+            "chunk_snapshot": str(chunk_snapshot_path) if chunk_snapshot_path else None,
+            "evidence_map_output": str(evidence_map_output_path) if evidence_map_output_path else None,
+        },
+        "issues": [issue.to_dict() for issue in issues],
+        "validation_report": {
+            "schema": validate_report.get("schema"),
+            "ok": validate_report.get("ok"),
+            "summary": validate_report.get("summary"),
+            "issues": validate_report.get("issues", []),
+            "runtime_partial_failure": validate_report.get("runtime_partial_failure"),
+        },
+        **(
+            {
+                "evidence_map_report": {
+                    "schema": evidence_map_report.get("schema"),
+                    "ok": evidence_map_report.get("ok"),
+                    "summary": evidence_map_report.get("summary"),
+                    "issues": evidence_map_report.get("issues", []),
+                    "runtime_partial_failure": evidence_map_report.get("runtime_partial_failure"),
+                }
+            }
+            if evidence_map_report
+            else {}
+        ),
+        "candidate_preview": {
+            "schema": candidate.get("schema"),
+            "advisory": candidate.get("advisory"),
+            "generated": candidate.get("generated"),
+            "item_count": len(candidate_items),
+            "item_ids": [_qa_item_identifier(item, index) for index, item in enumerate(candidate_items[:20])],
+        },
     }
 
 

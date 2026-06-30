@@ -153,6 +153,8 @@ KB_COVERED_COMMANDS = (
     "ragflow-kb-build profile recommend",
     "ragflow-kb-build qa generate",
     "ragflow-kb-build qa map-evidence",
+    "ragflow-kb-build qa suggest-request",
+    "ragflow-kb-build qa suggest-review",
     "ragflow-kb-build qa validate",
     "ragflow-kb-build segment-metadata report",
     "ragflow-kb-build snapshot-chunks",

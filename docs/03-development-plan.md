@@ -894,12 +894,12 @@ Tasks:
 - [x] Add root-cause hints for retrieval coverage, ranking, tag pollution, generation grounding, citation gaps, over-abstention, and cost/latency regressions.
 - [x] Add deterministic offline `ragflow-kb-build qa generate` for grounded QA scaffolds.
 - [ ] Add optional LLM adapter for grounded QA generation.
-- [ ] Add a no-LLM grounded-QA suggestion request artifact for external or host-approved
+- [x] Add a no-LLM grounded-QA suggestion request artifact for external or host-approved
   model calls.
-- [ ] Add a grounded-QA suggestion review gate that validates external candidates with
+- [x] Add a grounded-QA suggestion review gate that validates external candidates with
   `qa validate`, evidence mapping compatibility, advisory markings, redaction, and
   deterministic reports.
-- [ ] Add consumer acceptance or platform smoke coverage for the grounded-QA
+- [x] Add consumer acceptance or platform smoke coverage for the grounded-QA
   request/review boundary before enabling any script-owned generation.
 - [x] Add `ragflow-kb-build qa validate` to reject ungrounded generated evidence before benchmark use.
 - [x] Add `ragflow-kb-build qa map-evidence` to map evidence spans onto chunk snapshots.
@@ -924,6 +924,13 @@ Tasks:
 - [x] Add evidence mapping confidence, segment metadata coverage, and chunk coverage metrics.
 - [x] Add unit tests with fake RAGFlow clients and deterministic chunk snapshots.
 - [ ] Add live disposable tests gated by credentials and explicit confirmation.
+
+MVP note: `qa suggest-request` creates an advisory, no-LLM request artifact with source
+hashes, QA policy, optional bounded excerpts, and redaction metadata for host-approved
+external model calls. `qa suggest-review` checks external `ragflow_grounded_qa_v1`
+candidates with deterministic `qa validate`, optional evidence-map compatibility,
+advisory/generated markings, generated Markdown, redaction sidecars, and consumer/platform
+coverage. The public script still does not invoke a model for QA generation.
 
 Exit criteria:
 

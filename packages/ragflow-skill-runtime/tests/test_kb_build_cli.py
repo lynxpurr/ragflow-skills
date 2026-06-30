@@ -2211,6 +2211,148 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(evidence_map_payload["summary"]["evidence_mapping_coverage"], 1.0)
         self.assertEqual(evidence_map_payload["summary"]["evidence_mapping_confidence"], 1.0)
 
+    def test_qa_suggestion_request_and_review_subcommands_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "sources"
+            source_dir.mkdir()
+            (source_dir / "source.md").write_text(
+                "The suggested QA evidence mentions http://qa.internal.local and token=qa-suggest-secret exactly.",
+                encoding="utf-8",
+            )
+            request = root / "qa_suggestion_request.json"
+            request_md = root / "qa_suggestion_request.md"
+            request_redaction = root / "qa_suggestion_request_redaction.json"
+            candidate = root / "qa_suggestion_candidate.json"
+            review_json = root / "qa_suggestion_review.json"
+            review_md = root / "qa_suggestion_review.md"
+            review_redaction = root / "qa_suggestion_review_redaction.json"
+            snapshot = root / "chunk_snapshot.json"
+            evidence_map = root / "qa_suggestion_evidence_map.json"
+            fake_host = "qa.internal.local"
+            fake_secret = "qa-suggest-secret"
+            evidence = "The suggested QA evidence mentions http://qa.internal.local and token=qa-suggest-secret exactly."
+            candidate.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_grounded_qa_v1",
+                        "advisory": True,
+                        "generated": True,
+                        "items": [
+                            {
+                                "id": "qa-1",
+                                "question": "What does the evidence mention?",
+                                "answer": "The evidence mentions the configured placeholder.",
+                                "evidence": [{"document": "source.md", "text": evidence}],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "chunks": [
+                            {
+                                "id": "chunk-1",
+                                "stable_hash": "sha256:" + "d" * 64,
+                                "content": evidence,
+                                "document_name": "source.md",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            request_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "qa",
+                    "suggest-request",
+                    "--source-dir",
+                    str(source_dir),
+                    "--output",
+                    str(request),
+                    "--target-count",
+                    "1",
+                    "--question-type",
+                    "direct_fact",
+                    "--include-excerpts",
+                    "--report-md",
+                    str(request_md),
+                    "--redaction-report",
+                    str(request_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            review_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "qa",
+                    "suggest-review",
+                    "--candidate",
+                    str(candidate),
+                    "--request",
+                    str(request),
+                    "--source-dir",
+                    str(source_dir),
+                    "--chunk-snapshot",
+                    str(snapshot),
+                    "--evidence-map-output",
+                    str(evidence_map),
+                    "--report-json",
+                    str(review_json),
+                    "--report-md",
+                    str(review_md),
+                    "--redaction-report",
+                    str(review_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            request_payload = json.loads(request.read_text(encoding="utf-8")) if request.exists() else {}
+            review_payload = json.loads(review_json.read_text(encoding="utf-8")) if review_json.exists() else {}
+            evidence_map_payload = json.loads(evidence_map.read_text(encoding="utf-8")) if evidence_map.exists() else {}
+            combined = "\n".join(
+                [
+                    request_result.stdout,
+                    review_result.stdout,
+                    request_md.read_text(encoding="utf-8"),
+                    request_redaction.read_text(encoding="utf-8"),
+                    review_json.read_text(encoding="utf-8"),
+                    review_md.read_text(encoding="utf-8"),
+                    review_redaction.read_text(encoding="utf-8"),
+                ]
+            )
+
+        self.assertEqual(request_result.returncode, 0, request_result.stdout + request_result.stderr)
+        self.assertEqual(review_result.returncode, 0, review_result.stdout + review_result.stderr)
+        self.assertEqual(request_payload["schema"], "ragflow_grounded_qa_suggestion_request_v1")
+        self.assertFalse(request_payload["llm_invoked"])
+        self.assertEqual(review_payload["schema"], "ragflow_grounded_qa_suggestion_review_report_v1")
+        self.assertTrue(review_payload["ok"], review_payload["issues"])
+        self.assertEqual(evidence_map_payload["schema"], "ragflow_grounded_qa_evidence_map_v1")
+        self.assertIn("RAGFlow Grounded QA Suggestion Request", combined)
+        self.assertIn("RAGFlow Grounded QA Suggestion Review", combined)
+        self.assertNotIn(fake_host, combined)
+        self.assertNotIn(fake_secret, combined)
+        self.assertNotIn(str(root), combined)
+        self.assertIn("<redacted:private-host>", combined)
+        self.assertIn("<redacted:secret>", combined)
+        self.assertIn("<redacted:config-path>", combined)
+
     def test_qa_generate_checkpoint_resume_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -2647,6 +2647,42 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         qa_generate_resume_result,
         required_stdout='"resume": true',
     )
+    qa_suggestion_request = artifacts_dir / "qa_suggestion_request.json"
+    qa_suggestion_request_redaction = artifacts_dir / "qa_suggestion_request_redaction.json"
+    qa_suggestion_request_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "qa",
+            "suggest-request",
+            "--source-dir",
+            str(input_dir),
+            "--output",
+            str(qa_suggestion_request),
+            "--target-count",
+            "1",
+            "--question-type",
+            "direct_fact",
+            "--redaction-report",
+            str(qa_suggestion_request_redaction),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb qa suggest-request",
+        qa_suggestion_request_result,
+        required_stdout='"schema": "ragflow_grounded_qa_suggestion_request_v1"',
+    )
+    _record_redaction_sidecar_check(checks, "kb qa suggest-request redaction", qa_suggestion_request_redaction)
+    qa_suggestion_candidate = artifacts_dir / "qa_suggestion_candidate.json"
+    qa_suggestion_payload = json.loads(qa_path.read_text(encoding="utf-8"))
+    qa_suggestion_payload["advisory"] = True
+    qa_suggestion_payload["generated"] = True
+    qa_suggestion_payload.setdefault("metadata", {})["generator"] = "external_fixture_for_platform_smoke"
+    qa_suggestion_candidate.write_text(json.dumps(qa_suggestion_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     qa_generate_redaction = artifacts_dir / "qa_generate_redaction.json"
     qa_generate_redaction_result = _run_command(
         [
@@ -2747,6 +2783,41 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         required_stdout='"schema": "ragflow_chunk_snapshot_report_v1"',
     )
     _record_redaction_sidecar_check(checks, "kb snapshot-chunks redaction", chunk_snapshot_redaction)
+    qa_suggestion_review_json = artifacts_dir / "qa_suggestion_review.json"
+    qa_suggestion_review_redaction = artifacts_dir / "qa_suggestion_review_redaction.json"
+    qa_suggestion_evidence_map = artifacts_dir / "qa_suggestion_evidence_map.json"
+    qa_suggestion_review_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "qa",
+            "suggest-review",
+            "--candidate",
+            str(qa_suggestion_candidate),
+            "--request",
+            str(qa_suggestion_request),
+            "--source-dir",
+            str(input_dir),
+            "--chunk-snapshot",
+            str(chunk_snapshot),
+            "--evidence-map-output",
+            str(qa_suggestion_evidence_map),
+            "--report-json",
+            str(qa_suggestion_review_json),
+            "--redaction-report",
+            str(qa_suggestion_review_redaction),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb qa suggest-review",
+        qa_suggestion_review_result,
+        required_stdout='"schema": "ragflow_grounded_qa_suggestion_review_report_v1"',
+    )
+    _record_redaction_sidecar_check(checks, "kb qa suggest-review redaction", qa_suggestion_review_redaction)
     qa_evidence_map = artifacts_dir / "qa_evidence_map.json"
     qa_evidence_map_redaction = artifacts_dir / "qa_evidence_map_redaction.json"
     qa_map_result = _run_command(

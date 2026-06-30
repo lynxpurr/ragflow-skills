@@ -20,7 +20,7 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_runtime_resilience_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 81)
+        self.assertEqual(report["summary"]["command_count"], 83)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
@@ -28,7 +28,7 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
                 "candidate": 0,
                 "covered": 19,
                 "deferred": 2,
-                "not_applicable": 60,
+                "not_applicable": 62,
             },
         )
 
@@ -110,6 +110,14 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
         suggest_request = by_command["ragflow-kb-build metadata suggest-request"]
         self.assertEqual(suggest_request["status"], "not_applicable")
         self.assertEqual(suggest_request["features"], [])
+
+        qa_suggest_request = by_command["ragflow-kb-build qa suggest-request"]
+        self.assertEqual(qa_suggest_request["status"], "not_applicable")
+        self.assertEqual(qa_suggest_request["features"], [])
+
+        qa_suggest_review = by_command["ragflow-kb-build qa suggest-review"]
+        self.assertEqual(qa_suggest_review["status"], "not_applicable")
+        self.assertEqual(qa_suggest_review["features"], [])
 
     def test_markdown_renderer_summarizes_runtime_inventory(self) -> None:
         report = run_runtime_resilience_inventory()

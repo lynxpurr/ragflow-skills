@@ -102,6 +102,8 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("kb qa generate resume", check_names)
         self.assertIn("kb qa generate redaction", check_names)
         self.assertIn("kb qa generate redaction sidecar", check_names)
+        self.assertIn("kb qa suggest-request redaction", check_names)
+        self.assertIn("kb qa suggest-review redaction", check_names)
         self.assertIn("kb qa validate redaction", check_names)
         self.assertIn("kb qa validate redaction sidecar", check_names)
         self.assertIn("kb snapshot-chunks redaction", check_names)

@@ -131,6 +131,8 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("kb-build benchmark suggest redaction", check_names)
         self.assertIn("kb-build validate redaction", check_names)
         self.assertIn("kb-build qa generate resume", check_names)
+        self.assertIn("kb-build qa suggest-request redaction", check_names)
+        self.assertIn("kb-build qa suggest-review redaction", check_names)
         self.assertIn("kb-build append help", check_names)
         self.assertIn("kb-build append redaction", check_names)
         self.assertIn("kb-build append redaction sidecar", check_names)

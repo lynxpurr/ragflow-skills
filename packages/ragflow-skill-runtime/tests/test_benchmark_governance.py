@@ -19,9 +19,12 @@ from ragflow_skill_runtime.benchmark_governance import (
     GROUNDED_QA_EVIDENCE_MAP_REPORT_SCHEMA,
     GROUNDED_QA_EVIDENCE_MAP_SCHEMA,
     GROUNDED_QA_GENERATE_REPORT_SCHEMA,
+    GROUNDED_QA_SUGGESTION_REQUEST_SCHEMA,
+    GROUNDED_QA_SUGGESTION_REVIEW_REPORT_SCHEMA,
     GROUNDED_QA_VALIDATE_REPORT_SCHEMA,
     SUPPRESSION_REPORT_SCHEMA,
     BenchmarkGovernanceError,
+    create_grounded_qa_suggestion_request,
     delta_benchmark_reports,
     gate_benchmark_report,
     generate_grounded_qa,
@@ -33,6 +36,7 @@ from ragflow_skill_runtime.benchmark_governance import (
     suggest_benchmark_retrieval_parameters,
     summarize_benchmark_report,
     render_suppression_report_markdown,
+    review_grounded_qa_suggestions,
     suppression_report_payload,
     trend_benchmark_reports,
     validate_grounded_qa,
@@ -367,6 +371,145 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertTrue(report["ok"], report["issues"])
         self.assertEqual(report["summary"]["runtime_partial_failure_status"], "skipped")
         self.assertEqual(report["runtime_partial_failure"]["summary"]["skipped_count"], 1)
+
+    def test_grounded_qa_suggestion_request_and_review_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "sources"
+            source_dir.mkdir()
+            source = source_dir / "source.md"
+            source.write_text("The grounded suggestion answer is copied exactly from this source.\n", encoding="utf-8")
+            request_path = root / "qa_suggestion_request.json"
+            candidate = root / "qa_suggestion_candidate.json"
+            snapshot = root / "chunk_snapshot.json"
+            evidence_map = root / "qa_suggestion_evidence_map.json"
+            candidate.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_grounded_qa_v1",
+                        "advisory": True,
+                        "generated": True,
+                        "items": [
+                            {
+                                "id": "qa-1",
+                                "question": "What is copied exactly?",
+                                "answer": "The grounded suggestion answer.",
+                                "evidence": [
+                                    {
+                                        "document": "source.md",
+                                        "text": "The grounded suggestion answer is copied exactly from this source.",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "chunks": [
+                            {
+                                "id": "chunk-1",
+                                "stable_hash": "sha256:" + "c" * 64,
+                                "content": "The grounded suggestion answer is copied exactly from this source.",
+                                "document_name": "source.md",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            request = create_grounded_qa_suggestion_request(
+                source_dir=source_dir,
+                target_count=1,
+                question_types=["direct_fact"],
+                include_excerpts=True,
+            )
+            request_path.write_text(json.dumps(request), encoding="utf-8")
+            review = review_grounded_qa_suggestions(
+                candidate_path=candidate,
+                request_path=request_path,
+                source_dir=source_dir,
+                chunk_snapshot_path=snapshot,
+                evidence_map_output_path=evidence_map,
+            )
+            evidence_map_payload = json.loads(evidence_map.read_text(encoding="utf-8"))
+
+        self.assertEqual(request["schema"], GROUNDED_QA_SUGGESTION_REQUEST_SCHEMA)
+        self.assertTrue(request["ok"], request["issues"])
+        self.assertFalse(request["llm_invoked"])
+        self.assertEqual(request["summary"]["target_count"], 1)
+        self.assertIn("request_hash", request)
+        self.assertEqual(review["schema"], GROUNDED_QA_SUGGESTION_REVIEW_REPORT_SCHEMA)
+        self.assertTrue(review["ok"], review["issues"])
+        self.assertTrue(review["summary"]["validation_ok"])
+        self.assertTrue(review["summary"]["evidence_map_ok"])
+        self.assertEqual(review["summary"]["mapped_span_count"], 1)
+        self.assertEqual(evidence_map_payload["schema"], GROUNDED_QA_EVIDENCE_MAP_SCHEMA)
+
+    def test_grounded_qa_suggestion_review_rejects_unmarked_external_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "sources"
+            source_dir.mkdir()
+            (source_dir / "source.md").write_text("Grounded evidence must be marked as generated.\n", encoding="utf-8")
+            candidate = root / "candidate.json"
+            candidate.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_grounded_qa_v1",
+                        "items": [
+                            {
+                                "id": "qa-1",
+                                "question": "What must be marked?",
+                                "answer": "Generated evidence.",
+                                "evidence": [{"document": "source.md", "text": "Grounded evidence must be marked as generated."}],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            review = review_grounded_qa_suggestions(candidate_path=candidate, source_dir=source_dir)
+
+        self.assertFalse(review["ok"])
+        codes = {issue["code"] for issue in review["issues"]}
+        self.assertIn("qa_suggestion_not_advisory", codes)
+        self.assertIn("qa_suggestion_not_generated", codes)
+
+    def test_grounded_qa_suggestion_review_requires_evidence_documents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidate = root / "candidate.json"
+            candidate.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_grounded_qa_v1",
+                        "advisory": True,
+                        "generated": True,
+                        "items": [
+                            {
+                                "id": "qa-1",
+                                "question": "What must be documented?",
+                                "answer": "Evidence.",
+                                "evidence": [{"text": "Evidence without a source document."}],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            review = review_grounded_qa_suggestions(candidate_path=candidate)
+
+        self.assertFalse(review["ok"])
+        codes = {issue["code"] for issue in review["issues"]}
+        self.assertIn("qa_suggestion_evidence_document_missing", codes)
 
     def test_map_grounded_qa_evidence_to_chunk_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
