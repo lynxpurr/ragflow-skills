@@ -102,7 +102,13 @@ _COVERED = {
         status="covered",
         features=("checkpoint_resume", "partial_failure"),
         rationale="Offline profile experiment matrices can batch candidate-profile planning with checkpoints and partial-run summaries without touching RAGFlow.",
-        next_action="Keep profile experiments fixture-driven and non-mutating; use optimize plan-only as the next runtime candidate.",
+        next_action="Keep profile experiments fixture-driven and non-mutating.",
+    ),
+    "ragflow-kb-build optimize": RuntimeClassification(
+        status="covered",
+        features=("checkpoint_resume", "partial_failure"),
+        rationale="Plan-only optimization can batch candidate-profile plans with checkpoint/resume and partial-run summaries without enabling live disposable KB creation.",
+        next_action="Keep optimize --execute deferred behind explicit live mutation gating; use doc-to-md split as the next runtime candidate.",
     ),
     "ragflow-query cache-report": RuntimeClassification(
         status="covered",
@@ -136,12 +142,6 @@ _CANDIDATES = {
         features=("checkpoint_resume",),
         rationale="Large document split jobs are offline and could reuse bounded checkpoint semantics if split plans become batch-executed.",
         next_action="Defer until users need resume for multi-document split execution.",
-    ),
-    "ragflow-kb-build optimize": RuntimeClassification(
-        status="candidate",
-        features=("checkpoint_resume", "partial_failure"),
-        rationale="Optimization runs can be long and should eventually summarize partial profile execution without mutation by default.",
-        next_action="Start with plan-only or saved-report fixtures before any live optimizer path.",
     ),
 }
 

@@ -2659,6 +2659,7 @@ raise SystemExit(code)
     segment_metadata_redaction = work_root / "segment_metadata_redaction.json"
     optimization_plan = work_root / "optimization_plan.json"
     optimization_plan_md = work_root / "optimization_plan.md"
+    optimization_plan_checkpoint = work_root / "optimization_plan.checkpoint.json"
     optimization_plan_redaction = work_root / "optimization_plan_redaction.json"
     optimization_cleanup_plan = work_root / "optimization_cleanup_plan.json"
     optimization_cleanup_plan_md = work_root / "optimization_cleanup_plan.md"
@@ -2896,6 +2897,10 @@ raise SystemExit(code)
             str(baseline_benchmark_report_json),
             "--run-id",
             "acceptance",
+            "--checkpoint",
+            str(optimization_plan_checkpoint),
+            "--batch-size",
+            "1",
             "--output",
             str(optimization_plan),
             "--report-md",
@@ -2913,11 +2918,57 @@ raise SystemExit(code)
         optimize_plan_result,
         required_output='"schema": "ragflow_optimization_plan_v1"',
     )
+    optimize_plan_resume_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "optimize",
+            "--plan-only",
+            "--doc-manifest",
+            str(doc_manifest),
+            "--kb-name",
+            "kb:consumer-acceptance",
+            "--profile",
+            str(recommended_profile),
+            "--recommendation",
+            "zh:notes",
+            "--benchmark-manifest",
+            str(benchmark_dir / "manifest.json"),
+            "--metadata",
+            str(metadata_merged),
+            "--chunk-snapshot",
+            str(benchmark_chunk_snapshot),
+            "--gate-config",
+            str(benchmark_gate),
+            "--baseline-report",
+            str(baseline_benchmark_report_json),
+            "--run-id",
+            "acceptance",
+            "--checkpoint",
+            str(optimization_plan_checkpoint),
+            "--resume",
+            "--output",
+            str(optimization_plan),
+            "--report-md",
+            str(optimization_plan_md),
+            "--redaction-report",
+            str(optimization_plan_redaction),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build optimize plan-only resume",
+        optimize_plan_resume_result,
+        required_output='"resume": true',
+    )
     _record_redaction_sidecar_check(
         checks,
         "kb-build optimize plan-only redaction",
         optimization_plan_redaction,
-        result=optimize_plan_result,
+        result=optimize_plan_resume_result,
         checked_paths=(optimization_plan, optimization_plan_md),
     )
     optimize_cleanup_plan_result = _run_command(
@@ -3251,6 +3302,7 @@ raise SystemExit(code)
         segment_metadata_redaction,
         optimization_plan,
         optimization_plan_md,
+        optimization_plan_checkpoint,
         optimization_plan_redaction,
         optimization_cleanup_plan,
         optimization_cleanup_plan_md,

@@ -112,6 +112,7 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("kb-build activation-plan redaction", check_names)
         self.assertIn("kb-build parse-report redaction", check_names)
         self.assertIn("kb-build health-report redaction", check_names)
+        self.assertIn("kb-build optimize plan-only resume", check_names)
         self.assertIn("kb-build optimize plan-only redaction", check_names)
         self.assertIn("kb-build optimize cleanup-plan redaction", check_names)
         self.assertIn("kb-build optimize summarize redaction", check_names)
@@ -219,6 +220,10 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("optimization_plan_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("optimization_plan.checkpoint.json") for path in payload["produced_artifacts"]),
             payload["produced_artifacts"],
         )
         self.assertTrue(

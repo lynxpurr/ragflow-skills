@@ -5,11 +5,13 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+from datetime import datetime, timezone
+import hashlib
 import json
 import os
 import re
 import sys
-from typing import Any
+from typing import Any, Mapping
 
 
 def bootstrap_runtime() -> None:
@@ -98,6 +100,7 @@ _URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 _ASSIGNMENT_SECRET_VALUE_RE = re.compile(
     r"(?i)\b(?:api[_-]?key|token|secret|password|authorization)\s*[:=]\s*([^\s,;\"']+)"
 )
+OPTIMIZATION_PLAN_CHECKPOINT_SCHEMA = "ragflow_optimization_plan_checkpoint_v1"
 
 
 def _dump_json(data: Any) -> None:
@@ -141,12 +144,62 @@ def _write_json_file(path: str | None, payload: Any) -> None:
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _read_json_file(path: str | Path, *, label: str = "file") -> Any:
+    source = Path(path)
+    try:
+        return json.loads(source.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ProfileError(f"{label} not found: {source}") from exc
+    except json.JSONDecodeError as exc:
+        raise ProfileError(f"{label} is not valid JSON: {source}") from exc
+
+
 def _write_text_file(path: str | None, text: str) -> None:
     if not path:
         return
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding="utf-8")
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sha256_directory(path: Path) -> str:
+    digest = hashlib.sha256()
+    for item in sorted(candidate for candidate in path.rglob("*") if candidate.is_file()):
+        digest.update(item.relative_to(path).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(_sha256_file(item).encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _source_hash_map(paths: list[str | None]) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for path in paths:
+        if not path:
+            continue
+        source = Path(path)
+        if source.exists() and source.is_file():
+            hashes[str(source)] = _sha256_file(source)
+        elif source.exists() and source.is_dir():
+            hashes[str(source)] = _sha256_directory(source)
+    return hashes
+
+
+def _stable_digest(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _collect_urls(value: Any) -> list[str]:
@@ -524,6 +577,197 @@ def _sanitize_benchmark_report(
     )
 
 
+def _optimization_plan_request_hash(plan: Mapping[str, Any]) -> str:
+    candidates = plan.get("candidates") if isinstance(plan.get("candidates"), list) else []
+    candidate_summaries = []
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        candidate_summaries.append(
+            {
+                "profile_id": candidate.get("profile_id"),
+                "disposable_kb_name": candidate.get("disposable_kb_name"),
+                "profile": candidate.get("profile"),
+                "artifacts": candidate.get("artifacts"),
+            }
+        )
+    return _stable_digest(
+        {
+            "schema": plan.get("schema"),
+            "mode": plan.get("mode"),
+            "run_id": plan.get("run_id"),
+            "base_kb_name": plan.get("base_kb_name"),
+            "mutation_allowed": plan.get("mutation_allowed"),
+            "inputs": plan.get("inputs"),
+            "candidates": candidate_summaries,
+            "steps": plan.get("steps"),
+        }
+    )
+
+
+def _read_optimization_plan_checkpoint(path: Path) -> dict[str, Any]:
+    payload = _read_json_file(path, label="optimization plan checkpoint")
+    if not isinstance(payload, Mapping):
+        raise ProfileError("optimization plan checkpoint must be a JSON object")
+    if payload.get("schema") != OPTIMIZATION_PLAN_CHECKPOINT_SCHEMA:
+        raise ProfileError(f"optimization plan checkpoint schema must be {OPTIMIZATION_PLAN_CHECKPOINT_SCHEMA}")
+    processed = payload.get("processed_profile_ids")
+    if not isinstance(processed, list) or not all(isinstance(item, str) for item in processed):
+        raise ProfileError("optimization plan checkpoint processed_profile_ids must be a list of strings")
+    source_hashes = payload.get("source_hashes")
+    if not isinstance(source_hashes, Mapping):
+        raise ProfileError("optimization plan checkpoint source_hashes must be an object")
+    return dict(payload)
+
+
+def _validate_optimization_plan_checkpoint(
+    checkpoint: Mapping[str, Any],
+    *,
+    source_hashes: Mapping[str, str],
+    request_hash: str,
+    output_path: str | None,
+    artifact_dir: str | None,
+) -> None:
+    if dict(checkpoint.get("source_hashes") or {}) != dict(source_hashes):
+        raise ProfileError("optimization plan checkpoint source hashes do not match current inputs")
+    if str(checkpoint.get("request_hash") or "") != request_hash:
+        raise ProfileError("optimization plan checkpoint request hash does not match current request")
+    expected_output = str(Path(output_path)) if output_path else None
+    if (checkpoint.get("output") or None) != expected_output:
+        raise ProfileError("optimization plan checkpoint output does not match current output")
+    expected_artifact_dir = str(Path(artifact_dir)) if artifact_dir else None
+    if (checkpoint.get("artifact_dir") or None) != expected_artifact_dir:
+        raise ProfileError("optimization plan checkpoint artifact_dir does not match current request")
+
+
+def _write_optimization_plan_checkpoint(
+    *,
+    checkpoint_path: str | Path,
+    source_hashes: Mapping[str, str],
+    request_hash: str,
+    output_path: str | None,
+    artifact_dir: str | None,
+    processed_profile_ids: list[str],
+    total_profile_count: int,
+    completed: bool,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    processed = list(dict.fromkeys(str(item) for item in processed_profile_ids))
+    payload = {
+        "schema": OPTIMIZATION_PLAN_CHECKPOINT_SCHEMA,
+        "created_at": created_at or _utc_now(),
+        "updated_at": _utc_now(),
+        "source_hashes": dict(source_hashes),
+        "request_hash": request_hash,
+        "output": str(Path(output_path)) if output_path else None,
+        "artifact_dir": str(Path(artifact_dir)) if artifact_dir else None,
+        "processed_profile_ids": processed,
+        "summary": {
+            "processed_profile_count": len(processed),
+            "total_profile_count": total_profile_count,
+            "remaining_profile_count": max(total_profile_count - len(processed), 0),
+            "completed": bool(completed),
+        },
+    }
+    _write_json_file(str(checkpoint_path), payload)
+    return payload
+
+
+def _apply_optimization_plan_checkpoint(
+    plan: dict[str, Any],
+    *,
+    checkpoint_path: str | None,
+    resume: bool,
+    batch_size: int | None,
+    source_hashes: Mapping[str, str],
+    output_path: str | None,
+    artifact_dir: str | None,
+) -> dict[str, Any]:
+    candidates = plan.get("candidates") if isinstance(plan.get("candidates"), list) else []
+    candidate_ids = [str(item.get("profile_id")) for item in candidates if isinstance(item, Mapping) and item.get("profile_id")]
+    request_hash = _optimization_plan_request_hash(plan)
+    processed_profile_ids: list[str] = []
+    checkpoint_created_at: str | None = None
+
+    if checkpoint_path and resume:
+        checkpoint = _read_optimization_plan_checkpoint(Path(checkpoint_path))
+        _validate_optimization_plan_checkpoint(
+            checkpoint,
+            source_hashes=source_hashes,
+            request_hash=request_hash,
+            output_path=output_path,
+            artifact_dir=artifact_dir,
+        )
+        processed_profile_ids = list(checkpoint.get("processed_profile_ids") or [])
+        checkpoint_created_at = str(checkpoint.get("created_at") or "") or None
+
+    unknown_processed = sorted(set(processed_profile_ids) - set(candidate_ids))
+    if unknown_processed:
+        raise ProfileError(
+            "optimization plan checkpoint contains profile ids that are not present in current candidates: "
+            + ", ".join(unknown_processed[:5])
+        )
+
+    processed_set = set(processed_profile_ids)
+    remaining_profile_ids = [profile_id for profile_id in candidate_ids if profile_id not in processed_set]
+    next_profile_ids = remaining_profile_ids if batch_size is None else remaining_profile_ids[:batch_size]
+    selected_profile_ids = set(processed_profile_ids) | set(next_profile_ids)
+    completed = bool(plan.get("ok")) and len(selected_profile_ids) >= len(candidate_ids)
+    filtered_candidates = [
+        item
+        for item in candidates
+        if isinstance(item, Mapping) and str(item.get("profile_id") or "") in selected_profile_ids
+    ]
+
+    checkpoint_payload = None
+    if checkpoint_path and plan.get("ok"):
+        ordered_processed = [profile_id for profile_id in candidate_ids if profile_id in selected_profile_ids]
+        checkpoint_payload = _write_optimization_plan_checkpoint(
+            checkpoint_path=checkpoint_path,
+            source_hashes=source_hashes,
+            request_hash=request_hash,
+            output_path=output_path,
+            artifact_dir=artifact_dir,
+            processed_profile_ids=ordered_processed,
+            total_profile_count=len(candidate_ids),
+            completed=completed,
+            created_at=checkpoint_created_at,
+        )
+
+    summary = dict(plan.get("summary") if isinstance(plan.get("summary"), Mapping) else {})
+    summary.update(
+        {
+            "candidate_count": len(filtered_candidates),
+            "planned_experiment_count": len(filtered_candidates),
+            "blocked_mutation_command_count": len(filtered_candidates),
+            "completed": completed,
+            "checkpoint_enabled": bool(checkpoint_path),
+            "checkpoint_resume": bool(resume),
+            "checkpoint_new_profile_count": len(next_profile_ids),
+            "checkpoint_remaining_profile_count": max(len(candidate_ids) - len(selected_profile_ids), 0),
+        }
+    )
+    plan = dict(plan)
+    plan["summary"] = summary
+    plan["candidates"] = filtered_candidates
+    plan["completed"] = completed
+    plan["checkpoint"] = {
+        "enabled": bool(checkpoint_path),
+        "path": str(checkpoint_path) if checkpoint_path else None,
+        "resume": bool(resume),
+        "batch_size": batch_size,
+        "processed_profile_count": len(selected_profile_ids),
+        "new_profile_count": len(next_profile_ids),
+        "remaining_profile_count": max(len(candidate_ids) - len(selected_profile_ids), 0),
+        "total_profile_count": len(candidate_ids),
+        "completed": completed,
+        "next_profile_ids": list(next_profile_ids),
+    }
+    if checkpoint_payload:
+        plan["checkpoint_payload"] = checkpoint_payload
+    return plan
+
+
 def _run_benchmark_import(args: argparse.Namespace) -> int:
     try:
         report = import_benchmark_dataset(
@@ -877,6 +1121,12 @@ def _run_optimize(args: argparse.Namespace) -> int:
             raise ProfileError("optimize --execute is not implemented yet; use --plan-only for offline planning")
         if not args.plan_only:
             raise ProfileError("optimize currently requires --plan-only")
+        if args.resume and not args.checkpoint:
+            raise ProfileError("optimize --resume requires --checkpoint")
+        if args.batch_size is not None and not args.checkpoint:
+            raise ProfileError("optimize --batch-size requires --checkpoint")
+        if args.batch_size is not None and args.batch_size <= 0:
+            raise ProfileError("optimize batch_size must be positive")
         doc_manifest = load_doc_manifest(args.doc_manifest) if args.doc_manifest else None
         _guard_quality_gate(doc_manifest, allow_blocked=args.allow_blocked)
         docs = discover_markdown_documents(
@@ -907,6 +1157,33 @@ def _run_optimize(args: argparse.Namespace) -> int:
             top_k=args.top_k,
             metric_cutoff=args.metric_cutoff,
         )
+        source_hashes = _source_hash_map(
+            [
+                args.input,
+                args.doc_manifest,
+                *args.profile,
+                *args.profile_dir,
+                *args.profile_set,
+                args.benchmark_manifest,
+                args.queries,
+                args.qrels,
+                args.qa,
+                args.metadata,
+                args.tagset,
+                args.chunk_snapshot,
+                args.gate_config,
+                args.baseline_report,
+            ]
+        )
+        plan = _apply_optimization_plan_checkpoint(
+            plan,
+            checkpoint_path=args.checkpoint,
+            resume=args.resume,
+            batch_size=args.batch_size,
+            source_hashes=source_hashes,
+            output_path=args.output,
+            artifact_dir=args.artifact_dir,
+        )
         if args.redaction_report:
             plan, redaction_report = _sanitize_governance_report(
                 plan,
@@ -927,9 +1204,10 @@ def _run_optimize(args: argparse.Namespace) -> int:
                     args.gate_config,
                     args.baseline_report,
                     args.artifact_dir,
+                    args.checkpoint,
                     *_collect_path_like_literals(plan),
                 ],
-                output_paths=[args.output],
+                output_paths=[args.output, args.checkpoint],
             )
             _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.output, plan)
@@ -1556,6 +1834,9 @@ def build_optimize_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", help="Optional disposable KB run id; defaults to a deterministic hash")
     parser.add_argument("--top-k", type=int, default=3, help="Planned benchmark validation top_k")
     parser.add_argument("--metric-cutoff", type=int, help="Optional planned benchmark metric cutoff")
+    parser.add_argument("--checkpoint", help="Checkpoint path for resumable offline optimization planning")
+    parser.add_argument("--resume", action="store_true", help="Resume from an existing optimization planning checkpoint")
+    parser.add_argument("--batch-size", type=int, help="Emit at most this many new optimization candidates in this run")
     parser.add_argument("--output", default="optimization_plan.json", help="Output ragflow_optimization_plan_v1 JSON")
     parser.add_argument("--report-md", help="Optional optimization plan Markdown path")
     parser.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")

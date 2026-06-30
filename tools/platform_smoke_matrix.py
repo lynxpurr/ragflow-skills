@@ -2710,6 +2710,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     )
     _record_redaction_sidecar_check(checks, "kb benchmark preflight redaction", benchmark_preflight_redaction)
     optimization_plan = artifacts_dir / "optimization_plan.json"
+    optimization_plan_checkpoint = artifacts_dir / "optimization_plan.checkpoint.json"
     optimization_plan_redaction = artifacts_dir / "optimization_plan_redaction.json"
     optimize_plan_result = _run_command(
         [
@@ -2733,6 +2734,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(chunk_snapshot),
             "--run-id",
             "platform",
+            "--checkpoint",
+            str(optimization_plan_checkpoint),
+            "--batch-size",
+            "1",
             "--output",
             str(optimization_plan),
             "--redaction-report",
@@ -2747,6 +2752,46 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         "kb optimize plan-only",
         optimize_plan_result,
         required_stdout='"schema": "ragflow_optimization_plan_v1"',
+    )
+    optimize_plan_resume_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "optimize",
+            "--plan-only",
+            "--doc-manifest",
+            str(doc_manifest),
+            "--kb-name",
+            "kb:platform-smoke",
+            "--profile",
+            str(PROFILE_PATH),
+            "--recommendation",
+            "zh:notes",
+            "--benchmark-manifest",
+            str(benchmark_dir / "manifest.json"),
+            "--metadata",
+            str(metadata_template),
+            "--chunk-snapshot",
+            str(chunk_snapshot),
+            "--run-id",
+            "platform",
+            "--checkpoint",
+            str(optimization_plan_checkpoint),
+            "--resume",
+            "--output",
+            str(optimization_plan),
+            "--redaction-report",
+            str(optimization_plan_redaction),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb optimize plan-only resume",
+        optimize_plan_resume_result,
+        required_stdout='"resume": true',
     )
     _record_redaction_sidecar_check(checks, "kb optimize plan-only redaction", optimization_plan_redaction)
     optimization_cleanup_plan = artifacts_dir / "optimization_cleanup_plan.json"
@@ -3915,6 +3960,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "suppression_report.json",
         artifacts_dir / "suppression_report_redaction.json",
         artifacts_dir / "optimization_plan.json",
+        artifacts_dir / "optimization_plan.checkpoint.json",
         artifacts_dir / "optimization_plan_redaction.json",
         artifacts_dir / "optimization_cleanup_plan.json",
         artifacts_dir / "optimization_cleanup_plan.md",

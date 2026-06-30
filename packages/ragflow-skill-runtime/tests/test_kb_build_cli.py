@@ -3457,6 +3457,134 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("RAGFlow Best Profile Report", best_md_text)
         self.assertIn("## Diagnostics", best_md_text)
 
+    def test_optimize_plan_only_checkpoint_resume_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "sample.md").write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "candidate-a",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                        "parser_config": {
+                            "chunk_token_num": 512,
+                            "auto_keywords": 0,
+                            "auto_questions": 0,
+                            "__language__": "English",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            benchmark_manifest = root / "benchmark_manifest.json"
+            output = root / "optimization_plan.json"
+            report_md = root / "optimization_plan.md"
+            checkpoint = root / "optimization_plan.checkpoint.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            benchmark_manifest.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_benchmark_manifest_v1",
+                        "artifacts": {"queries": "queries.json", "qrels": "qrels.json"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            first = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "--plan-only",
+                    "--input",
+                    str(docs),
+                    "--kb-name",
+                    "kb:optimize-checkpoint",
+                    "--profile",
+                    str(profile),
+                    "--recommendation",
+                    "en:manual",
+                    "--benchmark-manifest",
+                    str(benchmark_manifest),
+                    "--run-id",
+                    "testrun",
+                    "--artifact-dir",
+                    str(root / "opt-artifacts"),
+                    "--checkpoint",
+                    str(checkpoint),
+                    "--batch-size",
+                    "1",
+                    "--output",
+                    str(output),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            partial_payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+            second = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "--plan-only",
+                    "--input",
+                    str(docs),
+                    "--kb-name",
+                    "kb:optimize-checkpoint",
+                    "--profile",
+                    str(profile),
+                    "--recommendation",
+                    "en:manual",
+                    "--benchmark-manifest",
+                    str(benchmark_manifest),
+                    "--run-id",
+                    "testrun",
+                    "--artifact-dir",
+                    str(root / "opt-artifacts"),
+                    "--checkpoint",
+                    str(checkpoint),
+                    "--resume",
+                    "--output",
+                    str(output),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            final_payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+            second_payload = json.loads(second.stdout)
+            checkpoint_payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertEqual(partial_payload["summary"]["candidate_count"], 1)
+        self.assertEqual(final_payload["summary"]["candidate_count"], 2)
+        self.assertFalse(partial_payload["completed"])
+        self.assertTrue(final_payload["completed"])
+        self.assertTrue(second_payload["checkpoint"]["resume"])
+        self.assertEqual(second_payload["checkpoint"]["processed_profile_count"], 2)
+        self.assertEqual(second_payload["checkpoint"]["new_profile_count"], 1)
+        self.assertEqual(checkpoint_payload["schema"], "ragflow_optimization_plan_checkpoint_v1")
+        self.assertEqual(checkpoint_payload["summary"]["processed_profile_count"], 2)
+        self.assertTrue(checkpoint_payload["summary"]["completed"])
+
     def test_optimize_cleanup_plan_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
