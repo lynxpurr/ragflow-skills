@@ -22,6 +22,9 @@ AGENTIC_TRACE_SCHEMA = "ragflow_agentic_trace_v1"
 HOST_SYNTHESIS_CONTRACT_SCHEMA = "ragflow_host_synthesis_contract_v1"
 AGENTIC_ANSWER_REQUEST_SCHEMA = "ragflow_agentic_answer_request_v1"
 AGENTIC_ANSWER_REVIEW_REPORT_SCHEMA = "ragflow_agentic_answer_review_report_v1"
+ANSWER_EVALUATOR_REQUEST_SCHEMA = "ragflow_answer_evaluator_request_v1"
+ANSWER_EVALUATOR_REVIEW_REPORT_SCHEMA = "ragflow_answer_evaluator_review_report_v1"
+ANSWER_EVALUATOR_CANDIDATE_SCHEMA = "ragflow_answer_evaluator_candidate_v1"
 
 
 class AgenticPlanError(ValueError):
@@ -181,6 +184,10 @@ def _query_payload_hash(query_payload: Mapping[str, Any]) -> str:
     return _stable_digest(hash_input)
 
 
+def _answer_hash(answer: str) -> str:
+    return _stable_digest({"answer": str(answer or "")})
+
+
 def _agentic_context_from_query_payload(query_payload: Mapping[str, Any]) -> dict[str, Any]:
     metadata = query_payload.get("metadata") if isinstance(query_payload.get("metadata"), Mapping) else {}
     trace = query_payload.get("trace") if isinstance(query_payload.get("trace"), Mapping) else {}
@@ -256,6 +263,31 @@ def _evidence_ranks(evidence: Sequence[Mapping[str, Any]]) -> list[int]:
         seen.add(rank)
         ranks.append(rank)
     return ranks
+
+
+def _evaluator_evidence_items(
+    evidence: Sequence[Mapping[str, Any]],
+    *,
+    include_evidence_previews: bool,
+    max_evidence_chars: int,
+) -> list[dict[str, Any]]:
+    evidence_items: list[dict[str, Any]] = []
+    for item in evidence:
+        evidence_item = {
+            "rank": item.get("rank"),
+            "citation_id": item.get("citation_id"),
+            "score": item.get("score"),
+            "document_name": item.get("document_name"),
+            "document_id": item.get("document_id"),
+            "dataset_id": item.get("dataset_id"),
+            "chunk_id": item.get("chunk_id"),
+        }
+        if include_evidence_previews:
+            evidence_item["content_preview"] = _preview_text(item.get("content_preview"), limit=max_evidence_chars)
+            evidence_item["preview_truncated"] = len(str(item.get("content_preview") or "")) > max_evidence_chars
+            evidence_item["max_evidence_chars"] = max_evidence_chars
+        evidence_items.append(evidence_item)
+    return evidence_items
 
 
 def _subqueries(question: str, *, intent: str, complexity: str, max_subqueries: int) -> list[dict[str, Any]]:
@@ -947,6 +979,416 @@ def review_agentic_answer(
     }
 
 
+def create_answer_evaluator_request(
+    query_payload: Mapping[str, Any],
+    answer: str,
+    *,
+    model_label: str | None = None,
+    provider_label: str | None = None,
+    expected_terms: Sequence[str] | None = None,
+    require_citation: bool = False,
+    allow_abstain: bool = False,
+    min_cited_evidence_score: float | None = None,
+    include_answer_text: bool = True,
+    max_answer_chars: int = 4000,
+    include_evidence_previews: bool = True,
+    max_evidence_chars: int = 1200,
+) -> dict[str, Any]:
+    """Create a no-LLM request artifact for external answer-evaluator scoring."""
+
+    if not isinstance(query_payload, Mapping):
+        raise AgenticPlanError("query payload must be a JSON object")
+    if max_answer_chars < 0:
+        raise AgenticPlanError("max_answer_chars must be non-negative")
+    if max_evidence_chars < 0:
+        raise AgenticPlanError("max_evidence_chars must be non-negative")
+    answer_text = str(answer or "")
+    if expected_terms is None:
+        expected_terms_list: list[str] = []
+    elif isinstance(expected_terms, str):
+        expected_terms_list = [expected_terms]
+    else:
+        expected_terms_list = list(expected_terms)
+    evidence = evidence_from_query_payload(query_payload)
+    deterministic_evaluation = evaluate_answer(
+        query_payload,
+        answer_text,
+        expected_terms=expected_terms_list,
+        require_citation=require_citation,
+        allow_abstain=allow_abstain,
+        min_cited_evidence_score=min_cited_evidence_score,
+    )
+    issues: list[dict[str, Any]] = []
+    for raw_issue in deterministic_evaluation.get("issues", []):
+        if isinstance(raw_issue, Mapping):
+            issues.append(_answer_review_issue_from_report(prefix="deterministic_evaluation", raw_issue=raw_issue))
+    if not evidence:
+        _append_issue(
+            issues,
+            severity="warning",
+            code="answer_evaluator_request_no_evidence",
+            message="query payload does not contain retrievable evidence; external evaluator should treat faithfulness as not assessable",
+            field="evidence",
+        )
+
+    answer_preview = _preview_text(answer_text, limit=max_answer_chars)
+    evidence_items = _evaluator_evidence_items(
+        evidence,
+        include_evidence_previews=include_evidence_previews,
+        max_evidence_chars=max_evidence_chars,
+    )
+    metrics_requested = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
+    request_core = {
+        "schema": ANSWER_EVALUATOR_REQUEST_SCHEMA,
+        "query_payload_hash": _query_payload_hash(query_payload),
+        "answer_hash": _answer_hash(answer_text),
+        "model_label": model_label,
+        "provider_label": provider_label,
+        "expected_terms": expected_terms_list,
+        "require_citation": require_citation,
+        "allow_abstain": allow_abstain,
+        "min_cited_evidence_score": min_cited_evidence_score,
+        "metrics_requested": metrics_requested,
+        "deterministic_evaluation_ok": bool(deterministic_evaluation.get("ok")),
+    }
+    return {
+        "ok": _issues_ok(issues),
+        "schema": ANSWER_EVALUATOR_REQUEST_SCHEMA,
+        "created_at": _now(),
+        "advisory": True,
+        "llm_invoked": False,
+        "request_hash": _stable_digest(request_core),
+        "query_payload_hash": request_core["query_payload_hash"],
+        "answer_hash": request_core["answer_hash"],
+        "question": query_payload.get("question"),
+        "model": {
+            "provider_label": provider_label,
+            "model_label": model_label,
+            "script_owned_llm_calls": 0,
+        },
+        "summary": {
+            **_issue_counts(issues),
+            "evidence_count": len(evidence_items),
+            "answer_chars": len(answer_text),
+            "answer_text_included": include_answer_text,
+            "answer_truncated": len(answer_text) > max_answer_chars,
+            "include_evidence_previews": include_evidence_previews,
+            "max_answer_chars": max_answer_chars,
+            "max_evidence_chars": max_evidence_chars,
+            "expected_term_count": len(expected_terms_list),
+            "require_citation": require_citation,
+            "allow_abstain": allow_abstain,
+            "deterministic_evaluation_ok": bool(deterministic_evaluation.get("ok")),
+            "deterministic_evaluation_status": deterministic_evaluation.get("status"),
+            "llm_invoked": False,
+        },
+        "redaction": {
+            "answer_text_included": include_answer_text,
+            "evidence_previews_included": include_evidence_previews,
+            "document_ids_included": True,
+            "dataset_ids_included": True,
+            "review_redaction_report_recommended": True,
+            "notes": [
+                "Run request and review commands with --redaction-report before sharing artifacts externally.",
+                "Do not include credentials, private endpoints, or authorization material in external evaluator candidates.",
+            ],
+        },
+        "instructions": {
+            "purpose": "Score an answer with an external LLM/RAGAS-style evaluator without letting the script invoke a backend.",
+            "required_output_shape": {
+                "schema": ANSWER_EVALUATOR_CANDIDATE_SCHEMA,
+                "advisory": True,
+                "generated": True,
+                "verdict": "pass|review|fail",
+                "metrics": {
+                    "faithfulness": {"score": "0.0-1.0", "rationale": "short rationale"},
+                    "answer_relevancy": {"score": "0.0-1.0", "rationale": "short rationale"},
+                    "context_precision": {"score": "0.0-1.0", "rationale": "short rationale"},
+                    "context_recall": {"score": "0.0-1.0", "rationale": "short rationale"},
+                },
+            },
+            "requirements": [
+                "Return JSON only unless the host explicitly requests plain text.",
+                "Set advisory to true.",
+                "Set generated to true.",
+                "Treat deterministic evaluate-answer failures as non-overridable gates.",
+                "Do not invent facts, credentials, private endpoints, or authorization material.",
+                "External evaluator output is advisory and must pass ragflow-query evaluator review before use.",
+            ],
+            "review_command": "ragflow-query evaluator review --request REQUEST.json --candidate CANDIDATE.json",
+        },
+        "evaluator_policy": {
+            "adapter": "request_review",
+            "script_owned_backend": "disabled",
+            "script_owned_llm_calls": 0,
+            "metrics_requested": metrics_requested,
+            "deterministic_gate": "ragflow-query evaluate-answer",
+            "external_scores_are_advisory": True,
+        },
+        "answer": {
+            "chars": len(answer_text),
+            "sha256": request_core["answer_hash"],
+            "text": answer_preview if include_answer_text else None,
+            "preview": answer_preview,
+            "truncated": len(answer_text) > max_answer_chars,
+        },
+        "deterministic_evaluation": deterministic_evaluation,
+        "evidence": evidence_items,
+        "issues": issues,
+    }
+
+
+def _normalize_evaluator_metric(
+    name: str,
+    raw_metric: Any,
+    issues: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    metric: dict[str, Any]
+    if isinstance(raw_metric, (int, float)):
+        metric = {"score": float(raw_metric)}
+    elif isinstance(raw_metric, Mapping):
+        metric = dict(raw_metric)
+    else:
+        _append_issue(
+            issues,
+            severity="error",
+            code="answer_evaluator_metric_invalid",
+            message="evaluator metric must be a number or object with a numeric score",
+            field=f"candidate.metrics.{name}",
+        )
+        return None
+    try:
+        score = float(metric.get("score"))
+    except (TypeError, ValueError):
+        _append_issue(
+            issues,
+            severity="error",
+            code="answer_evaluator_metric_score_invalid",
+            message="evaluator metric score must be numeric",
+            field=f"candidate.metrics.{name}.score",
+        )
+        return None
+    if score < 0.0 or score > 1.0:
+        _append_issue(
+            issues,
+            severity="error",
+            code="answer_evaluator_metric_score_out_of_range",
+            message="evaluator metric score must be between 0.0 and 1.0",
+            field=f"candidate.metrics.{name}.score",
+        )
+    normalized = {
+        "score": score,
+    }
+    rationale = _clean_string(metric.get("rationale") or metric.get("reason"))
+    if rationale:
+        normalized["rationale"] = rationale
+    return normalized
+
+
+def review_answer_evaluator_output(
+    request: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    *,
+    query_payload: Mapping[str, Any] | None = None,
+    require_advisory: bool = True,
+    require_generated: bool = True,
+) -> dict[str, Any]:
+    """Review externally generated answer-evaluator output with deterministic gates."""
+
+    issues: list[dict[str, Any]] = []
+    request_hash = None
+    query_payload_hash = None
+    answer_hash = None
+    deterministic_ok = False
+    deterministic_status = None
+    deterministic_evaluation: Mapping[str, Any] | None = None
+    if not isinstance(request, Mapping):
+        _append_issue(
+            issues,
+            severity="error",
+            code="answer_evaluator_request_invalid",
+            message="evaluator request must be a JSON object",
+            field="request",
+        )
+        request = {}
+    elif request.get("schema") != ANSWER_EVALUATOR_REQUEST_SCHEMA:
+        _append_issue(
+            issues,
+            severity="error",
+            code="answer_evaluator_request_schema_invalid",
+            message=f"request schema must be {ANSWER_EVALUATOR_REQUEST_SCHEMA}",
+            field="request.schema",
+        )
+    else:
+        request_hash = _clean_string(request.get("request_hash"))
+        query_payload_hash = _clean_string(request.get("query_payload_hash"))
+        answer_hash = _clean_string(request.get("answer_hash"))
+        deterministic_evaluation = (
+            request.get("deterministic_evaluation")
+            if isinstance(request.get("deterministic_evaluation"), Mapping)
+            else None
+        )
+        deterministic_ok = bool(deterministic_evaluation.get("ok")) if deterministic_evaluation else False
+        deterministic_status = deterministic_evaluation.get("status") if deterministic_evaluation else None
+        if not deterministic_evaluation:
+            _append_issue(
+                issues,
+                severity="error",
+                code="answer_evaluator_request_missing_deterministic_gate",
+                message="request must include deterministic evaluate-answer results",
+                field="request.deterministic_evaluation",
+            )
+        elif not deterministic_ok:
+            _append_issue(
+                issues,
+                severity="error",
+                code="answer_evaluator_deterministic_gate_failed",
+                message="deterministic evaluate-answer gate failed and cannot be overridden by advisory evaluator scores",
+                field="request.deterministic_evaluation.ok",
+            )
+        if query_payload is not None:
+            if not isinstance(query_payload, Mapping):
+                _append_issue(
+                    issues,
+                    severity="error",
+                    code="answer_evaluator_query_payload_invalid",
+                    message="query payload must be a JSON object",
+                    field="query_payload",
+                )
+            elif query_payload_hash and _query_payload_hash(query_payload) != query_payload_hash:
+                _append_issue(
+                    issues,
+                    severity="error",
+                    code="answer_evaluator_request_query_mismatch",
+                    message="request was built from a different query output",
+                    field="request.query_payload_hash",
+                )
+
+    candidate_schema = candidate.get("schema") if isinstance(candidate, Mapping) else None
+    normalized_metrics: dict[str, Any] = {}
+    verdict = None
+    if not isinstance(candidate, Mapping):
+        _append_issue(
+            issues,
+            severity="error",
+            code="answer_evaluator_candidate_invalid",
+            message="evaluator candidate must be a JSON object",
+            field="candidate",
+        )
+        candidate = {}
+    else:
+        if candidate_schema not in {None, ANSWER_EVALUATOR_CANDIDATE_SCHEMA}:
+            _append_issue(
+                issues,
+                severity="warning",
+                code="answer_evaluator_candidate_schema_unrecognized",
+                message=f"candidate schema is not {ANSWER_EVALUATOR_CANDIDATE_SCHEMA}",
+                field="candidate.schema",
+            )
+        if require_advisory and candidate.get("advisory") is not True:
+            _append_issue(
+                issues,
+                severity="error",
+                code="answer_evaluator_not_advisory",
+                message="external evaluator output must set advisory to true",
+                field="candidate.advisory",
+            )
+        if require_generated and candidate.get("generated") is not True:
+            _append_issue(
+                issues,
+                severity="error",
+                code="answer_evaluator_not_generated",
+                message="external evaluator output must set generated to true",
+                field="candidate.generated",
+            )
+        raw_verdict = _clean_string(candidate.get("verdict"))
+        if raw_verdict:
+            verdict = raw_verdict.lower()
+            if verdict not in {"pass", "review", "fail"}:
+                _append_issue(
+                    issues,
+                    severity="warning",
+                    code="answer_evaluator_verdict_unrecognized",
+                    message="evaluator verdict should be pass, review, or fail",
+                    field="candidate.verdict",
+                )
+        else:
+            _append_issue(
+                issues,
+                severity="warning",
+                code="answer_evaluator_verdict_missing",
+                message="evaluator candidate does not include a pass/review/fail verdict",
+                field="candidate.verdict",
+            )
+        metrics = candidate.get("metrics")
+        if not isinstance(metrics, Mapping) or not metrics:
+            _append_issue(
+                issues,
+                severity="error",
+                code="answer_evaluator_metrics_missing",
+                message="evaluator candidate must include metrics with 0.0-1.0 scores",
+                field="candidate.metrics",
+            )
+        else:
+            for name, raw_metric in metrics.items():
+                normalized = _normalize_evaluator_metric(str(name), raw_metric, issues)
+                if normalized is not None:
+                    normalized_metrics[str(name)] = normalized
+        if verdict == "pass" and not deterministic_ok:
+            _append_issue(
+                issues,
+                severity="error",
+                code="answer_evaluator_verdict_conflicts_with_deterministic_gate",
+                message="candidate verdict is pass even though deterministic evaluate-answer did not pass",
+                field="candidate.verdict",
+            )
+
+    evidence = request.get("evidence", []) if isinstance(request.get("evidence"), list) else []
+    return {
+        "ok": _issues_ok(issues),
+        "schema": ANSWER_EVALUATOR_REVIEW_REPORT_SCHEMA,
+        "created_at": _now(),
+        "candidate_schema": candidate_schema,
+        "request_schema": request.get("schema"),
+        "request_hash": request_hash,
+        "query_payload_hash": query_payload_hash,
+        "answer_hash": answer_hash,
+        "summary": {
+            **_issue_counts(issues),
+            "evidence_count": len(evidence),
+            "metric_count": len(normalized_metrics),
+            "deterministic_evaluation_ok": deterministic_ok,
+            "deterministic_evaluation_status": deterministic_status,
+            "advisory": candidate.get("advisory") is True if isinstance(candidate, Mapping) else None,
+            "generated": candidate.get("generated") is True if isinstance(candidate, Mapping) else None,
+            "verdict": verdict,
+            "script_owned_llm_calls": 0,
+        },
+        "policy": {
+            "external_evaluator_advisory": True,
+            "deterministic_evaluate_answer_required": True,
+            "script_owned_backend": "disabled",
+            "script_owned_llm_calls": 0,
+            "require_advisory": require_advisory,
+            "require_generated": require_generated,
+        },
+        "candidate_metrics": normalized_metrics,
+        "candidate_preview": {
+            "schema": candidate_schema,
+            "advisory": candidate.get("advisory") if isinstance(candidate, Mapping) else None,
+            "generated": candidate.get("generated") if isinstance(candidate, Mapping) else None,
+            "verdict": candidate.get("verdict") if isinstance(candidate, Mapping) else None,
+        },
+        "deterministic_evaluation": dict(deterministic_evaluation) if isinstance(deterministic_evaluation, Mapping) else None,
+        "issues": issues,
+        "recommendations": [
+            "Treat external LLM/RAGAS-style evaluator scores as advisory only.",
+            "Keep deterministic ragflow-query evaluate-answer as the non-overridable acceptance gate.",
+            "Add script-owned evaluator execution only after explicit LLM config, fixtures, redaction, and release gates exist.",
+        ],
+    }
+
+
 def render_agentic_answer_request_markdown(request: Mapping[str, Any]) -> str:
     """Render a compact Markdown agentic-answer request."""
 
@@ -1011,6 +1453,80 @@ def render_agentic_answer_review_markdown(report: Mapping[str, Any]) -> str:
     preview = answer.get("preview")
     if isinstance(preview, str) and preview:
         lines.extend(["", "## Answer Preview", "", preview])
+    return "\n".join(lines) + "\n"
+
+
+def render_answer_evaluator_request_markdown(request: Mapping[str, Any]) -> str:
+    """Render a compact Markdown answer-evaluator request."""
+
+    summary = request.get("summary", {}) if isinstance(request.get("summary"), Mapping) else {}
+    answer = request.get("answer", {}) if isinstance(request.get("answer"), Mapping) else {}
+    lines = [
+        "# RAGFlow Answer Evaluator Request",
+        "",
+        f"- schema: `{request.get('schema', ANSWER_EVALUATOR_REQUEST_SCHEMA)}`",
+        f"- llm_invoked: `{str(bool(request.get('llm_invoked'))).lower()}`",
+        f"- deterministic_evaluation_ok: `{str(bool(summary.get('deterministic_evaluation_ok'))).lower()}`",
+        f"- evidence_count: `{summary.get('evidence_count', 0)}`",
+        f"- answer_chars: `{summary.get('answer_chars', 0)}`",
+        "",
+        "## Metrics Requested",
+        "",
+    ]
+    policy = request.get("evaluator_policy", {}) if isinstance(request.get("evaluator_policy"), Mapping) else {}
+    metrics = policy.get("metrics_requested", []) if isinstance(policy.get("metrics_requested"), list) else []
+    if metrics:
+        lines.extend(f"- `{metric}`" for metric in metrics)
+    else:
+        lines.append("- None")
+    preview = answer.get("preview")
+    if isinstance(preview, str) and preview:
+        lines.extend(["", "## Answer Preview", "", preview])
+    issues = request.get("issues", []) if isinstance(request.get("issues"), list) else []
+    if issues:
+        lines.extend(["", "## Issues", ""])
+        for issue in issues:
+            if isinstance(issue, Mapping):
+                lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    return "\n".join(lines) + "\n"
+
+
+def render_answer_evaluator_review_markdown(report: Mapping[str, Any]) -> str:
+    """Render a compact Markdown answer-evaluator review report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Answer Evaluator Review",
+        "",
+        f"- ok: `{str(bool(report.get('ok'))).lower()}`",
+        f"- schema: `{report.get('schema', ANSWER_EVALUATOR_REVIEW_REPORT_SCHEMA)}`",
+        f"- deterministic_evaluation_ok: `{str(bool(summary.get('deterministic_evaluation_ok'))).lower()}`",
+        f"- metric_count: `{summary.get('metric_count', 0)}`",
+        f"- verdict: `{summary.get('verdict') or ''}`",
+        f"- errors: `{summary.get('errors', 0)}`",
+        f"- warnings: `{summary.get('warnings', 0)}`",
+        "",
+        "## Metrics",
+        "",
+    ]
+    metrics = report.get("candidate_metrics", {}) if isinstance(report.get("candidate_metrics"), Mapping) else {}
+    if not metrics:
+        lines.append("- None")
+    else:
+        lines.extend(["| metric | score | rationale |", "| --- | ---: | --- |"])
+        for name, metric in metrics.items():
+            if not isinstance(metric, Mapping):
+                continue
+            rationale = str(metric.get("rationale") or "").replace("|", "\\|")
+            lines.append(f"| `{name}` | `{float(metric.get('score') or 0.0):.3f}` | {rationale} |")
+    lines.extend(["", "## Issues", ""])
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    if not issues:
+        lines.append("- None")
+    else:
+        for issue in issues:
+            if isinstance(issue, Mapping):
+                lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
     return "\n".join(lines) + "\n"
 
 

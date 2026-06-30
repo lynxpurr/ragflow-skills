@@ -7,15 +7,21 @@ from ragflow_skill_runtime.agentic import (
     AGENTIC_ANSWER_REVIEW_REPORT_SCHEMA,
     AGENTIC_PLAN_SCHEMA,
     AGENTIC_TRACE_SCHEMA,
+    ANSWER_EVALUATOR_REQUEST_SCHEMA,
+    ANSWER_EVALUATOR_REVIEW_REPORT_SCHEMA,
     AgenticPlanError,
     HOST_SYNTHESIS_CONTRACT_SCHEMA,
     build_agentic_execution_trace,
     build_agentic_plan,
     build_host_synthesis_contract,
     create_agentic_answer_request,
+    create_answer_evaluator_request,
     render_agentic_answer_request_markdown,
     render_agentic_answer_review_markdown,
     render_agentic_plan_markdown,
+    render_answer_evaluator_request_markdown,
+    render_answer_evaluator_review_markdown,
+    review_answer_evaluator_output,
     review_agentic_answer,
 )
 
@@ -207,6 +213,122 @@ class AgenticPlanTests(unittest.TestCase):
         self.assertIn("agentic_answer_not_advisory", codes)
         self.assertIn("agentic_answer_not_generated", codes)
         self.assertIn("agentic_answer_request_query_mismatch", codes)
+
+    def test_answer_evaluator_request_packages_deterministic_gate_without_llm(self) -> None:
+        query_payload = {
+            "ok": True,
+            "question": "What is portable?",
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "content": "Portable release artifacts include vendored runtime files.",
+                    "similarity": 0.9,
+                    "document_name": "sample.md",
+                    "dataset_id": "ds-1",
+                }
+            ],
+        }
+
+        request = create_answer_evaluator_request(
+            query_payload,
+            "Portable release artifacts include vendored runtime files [1].",
+            provider_label="external",
+            model_label="ragas-review-model",
+            expected_terms=["portable"],
+            require_citation=True,
+            max_answer_chars=32,
+            max_evidence_chars=24,
+        )
+        markdown = render_answer_evaluator_request_markdown(request)
+
+        self.assertEqual(request["schema"], ANSWER_EVALUATOR_REQUEST_SCHEMA)
+        self.assertTrue(request["ok"])
+        self.assertTrue(request["advisory"])
+        self.assertFalse(request["llm_invoked"])
+        self.assertEqual(request["model"]["script_owned_llm_calls"], 0)
+        self.assertEqual(request["summary"]["deterministic_evaluation_status"], "PASS")
+        self.assertEqual(request["summary"]["evidence_count"], 1)
+        self.assertEqual(request["deterministic_evaluation"]["schema"], "ragflow_answer_evaluation_report_v1")
+        self.assertIn("faithfulness", request["evaluator_policy"]["metrics_requested"])
+        self.assertLessEqual(len(request["answer"]["preview"]), 32)
+        self.assertLessEqual(len(request["evidence"][0]["content_preview"]), 24)
+        self.assertIn("ragflow-query evaluator review", request["instructions"]["review_command"])
+        self.assertIn("RAGFlow Answer Evaluator Request", markdown)
+
+    def test_answer_evaluator_review_validates_external_scores(self) -> None:
+        query_payload = {
+            "ok": True,
+            "question": "What is portable?",
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "content": "Portable release artifacts include vendored runtime files.",
+                    "similarity": 0.9,
+                    "document_name": "sample.md",
+                    "dataset_id": "ds-1",
+                }
+            ],
+        }
+        request = create_answer_evaluator_request(
+            query_payload,
+            "Portable release artifacts include vendored runtime files [1].",
+            expected_terms=["portable"],
+            require_citation=True,
+        )
+        candidate = {
+            "schema": "ragflow_answer_evaluator_candidate_v1",
+            "advisory": True,
+            "generated": True,
+            "verdict": "pass",
+            "metrics": {
+                "faithfulness": {"score": 0.98, "rationale": "answer matches cited evidence"},
+                "answer_relevancy": 0.91,
+            },
+        }
+
+        report = review_answer_evaluator_output(request, candidate, query_payload=query_payload)
+        markdown = render_answer_evaluator_review_markdown(report)
+
+        self.assertEqual(report["schema"], ANSWER_EVALUATOR_REVIEW_REPORT_SCHEMA)
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["summary"]["metric_count"], 2)
+        self.assertTrue(report["summary"]["deterministic_evaluation_ok"])
+        self.assertEqual(report["summary"]["script_owned_llm_calls"], 0)
+        self.assertEqual(report["candidate_metrics"]["faithfulness"]["score"], 0.98)
+        self.assertEqual(report["issues"], [])
+        self.assertIn("RAGFlow Answer Evaluator Review", markdown)
+
+    def test_answer_evaluator_review_rejects_override_of_deterministic_failure(self) -> None:
+        query_payload = {
+            "ok": True,
+            "question": "What is portable?",
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "content": "Portable release artifacts include vendored runtime files.",
+                    "similarity": 0.9,
+                }
+            ],
+        }
+        request = create_answer_evaluator_request(
+            query_payload,
+            "Portable release artifacts include vendored runtime files.",
+            require_citation=True,
+        )
+        candidate = {
+            "schema": "ragflow_answer_evaluator_candidate_v1",
+            "advisory": True,
+            "generated": True,
+            "verdict": "pass",
+            "metrics": {"faithfulness": {"score": 0.99}},
+        }
+
+        report = review_answer_evaluator_output(request, candidate)
+        codes = {issue["code"] for issue in report["issues"]}
+
+        self.assertFalse(report["ok"])
+        self.assertIn("answer_evaluator_deterministic_gate_failed", codes)
+        self.assertIn("answer_evaluator_verdict_conflicts_with_deterministic_gate", codes)
 
     def test_agentic_plan_stops_for_clarification(self) -> None:
         plan = build_agentic_plan("What about it?")

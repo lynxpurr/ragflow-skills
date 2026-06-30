@@ -666,6 +666,13 @@ Current implementation:
 - checks are deterministic and offline, reusing saved `ask --json` outputs and numeric
   citation audit behavior;
 - no LLM/RAGAS backend is invoked by the MVP.
+- `ragflow-query evaluator request` emits `ragflow_answer_evaluator_request_v1` with a
+  deterministic `evaluate-answer` gate, answer hash/text preview, bounded evidence,
+  requested RAGAS-style metric names, model/provider labels, and redaction metadata for a
+  host-approved external evaluator call.
+- `ragflow-query evaluator review` emits `ragflow_answer_evaluator_review_report_v1`,
+  validates advisory/generated external evaluator scores, and refuses to let an external
+  pass verdict override a deterministic `evaluate-answer` failure.
 
 Optional LLM/RAGAS backend:
 
@@ -675,10 +682,10 @@ Optional LLM/RAGAS backend:
 - context recall;
 - drift report against prior evaluations.
 
-As with metadata suggestions and future agentic answers, the first LLM/RAGAS adapter
-should be a request/review contract. Deterministic `evaluate-answer` remains the default
-gate; externally generated evaluator output must be reviewed, redacted, and marked
-advisory before any script-owned evaluator backend is added.
+As with metadata suggestions and agentic answers, the first LLM/RAGAS adapter is a
+request/review contract. Deterministic `evaluate-answer` remains the default gate;
+externally generated evaluator output must be reviewed, redacted, and marked advisory
+before any script-owned evaluator backend is added.
 
 ## Feature Design 11: Routing Quality Upgrade
 
@@ -1368,8 +1375,8 @@ breaker pilots must stay default-off, read-only, and scoped to `endpoint-report`
 Inventory implemented. `tools/report_surface_inventory.py` emits
 `ragflow_report_surface_inventory_v1`, imports the public CLI parsers offline, and fails
 the inventory when a public command lacks an explicit `covered`, `not_applicable`, or
-`needs_redaction` classification. The current verified inventory names 85 public commands:
-76 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
+`needs_redaction` classification. The current verified inventory names 87 public commands:
+78 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
 classification findings.
 
 `ragflow-kb-build parse-report` and `ragflow-kb-build health-report` now support
@@ -1553,7 +1560,7 @@ remain open Phase 31 work.
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene as a static Phase
 31 governance surface. It reuses the public command inventory and classifies current
 runtime-helper coverage as 19 covered commands, 0 candidate commands, 2 deferred live
-commands, and 64 not-applicable commands with no stale classification findings. Covered
+commands, and 66 not-applicable commands with no stale classification findings. Covered
 commands include the endpoint-report helper pilot, query fallback partial-failure reports,
 query-output cache reports, centroid build checkpoints, doc-to-md process cleanup
 reporting, backend probe/warmup reporting, bounded offline `doc-to-md split`
@@ -1585,7 +1592,7 @@ hygiene.
 
 The active non-live Phase 31 candidate inventory is closed. The runtime-resilience
 inventory is the authoritative ledger: 19 command surfaces are currently `covered`, 0 are
-`candidate`, 2 are intentionally `deferred` live surfaces, and 64 are `not_applicable`.
+`candidate`, 2 are intentionally `deferred` live surfaces, and 66 are `not_applicable`.
 
 Finish the remaining work in this order:
 
@@ -1673,6 +1680,6 @@ Recommended implementation order is the Phase 24-36 task list in
 This order kept the foundation document-centric before adding more complex query-time and
 LLM-assisted behavior, then closed release governance, post-ingest operational guidance,
 and generated-report safety. After the current Phase 36 closure, remaining completion work
-should prioritize the remaining LLM/RAGAS evaluator request/review boundary, then
-explicitly gated live validation, then local service, packaging, provider, and web/API
-product adapters.
+should prioritize explicitly gated live validation, then local service, packaging,
+provider, and web/API product adapters. Script-owned LLM/RAGAS evaluator execution remains
+deferred behind explicit config, deterministic fixtures, redaction, and release gates.

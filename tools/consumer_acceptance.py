@@ -4698,6 +4698,13 @@ raise SystemExit(code)
     query_agentic_answer_review_json = work_root / "query_agentic_answer_review.json"
     query_agentic_answer_review_md = work_root / "query_agentic_answer_review.md"
     query_agentic_answer_review_redaction = work_root / "query_agentic_answer_review_redaction.json"
+    query_evaluator_request_json = work_root / "query_evaluator_request.json"
+    query_evaluator_request_md = work_root / "query_evaluator_request.md"
+    query_evaluator_request_redaction = work_root / "query_evaluator_request_redaction.json"
+    query_evaluator_candidate_json = work_root / "query_evaluator_candidate.json"
+    query_evaluator_review_json = work_root / "query_evaluator_review.json"
+    query_evaluator_review_md = work_root / "query_evaluator_review.md"
+    query_evaluator_review_redaction = work_root / "query_evaluator_review_redaction.json"
     query_output.write_text(
         json.dumps(
             {
@@ -5543,6 +5550,104 @@ raise SystemExit(code)
     _record_file_check(checks, "query agentic-answer review redaction", query_agentic_answer_review_redaction)
     if query_agentic_answer_review_redaction.exists():
         produced.append(query_agentic_answer_review_redaction)
+
+    query_evaluator_request = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "evaluator",
+            "request",
+            "--query-output",
+            str(query_output),
+            "--answer",
+            "The release artifact can run without repository source context [1].",
+            "--provider-label",
+            "external",
+            "--model-label",
+            "consumer-evaluator-model",
+            "--expected-term",
+            "release",
+            "--require-citation",
+            "--report-json",
+            str(query_evaluator_request_json),
+            "--report-md",
+            str(query_evaluator_request_md),
+            "--redaction-report",
+            str(query_evaluator_request_redaction),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query evaluator request",
+        query_evaluator_request,
+        required_output='"schema": "ragflow_answer_evaluator_request_v1"',
+    )
+    if query_evaluator_request_json.exists():
+        produced.append(query_evaluator_request_json)
+    if query_evaluator_request_md.exists():
+        produced.append(query_evaluator_request_md)
+    _record_file_check(checks, "query evaluator request redaction", query_evaluator_request_redaction)
+    if query_evaluator_request_redaction.exists():
+        produced.append(query_evaluator_request_redaction)
+
+    query_evaluator_candidate_json.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_answer_evaluator_candidate_v1",
+                "advisory": True,
+                "generated": True,
+                "verdict": "pass",
+                "metrics": {
+                    "faithfulness": {"score": 0.96, "rationale": "answer is supported by citation [1]"},
+                    "answer_relevancy": {"score": 0.91, "rationale": "answer addresses the release artifact question"},
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    query_evaluator_review = _run_command(
+        [
+            python_executable,
+            str(query_script),
+            "evaluator",
+            "review",
+            "--query-output",
+            str(query_output),
+            "--request",
+            str(query_evaluator_request_json),
+            "--candidate",
+            str(query_evaluator_candidate_json),
+            "--report-json",
+            str(query_evaluator_review_json),
+            "--report-md",
+            str(query_evaluator_review_md),
+            "--redaction-report",
+            str(query_evaluator_review_redaction),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "query evaluator review",
+        query_evaluator_review,
+        required_output='"schema": "ragflow_answer_evaluator_review_report_v1"',
+    )
+    if query_evaluator_candidate_json.exists():
+        produced.append(query_evaluator_candidate_json)
+    if query_evaluator_review_json.exists():
+        produced.append(query_evaluator_review_json)
+    if query_evaluator_review_md.exists():
+        produced.append(query_evaluator_review_md)
+    _record_file_check(checks, "query evaluator review redaction", query_evaluator_review_redaction)
+    if query_evaluator_review_redaction.exists():
+        produced.append(query_evaluator_review_redaction)
 
     missing_config = _run_command(
         [

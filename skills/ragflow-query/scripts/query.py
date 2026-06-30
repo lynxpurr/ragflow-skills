@@ -54,6 +54,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     build_query_session_inspection,
     build_query_endpoint_report,
     build_query_trace,
+    create_answer_evaluator_request,
     diagnose_query_result,
     evaluate_answer,
     configured_private_hosts_from_urls,
@@ -83,6 +84,8 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_answer_evaluation_markdown,
     render_agentic_answer_request_markdown,
     render_agentic_answer_review_markdown,
+    render_answer_evaluator_request_markdown,
+    render_answer_evaluator_review_markdown,
     render_assistant_profile_recommendation_markdown,
     render_assistant_test_plan_review_markdown,
     render_agentic_plan_markdown,
@@ -110,6 +113,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     run_fusion_tests,
     run_query_fallback_tests,
     recommend_assistant_profile,
+    review_answer_evaluator_output,
     review_agentic_answer,
     review_assistant_test_plan,
     resolve_dataset_ids,
@@ -1254,6 +1258,133 @@ def _agentic_answer_review(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _sanitize_answer_evaluator_request(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+    answer: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(answer),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.answer_file,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _answer_evaluator_request(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        answer = args.answer
+        if args.answer_file:
+            answer = Path(args.answer_file).read_text(encoding="utf-8")
+        if not answer or not answer.strip():
+            raise ValueError("answer text is required")
+        report = create_answer_evaluator_request(
+            query_payload,
+            answer,
+            model_label=args.model_label,
+            provider_label=args.provider_label,
+            expected_terms=args.expected_term,
+            require_citation=args.require_citation,
+            allow_abstain=args.allow_abstain,
+            min_cited_evidence_score=args.min_cited_evidence_score,
+            include_answer_text=args.include_answer_text,
+            max_answer_chars=args.max_answer_chars,
+            include_evidence_previews=args.include_evidence_previews,
+            max_evidence_chars=args.max_evidence_chars,
+        )
+    except (AgenticPlanError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_answer_evaluator_request(report, args, query_payload, answer or "")
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_answer_evaluator_request_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_answer_evaluator_review(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any] | None,
+    request_payload: dict[str, Any],
+    candidate_payload: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload or {}),
+        *_collect_urls(request_payload),
+        *_collect_urls(candidate_payload),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.request,
+            args.candidate,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _answer_evaluator_review(args: argparse.Namespace) -> int:
+    try:
+        request_payload = _read_json(args.request)
+        if not isinstance(request_payload, dict):
+            raise ValueError("request must be a JSON object")
+        candidate_payload = _read_json(args.candidate)
+        if not isinstance(candidate_payload, dict):
+            raise ValueError("candidate must be a JSON object")
+        query_payload = None
+        if args.query_output:
+            query_payload = _read_json(args.query_output)
+            if not isinstance(query_payload, dict):
+                raise ValueError("query output must be a JSON object")
+        report = review_answer_evaluator_output(
+            request_payload,
+            candidate_payload,
+            query_payload=query_payload,
+            require_advisory=args.require_advisory,
+            require_generated=args.require_generated,
+        )
+    except (AgenticPlanError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_answer_evaluator_review(
+            report,
+            args,
+            query_payload,
+            request_payload,
+            candidate_payload,
+        )
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_answer_evaluator_review_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _audit_citations(args: argparse.Namespace) -> int:
     try:
         query_payload = _read_json(args.query_output)
@@ -2091,6 +2222,67 @@ def build_parser() -> argparse.ArgumentParser:
     agentic_answer_review.set_defaults(
         func=_agentic_answer_review,
         require_citation=True,
+        require_advisory=True,
+        require_generated=True,
+    )
+
+    evaluator = sub.add_parser("evaluator", help="Request or review external answer evaluator scores")
+    evaluator_sub = evaluator.add_subparsers(dest="evaluator_command", required=True)
+    evaluator_request = evaluator_sub.add_parser(
+        "request",
+        help="Create a no-LLM answer evaluator request artifact",
+        description="Create a no-LLM answer evaluator request artifact",
+    )
+    evaluator_request.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    evaluator_request_group = evaluator_request.add_mutually_exclusive_group(required=True)
+    evaluator_request_group.add_argument("--answer", help="Host-generated answer text")
+    evaluator_request_group.add_argument("--answer-file", help="File containing host-generated answer text")
+    evaluator_request.add_argument("--provider-label", help="Optional external provider label")
+    evaluator_request.add_argument("--model-label", help="Optional external model label")
+    evaluator_request.add_argument("--expected-term", action="append", default=[], help="Expected term; repeatable")
+    evaluator_request.add_argument("--require-citation", action="store_true", help="Fail when evidence exists but answer lacks citations")
+    evaluator_request.add_argument("--allow-abstain", action="store_true", help="Allow no-evidence abstention wording")
+    evaluator_request.add_argument("--min-cited-evidence-score", type=float)
+    evaluator_request.add_argument("--max-answer-chars", type=int, default=4000)
+    evaluator_request.add_argument("--max-evidence-chars", type=int, default=1200)
+    evaluator_request.add_argument(
+        "--no-answer-text",
+        dest="include_answer_text",
+        action="store_false",
+        help="Do not include bounded answer text in the request",
+    )
+    evaluator_request.add_argument(
+        "--no-evidence-previews",
+        dest="include_evidence_previews",
+        action="store_false",
+        help="Do not include bounded evidence previews in the request",
+    )
+    evaluator_request.add_argument("--report-json", help="Optional JSON report output path")
+    evaluator_request.add_argument("--report-md", help="Optional Markdown report output path")
+    evaluator_request.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    evaluator_request.add_argument("--json", action="store_true", help="Emit JSON report")
+    evaluator_request.set_defaults(
+        func=_answer_evaluator_request,
+        include_answer_text=True,
+        include_evidence_previews=True,
+    )
+
+    evaluator_review = evaluator_sub.add_parser(
+        "review",
+        help="Review external answer evaluator scores",
+        description="Review external answer evaluator scores",
+    )
+    evaluator_review.add_argument("--request", required=True, help="ragflow_answer_evaluator_request_v1 JSON")
+    evaluator_review.add_argument("--candidate", required=True, help="External answer evaluator candidate JSON")
+    evaluator_review.add_argument("--query-output", help="Optional JSON output from query.py ask for request hash verification")
+    evaluator_review.add_argument("--no-require-advisory", dest="require_advisory", action="store_false")
+    evaluator_review.add_argument("--no-require-generated", dest="require_generated", action="store_false")
+    evaluator_review.add_argument("--report-json", help="Optional JSON report output path")
+    evaluator_review.add_argument("--report-md", help="Optional Markdown report output path")
+    evaluator_review.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    evaluator_review.add_argument("--json", action="store_true", help="Emit JSON report")
+    evaluator_review.set_defaults(
+        func=_answer_evaluator_review,
         require_advisory=True,
         require_generated=True,
     )

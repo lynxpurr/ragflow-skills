@@ -20,12 +20,12 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_report_surface_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 85)
+        self.assertEqual(report["summary"]["command_count"], 87)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
             {
-                "covered": 76,
+                "covered": 78,
                 "needs_redaction": 0,
                 "not_applicable": 9,
             },
@@ -97,6 +97,16 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
         self.assertEqual(agentic_answer_review["status"], "covered")
         self.assertIn("redaction_sidecar", agentic_answer_review["output_categories"])
         self.assertIn("markdown_report", agentic_answer_review["output_categories"])
+
+        evaluator_request = by_command["ragflow-query evaluator request"]
+        self.assertEqual(evaluator_request["status"], "covered")
+        self.assertIn("redaction_sidecar", evaluator_request["output_categories"])
+        self.assertIn("markdown_report", evaluator_request["output_categories"])
+
+        evaluator_review = by_command["ragflow-query evaluator review"]
+        self.assertEqual(evaluator_review["status"], "covered")
+        self.assertIn("redaction_sidecar", evaluator_review["output_categories"])
+        self.assertIn("markdown_report", evaluator_review["output_categories"])
 
         activation_plan = by_command["ragflow-kb-build activation-plan"]
         self.assertEqual(activation_plan["status"], "covered")

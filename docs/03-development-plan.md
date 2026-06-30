@@ -50,12 +50,12 @@ Partially completed and still active:
     are implemented.
   - Agentic-answer request/review now packages host or external answer synthesis
     requests and validates returned answers without script-owned model calls.
-  - Optional script-owned answer synthesis, reflection, and LLM/RAGAS-style evaluation
-    remain future adapters.
+  - Optional script-owned answer synthesis, reflection, and LLM/RAGAS-style evaluator
+    backend execution remain future adapters.
 - Phase 31 runtime resilience
   - Report redaction and generated-report safety are closed for the current inventory.
-  - Runtime helper coverage currently tracks 85 public command surfaces: 19 `covered`,
-    0 `candidate`, 2 `deferred`, and 64 `not_applicable`.
+  - Runtime helper coverage currently tracks 87 public command surfaces: 19 `covered`,
+    0 `candidate`, 2 `deferred`, and 66 `not_applicable`.
   - The bounded non-live checkpoint/resume and partial-failure candidate inventory is
     closed; remaining resilience work is explicitly gated live mutation or future
     adapter scope.
@@ -77,8 +77,8 @@ Completion priorities:
 1. Keep the portable archive release path green while new work is added behind
    deterministic, no-network defaults.
 2. Add optional LLM adapters as request/review boundaries before any script-owned model
-   call. Metadata, grounded-QA, and agentic-answer boundaries are complete; the remaining
-   request/review boundary is LLM/RAGAS-style evaluation.
+   call. Metadata, grounded-QA, agentic-answer, and answer-evaluator boundaries are
+   complete.
 3. Add live disposable tests only when credentials, exact confirmation, retained cleanup
    artifacts, and explicit approval are present.
 4. Consider `serve`, wheel packaging, provider abstractions, remote conversion clients,
@@ -91,20 +91,18 @@ remain in their owning phases below.
 
 | Track | Existing open items | Current status | Completion rule |
 | --- | --- | --- | --- |
-| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory closed | Runtime inventory stays at 19 `covered`, 0 `candidate`, 2 intentionally `deferred`, and 64 `not_applicable` command surfaces. |
+| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory closed | Runtime inventory stays at 19 `covered`, 0 `candidate`, 2 intentionally `deferred`, and 66 `not_applicable` command surfaces. |
 | Document split packaging | Phase 16 optional manifest rewrite/package mode | Complete for current CLI scope | Split outputs can be resumed and optionally repackaged without breaking existing segment-directory ingestion. |
 | Query service and agentic adapters | Phase 3 `serve`, Phase 21/30 script-owned synthesis and reflection | Host-assisted agentic retrieval and agentic-answer request/review complete; local service and script-owned answer synthesis deferred | Implement script-owned synthesis only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
 | Live disposable optimization | Phase 17 live probe tests, Phase 26 live disposable tests, Phase 27 live enrichment tests | Build, validation, and cleanup execution gates complete for current CLI scope; live tests deferred | Requires credentials, explicit confirmation, exact cleanup confirmation, retained dataset IDs, and user approval. |
-| Optional LLM-assisted adapters | Phase 26 grounded QA, Phase 30 agentic answer synthesis, Phase 30 LLM/RAGAS-style evaluator | Metadata, grounded-QA, and agentic-answer request/review boundaries complete; LLM/RAGAS evaluator boundary remains deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
+| Optional LLM-assisted adapters | Phase 26 grounded QA, Phase 30 agentic answer synthesis, Phase 30 LLM/RAGAS-style evaluator | Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries complete; script-owned LLM/RAGAS backends remain deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
 | Packaging and platform adapters | Backlog wheel path, remote conversion service client, provider abstractions, web/API wrapper | Post-CLI backlog | Start only after the portable archive release path remains green and users need a non-archive deployment model. |
 | Private dedao bridge | Deferred private adapter tasks | Outside public release scope | Keep private examples and adapter logic outside public `skills/`; consume only public handoff shapes. |
 
 Recommended completion queue:
 
-1. Add an LLM/RAGAS-style evaluator request/review boundary after deterministic
-   `evaluate-answer` remains the default gate.
-2. Add live disposable optimization tests only in an approved credentialed environment.
-3. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients,
+1. Add live disposable optimization tests only in an approved credentialed environment.
+2. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients,
    and web/API wrappers as post-CLI product adapters.
 
 ## Phase 0: Architecture Skeleton
@@ -1070,7 +1068,7 @@ Tasks:
 - [x] Add `ragflow-query evaluate-answer`.
 - [x] Add deterministic answer checks for citation presence, citation reachability, unsupported-claim warnings, and abstention behavior.
 - [ ] Add optional LLM/RAGAS-style backend as a deferred adapter.
-- [ ] Add an LLM/RAGAS evaluator request/review boundary before any backend invocation.
+- [x] Add an LLM/RAGAS evaluator request/review boundary before any backend invocation.
 - [x] Add offline unit tests and fixture traces.
 
 MVP note: `agentic-answer request` creates a no-LLM advisory request artifact from a
@@ -1079,7 +1077,12 @@ redaction metadata for a host-approved external model call. `agentic-answer revi
 checks an external candidate answer with deterministic citation audit and
 `evaluate-answer` compatibility, advisory/generated markings, Markdown, redaction
 sidecars, consumer acceptance, and platform smoke coverage. The public script still does
-not invoke a model or synthesize answers itself.
+not invoke a model or synthesize answers itself. `evaluator request` now packages a
+deterministic `evaluate-answer` gate, answer hash/text preview, evidence, requested
+RAGAS-style metric names, model/provider labels, and redaction metadata for an external
+evaluator call. `evaluator review` validates advisory/generated external evaluator scores
+and refuses to let a candidate verdict override a deterministic `evaluate-answer` failure.
+The optional script-owned LLM/RAGAS backend remains deferred.
 
 Exit criteria:
 
@@ -1176,8 +1179,8 @@ sanitized reports and redaction sidecars should be stored and what must stay out
 transcripts.
 `tools/runtime_resilience_inventory.py` now emits
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene to track Phase 31
-runtime helper coverage without broadening live behavior. The current inventory names 85
-public commands: 19 `covered`, 0 `candidate`, 2 `deferred`, and 64 `not_applicable`, with
+runtime helper coverage without broadening live behavior. The current inventory names 87
+public commands: 19 `covered`, 0 `candidate`, 2 `deferred`, and 66 `not_applicable`, with
 no stale classification findings. Covered surfaces include `ragflow-query endpoint-report`,
 `ragflow-query fallback-test`, `ragflow-query cache-report`, `ragflow-query centroid build`,
 `ragflow-doc-to-md` process cleanup reporting, `ragflow-doc-to-md backend probe`,
@@ -1433,7 +1436,7 @@ Tasks:
 Status note: `tools/report_surface_inventory.py` now emits
 `ragflow_report_surface_inventory_v1`, dynamically enumerates public argparse command
 leaves, and overlays an explicit Phase 36 classification. The verified inventory currently
-names 85 public commands: 76 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with
+names 87 public commands: 78 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with
 no uncatalogued or stale classification findings. Generated-report redaction coverage is
 now closed across inventoried public command surfaces; `ragflow-doc-to-md`
 and `ragflow-query` report commands are currently classified as covered or not applicable.

@@ -1210,6 +1210,154 @@ class QueryCliTests(unittest.TestCase):
         self.assertNotIn(fake_key, combined)
         self.assertNotIn(home_path, combined)
 
+    def test_answer_evaluator_request_and_review_write_redacted_reports(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            query_output = root / "query.json"
+            request_json = root / "answer_evaluator_request.json"
+            request_md = root / "answer_evaluator_request.md"
+            request_redaction = root / "answer_evaluator_request_redaction.json"
+            candidate_json = root / "answer_evaluator_candidate.json"
+            review_json = root / "answer_evaluator_review.json"
+            review_md = root / "answer_evaluator_review.md"
+            review_redaction = root / "answer_evaluator_review_redaction.json"
+            private_host = ".".join(["192", "168", "73", "95"])
+            fake_token = "fake-evaluator-token"
+            fake_key = "fake-evaluator-secret"
+            home_path = str(Path.home() / ".ragflow" / "evaluator.local.yaml")
+            query_output.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "question": f"What does http://{private_host}:9380/expose?token={fake_token}",
+                        "chunks": [
+                            {
+                                "chunk_id": "eval-chunk",
+                                "content": f"Supported evaluator evidence mentions api_key={fake_key}.",
+                                "similarity": 0.91,
+                                "document_name": home_path,
+                                "dataset_id": "ds-evaluator",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                request_code = module.main(
+                    [
+                        "evaluator",
+                        "request",
+                        "--query-output",
+                        str(query_output),
+                        "--answer",
+                        f"Supported evaluator evidence mentions api_key={fake_key} [1].",
+                        "--provider-label",
+                        "external",
+                        "--model-label",
+                        "ragas-review-model",
+                        "--expected-term",
+                        "Supported evaluator evidence",
+                        "--require-citation",
+                        "--report-json",
+                        str(request_json),
+                        "--report-md",
+                        str(request_md),
+                        "--redaction-report",
+                        str(request_redaction),
+                        "--json",
+                    ]
+                )
+            request_output = stdout.getvalue()
+            request_payload = json.loads(request_output)
+            candidate_json.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_answer_evaluator_candidate_v1",
+                        "advisory": True,
+                        "generated": True,
+                        "verdict": "pass",
+                        "metrics": {
+                            "faithfulness": {
+                                "score": 0.97,
+                                "rationale": f"Matches evidence from http://{private_host}:9380 with token={fake_token}.",
+                            },
+                            "answer_relevancy": {"score": 0.92, "rationale": f"Uses {home_path}."},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                review_code = module.main(
+                    [
+                        "evaluator",
+                        "review",
+                        "--query-output",
+                        str(query_output),
+                        "--request",
+                        str(request_json),
+                        "--candidate",
+                        str(candidate_json),
+                        "--report-json",
+                        str(review_json),
+                        "--report-md",
+                        str(review_md),
+                        "--redaction-report",
+                        str(review_redaction),
+                        "--json",
+                    ]
+                )
+            review_output = stdout.getvalue()
+            review_payload = json.loads(review_output)
+            request_text = request_json.read_text(encoding="utf-8")
+            request_markdown = request_md.read_text(encoding="utf-8")
+            request_redaction_text = request_redaction.read_text(encoding="utf-8")
+            review_text = review_json.read_text(encoding="utf-8")
+            review_markdown = review_md.read_text(encoding="utf-8")
+            review_redaction_text = review_redaction.read_text(encoding="utf-8")
+            request_redaction_payload = json.loads(request_redaction_text)
+            review_redaction_payload = json.loads(review_redaction_text)
+
+        combined = "\n".join(
+            [
+                request_output,
+                request_text,
+                request_markdown,
+                request_redaction_text,
+                review_output,
+                review_text,
+                review_markdown,
+                review_redaction_text,
+            ]
+        )
+        self.assertEqual(request_code, 0, request_output)
+        self.assertEqual(request_payload["schema"], "ragflow_answer_evaluator_request_v1")
+        self.assertFalse(request_payload["llm_invoked"])
+        self.assertEqual(request_payload["model"]["script_owned_llm_calls"], 0)
+        self.assertEqual(review_code, 0, review_output)
+        self.assertEqual(review_payload["schema"], "ragflow_answer_evaluator_review_report_v1")
+        self.assertEqual(review_payload["summary"]["script_owned_llm_calls"], 0)
+        self.assertEqual(review_payload["summary"]["metric_count"], 2)
+        self.assertEqual(request_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertEqual(review_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(request_redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(request_redaction_payload["rule_counts"]["assignment_secret"], 1)
+        self.assertGreaterEqual(request_redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(request_redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertGreaterEqual(review_redaction_payload["rule_counts"]["query_secret"], 1)
+        self.assertGreaterEqual(review_redaction_payload["rule_counts"]["private_host"], 1)
+        self.assertGreaterEqual(review_redaction_payload["rule_counts"]["home_path"], 1)
+        self.assertIn("RAGFlow Answer Evaluator Request", request_markdown)
+        self.assertIn("RAGFlow Answer Evaluator Review", review_markdown)
+        self.assertNotIn(private_host, combined)
+        self.assertNotIn(fake_token, combined)
+        self.assertNotIn(fake_key, combined)
+        self.assertNotIn(home_path, combined)
+
     def test_ask_rewrite_and_multi_query_record_trace_and_retrievals(self) -> None:
         class RewriteClient(FakeQueryClient):
             def retrieve(self, *, question, dataset_ids, top_k=5, similarity_threshold=None):

@@ -1291,6 +1291,80 @@ agentic_answer_review_payload = json.loads(stdout.getvalue())
 if agentic_answer_review_payload.get("schema") != "ragflow_agentic_answer_review_report_v1":
     raise SystemExit(31)
 
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    evaluator_request_code = module.main([
+        "evaluator",
+        "request",
+        "--query-output",
+        str(artifacts_dir / "query_host_assisted.json"),
+        "--answer",
+        "The known term is present in the portable validation chunk [1].",
+        "--provider-label",
+        "external",
+        "--model-label",
+        "smoke-evaluator-model",
+        "--expected-term",
+        "known term",
+        "--require-citation",
+        "--report-json",
+        str(artifacts_dir / "query_evaluator_request.json"),
+        "--report-md",
+        str(artifacts_dir / "query_evaluator_request.md"),
+        "--redaction-report",
+        str(artifacts_dir / "query_evaluator_request_redaction.json"),
+        "--json",
+    ])
+if evaluator_request_code != 0:
+    raise SystemExit(evaluator_request_code)
+evaluator_request_payload = json.loads(stdout.getvalue())
+if evaluator_request_payload.get("schema") != "ragflow_answer_evaluator_request_v1":
+    raise SystemExit(34)
+
+evaluator_candidate_path = artifacts_dir / "query_evaluator_candidate.json"
+evaluator_candidate_path.write_text(
+    json.dumps(
+        {{
+            "schema": "ragflow_answer_evaluator_candidate_v1",
+            "advisory": True,
+            "generated": True,
+            "verdict": "pass",
+            "metrics": {{
+                "faithfulness": {{"score": 0.97, "rationale": "answer is supported by citation [1]"}},
+                "answer_relevancy": {{"score": 0.9, "rationale": "answer addresses the query"}},
+            }},
+        }},
+        ensure_ascii=False,
+        indent=2,
+    )
+    + "\\n",
+    encoding="utf-8",
+)
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    evaluator_review_code = module.main([
+        "evaluator",
+        "review",
+        "--query-output",
+        str(artifacts_dir / "query_host_assisted.json"),
+        "--request",
+        str(artifacts_dir / "query_evaluator_request.json"),
+        "--candidate",
+        str(evaluator_candidate_path),
+        "--report-json",
+        str(artifacts_dir / "query_evaluator_review.json"),
+        "--report-md",
+        str(artifacts_dir / "query_evaluator_review.md"),
+        "--redaction-report",
+        str(artifacts_dir / "query_evaluator_review_redaction.json"),
+        "--json",
+    ])
+if evaluator_review_code != 0:
+    raise SystemExit(evaluator_review_code)
+evaluator_review_payload = json.loads(stdout.getvalue())
+if evaluator_review_payload.get("schema") != "ragflow_answer_evaluator_review_report_v1":
+    raise SystemExit(35)
+
 multi_query_path = artifacts_dir / "query_multi_input.json"
 multi_query_path.write_text(
     json.dumps({{"queries": [{{"id": "rewrite-cn", "query": "运行时 配置"}}]}}, ensure_ascii=False, indent=2)
@@ -4166,6 +4240,13 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "query_agentic_answer_review.json",
         artifacts_dir / "query_agentic_answer_review.md",
         artifacts_dir / "query_agentic_answer_review_redaction.json",
+        artifacts_dir / "query_evaluator_request.json",
+        artifacts_dir / "query_evaluator_request.md",
+        artifacts_dir / "query_evaluator_request_redaction.json",
+        artifacts_dir / "query_evaluator_candidate.json",
+        artifacts_dir / "query_evaluator_review.json",
+        artifacts_dir / "query_evaluator_review.md",
+        artifacts_dir / "query_evaluator_review_redaction.json",
         artifacts_dir / "query_multi.json",
         artifacts_dir / "query_multi_trace.json",
         artifacts_dir / "citation_audit.json",

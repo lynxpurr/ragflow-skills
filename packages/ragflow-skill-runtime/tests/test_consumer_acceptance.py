@@ -155,6 +155,8 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("query agentic plan redaction", check_names)
         self.assertIn("query agentic-answer request redaction", check_names)
         self.assertIn("query agentic-answer review redaction", check_names)
+        self.assertIn("query evaluator request redaction", check_names)
+        self.assertIn("query evaluator review redaction", check_names)
         self.assertIn("query endpoint-report", check_names)
         self.assertIn("query endpoint-report runtime metrics", check_names)
         self.assertIn("query endpoint-report retry policy", check_names)

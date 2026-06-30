@@ -74,6 +74,8 @@ SANITIZED_MARKDOWN_VERIFIED_COMMANDS = (
     "ragflow-query diagnose-result",
     "ragflow-query endpoint-report",
     "ragflow-query evaluate-answer",
+    "ragflow-query evaluator request",
+    "ragflow-query evaluator review",
     "ragflow-query fallback-test",
     "ragflow-query fusion",
     "ragflow-query fusion-test",
