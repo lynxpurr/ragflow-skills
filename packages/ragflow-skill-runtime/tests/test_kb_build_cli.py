@@ -59,6 +59,7 @@ class FakeOptimizeBuildClient:
         self.uploads: list[tuple[str, str]] = []
         self.parsed: list[tuple[str, list[str]]] = []
         self.retrievals: list[tuple[str, list[str], int]] = []
+        self.deleted: list[str] = []
         self.documents: dict[str, list[dict[str, object]]] = {}
         FakeOptimizeBuildClient.instances.append(self)
 
@@ -96,6 +97,10 @@ class FakeOptimizeBuildClient:
                 ]
             }
         }
+
+    def delete_dataset(self, dataset_id):
+        self.deleted.append(str(dataset_id))
+        return {"data": {"id": dataset_id, "deleted": True}}
 
 
 class FakeValidationClient:
@@ -4093,6 +4098,113 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(cleanup_payload["summary"]["ready_target_count"], 1)
         self.assertIn("--confirm-dataset-id", cleanup_payload["targets"][0]["commands"]["execute"])
         self.assertIn("RAGFlow Optimization Cleanup Plan", cleanup_md_text)
+
+    def test_optimize_cleanup_execute_requires_exact_target_confirmation(self) -> None:
+        module = load_build_module()
+        FakeOptimizeBuildClient.instances = []
+        module.RAGFlowClient = FakeOptimizeBuildClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cleanup_plan = root / "cleanup_plan.json"
+            cleanup_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_optimization_cleanup_plan_v1",
+                        "targets": [
+                            {
+                                "profile_id": "candidate-a",
+                                "status": "ready",
+                                "target": {"dataset_id": "ds-cleanup", "dataset_name": "kb:cleanup"},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "optimize",
+                        "cleanup-execute",
+                        "--cleanup-plan",
+                        str(cleanup_plan),
+                        "--execute",
+                        "--confirm-dataset-id",
+                        "ds-cleanup",
+                        "--confirm-kb-name",
+                        "kb:wrong",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(code, 2, stdout.getvalue())
+        self.assertIn("confirmations must exactly match", json.loads(stdout.getvalue())["error"])
+        self.assertEqual(FakeOptimizeBuildClient.instances, [])
+
+    def test_optimize_cleanup_execute_deletes_ready_targets_with_fake_client(self) -> None:
+        module = load_build_module()
+        FakeOptimizeBuildClient.instances = []
+        module.RAGFlowClient = FakeOptimizeBuildClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cleanup_plan = root / "cleanup_plan.json"
+            output = root / "cleanup_execution_report.json"
+            cleanup_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_optimization_cleanup_plan_v1",
+                        "targets": [
+                            {
+                                "profile_id": "candidate-a",
+                                "disposable_kb_name": "kb:cleanup-a",
+                                "status": "ready",
+                                "kb_manifest": str(root / "candidate-a" / "kb_manifest.json"),
+                                "target": {"dataset_id": "ds-cleanup-a", "dataset_name": "kb:cleanup-a"},
+                            },
+                            {
+                                "profile_id": "candidate-b",
+                                "disposable_kb_name": "kb:cleanup-b",
+                                "status": "pending_manifest",
+                                "target": {"dataset_id": None, "dataset_name": "kb:cleanup-b"},
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "optimize",
+                        "cleanup-execute",
+                        "--cleanup-plan",
+                        str(cleanup_plan),
+                        "--output",
+                        str(output),
+                        "--execute",
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "fake-key",
+                        "--confirm-dataset-id",
+                        "ds-cleanup-a",
+                        "--confirm-kb-name",
+                        "kb:cleanup-a",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            output_payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(payload["schema"], "ragflow_optimization_cleanup_execution_report_v1")
+        self.assertTrue(payload["mutation_allowed"])
+        self.assertEqual(payload["summary"]["deleted_target_count"], 1)
+        self.assertEqual(payload["results"][0]["target"]["dataset_id"], "ds-cleanup-a")
+        self.assertEqual(output_payload["summary"]["cleanup_executed"], True)
+        self.assertEqual(len(FakeOptimizeBuildClient.instances), 1)
+        self.assertEqual(FakeOptimizeBuildClient.instances[0].deleted, ["ds-cleanup-a"])
 
     def test_optimize_report_surfaces_emit_redaction_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

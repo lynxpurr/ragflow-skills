@@ -114,6 +114,7 @@ _ASSIGNMENT_SECRET_VALUE_RE = re.compile(
 )
 OPTIMIZATION_PLAN_CHECKPOINT_SCHEMA = "ragflow_optimization_plan_checkpoint_v1"
 OPTIMIZATION_COMMAND_MANIFEST_SCHEMA = "ragflow_optimization_command_manifest_v1"
+OPTIMIZATION_CLEANUP_EXECUTION_REPORT_SCHEMA = "ragflow_optimization_cleanup_execution_report_v1"
 
 
 def _dump_json(data: Any) -> None:
@@ -1781,6 +1782,132 @@ def _run_optimize_cleanup_plan(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _cleanup_target_key(dataset_id: str, dataset_name: str | None) -> tuple[str, str | None]:
+    return dataset_id, dataset_name or None
+
+
+def _confirmed_cleanup_keys(args: argparse.Namespace) -> set[tuple[str, str | None]]:
+    dataset_ids = list(args.confirm_dataset_id or [])
+    kb_names = list(args.confirm_kb_name or [])
+    if len(dataset_ids) != len(kb_names):
+        raise BuildError("cleanup-execute requires matching repeated --confirm-dataset-id and --confirm-kb-name values")
+    return {_cleanup_target_key(dataset_id, kb_name) for dataset_id, kb_name in zip(dataset_ids, kb_names, strict=True)}
+
+
+def _ready_cleanup_targets(cleanup_plan: Mapping[str, Any]) -> list[dict[str, Any]]:
+    if cleanup_plan.get("schema") != "ragflow_optimization_cleanup_plan_v1":
+        raise BuildError("cleanup-execute requires a ragflow_optimization_cleanup_plan_v1 cleanup plan")
+    targets = cleanup_plan.get("targets")
+    if not isinstance(targets, list):
+        raise BuildError("cleanup-execute cleanup plan targets must be a list")
+    ready = []
+    for index, target in enumerate(targets):
+        if not isinstance(target, Mapping):
+            raise BuildError(f"cleanup-execute target[{index}] must be an object")
+        target_payload = target.get("target") if isinstance(target.get("target"), Mapping) else {}
+        dataset_id = target_payload.get("dataset_id")
+        dataset_name = target_payload.get("dataset_name")
+        if target.get("status") != "ready":
+            continue
+        if not isinstance(dataset_id, str) or not dataset_id:
+            raise BuildError(f"cleanup-execute ready target[{index}] is missing target.dataset_id")
+        if dataset_name is not None and not isinstance(dataset_name, str):
+            raise BuildError(f"cleanup-execute ready target[{index}] target.dataset_name must be a string when present")
+        ready.append(
+            {
+                "index": index,
+                "profile_id": target.get("profile_id"),
+                "disposable_kb_name": target.get("disposable_kb_name"),
+                "kb_manifest": target.get("kb_manifest"),
+                "cleanup_plan": target.get("cleanup_plan"),
+                "target": {
+                    "dataset_id": dataset_id,
+                    "dataset_name": dataset_name,
+                },
+            }
+        )
+    return ready
+
+
+def _require_cleanup_execute_confirmation(args: argparse.Namespace, ready_targets: list[Mapping[str, Any]]) -> None:
+    if not args.execute:
+        raise BuildError("cleanup-execute requires --execute")
+    if not ready_targets:
+        raise BuildError("cleanup-execute requires at least one ready cleanup target")
+    expected = {
+        _cleanup_target_key(
+            str(target["target"]["dataset_id"]),
+            target["target"].get("dataset_name") if isinstance(target.get("target"), Mapping) else None,
+        )
+        for target in ready_targets
+    }
+    confirmed = _confirmed_cleanup_keys(args)
+    if confirmed != expected:
+        missing = sorted(expected - confirmed)
+        extra = sorted(confirmed - expected)
+        details = []
+        if missing:
+            details.append("missing confirmations: " + ", ".join(f"{dataset_id}:{kb_name or ''}" for dataset_id, kb_name in missing))
+        if extra:
+            details.append("unexpected confirmations: " + ", ".join(f"{dataset_id}:{kb_name or ''}" for dataset_id, kb_name in extra))
+        raise BuildError("cleanup-execute confirmations must exactly match ready targets" + (f" ({'; '.join(details)})" if details else ""))
+
+
+def _run_optimize_cleanup_execute(args: argparse.Namespace) -> int:
+    try:
+        context_secrets, context_hosts, context_paths = _collect_redaction_context_from_json_paths([args.cleanup_plan])
+        cleanup_plan = _read_json_file(args.cleanup_plan, label="optimization cleanup plan")
+        if not isinstance(cleanup_plan, Mapping):
+            raise BuildError("cleanup-execute cleanup plan must be a JSON object")
+        ready_targets = _ready_cleanup_targets(cleanup_plan)
+        _require_cleanup_execute_confirmation(args, ready_targets)
+        config = _load_config(args)
+        client = RAGFlowClient(config)
+        results = []
+        for target in ready_targets:
+            target_payload = target["target"]
+            dataset_id = str(target_payload["dataset_id"])
+            delete_response = client.delete_dataset(dataset_id)
+            results.append(
+                {
+                    **target,
+                    "status": "deleted",
+                    "delete_response": delete_response,
+                }
+            )
+        report = {
+            "ok": True,
+            "schema": OPTIMIZATION_CLEANUP_EXECUTION_REPORT_SCHEMA,
+            "created_at": _utc_now(),
+            "cleanup_plan": args.cleanup_plan,
+            "execute": True,
+            "dry_run": False,
+            "mutation_allowed": True,
+            "requires_exact_confirmation": True,
+            "summary": {
+                "target_count": len(ready_targets),
+                "deleted_target_count": len(results),
+                "cleanup_executed": True,
+            },
+            "results": results,
+        }
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[args.cleanup_plan, args.config, *context_paths, *_collect_path_like_literals(report)],
+                output_paths=[args.output, args.redaction_report],
+                extra_secret_literals=[getattr(args, "api_key", None), *context_secrets],
+                extra_private_hosts=[*context_hosts, *configured_private_hosts_from_urls([getattr(args, "base_url", None)])],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.output, report)
+        _dump_json(report)
+        return 0
+    except (BuildError, ConfigError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _run_topology_advise(args: argparse.Namespace) -> int:
     try:
         doc_manifest = load_doc_manifest(args.doc_manifest) if args.doc_manifest else None
@@ -2394,6 +2521,22 @@ def build_optimize_cleanup_plan_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_optimize_cleanup_execute_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Execute exact-confirmation cleanup for profile optimization KBs")
+    parser.add_argument("--cleanup-plan", required=True, help="ragflow_optimization_cleanup_plan_v1 JSON")
+    parser.add_argument("--output", default="cleanup_execution_report.json", help="Output cleanup execution report JSON")
+    parser.add_argument("--execute", action="store_true", help="Actually delete every ready target in the cleanup plan")
+    parser.add_argument("--confirm-dataset-id", action="append", default=[], help="Required with --execute; repeat once per ready target")
+    parser.add_argument("--confirm-kb-name", action="append", default=[], help="Required with --execute; repeat once per ready target in the same order")
+    parser.add_argument("--config", help="Runtime config file")
+    parser.add_argument("--base-url", help="RAGFlow base URL")
+    parser.add_argument("--api-key", help="RAGFlow API key")
+    parser.add_argument("--redaction-report", help="Optional redaction sidecar for cleanup execution reports")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    parser.set_defaults(func=_run_optimize_cleanup_execute)
+    return parser
+
+
 def build_topology_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Create non-mutating KB topology advice")
     subparsers = parser.add_subparsers(dest="topology_command", required=True)
@@ -2581,6 +2724,9 @@ def main(argv: list[str] | None = None) -> int:
             if command_args and command_args[0] == "cleanup-plan":
                 optimize_cleanup_args = build_optimize_cleanup_plan_parser().parse_args(command_args[1:])
                 return optimize_cleanup_args.func(optimize_cleanup_args)
+            if command_args and command_args[0] == "cleanup-execute":
+                optimize_cleanup_execute_args = build_optimize_cleanup_execute_parser().parse_args(command_args[1:])
+                return optimize_cleanup_execute_args.func(optimize_cleanup_execute_args)
             optimize_args = build_optimize_parser().parse_args(command_args)
             return optimize_args.func(optimize_args)
     args = build_parser().parse_args(actual_argv)

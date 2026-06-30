@@ -394,8 +394,7 @@ future live disposable optimization execution.
 selected disposable candidate KBs, retaining each candidate `kb_manifest.json`, and, when
 `--validate-benchmark` is present, running benchmark validation for each built candidate and
 retaining the candidate validation reports. It requires credentials plus
-`--confirm-live-build`, exact `--confirm-kb-name`, and exact `--confirm-run-id`. It does not
-run cleanup execution yet; that remains a separate gated follow-up step.
+`--confirm-live-build`, exact `--confirm-kb-name`, and exact `--confirm-run-id`.
 MVP `optimize summarize` then reads the plan plus existing validation reports and
 produces `ragflow_profile_experiment_results_v1` plus a Markdown best-profile report with
 metric tradeoffs and recommendation rationale. When a candidate validation report is
@@ -407,6 +406,9 @@ MVP `optimize cleanup-plan` reads the optimization plan and any available candid
 `kb_manifest.json` files, then produces a non-mutating `ragflow_optimization_cleanup_plan_v1`.
 Targets with dataset IDs include exact-confirmation cleanup commands; targets without
 manifests stay pending until disposable KB execution creates the manifests.
+`optimize cleanup-execute` reads the aggregate cleanup plan, requires `--execute`, and
+requires repeated exact `--confirm-dataset-id` plus matching `--confirm-kb-name` values for
+every ready target before deleting those datasets.
 
 ## Feature Design 5: Chunk Snapshot And Strict Chunk Recall
 
@@ -1561,12 +1563,10 @@ inventory is the authoritative ledger: 19 command surfaces are currently `covere
 
 Finish the remaining work in this order:
 
-1. Add live disposable cleanup execution only behind credentials, explicit confirmation,
-   exact cleanup matching, and retained dataset IDs.
-2. Add optional LLM adapters after deterministic artifacts already cover the workflow:
+1. Add optional LLM adapters after deterministic artifacts already cover the workflow:
    metadata suggestions, grounded QA generation, agentic answer synthesis, then an
    LLM/RAGAS-style evaluator.
-3. Treat `serve`, wheel packaging, provider abstractions, remote conversion clients, and
+2. Treat `serve`, wheel packaging, provider abstractions, remote conversion clients, and
    web/API wrappers as post-CLI adapters instead of blockers for the portable public skill
    suite.
 
