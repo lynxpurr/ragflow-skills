@@ -220,6 +220,7 @@ def _run_doc_split_resume_check(
     split_plan = artifacts_dir / "doc_split_plan.json"
     split_redaction = artifacts_dir / "doc_split_redaction.json"
     split_checkpoint = artifacts_dir / "doc_split.checkpoint.json"
+    split_manifest = artifacts_dir / "doc_split_manifest.json"
     base_args = [
         sys.executable,
         str(convert_script),
@@ -230,6 +231,8 @@ def _run_doc_split_resume_check(
         str(segments_dir),
         "--plan-output",
         str(split_plan),
+        "--manifest-output",
+        str(split_manifest),
         "--redaction-report",
         str(split_redaction),
         "--checkpoint",
@@ -247,6 +250,14 @@ def _run_doc_split_resume_check(
     split_resume_result = _run_command([*base_args, "--resume"], cwd=workspace, env=env)
     _record_command_check(checks, "doc-to-md split resume", split_resume_result, required_stdout='"resume": true')
     _record_redaction_sidecar_check(checks, "doc-to-md split redaction", split_redaction)
+    checks.append(
+        {
+            "name": "doc-to-md split manifest",
+            "ok": split_manifest.exists(),
+            "returncode": 0 if split_manifest.exists() else 1,
+            "error": "" if split_manifest.exists() else f"missing {split_manifest}",
+        }
+    )
 
 
 def _write_fake_mineru_cli(path: Path) -> Path:
@@ -3860,6 +3871,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "doc_split_plan.json",
         artifacts_dir / "doc_split_redaction.json",
         artifacts_dir / "doc_split.checkpoint.json",
+        artifacts_dir / "doc_split_manifest.json",
         artifacts_dir / "handoff_inspection.json",
         artifacts_dir / "handoff_inspection.md",
         artifacts_dir / "handoff_inspection_redaction.json",

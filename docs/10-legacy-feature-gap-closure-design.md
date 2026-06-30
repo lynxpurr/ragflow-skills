@@ -1550,14 +1550,13 @@ inventory is the authoritative ledger: 19 command surfaces are currently `covere
 
 Finish the remaining work in this order:
 
-1. Revisit the optional split manifest rewrite/package mode from Phase 16.
-2. Add command-manifest dry-runs before any live disposable optimization execution.
-3. Add live disposable build, benchmark validation, and cleanup execution only behind
+1. Add command-manifest dry-runs before any live disposable optimization execution.
+2. Add live disposable build, benchmark validation, and cleanup execution only behind
    credentials, explicit confirmation, exact cleanup matching, and retained dataset IDs.
-4. Add optional LLM adapters after deterministic artifacts already cover the workflow:
+3. Add optional LLM adapters after deterministic artifacts already cover the workflow:
    metadata suggestions, grounded QA generation, agentic answer synthesis, then an
    LLM/RAGAS-style evaluator.
-5. Treat `serve`, wheel packaging, provider abstractions, remote conversion clients, and
+4. Treat `serve`, wheel packaging, provider abstractions, remote conversion clients, and
    web/API wrappers as post-CLI adapters instead of blockers for the portable public skill
    suite.
 

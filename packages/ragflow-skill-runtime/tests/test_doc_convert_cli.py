@@ -1176,6 +1176,55 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertTrue(first_segment_exists)
         self.assertTrue(second_segment_exists)
 
+    def test_split_manifest_output_can_feed_kb_build_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            handoff = root / "handoff"
+            markdown = root / "long.md"
+            segments = handoff / "documents" / "segments"
+            manifest_output = handoff / "doc_manifest.json"
+            markdown.write_text("# One\n" + ("a" * 70) + "\n# Two\n" + ("b" * 70) + "\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "split",
+                    "--markdown",
+                    str(markdown),
+                    "--output",
+                    str(segments),
+                    "--plan-output",
+                    str(handoff / "segmentation_plan.json"),
+                    "--manifest-output",
+                    str(manifest_output),
+                    "--soft-max-chars",
+                    "50",
+                    "--hard-max-chars",
+                    "90",
+                    "--min-segment-chars",
+                    "20",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+            manifest_payload = json.loads(manifest_output.read_text(encoding="utf-8"))
+            manifest = load_doc_manifest(manifest_output)
+            docs = discover_markdown_documents(doc_manifest=manifest, manifest_base_path=manifest_output)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["split_manifest"]["document_count"], 2)
+        self.assertTrue(payload["split_manifest"]["completed"])
+        self.assertEqual(manifest_payload["version"], "0.1")
+        self.assertEqual(manifest_payload["split"]["segment_count"], 2)
+        self.assertEqual(
+            [doc.path.name for doc in docs],
+            ["long.part-001.md", "long.part-002.md"],
+        )
+
     def test_postprocess_writes_redaction_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

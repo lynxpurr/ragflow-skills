@@ -70,6 +70,7 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("doc-to-md split checkpoint", check_names)
         self.assertIn("doc-to-md split resume", check_names)
         self.assertIn("doc-to-md split redaction", check_names)
+        self.assertIn("doc-to-md split manifest", check_names)
         self.assertIn("kb model-providers probe", check_names)
         self.assertIn("kb model-providers partial failure", check_names)
         self.assertIn("kb append redaction", check_names)
@@ -159,6 +160,10 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("doc_split.checkpoint.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("doc_split_manifest.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
         self.assertTrue(

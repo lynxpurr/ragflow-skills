@@ -523,6 +523,90 @@ def _apply_split_checkpoint(
     return materialized
 
 
+def _relative_manifest_path(path: Path, *, manifest_base: Path) -> str:
+    try:
+        return os.path.relpath(path, manifest_base).replace(os.sep, "/")
+    except ValueError:
+        return str(path)
+
+
+def _build_split_manifest_payload(
+    *,
+    payload: dict[str, Any],
+    markdown_path: str | Path,
+    output_dir: str | Path,
+    manifest_output: str | Path,
+    plan_output: str | Path | None,
+) -> dict[str, Any]:
+    plan = payload.get("segmentation_plan")
+    if not isinstance(plan, dict):
+        raise DocSegmentError("split payload is missing segmentation_plan")
+    raw_segments = plan.get("segments")
+    if not isinstance(raw_segments, list):
+        raise DocSegmentError("split segmentation_plan.segments must be a list")
+    segment_paths = payload.get("segment_paths")
+    if not isinstance(segment_paths, list) or not all(isinstance(item, str) for item in segment_paths):
+        raise DocSegmentError("split payload segment_paths must be a list of strings")
+
+    manifest_path = Path(manifest_output)
+    manifest_base = manifest_path.parent
+    output = Path(output_dir)
+    selected_by_name = {Path(path).name for path in segment_paths}
+    source_markdown = Path(markdown_path)
+    source_path = _relative_manifest_path(source_markdown, manifest_base=manifest_base)
+    documents: list[dict[str, Any]] = []
+    for item in raw_segments:
+        if not isinstance(item, dict):
+            continue
+        suggested = item.get("suggested_markdown_path")
+        if not isinstance(suggested, str) or not suggested:
+            continue
+        target = output / Path(suggested).name
+        if target.name not in selected_by_name:
+            continue
+        if not target.exists():
+            raise DocSegmentError(f"split manifest segment output is missing: {target}")
+        documents.append(
+            {
+                "source_path": source_path,
+                "markdown_path": _relative_manifest_path(target, manifest_base=manifest_base),
+                "sha256": sha256_file(target),
+                "title": item.get("title") if isinstance(item.get("title"), str) else None,
+                "warnings": [],
+                "segment": {
+                    "index": item.get("index"),
+                    "start_line": item.get("start_line"),
+                    "end_line": item.get("end_line"),
+                    "char_count": item.get("char_count"),
+                    "image_count": item.get("image_count"),
+                    "chunk_marker_count": item.get("chunk_marker_count"),
+                    "suggested_markdown_path": suggested,
+                },
+            }
+        )
+    if not documents:
+        raise DocSegmentError("split manifest would contain no materialized segments")
+
+    checkpoint = payload.get("checkpoint") if isinstance(payload.get("checkpoint"), dict) else {}
+    return {
+        "version": "0.1",
+        "created_at": _utc_now(),
+        "source_root": ".",
+        "documents": documents,
+        "split": {
+            "source_markdown_path": source_path,
+            "segmentation_plan": _relative_manifest_path(Path(plan_output), manifest_base=manifest_base)
+            if plan_output
+            else None,
+            "strategy": plan.get("strategy"),
+            "document_name": plan.get("document_name"),
+            "segment_count": len(documents),
+            "total_segment_count": len(raw_segments),
+            "completed": bool(checkpoint.get("completed", len(documents) >= len(raw_segments))),
+        },
+    }
+
+
 def _postprocess_report_path(args: argparse.Namespace) -> Path:
     if args.report_json:
         return Path(args.report_json)
@@ -1009,13 +1093,41 @@ def _run_split(args: argparse.Namespace) -> int:
                 force=args.force,
             )
             payload = materialized.to_dict()
-        if args.redaction_report:
-            payload = _sanitize_generated_report(
-                payload,
-                args.redaction_report,
-                home_paths=[args.markdown, args.output, args.plan_output, args.checkpoint],
-                config_paths=[args.markdown, args.output, args.plan_output, args.checkpoint, args.redaction_report],
+        manifest_payload = None
+        if args.manifest_output:
+            manifest_payload = _build_split_manifest_payload(
+                payload=payload,
+                markdown_path=args.markdown,
+                output_dir=args.output,
+                manifest_output=args.manifest_output,
+                plan_output=args.plan_output,
             )
+            payload["split_manifest"] = {
+                "path": args.manifest_output,
+                "document_count": len(manifest_payload["documents"]),
+                "completed": manifest_payload.get("split", {}).get("completed"),
+            }
+        if args.redaction_report:
+            sanitized = _sanitize_generated_report(
+                {"payload": payload, "split_manifest_payload": manifest_payload}
+                if manifest_payload
+                else payload,
+                args.redaction_report,
+                home_paths=[args.markdown, args.output, args.plan_output, args.checkpoint, args.manifest_output],
+                config_paths=[
+                    args.markdown,
+                    args.output,
+                    args.plan_output,
+                    args.checkpoint,
+                    args.manifest_output,
+                    args.redaction_report,
+                ],
+            )
+            if manifest_payload:
+                payload = sanitized["payload"]
+                manifest_payload = sanitized["split_manifest_payload"]
+            else:
+                payload = sanitized
         if args.plan_output:
             plan_output = Path(args.plan_output)
             plan_output.parent.mkdir(parents=True, exist_ok=True)
@@ -1023,6 +1135,10 @@ def _run_split(args: argparse.Namespace) -> int:
                 json.dumps(payload["segmentation_plan"], ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+        if args.manifest_output and manifest_payload:
+            manifest_output = Path(args.manifest_output)
+            manifest_output.parent.mkdir(parents=True, exist_ok=True)
+            manifest_output.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
         _dump_json(payload)
         return 0
     except (DocSegmentError, OSError, UnicodeDecodeError) as exc:
@@ -1290,6 +1406,7 @@ def build_split_parser() -> argparse.ArgumentParser:
     parser.add_argument("--markdown", required=True, help="Markdown file to split")
     parser.add_argument("--output", required=True, help="Output directory for segment Markdown files")
     parser.add_argument("--plan-output", help="Optional segmentation_plan.json output path")
+    parser.add_argument("--manifest-output", help="Optional doc_manifest.json output path for materialized segments")
     parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     parser.add_argument("--checkpoint", help="Checkpoint path for resumable bounded split execution")
     parser.add_argument("--resume", action="store_true", help="Resume from an existing split checkpoint")

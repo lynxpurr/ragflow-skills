@@ -1394,6 +1394,7 @@ def _run_no_network_checks(
     split_plan = work_root / "split_plan.json"
     split_redaction = work_root / "split_plan_redaction.json"
     split_checkpoint = work_root / "split.checkpoint.json"
+    split_manifest = work_root / "split_doc_manifest.json"
     split_result = _run_command(
         [
             python_executable,
@@ -1405,6 +1406,8 @@ def _run_no_network_checks(
             str(segments_dir),
             "--plan-output",
             str(split_plan),
+            "--manifest-output",
+            str(split_manifest),
             "--redaction-report",
             str(split_redaction),
             "--checkpoint",
@@ -1433,6 +1436,8 @@ def _run_no_network_checks(
             str(segments_dir),
             "--plan-output",
             str(split_plan),
+            "--manifest-output",
+            str(split_manifest),
             "--redaction-report",
             str(split_redaction),
             "--checkpoint",
@@ -1453,6 +1458,8 @@ def _run_no_network_checks(
         produced.append(split_plan)
     if split_checkpoint.exists():
         produced.append(split_checkpoint)
+    if split_manifest.exists():
+        produced.append(split_manifest)
     if split_redaction.exists():
         produced.append(split_redaction)
         redaction_payload = json.loads(split_redaction.read_text(encoding="utf-8"))
@@ -1461,6 +1468,7 @@ def _run_no_network_checks(
                 split_resume_result.get("stdout", ""),
                 split_plan.read_text(encoding="utf-8") if split_plan.exists() else "",
                 split_checkpoint.read_text(encoding="utf-8") if split_checkpoint.exists() else "",
+                split_manifest.read_text(encoding="utf-8") if split_manifest.exists() else "",
                 split_redaction.read_text(encoding="utf-8"),
             ]
         )
@@ -1481,6 +1489,28 @@ def _run_no_network_checks(
 
     build_script = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "build.py")
     profile = _skill_path(extract_dir, "ragflow-kb-build", "templates", "default-en-768.json")
+    split_manifest_build_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "--doc-manifest",
+            str(split_manifest),
+            "--kb-name",
+            "kb:split-manifest",
+            "--profile",
+            str(profile),
+            "--dry-run",
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build split manifest dry-run",
+        split_manifest_build_result,
+        required_output='"dry_run": true',
+    )
     vendor_parent = _skill_path(extract_dir, "ragflow-kb-build", "scripts", "_vendor")
     profile_payload_check = _run_command(
         [

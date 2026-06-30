@@ -68,13 +68,11 @@ Deferred or outside the active public-suite completion path:
 
 Completion priorities:
 
-1. Revisit the optional split manifest rewrite/package mode now that `doc-to-md split`
-   can resume bounded offline runs.
-2. Revisit live disposable optimization execution only behind explicit dry-run,
+1. Revisit live disposable optimization execution only behind explicit dry-run,
    credential, confirmation, and cleanup gates.
-3. Add optional LLM adapters only after deterministic artifacts, redaction, and
+2. Add optional LLM adapters only after deterministic artifacts, redaction, and
    acceptance gates already cover the same workflow.
-4. Consider `serve`, wheel packaging, and web/hosted wrappers only as post-CLI product
+3. Consider `serve`, wheel packaging, and web/hosted wrappers only as post-CLI product
    adapters.
 
 ## Remaining Work Ledger
@@ -85,7 +83,7 @@ remain in their owning phases below.
 | Track | Existing open items | Current status | Completion rule |
 | --- | --- | --- | --- |
 | Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory closed | Runtime inventory stays at 19 `covered`, 0 `candidate`, 2 intentionally `deferred`, and 58 `not_applicable` command surfaces. |
-| Document split packaging | Phase 16 optional manifest rewrite/package mode | Ready to revisit | Split outputs can be resumed and optionally repackaged without breaking existing segment-directory ingestion. |
+| Document split packaging | Phase 16 optional manifest rewrite/package mode | Complete for current CLI scope | Split outputs can be resumed and optionally repackaged without breaking existing segment-directory ingestion. |
 | Query service and agentic adapters | Phase 3 `serve`, Phase 3 agentic retrieval, Phase 21/30 script-owned synthesis and reflection | Deferred | Implement only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
 | Live disposable optimization | Phase 17 live probe tests, Phase 26 disposable KB build/validation/cleanup execution/live tests, Phase 27 live enrichment tests | Gated | Requires credentials, explicit confirmation, non-mutating command manifests, exact cleanup confirmation, and retained dataset IDs. |
 | Optional LLM-assisted adapters | Phase 25 metadata, Phase 26 grounded QA, Phase 30 LLM/RAGAS-style evaluator | Deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
@@ -94,11 +92,10 @@ remain in their owning phases below.
 
 Recommended completion queue:
 
-1. Revisit optional split manifest rewrite/package mode.
-2. Add command-manifest dry-runs for live disposable optimization before any new live mutation.
-3. Implement live disposable build/benchmark/cleanup execution with exact confirmation and retained cleanup artifacts.
-4. Add optional LLM adapters in this order: metadata suggestions, grounded QA generation, agentic answer synthesis, LLM/RAGAS evaluator.
-5. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients, and web/API wrappers as post-CLI product adapters.
+1. Add command-manifest dry-runs for live disposable optimization before any new live mutation.
+2. Implement live disposable build/benchmark/cleanup execution with exact confirmation and retained cleanup artifacts.
+3. Add optional LLM adapters in this order: metadata suggestions, grounded QA generation, agentic answer synthesis, LLM/RAGAS evaluator.
+4. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients, and web/API wrappers as post-CLI product adapters.
 
 ## Phase 0: Architecture Skeleton
 
@@ -555,12 +552,12 @@ Tasks:
 - [x] Add `ragflow-kb-build --allow-blocked`; block `quality_gate.status: BLOCKED` by default.
 - [x] Add unit and CLI coverage for quality reports, blocked manifests, segment planning, and split output.
 - [x] Add clean-consumer acceptance checks for quality report and segmentation command availability.
-- [ ] Add optional manifest rewrite/package mode for split outputs after the basic segment-directory path is validated.
+- [x] Add optional manifest rewrite/package mode for split outputs after the basic segment-directory path is validated.
 
 Exit criteria:
 
 - Empty or broken Markdown handoffs are prevented from reaching live RAGFlow upload unless the user explicitly accepts the risk.
-- Long Markdown files can be split into `segments/*.md`, then ingested by passing the segment directory to `ragflow-kb-build --input`.
+- Long Markdown files can be split into `segments/*.md`, then ingested by passing the segment directory to `ragflow-kb-build --input` or by generating a split `doc_manifest.json` with `--manifest-output`.
 - Existing v0.1 command surfaces and manifests remain backward-compatible.
 
 ## Phase 17: Read-Only RAGFlow Diagnostics MVP
