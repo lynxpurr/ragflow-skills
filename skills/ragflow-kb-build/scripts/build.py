@@ -32,13 +32,20 @@ from ragflow_skill_runtime import (  # noqa: E402
     BuildError,
     HandoffError,
     RAGFlowClient,
+    attach_benchmark_evaluation,
     create_optimization_cleanup_plan,
     create_optimization_plan,
     discover_markdown_documents,
     inspect_rich_handoff,
+    load_benchmark_baseline,
+    load_benchmark_gate,
+    load_benchmark_qrels,
+    load_chunk_snapshot,
     load_config,
     load_doc_manifest,
+    load_kb_manifest,
     load_profile,
+    load_validation_queries,
     lint_metadata_file,
     lint_tagset_file,
     make_kb_manifest_payload,
@@ -55,6 +62,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     create_parse_report,
     render_handoff_inspection_markdown,
     render_kb_health_report_markdown,
+    render_markdown_report,
     render_governance_markdown,
     render_model_provider_probe_markdown,
     render_parse_report_markdown,
@@ -84,17 +92,20 @@ from ragflow_skill_runtime import (  # noqa: E402
     generate_grounded_qa,
     validate_grounded_qa,
     wait_for_document_states,
+    run_retrieval_validation,
     sanitize_report_payload,
 )
 from ragflow_skill_runtime.benchmark_governance import BenchmarkGovernanceError  # noqa: E402
 from ragflow_skill_runtime.config import ConfigError  # noqa: E402
 from ragflow_skill_runtime.health_report import HealthReportError  # noqa: E402
 from ragflow_skill_runtime.kb_build import extract_dataset_id, extract_uploaded_document_id  # noqa: E402
+from ragflow_skill_runtime.manifests import ManifestError  # noqa: E402
 from ragflow_skill_runtime.metadata_governance import MetadataGovernanceError  # noqa: E402
 from ragflow_skill_runtime.parse_report import ParseReportError  # noqa: E402
 from ragflow_skill_runtime.profiles import ChunkProfile  # noqa: E402
 from ragflow_skill_runtime.profiles import ProfileError  # noqa: E402
 from ragflow_skill_runtime.topology import TopologyError  # noqa: E402
+from ragflow_skill_runtime.validation import ValidationError  # noqa: E402
 
 
 _URL_RE = re.compile(r"https?://[^\s\"'<>]+")
@@ -309,7 +320,7 @@ def _build_optimization_command_manifest(plan: Mapping[str, Any], *, output_path
                 expected_artifacts=[artifacts.get("kb_manifest")],
                 cleanup_notes=[
                     "Disabled in command-manifest dry-run.",
-                    "Requires future optimize --execute support and explicit user confirmation before mutation.",
+                    "Requires optimize --execute and explicit user confirmation before mutation.",
                     "After live execution, retain the generated kb_manifest.json so cleanup can confirm the exact dataset id and KB name.",
                 ],
                 artifact_dir=artifact_dir,
@@ -380,7 +391,7 @@ def _build_optimization_command_manifest(plan: Mapping[str, Any], *, output_path
             "execute_flag": "--execute",
             "cleanup_confirmation_required": True,
             "cleanup_confirmation_flags": ["--confirm-dataset-id", "--confirm-kb-name"],
-            "live_execution_status": "not_implemented",
+            "live_execution_status": "gated_build_available_validation_optional_cleanup_pending",
         },
         "inputs": {
             "input": _manifest_path_token(inputs.get("input"), artifact_dir=artifact_dir) if inputs.get("input") else None,
@@ -501,6 +512,83 @@ def _build_candidate_kb(
         "parse_waited": bool(document_ids and not no_parse and not no_wait),
         "parse_response": parse_response,
         "cleanup_required": True,
+    }
+
+
+def _validate_candidate_benchmark(
+    *,
+    candidate: Mapping[str, Any],
+    client: Any,
+    queries_path: str | None,
+    qrels_path: str | None,
+    gate_config_path: str | None,
+    baseline_report_path: str | None,
+    chunk_snapshot_path: str | None,
+    metadata_summary: dict[str, Any] | None,
+    top_k: int,
+    metric_cutoff: int | None,
+) -> dict[str, Any]:
+    if not queries_path:
+        raise ValidationError("optimize --validate-benchmark requires benchmark queries")
+    if not qrels_path:
+        raise ValidationError("optimize --validate-benchmark requires benchmark qrels")
+    artifacts = candidate.get("artifacts") if isinstance(candidate.get("artifacts"), Mapping) else {}
+    manifest_path = artifacts.get("kb_manifest")
+    report_path = artifacts.get("validation_report")
+    report_md_path = artifacts.get("validation_report_md")
+    if not isinstance(manifest_path, str) or not manifest_path:
+        raise ValidationError(f"candidate {candidate.get('profile_id') or '<unknown>'} is missing artifacts.kb_manifest")
+    if not isinstance(report_path, str) or not report_path:
+        raise ValidationError(f"candidate {candidate.get('profile_id') or '<unknown>'} is missing artifacts.validation_report")
+    if not isinstance(report_md_path, str) or not report_md_path:
+        raise ValidationError(f"candidate {candidate.get('profile_id') or '<unknown>'} is missing artifacts.validation_report_md")
+
+    manifest = load_kb_manifest(manifest_path)
+    queries = load_validation_queries(queries_path)
+    report = run_retrieval_validation(
+        client,
+        level="benchmark",
+        dataset_id=manifest.dataset.id,
+        dataset_name=manifest.dataset.name,
+        queries=queries,
+        top_k=top_k,
+    )
+    report = attach_benchmark_evaluation(
+        report,
+        qrels=load_benchmark_qrels(qrels_path),
+        cutoff=metric_cutoff or top_k,
+        gate=load_benchmark_gate(gate_config_path) if gate_config_path else None,
+        baseline_metrics=load_benchmark_baseline(baseline_report_path) if baseline_report_path else None,
+        baseline_path=baseline_report_path,
+        chunk_snapshot=load_chunk_snapshot(chunk_snapshot_path) if chunk_snapshot_path else None,
+    )
+    payload = report.to_dict()
+    if metadata_summary:
+        payload["metadata_summary"] = metadata_summary
+    _write_json_file(report_path, payload)
+    _write_text_file(report_md_path, render_markdown_report(report))
+    benchmark = payload.get("benchmark") if isinstance(payload.get("benchmark"), Mapping) else {}
+    metrics = benchmark.get("metrics") if isinstance(benchmark.get("metrics"), Mapping) else {}
+    return {
+        "profile_id": candidate.get("profile_id"),
+        "disposable_kb_name": candidate.get("disposable_kb_name"),
+        "validation_report": report_path,
+        "validation_report_md": report_md_path,
+        "ok": bool(payload.get("ok")),
+        "query_count": int(metrics.get("query_count") or 0),
+        "metrics": {
+            key: metrics[key]
+            for key in (
+                "hit_rate",
+                "mrr",
+                "precision_at_k",
+                "recall_at_k",
+                "ndcg_at_k",
+                "map_at_k",
+                "empty_result_rate",
+            )
+            if isinstance(metrics.get(key), (int, float))
+        },
     }
 
 
@@ -1423,6 +1511,10 @@ def _run_optimize(args: argparse.Namespace) -> int:
             raise ProfileError("optimize --execute cannot be combined with --plan-only")
         if not args.plan_only and not args.execute:
             raise ProfileError("optimize requires --plan-only or --execute")
+        if args.validate_benchmark and not args.execute:
+            raise ProfileError("optimize --validate-benchmark requires --execute")
+        if args.validate_benchmark and (args.no_parse or args.no_wait):
+            raise ProfileError("optimize --validate-benchmark requires parse completion; omit --no-parse and --no-wait")
         if args.execute and args.command_manifest_output:
             raise ProfileError("optimize --command-manifest-output is for --plan-only dry-run review; omit it with --execute")
         if args.resume and not args.checkpoint:
@@ -1499,6 +1591,10 @@ def _run_optimize(args: argparse.Namespace) -> int:
             if metadata_summary and not metadata_summary.get("ok", False):
                 raise BuildError("metadata lint failed; run metadata lint for details")
             results = []
+            validation_results = []
+            benchmark_inputs = plan.get("inputs", {}).get("benchmark", {}) if isinstance(plan.get("inputs"), Mapping) else {}
+            queries_path = benchmark_inputs.get("queries") if isinstance(benchmark_inputs, Mapping) else None
+            qrels_path = benchmark_inputs.get("qrels") if isinstance(benchmark_inputs, Mapping) else None
             for candidate in plan.get("candidates", []):
                 if not isinstance(candidate, Mapping):
                     continue
@@ -1515,10 +1611,25 @@ def _run_optimize(args: argparse.Namespace) -> int:
                         no_wait=args.no_wait,
                     )
                 )
+                if args.validate_benchmark:
+                    validation_results.append(
+                        _validate_candidate_benchmark(
+                            candidate=candidate,
+                            client=client,
+                            queries_path=queries_path if isinstance(queries_path, str) else None,
+                            qrels_path=qrels_path if isinstance(qrels_path, str) else None,
+                            gate_config_path=args.gate_config,
+                            baseline_report_path=args.baseline_report,
+                            chunk_snapshot_path=args.chunk_snapshot,
+                            metadata_summary=metadata_summary,
+                            top_k=args.top_k,
+                            metric_cutoff=args.metric_cutoff,
+                        )
+                    )
             execution_report = {
                 "schema": "ragflow_optimization_execute_report_v1",
                 "created_at": _utc_now(),
-                "mode": "execute-build",
+                "mode": "execute-build-validate" if args.validate_benchmark else "execute-build",
                 "run_id": plan.get("run_id"),
                 "base_kb_name": plan.get("base_kb_name"),
                 "confirmation": {
@@ -1532,17 +1643,22 @@ def _run_optimize(args: argparse.Namespace) -> int:
                     "dataset_count": len(results),
                     "document_count": sum(int(item.get("document_count") or 0) for item in results),
                     "cleanup_required_count": sum(1 for item in results if item.get("cleanup_required")),
-                    "benchmark_validation_executed": False,
+                    "benchmark_validation_executed": bool(args.validate_benchmark),
+                    "validated_candidate_count": len(validation_results),
+                    "benchmark_validation_passed_count": sum(1 for item in validation_results if item.get("ok")),
                     "cleanup_executed": False,
                 },
                 "results": results,
+                "validation_results": validation_results,
                 "next_steps": [
-                    "Run optimize summarize after benchmark validation reports exist.",
+                    "Run optimize summarize after benchmark validation reports exist."
+                    if not args.validate_benchmark
+                    else "Run optimize summarize to rank candidate benchmark reports.",
                     "Run optimize cleanup-plan before deleting disposable KBs.",
                     "Delete disposable KBs only with exact dataset id and KB name confirmation.",
                 ],
             }
-            plan["mode"] = "execute-build"
+            plan["mode"] = execution_report["mode"]
             plan["mutation_allowed"] = True
             plan["execution"] = execution_report
             plan_summary = dict(plan.get("summary") if isinstance(plan.get("summary"), Mapping) else {})
@@ -1550,7 +1666,9 @@ def _run_optimize(args: argparse.Namespace) -> int:
                 {
                     "built_candidate_count": len(results),
                     "cleanup_required_count": execution_report["summary"]["cleanup_required_count"],
-                    "benchmark_validation_executed": False,
+                    "benchmark_validation_executed": bool(args.validate_benchmark),
+                    "validated_candidate_count": len(validation_results),
+                    "benchmark_validation_passed_count": execution_report["summary"]["benchmark_validation_passed_count"],
                     "cleanup_executed": False,
                 }
             )
@@ -1607,7 +1725,7 @@ def _run_optimize(args: argparse.Namespace) -> int:
         _write_text_file(args.report_md, render_optimization_plan_markdown(plan))
         _dump_json(plan)
         return 0 if plan["ok"] else 1
-    except (BuildError, ProfileError, OSError, RuntimeError) as exc:
+    except (BuildError, ManifestError, ProfileError, ValidationError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=args.json)
 
 
@@ -2236,6 +2354,7 @@ def build_optimize_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confirm-live-build", action="store_true", help="Required with --execute to create disposable KBs")
     parser.add_argument("--confirm-kb-name", help="Required with --execute; must exactly match --kb-name")
     parser.add_argument("--confirm-run-id", help="Required with --execute; must exactly match the planned run_id")
+    parser.add_argument("--validate-benchmark", action="store_true", help="With --execute, run benchmark validation for each built candidate KB")
     parser.add_argument("--no-parse", action="store_true", help="With --execute, upload documents without triggering parse")
     parser.add_argument("--no-wait", action="store_true", help="With --execute, do not wait for parse completion")
     parser.add_argument("--parse-timeout", type=float, default=300.0, help="With --execute, maximum seconds to wait for parse completion")

@@ -390,11 +390,12 @@ KB creation remains gated on a future explicit `optimize --execute` path.
 lists the planned disposable build, benchmark validation, diagnostic, and cleanup-preview
 commands without enabling mutation. It is the review artifact that must exist before any
 future live disposable optimization execution.
-`optimize --execute` now implements the first live slice: building selected disposable
-candidate KBs and retaining each candidate `kb_manifest.json`. It requires credentials plus
+`optimize --execute` now implements the gated live build and validation slices: building
+selected disposable candidate KBs, retaining each candidate `kb_manifest.json`, and, when
+`--validate-benchmark` is present, running benchmark validation for each built candidate and
+retaining the candidate validation reports. It requires credentials plus
 `--confirm-live-build`, exact `--confirm-kb-name`, and exact `--confirm-run-id`. It does not
-run benchmark validation or cleanup execution yet; those remain separate gated follow-up
-steps.
+run cleanup execution yet; that remains a separate gated follow-up step.
 MVP `optimize summarize` then reads the plan plus existing validation reports and
 produces `ragflow_profile_experiment_results_v1` plus a Markdown best-profile report with
 metric tradeoffs and recommendation rationale. When a candidate validation report is
@@ -1560,8 +1561,8 @@ inventory is the authoritative ledger: 19 command surfaces are currently `covere
 
 Finish the remaining work in this order:
 
-1. Add live disposable benchmark validation and cleanup execution only behind credentials,
-   explicit confirmation, exact cleanup matching, and retained dataset IDs.
+1. Add live disposable cleanup execution only behind credentials, explicit confirmation,
+   exact cleanup matching, and retained dataset IDs.
 2. Add optional LLM adapters after deterministic artifacts already cover the workflow:
    metadata suggestions, grounded QA generation, agentic answer synthesis, then an
    LLM/RAGAS-style evaluator.
