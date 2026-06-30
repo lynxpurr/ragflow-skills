@@ -1,7 +1,7 @@
 # RAGFlow Skills Phased Development Plan
 
 Status: active roadmap
-Date: 2026-06-30
+Date: 2026-07-01
 
 ## Objective
 
@@ -27,8 +27,9 @@ Completed or closed for the current public command surface:
   read-only diagnostics, benchmark validation, profile engineering, routing,
   observability, query diagnostics, and MinerU local CLI support.
 - Phase 24-29 rich handoffs, metadata/tagset governance, benchmark lifecycle,
-  grounded QA validation, evidence mapping, optimization planning, retrieval
-  enrichment reports, fusion/rewrite, and routing quality upgrades.
+  grounded QA validation, evidence mapping, optimization planning, gated
+  disposable optimization build/validation/cleanup execution, retrieval enrichment
+  reports, fusion/rewrite, and routing quality upgrades.
 - Phase 32-36 skill-suite drift control, contract/package gates, topology and
   assistant review reports, parser/KB health telemetry, generated-report safety,
   and the first read-only runtime helper pilots.
@@ -38,6 +39,8 @@ Partially completed and still active:
 - Phase 3 `ragflow-query`
   - Direct, auto, host-assisted, routing, fusion, rewrite, session, and agentic
     planning paths exist as CLI surfaces.
+  - Host-assisted agentic retrieval can execute bounded deterministic sub-query
+    retrieval and return evidence plus traces; script-owned synthesis is not enabled.
   - V1 remains CLI-first; a local/OpenClaw `serve` command is still deferred until a
     real host workflow needs it.
   - Script-owned agentic answer generation remains gated behind future explicit LLM
@@ -69,12 +72,14 @@ Deferred or outside the active public-suite completion path:
 
 Completion priorities:
 
-1. Revisit live disposable optimization execution only behind explicit dry-run,
-   credential, confirmation, and cleanup gates.
-2. Add optional LLM adapters only after deterministic artifacts, redaction, and
-   acceptance gates already cover the same workflow.
-3. Consider `serve`, wheel packaging, and web/hosted wrappers only as post-CLI product
-   adapters.
+1. Keep the portable archive release path green while new work is added behind
+   deterministic, no-network defaults.
+2. Add optional LLM adapters as request/review boundaries before any script-owned model
+   call: grounded QA suggestions, agentic answers, then LLM/RAGAS-style evaluation.
+3. Add live disposable tests only when credentials, exact confirmation, retained cleanup
+   artifacts, and explicit approval are present.
+4. Consider `serve`, wheel packaging, provider abstractions, remote conversion clients,
+   and web/API wrappers only as post-CLI product adapters.
 
 ## Remaining Work Ledger
 
@@ -85,16 +90,22 @@ remain in their owning phases below.
 | --- | --- | --- | --- |
 | Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory closed | Runtime inventory stays at 19 `covered`, 0 `candidate`, 2 intentionally `deferred`, and 60 `not_applicable` command surfaces. |
 | Document split packaging | Phase 16 optional manifest rewrite/package mode | Complete for current CLI scope | Split outputs can be resumed and optionally repackaged without breaking existing segment-directory ingestion. |
-| Query service and agentic adapters | Phase 3 `serve`, Phase 3 agentic retrieval, Phase 21/30 script-owned synthesis and reflection | Deferred | Implement only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
-| Live disposable optimization | Phase 17 live probe tests, Phase 26 disposable KB build/validation/cleanup execution/live tests, Phase 27 live enrichment tests | Complete for current CLI scope | Requires credentials, explicit confirmation, exact cleanup confirmation, and retained dataset IDs. |
-| Optional LLM-assisted adapters | Phase 25 metadata, Phase 26 grounded QA, Phase 30 LLM/RAGAS-style evaluator | Metadata suggestion boundary complete; remaining adapters deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
+| Query service and agentic adapters | Phase 3 `serve`, Phase 21/30 script-owned synthesis and reflection | Host-assisted agentic retrieval complete; local service and answer synthesis deferred | Implement only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
+| Live disposable optimization | Phase 17 live probe tests, Phase 26 live disposable tests, Phase 27 live enrichment tests | Build, validation, and cleanup execution gates complete for current CLI scope; live tests deferred | Requires credentials, explicit confirmation, exact cleanup confirmation, retained dataset IDs, and user approval. |
+| Optional LLM-assisted adapters | Phase 26 grounded QA, Phase 30 agentic answer synthesis, Phase 30 LLM/RAGAS-style evaluator | Metadata suggestion boundary complete; remaining adapters deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
 | Packaging and platform adapters | Backlog wheel path, remote conversion service client, provider abstractions, web/API wrapper | Post-CLI backlog | Start only after the portable archive release path remains green and users need a non-archive deployment model. |
 | Private dedao bridge | Deferred private adapter tasks | Outside public release scope | Keep private examples and adapter logic outside public `skills/`; consume only public handoff shapes. |
 
 Recommended completion queue:
 
-1. Add optional LLM adapters in this order: grounded QA generation, agentic answer synthesis, LLM/RAGAS evaluator.
-2. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients, and web/API wrappers as post-CLI product adapters.
+1. Add a grounded-QA suggestion request/review adapter boundary without script-owned LLM calls.
+2. Add an agentic-answer request/review adapter boundary that validates host or external
+   answers against returned evidence and `audit-citations`.
+3. Add an LLM/RAGAS-style evaluator request/review boundary after deterministic
+   `evaluate-answer` remains the default gate.
+4. Add live disposable optimization tests only in an approved credentialed environment.
+5. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients,
+   and web/API wrappers as post-CLI product adapters.
 
 ## Phase 0: Architecture Skeleton
 
@@ -184,7 +195,8 @@ Tasks:
 - [x] Add `--mode auto` classification placeholder with conservative direct fallback. Superseded by Phase 20 routing config support.
 - [x] Add `--host-assisted` response shape for host-agent synthesis.
 - [ ] Add optional `serve` subcommand for local/OpenClaw use.
-- [ ] Port agentic retrieval after direct mode is stable.
+- [x] Port bounded agentic retrieval as `ask --mode agentic --host-assisted`, returning
+  evidence, plan, and trace artifacts without script-owned synthesis.
 
 Validation:
 
@@ -377,11 +389,16 @@ Exit criteria:
 ## Backlog
 
 - [ ] Formal JSON Schema for manifests after multiple independent consumers exist.
+- [ ] Post-CLI service adapters beyond the optional Phase 3 `serve` wrapper, with no
+  required daemon in release artifacts.
 - [ ] Wheel-based release path for platforms that support package installation.
-- [ ] Remote document conversion service client.
-- [ ] LLM provider abstraction beyond OpenAI-compatible APIs.
-- [ ] Reranker provider abstraction.
-- [ ] Optional web UI or hosted API wrapper.
+- [ ] Remote document conversion service client with fake-client tests and no default
+  hosted endpoint.
+- [ ] LLM provider abstraction beyond OpenAI-compatible APIs, starting with
+  request/review artifacts before script-owned calls.
+- [ ] Reranker provider abstraction with fake adapter contracts and no assumed local
+  model service.
+- [ ] Optional web UI or hosted API wrapper after the CLI archive path remains green.
 
 ## Phase 10: First Release Candidate Validation
 
@@ -666,7 +683,8 @@ Tasks:
 - [x] Add `ragflow_citation_audit_v1` JSON and Markdown reports.
 - [x] Add public example payloads for host-assisted output, traces, and citation audit.
 - [x] Add unit, CLI, release-build, clean-consumer, and platform-smoke coverage.
-- [ ] Keep script-owned LLM synthesis deferred until tracing and audit behavior is stable in real use.
+- [ ] Revisit script-owned LLM synthesis only through the Phase 30 adapter tasks after
+  real-use tracing and citation-audit behavior are stable.
 
 Exit criteria:
 
@@ -876,6 +894,13 @@ Tasks:
 - [x] Add root-cause hints for retrieval coverage, ranking, tag pollution, generation grounding, citation gaps, over-abstention, and cost/latency regressions.
 - [x] Add deterministic offline `ragflow-kb-build qa generate` for grounded QA scaffolds.
 - [ ] Add optional LLM adapter for grounded QA generation.
+- [ ] Add a no-LLM grounded-QA suggestion request artifact for external or host-approved
+  model calls.
+- [ ] Add a grounded-QA suggestion review gate that validates external candidates with
+  `qa validate`, evidence mapping compatibility, advisory markings, redaction, and
+  deterministic reports.
+- [ ] Add consumer acceptance or platform smoke coverage for the grounded-QA
+  request/review boundary before enabling any script-owned generation.
 - [x] Add `ragflow-kb-build qa validate` to reject ungrounded generated evidence before benchmark use.
 - [x] Add `ragflow-kb-build qa map-evidence` to map evidence spans onto chunk snapshots.
 - [x] Add `ragflow-kb-build segment-metadata report`.
@@ -1027,11 +1052,18 @@ Tasks:
 - [x] Implement bounded query decomposition and sub-query retrieval.
 - [ ] Implement optional reflection with a strict iteration budget.
 - [ ] Synthesize answers only from retrieved evidence.
+- [ ] Add an agentic-answer request artifact that packages evidence, citation rules,
+  trace context, model config labels, and redaction metadata without calling an LLM.
+- [ ] Add an agentic-answer review gate that validates host or external answers against
+  returned evidence and numeric citations before acceptance.
+- [ ] Add script-owned agentic-answer execution only after the request/review boundary,
+  explicit LLM config, deterministic fixtures, redaction, and release gates exist.
 - [x] Emit citations compatible with `audit-citations`.
 - [x] Emit latency, token, model, and estimated cost traces.
 - [x] Add `ragflow-query evaluate-answer`.
 - [x] Add deterministic answer checks for citation presence, citation reachability, unsupported-claim warnings, and abstention behavior.
 - [ ] Add optional LLM/RAGAS-style backend as a deferred adapter.
+- [ ] Add an LLM/RAGAS evaluator request/review boundary before any backend invocation.
 - [x] Add offline unit tests and fixture traces.
 
 Exit criteria:
@@ -1072,8 +1104,13 @@ Tasks:
 - [x] Add metrics collector for counters, gauges, and latency histograms with p50/p95/p99 summaries.
 - [x] Add a static runtime-resilience inventory that classifies public commands by covered,
   candidate, deferred, or not-applicable helper coverage.
-- [ ] Add checkpoint/resume helpers for bounded long-running jobs such as centroid build, benchmark import, optimize, and report generation.
-- [ ] Add partial-failure report schemas for timeout, partial, and skipped profiles.
+- [x] Add checkpoint/resume coverage for verified bounded offline candidates such as
+  centroid build, benchmark import, deterministic QA generation, profile experiment,
+  optimize plan-only, and document split.
+- [x] Add partial-failure report schemas for verified non-live or read-only timeout,
+  partial, skipped, warning, invalid, and not-checked outcomes.
+- [ ] Add live mutation/query resilience only after explicit approval for live
+  `ragflow-kb-build` and `ragflow-query ask` helper rollout.
 - [x] Add a shared report sanitizer for API keys, bearer tokens, configured private hosts, home paths, and local config paths.
 - [x] Add `--redaction-report` to relevant commands.
 - [x] Add `--redaction-report` to `ragflow-query route-test` route fixture reports.

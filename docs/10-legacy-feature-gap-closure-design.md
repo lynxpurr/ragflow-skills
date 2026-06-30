@@ -628,6 +628,14 @@ from returned evidence and use numeric `[n]` citations that can be checked by
 `audit-citations`. It still does not run reflection or synthesize an answer; host-owned
 synthesis remains the required final step.
 
+The next safe adapter step is not a script-owned model call. It should first add an
+agentic-answer request/review boundary: a request artifact packages evidence, citation
+rules, trace context, model/provider labels, and redaction metadata for a host-approved
+model call; a review command validates an externally produced answer against retrieved
+evidence and numeric citations before it can be treated as accepted output. Script-owned
+`agentic-answer` execution should remain disabled until that boundary, deterministic
+fixtures, explicit LLM config, redaction sidecars, and release gates all exist.
+
 ## Feature Design 10: Generation Evaluation
 
 ### Problem
@@ -664,6 +672,11 @@ Optional LLM/RAGAS backend:
 - context precision;
 - context recall;
 - drift report against prior evaluations.
+
+As with metadata suggestions and future agentic answers, the first LLM/RAGAS adapter
+should be a request/review contract. Deterministic `evaluate-answer` remains the default
+gate; externally generated evaluator output must be reviewed, redacted, and marked
+advisory before any script-owned evaluator backend is added.
 
 ## Feature Design 11: Routing Quality Upgrade
 
@@ -809,6 +822,13 @@ offline; it does not repair near matches or query RAGFlow.
 MVP `segment-metadata report` measures document metadata matches, segment-like document
 paths, explicit segment hints, and segmentation-plan coverage in chunk snapshots. It is an
 offline report and does not mutate RAGFlow.
+
+Future LLM-assisted QA generation should mirror the metadata suggestion adapter boundary.
+The first increment should create a no-LLM request artifact for an external or host-owned
+model call, then review candidate QA with deterministic `qa validate`, evidence-map
+compatibility checks, advisory/generated markings, redaction sidecars, and acceptance or
+platform smoke coverage. Script-owned QA generation remains out of scope until that
+request/review path is verified.
 
 ## Feature Design 15: Retrieval Pollution And Suppression Diagnostics
 
@@ -1565,9 +1585,14 @@ inventory is the authoritative ledger: 19 command surfaces are currently `covere
 
 Finish the remaining work in this order:
 
-1. Add optional LLM adapters after deterministic artifacts already cover the workflow:
-   grounded QA generation, agentic answer synthesis, then an LLM/RAGAS-style evaluator.
-2. Treat `serve`, wheel packaging, provider abstractions, remote conversion clients, and
+1. Keep the portable archive release path green while new work keeps deterministic,
+   no-network defaults.
+2. Add optional LLM adapters as request/review boundaries before any script-owned model
+   calls: grounded QA suggestions, agentic answer synthesis, then an LLM/RAGAS-style
+   evaluator.
+3. Add live disposable tests only in credentialed environments with exact confirmation,
+   retained cleanup artifacts, and explicit approval.
+4. Treat `serve`, wheel packaging, provider abstractions, remote conversion clients, and
    web/API wrappers as post-CLI adapters instead of blockers for the portable public skill
    suite.
 
@@ -1644,5 +1669,6 @@ Recommended implementation order is the Phase 24-36 task list in
 This order kept the foundation document-centric before adding more complex query-time and
 LLM-assisted behavior, then closed release governance, post-ingest operational guidance,
 and generated-report safety. After the current Phase 36 closure, remaining completion work
-should prioritize Phase 31 offline runtime resilience, then explicitly gated live
-disposable workflows, then optional LLM and platform adapters.
+should prioritize optional request/review adapter boundaries for LLM-assisted workflows,
+then explicitly gated live validation, then local service, packaging, provider, and
+web/API product adapters.
