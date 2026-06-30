@@ -336,8 +336,10 @@ Phase 25 implements deterministic governance first:
   metadata contains errors.
 - Build and validation can attach metadata summaries with `--metadata`, but upload,
   parse, retrieval, and RAGFlow dataset settings are unchanged.
-- LLM-assisted metadata generation remains a future adapter. Its output must be marked
-  advisory and must pass the same deterministic lint before use.
+- LLM-assisted metadata generation is represented by an explicit adapter boundary:
+  `metadata suggest-request` creates a no-LLM advisory request artifact, and
+  `metadata suggest-review` checks external candidates with deterministic lint, advisory
+  marking, document-path checks, generated Markdown, and redaction sidecars before use.
 
 ## Feature Design 4: Optimization Loop
 
@@ -1342,8 +1344,8 @@ breaker pilots must stay default-off, read-only, and scoped to `endpoint-report`
 Inventory implemented. `tools/report_surface_inventory.py` emits
 `ragflow_report_surface_inventory_v1`, imports the public CLI parsers offline, and fails
 the inventory when a public command lacks an explicit `covered`, `not_applicable`, or
-`needs_redaction` classification. The current verified inventory names 79 public commands:
-70 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
+`needs_redaction` classification. The current verified inventory names 81 public commands:
+72 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
 classification findings.
 
 `ragflow-kb-build parse-report` and `ragflow-kb-build health-report` now support
@@ -1527,7 +1529,7 @@ remain open Phase 31 work.
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene as a static Phase
 31 governance surface. It reuses the public command inventory and classifies current
 runtime-helper coverage as 19 covered commands, 0 candidate commands, 2 deferred live
-commands, and 58 not-applicable commands with no stale classification findings. Covered
+commands, and 60 not-applicable commands with no stale classification findings. Covered
 commands include the endpoint-report helper pilot, query fallback partial-failure reports,
 query-output cache reports, centroid build checkpoints, doc-to-md process cleanup
 reporting, backend probe/warmup reporting, bounded offline `doc-to-md split`
@@ -1559,13 +1561,12 @@ hygiene.
 
 The active non-live Phase 31 candidate inventory is closed. The runtime-resilience
 inventory is the authoritative ledger: 19 command surfaces are currently `covered`, 0 are
-`candidate`, 2 are intentionally `deferred` live surfaces, and 58 are `not_applicable`.
+`candidate`, 2 are intentionally `deferred` live surfaces, and 60 are `not_applicable`.
 
 Finish the remaining work in this order:
 
 1. Add optional LLM adapters after deterministic artifacts already cover the workflow:
-   metadata suggestions, grounded QA generation, agentic answer synthesis, then an
-   LLM/RAGAS-style evaluator.
+   grounded QA generation, agentic answer synthesis, then an LLM/RAGAS-style evaluator.
 2. Treat `serve`, wheel packaging, provider abstractions, remote conversion clients, and
    web/API wrappers as post-CLI adapters instead of blockers for the portable public skill
    suite.

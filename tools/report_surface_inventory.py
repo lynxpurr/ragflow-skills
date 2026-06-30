@@ -138,6 +138,8 @@ KB_COVERED_COMMANDS = (
     "ragflow-kb-build inspect-kb",
     "ragflow-kb-build metadata lint",
     "ragflow-kb-build metadata merge",
+    "ragflow-kb-build metadata suggest-request",
+    "ragflow-kb-build metadata suggest-review",
     "ragflow-kb-build model-providers probe",
     "ragflow-kb-build optimize",
     "ragflow-kb-build optimize cleanup-plan",

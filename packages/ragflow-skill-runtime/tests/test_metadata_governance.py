@@ -6,15 +6,19 @@ import unittest
 from pathlib import Path
 
 from ragflow_skill_runtime.metadata_governance import (
+    METADATA_SUGGESTION_REQUEST_SCHEMA,
+    METADATA_SUGGESTION_REVIEW_REPORT_SCHEMA,
     RAGFLOW_METADATA_SCHEMA,
     RAGFLOW_TAGSET_SCHEMA,
     SEGMENT_METADATA_REPORT_SCHEMA,
+    create_metadata_suggestion_request,
     export_tagset_payload,
     lint_metadata_payload,
     lint_tagset_payload,
     make_metadata_template_payload,
     make_tagset_template_payload,
     merge_metadata_payloads,
+    review_metadata_suggestions,
     segment_metadata_report_file,
     tagset_report_payload,
 )
@@ -145,6 +149,91 @@ class MetadataGovernanceTests(unittest.TestCase):
         combined = json.dumps({"metadata": metadata, "tagset": tagset}, ensure_ascii=False)
         self.assertIn("example.com", combined)
         self.assertNotIn("/home/", combined)
+
+    def test_metadata_suggestion_request_is_advisory_and_does_not_invoke_llm(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            handoff = root / "handoff"
+            docs = handoff / "documents"
+            docs.mkdir(parents=True)
+            (docs / "sample.md").write_text("# Sample\n\nBody with source context.\n", encoding="utf-8")
+            doc_manifest = handoff / "doc_manifest.json"
+            doc_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [
+                            {
+                                "source_path": "source/sample.pdf",
+                                "markdown_path": "documents/sample.md",
+                                "title": "Sample",
+                                "language": "en",
+                                "sha256": "1" * 64,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            request = create_metadata_suggestion_request(
+                doc_manifest_path=doc_manifest,
+                include_excerpts=True,
+                max_excerpt_chars=12,
+            )
+
+        self.assertTrue(request["ok"], request["issues"])
+        self.assertEqual(request["schema"], METADATA_SUGGESTION_REQUEST_SCHEMA)
+        self.assertTrue(request["advisory"])
+        self.assertFalse(request["llm_invoked"])
+        self.assertEqual(request["summary"]["document_count"], 1)
+        self.assertEqual(request["documents"][0]["path"], "documents/sample.md")
+        self.assertEqual(request["documents"][0]["excerpt"], "# Sample\n\nBo")
+        self.assertIn("allowed_metadata_fields", request["instructions"])
+
+    def test_metadata_suggestion_review_requires_advisory_and_known_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            request = root / "request.json"
+            candidate = root / "candidate.json"
+            request.write_text(
+                json.dumps(
+                    {
+                        "schema": METADATA_SUGGESTION_REQUEST_SCHEMA,
+                        "documents": [{"path": "documents/sample.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            candidate.write_text(
+                json.dumps(
+                    {
+                        "schema": RAGFLOW_METADATA_SCHEMA,
+                        "documents": [
+                            {
+                                "path": "documents/other.md",
+                                "metadata": {
+                                    "topic": "Suggested",
+                                    "private_note": "token=sample-secret-value",
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = review_metadata_suggestions(candidate_path=candidate, request_path=request)
+
+        self.assertEqual(report["schema"], METADATA_SUGGESTION_REVIEW_REPORT_SCHEMA)
+        self.assertFalse(report["ok"])
+        codes = {issue["code"] for issue in report["issues"]}
+        self.assertIn("metadata_suggestion_not_advisory", codes)
+        self.assertIn("metadata_suggestion_unknown_document", codes)
+        self.assertIn("metadata_lint_metadata_value_looks_secret", codes)
+        self.assertIn("metadata_lint_metadata_field_not_public", codes)
+        self.assertNotIn("sample-secret-value", json.dumps(report, ensure_ascii=False))
 
     def test_tagset_lint_report_and_export(self) -> None:
         tagset = {

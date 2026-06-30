@@ -27,6 +27,8 @@ python scripts/build.py inspect-handoff --handoff ./handoff --report-md ./run/ha
 python scripts/build.py metadata generate-template --doc-manifest ./handoff/doc_manifest.json --output ./run/metadata.template.json
 python scripts/build.py metadata lint --metadata ./run/metadata.template.json --report-md ./run/metadata_lint.md
 python scripts/build.py metadata merge --doc-manifest ./handoff/doc_manifest.json --handoff-metadata ./handoff/metadata.json --metadata ./run/metadata.template.json --output ./run/metadata.merged.json
+python scripts/build.py metadata suggest-request --doc-manifest ./handoff/doc_manifest.json --metadata ./run/metadata.merged.json --output ./run/metadata_suggestion_request.json --report-md ./run/metadata_suggestion_request.md
+python scripts/build.py metadata suggest-review --candidate ./run/metadata_suggestion_candidate.json --request ./run/metadata_suggestion_request.json --report-md ./run/metadata_suggestion_review.md
 python scripts/build.py tagset generate-template --output ./run/tagset.template.json
 python scripts/build.py tagset lint --tagset ./run/tagset.template.json --report-md ./run/tagset_lint.md
 python scripts/build.py tagset export --tagset ./run/tagset.template.json --format csv --output ./run/tagset.csv
@@ -86,6 +88,7 @@ Notes:
 - Use `model-providers probe` before live builds to check read-only RAGFlow model-provider endpoints, optional expected embedding/rerank model names, explicit adapter empty-input request shapes, and optional `--redaction-report` sidecars without creating datasets.
 - Use `inspect-handoff` before upload when a `ragflow-doc-to-md package --rich` handoff includes optional sidecars.
 - Use `metadata` and `tagset` subcommands to prepare advisory public metadata and tag reports offline. Metadata summaries can be attached to build reports with `--metadata`; default upload behavior is unchanged.
+- Use `metadata suggest-request` and `metadata suggest-review` as the explicit LLM-adapter boundary. The request command does not call an LLM; review checks external candidates with the same deterministic metadata lint before use.
 - Use `benchmark import/sample/preflight/summarize/gate` and `snapshot-chunks` for offline benchmark lifecycle checks around `validate.py --level benchmark`; these commands do not touch RAGFlow. `benchmark import --checkpoint --batch-size ...` can be resumed with `--resume` when normalizing large local query/qrel sets.
 - Benchmark summarize/gate/trend/delta reports include deterministic root-cause hints for coverage, ranking, pollution, grounding, citation, abstention, and cost/latency regressions when matching metrics are present.
 - Use `benchmark suggest` to derive conservative `top_k` and `similarity_threshold` experiment suggestions from benchmark metrics, optional baseline deltas, and optional gate thresholds.

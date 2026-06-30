@@ -33,6 +33,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     HandoffError,
     RAGFlowClient,
     attach_benchmark_evaluation,
+    create_metadata_suggestion_request,
     create_optimization_cleanup_plan,
     create_optimization_plan,
     discover_markdown_documents,
@@ -66,6 +67,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_governance_markdown,
     render_model_provider_probe_markdown,
     render_parse_report_markdown,
+    review_metadata_suggestions,
     gate_benchmark_report,
     import_benchmark_dataset,
     preflight_benchmark_dataset,
@@ -890,6 +892,60 @@ def _run_metadata_generate_template(args: argparse.Namespace) -> int:
         _write_json_file(args.output, payload)
         _dump_json({"ok": True, "schema": payload["schema"], "output": args.output, "document_count": len(payload["documents"])})
         return 0
+    except (MetadataGovernanceError, OSError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
+def _run_metadata_suggest_request(args: argparse.Namespace) -> int:
+    try:
+        report = create_metadata_suggestion_request(
+            doc_manifest_path=args.doc_manifest,
+            handoff_metadata_path=args.handoff_metadata,
+            metadata_path=args.metadata,
+            include_excerpts=args.include_excerpts,
+            max_excerpt_chars=args.max_excerpt_chars,
+        )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[args.doc_manifest, args.handoff_metadata, args.metadata],
+                output_paths=[args.output, args.report_json, args.report_md, args.redaction_report],
+                extra_secret_literals=_collect_secret_literals(report),
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.output, report)
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_governance_markdown(report, title="RAGFlow Metadata Suggestion Request"))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (MetadataGovernanceError, OSError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
+def _run_metadata_suggest_review(args: argparse.Namespace) -> int:
+    try:
+        report = review_metadata_suggestions(
+            candidate_path=args.candidate,
+            request_path=args.request,
+            require_advisory=not args.allow_non_advisory,
+        )
+        if args.redaction_report:
+            context_paths = [args.candidate, args.request]
+            context_secrets, context_hosts, _context_config_paths = _collect_redaction_context_from_json_paths(context_paths)
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[args.candidate, args.request],
+                output_paths=[args.report_json, args.report_md, args.redaction_report],
+                extra_secret_literals=[*context_secrets, *_collect_secret_literals(report)],
+                extra_private_hosts=context_hosts,
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_governance_markdown(report, title="RAGFlow Metadata Suggestion Review"))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
     except (MetadataGovernanceError, OSError) as exc:
         return _error(str(exc), json_output=args.json)
 
@@ -2213,6 +2269,35 @@ def build_metadata_parser() -> argparse.ArgumentParser:
     template.add_argument("--output", required=True, help="Output metadata template JSON")
     template.add_argument("--json", action="store_true", help="Emit JSON errors")
     template.set_defaults(func=_run_metadata_generate_template)
+
+    suggest_request = subparsers.add_parser(
+        "suggest-request",
+        help="Create an advisory metadata suggestion request for an external LLM",
+    )
+    suggest_request.add_argument("--doc-manifest", required=True, help="doc_manifest.json used to list document paths")
+    suggest_request.add_argument("--handoff-metadata", help="Optional rich handoff metadata.json")
+    suggest_request.add_argument("--metadata", help="Optional existing ragflow_metadata_v1 file")
+    suggest_request.add_argument("--output", required=True, help="Output metadata suggestion request JSON")
+    suggest_request.add_argument("--report-json", help="Optional JSON report path")
+    suggest_request.add_argument("--report-md", help="Optional Markdown report path")
+    suggest_request.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    suggest_request.add_argument("--include-excerpts", action="store_true", help="Include truncated Markdown excerpts for host-approved LLM context")
+    suggest_request.add_argument("--max-excerpt-chars", type=int, default=1200, help="Maximum excerpt characters per document")
+    suggest_request.add_argument("--json", action="store_true", help="Emit JSON errors")
+    suggest_request.set_defaults(func=_run_metadata_suggest_request)
+
+    suggest_review = subparsers.add_parser(
+        "suggest-review",
+        help="Review external LLM metadata suggestions before use",
+    )
+    suggest_review.add_argument("--candidate", required=True, help="Candidate ragflow_metadata_v1 JSON/YAML from an external LLM")
+    suggest_review.add_argument("--request", help="Optional metadata suggestion request JSON used to verify document paths")
+    suggest_review.add_argument("--report-json", help="Optional JSON review report path")
+    suggest_review.add_argument("--report-md", help="Optional Markdown review report path")
+    suggest_review.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    suggest_review.add_argument("--allow-non-advisory", action="store_true", help="Allow candidates that do not set advisory=true")
+    suggest_review.add_argument("--json", action="store_true", help="Emit JSON errors")
+    suggest_review.set_defaults(func=_run_metadata_suggest_review)
 
     return parser
 

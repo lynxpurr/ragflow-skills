@@ -49,8 +49,8 @@ Partially completed and still active:
     remain future adapters.
 - Phase 31 runtime resilience
   - Report redaction and generated-report safety are closed for the current inventory.
-  - Runtime helper coverage currently tracks 79 public command surfaces: 19 `covered`,
-    0 `candidate`, 2 `deferred`, and 58 `not_applicable`.
+  - Runtime helper coverage currently tracks 81 public command surfaces: 19 `covered`,
+    0 `candidate`, 2 `deferred`, and 60 `not_applicable`.
   - The bounded non-live checkpoint/resume and partial-failure candidate inventory is
     closed; remaining resilience work is explicitly gated live mutation or future
     adapter scope.
@@ -58,9 +58,10 @@ Partially completed and still active:
 Deferred or outside the active public-suite completion path:
 
 - Private dedao bridging stays out of public skills unless a private adapter is needed.
-- Optional LLM-assisted metadata, grounded-QA generation, agentic answers, reflection,
-  and LLM/RAGAS evaluators must stay disabled until explicit LLM config and deterministic
-  fixtures exist.
+- Optional LLM-assisted grounded-QA generation, agentic answers, reflection, and
+  LLM/RAGAS evaluators must stay disabled until explicit LLM config and deterministic
+  fixtures exist. Metadata suggestions now have a no-LLM request/review boundary, but no
+  script-owned model call.
 - Live disposable KB optimization, cleanup execution, and live tests remain gated by
   credentials plus explicit user approval.
 - Wheel packaging, web/UI wrappers, provider abstractions, and hosted service clients are
@@ -82,17 +83,17 @@ remain in their owning phases below.
 
 | Track | Existing open items | Current status | Completion rule |
 | --- | --- | --- | --- |
-| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory closed | Runtime inventory stays at 19 `covered`, 0 `candidate`, 2 intentionally `deferred`, and 58 `not_applicable` command surfaces. |
+| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory closed | Runtime inventory stays at 19 `covered`, 0 `candidate`, 2 intentionally `deferred`, and 60 `not_applicable` command surfaces. |
 | Document split packaging | Phase 16 optional manifest rewrite/package mode | Complete for current CLI scope | Split outputs can be resumed and optionally repackaged without breaking existing segment-directory ingestion. |
 | Query service and agentic adapters | Phase 3 `serve`, Phase 3 agentic retrieval, Phase 21/30 script-owned synthesis and reflection | Deferred | Implement only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
 | Live disposable optimization | Phase 17 live probe tests, Phase 26 disposable KB build/validation/cleanup execution/live tests, Phase 27 live enrichment tests | Complete for current CLI scope | Requires credentials, explicit confirmation, exact cleanup confirmation, and retained dataset IDs. |
-| Optional LLM-assisted adapters | Phase 25 metadata, Phase 26 grounded QA, Phase 30 LLM/RAGAS-style evaluator | Deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
+| Optional LLM-assisted adapters | Phase 25 metadata, Phase 26 grounded QA, Phase 30 LLM/RAGAS-style evaluator | Metadata suggestion boundary complete; remaining adapters deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
 | Packaging and platform adapters | Backlog wheel path, remote conversion service client, provider abstractions, web/API wrapper | Post-CLI backlog | Start only after the portable archive release path remains green and users need a non-archive deployment model. |
 | Private dedao bridge | Deferred private adapter tasks | Outside public release scope | Keep private examples and adapter logic outside public `skills/`; consume only public handoff shapes. |
 
 Recommended completion queue:
 
-1. Add optional LLM adapters in this order: metadata suggestions, grounded QA generation, agentic answer synthesis, LLM/RAGAS evaluator.
+1. Add optional LLM adapters in this order: grounded QA generation, agentic answer synthesis, LLM/RAGAS evaluator.
 2. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients, and web/API wrappers as post-CLI product adapters.
 
 ## Phase 0: Architecture Skeleton
@@ -843,13 +844,14 @@ Tasks:
 - [x] Add `ragflow-kb-build tagset export` for RAGFlow-compatible CSV/JSON outputs.
 - [x] Add `ragflow-kb-build tagset report` for coverage, duplicates, and orphan tag warnings.
 - [x] Wire metadata summaries into build and validation reports without changing default upload behavior.
-- [ ] Add optional LLM-assisted metadata generation as a deferred adapter, not as the MVP default.
+- [x] Add optional LLM-assisted metadata suggestion adapter boundary as a deferred-by-default request/review workflow.
 - [x] Add offline tests for schema validation, merge precedence, and redaction.
 - [x] Add sample public metadata and tagset templates with placeholder-only values.
 
-MVP note: LLM-assisted metadata generation is intentionally not part of the deterministic
-Phase 25 command surface. A future adapter must mark generated metadata advisory and pass
-`metadata lint` before build or validation can summarize it.
+MVP note: `metadata suggest-request` creates an advisory, no-LLM request artifact for a
+host-approved external model call, and `metadata suggest-review` checks external
+candidates with deterministic lint, advisory marking, path checks, generated Markdown, and
+redaction sidecars. The public script still does not invoke a model itself.
 
 Exit criteria:
 
@@ -1122,8 +1124,8 @@ sanitized reports and redaction sidecars should be stored and what must stay out
 transcripts.
 `tools/runtime_resilience_inventory.py` now emits
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene to track Phase 31
-runtime helper coverage without broadening live behavior. The current inventory names 79
-public commands: 19 `covered`, 0 `candidate`, 2 `deferred`, and 58 `not_applicable`, with
+runtime helper coverage without broadening live behavior. The current inventory names 81
+public commands: 19 `covered`, 0 `candidate`, 2 `deferred`, and 60 `not_applicable`, with
 no stale classification findings. Covered surfaces include `ragflow-query endpoint-report`,
 `ragflow-query fallback-test`, `ragflow-query cache-report`, `ragflow-query centroid build`,
 `ragflow-doc-to-md` process cleanup reporting, `ragflow-doc-to-md backend probe`,
@@ -1173,7 +1175,7 @@ Recommended next slices:
    checkpoint/resume are now covered, `ragflow-doc-to-md split` now supports bounded
    checkpoint/resume, and `inspect-kb`, `validate`, `snapshot-chunks`, `qa validate`,
    plus `qa map-evidence` now have partial-failure coverage. The Phase 31 non-live
-   inventory now records 19 `covered`, 0 `candidate`, 2 explicitly `deferred`, and 58
+   inventory now records 19 `covered`, 0 `candidate`, 2 explicitly `deferred`, and 60
    `not_applicable` public command surfaces in
    `ragflow_runtime_resilience_inventory_v1`.
 
@@ -1379,7 +1381,7 @@ Tasks:
 Status note: `tools/report_surface_inventory.py` now emits
 `ragflow_report_surface_inventory_v1`, dynamically enumerates public argparse command
 leaves, and overlays an explicit Phase 36 classification. The verified inventory currently
-names 79 public commands: 70 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with
+names 81 public commands: 72 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with
 no uncatalogued or stale classification findings. Generated-report redaction coverage is
 now closed across inventoried public command surfaces; `ragflow-doc-to-md`
 and `ragflow-query` report commands are currently classified as covered or not applicable.

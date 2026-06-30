@@ -107,6 +107,8 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("kb-build inspect-handoff redaction", check_names)
         self.assertIn("kb-build metadata lint redaction", check_names)
         self.assertIn("kb-build metadata merge redaction", check_names)
+        self.assertIn("kb-build metadata suggest-request redaction", check_names)
+        self.assertIn("kb-build metadata suggest-review redaction", check_names)
         self.assertIn("kb-build tagset lint redaction", check_names)
         self.assertIn("kb-build tagset report redaction", check_names)
         self.assertIn("kb-build topology advise redaction", check_names)
@@ -199,6 +201,14 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("metadata_merge_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("metadata_suggestion_request_redaction.json") for path in payload["produced_artifacts"]),
+            payload["produced_artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("metadata_suggestion_review_redaction.json") for path in payload["produced_artifacts"]),
             payload["produced_artifacts"],
         )
         self.assertTrue(

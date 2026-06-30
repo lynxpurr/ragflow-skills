@@ -79,6 +79,8 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("kb cleanup redaction sidecar", check_names)
         self.assertIn("kb inspect-handoff redaction", check_names)
         self.assertIn("kb metadata lint redaction", check_names)
+        self.assertIn("kb metadata suggest-request redaction", check_names)
+        self.assertIn("kb metadata suggest-review redaction", check_names)
         self.assertIn("kb tagset report redaction", check_names)
         self.assertIn("kb topology advise redaction", check_names)
         self.assertIn("kb topology split-plan redaction", check_names)
@@ -193,6 +195,14 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         )
         self.assertTrue(
             any(path.endswith("metadata_lint_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("metadata_suggestion_request_redaction.json") for path in profile["artifacts"]),
+            profile["artifacts"],
+        )
+        self.assertTrue(
+            any(path.endswith("metadata_suggestion_review_redaction.json") for path in profile["artifacts"]),
             profile["artifacts"],
         )
         self.assertTrue(

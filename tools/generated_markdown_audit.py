@@ -38,6 +38,8 @@ SANITIZED_MARKDOWN_VERIFIED_COMMANDS = (
     "ragflow-kb-build inspect-handoff",
     "ragflow-kb-build metadata lint",
     "ragflow-kb-build metadata merge",
+    "ragflow-kb-build metadata suggest-request",
+    "ragflow-kb-build metadata suggest-review",
     "ragflow-kb-build model-providers probe",
     "ragflow-kb-build optimize",
     "ragflow-kb-build optimize cleanup-plan",

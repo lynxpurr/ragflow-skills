@@ -21,6 +21,8 @@ RAGFLOW_METADATA_SCHEMA = "ragflow_metadata_v1"
 RAGFLOW_TAGSET_SCHEMA = "ragflow_tagset_v1"
 METADATA_LINT_REPORT_SCHEMA = "ragflow_metadata_lint_report_v1"
 METADATA_MERGE_REPORT_SCHEMA = "ragflow_metadata_merge_report_v1"
+METADATA_SUGGESTION_REQUEST_SCHEMA = "ragflow_metadata_suggestion_request_v1"
+METADATA_SUGGESTION_REVIEW_REPORT_SCHEMA = "ragflow_metadata_suggestion_review_report_v1"
 TAGSET_LINT_REPORT_SCHEMA = "ragflow_tagset_lint_report_v1"
 TAGSET_REPORT_SCHEMA = "ragflow_tagset_report_v1"
 TAGSET_EXPORT_SCHEMA = "ragflow_tagset_export_v1"
@@ -544,6 +546,236 @@ def merge_metadata_payloads(
         },
         "conflicts": conflicts,
         "issues": lint_report["issues"],
+    }
+
+
+def _read_markdown_excerpt(
+    *,
+    doc_manifest_path: str | Path,
+    markdown_path: str,
+    max_chars: int,
+    issues: list[GovernanceIssue],
+    field: str,
+) -> str | None:
+    if max_chars <= 0:
+        return None
+    manifest_root = Path(doc_manifest_path).parent
+    source = Path(markdown_path)
+    if not source.is_absolute():
+        source = manifest_root / source
+    try:
+        text = source.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        issues.append(
+            GovernanceIssue(
+                "warning",
+                "metadata_suggestion_excerpt_missing",
+                "markdown excerpt requested but document file was not found",
+                field,
+            )
+        )
+        return None
+    except OSError as exc:
+        issues.append(
+            GovernanceIssue(
+                "warning",
+                "metadata_suggestion_excerpt_unreadable",
+                f"markdown excerpt requested but document file could not be read: {exc}",
+                field,
+            )
+        )
+        return None
+    return text[:max_chars]
+
+
+def create_metadata_suggestion_request(
+    *,
+    doc_manifest_path: str | Path,
+    handoff_metadata_path: str | Path | None = None,
+    metadata_path: str | Path | None = None,
+    include_excerpts: bool = False,
+    max_excerpt_chars: int = 1200,
+) -> dict[str, Any]:
+    """Create an advisory metadata-suggestion request for an external LLM.
+
+    The function does not invoke a model. It packages safe document context and
+    explicit output constraints so a host agent can decide whether to call an
+    LLM outside the public skill runtime.
+    """
+
+    issues: list[GovernanceIssue] = []
+    entries = _doc_manifest_entries(doc_manifest_path)
+    if not entries:
+        raise MetadataGovernanceError("doc_manifest does not contain documents")
+    handoff_index = _metadata_from_handoff_payload(_read_mapping(handoff_metadata_path)) if handoff_metadata_path else {}
+    user_index = _metadata_index(_read_mapping(metadata_path)) if metadata_path else {}
+
+    documents = []
+    for index, entry in enumerate(entries):
+        document: dict[str, Any] = {
+            "path": entry["path"],
+            "source_path": entry["source_path"],
+            "title": entry["title"],
+            "language": entry["language"],
+            "sha256": entry["sha256"],
+            "existing_metadata": {
+                "handoff": handoff_index.get(entry["path"], {}),
+                "user": user_index.get(entry["path"], {}),
+                "path_derived": _derive_metadata_from_path(entry["path"]),
+            },
+        }
+        if include_excerpts:
+            excerpt = _read_markdown_excerpt(
+                doc_manifest_path=doc_manifest_path,
+                markdown_path=entry["path"],
+                max_chars=max_excerpt_chars,
+                issues=issues,
+                field=f"documents[{index}].excerpt",
+            )
+            if excerpt is not None:
+                document["excerpt"] = excerpt
+                document["excerpt_truncated"] = len(excerpt) >= max_excerpt_chars
+                document["max_excerpt_chars"] = max_excerpt_chars
+        documents.append(document)
+
+    return {
+        "ok": _ok(issues),
+        "schema": METADATA_SUGGESTION_REQUEST_SCHEMA,
+        "created_at": _now(),
+        "metadata_schema": RAGFLOW_METADATA_SCHEMA,
+        "advisory": True,
+        "llm_invoked": False,
+        "summary": {
+            **_issue_counts(issues),
+            "document_count": len(documents),
+            "include_excerpts": include_excerpts,
+            "safe_field_count": len(SAFE_METADATA_FIELDS),
+        },
+        "instructions": {
+            "purpose": "Suggest advisory ragflow_metadata_v1 values for the listed documents.",
+            "required_output_schema": RAGFLOW_METADATA_SCHEMA,
+            "allowed_metadata_fields": sorted(SAFE_METADATA_FIELDS),
+            "list_fields": sorted(LIST_METADATA_FIELDS),
+            "requirements": [
+                "Return JSON only.",
+                "Set advisory to true.",
+                "Use only allowed metadata fields.",
+                "Do not include secrets, credentials, private endpoints, or authorization material.",
+                "Do not invent source_uri or source_hash values when they are not present in the request.",
+                "Every suggested document path must match a request document path exactly.",
+            ],
+            "review_command": "ragflow-kb-build metadata suggest-review --candidate CANDIDATE.json --request REQUEST.json",
+        },
+        "documents": documents,
+        "issues": [issue.to_dict() for issue in issues],
+    }
+
+
+def _review_issue_from_lint(raw_issue: Mapping[str, Any]) -> GovernanceIssue:
+    return GovernanceIssue(
+        severity=str(raw_issue.get("severity", "warning")),
+        code=f"metadata_lint_{raw_issue.get('code', 'issue')}",
+        message=str(raw_issue.get("message", "")),
+        field=raw_issue.get("field") if isinstance(raw_issue.get("field"), str) else None,
+        recommendation=raw_issue.get("recommendation") if isinstance(raw_issue.get("recommendation"), str) else None,
+    )
+
+
+def review_metadata_suggestions(
+    *,
+    candidate_path: str | Path,
+    request_path: str | Path | None = None,
+    require_advisory: bool = True,
+) -> dict[str, Any]:
+    """Review external LLM metadata suggestions with deterministic lint gates."""
+
+    raw_candidate = _read_mapping(candidate_path)
+    candidate = raw_candidate.get("metadata") if isinstance(raw_candidate.get("metadata"), Mapping) else raw_candidate
+    if not isinstance(candidate, Mapping):
+        raise MetadataGovernanceError("candidate metadata must be a JSON object")
+
+    issues: list[GovernanceIssue] = []
+    if require_advisory and candidate.get("advisory") is not True:
+        issues.append(
+            GovernanceIssue(
+                "error",
+                "metadata_suggestion_not_advisory",
+                "LLM-assisted metadata suggestions must set advisory to true",
+                "advisory",
+            )
+        )
+
+    lint_report = lint_metadata_payload(candidate)
+    for raw_issue in lint_report.get("issues", []):
+        if isinstance(raw_issue, Mapping):
+            issues.append(_review_issue_from_lint(raw_issue))
+
+    normalized = lint_report.get("normalized_preview", {})
+    candidate_documents = normalized.get("documents", []) if isinstance(normalized, Mapping) else []
+    candidate_paths = {
+        str(document.get("path"))
+        for document in candidate_documents
+        if isinstance(document, Mapping) and isinstance(document.get("path"), str)
+    }
+
+    request_document_count = 0
+    if request_path:
+        request = _read_mapping(request_path)
+        if request.get("schema") != METADATA_SUGGESTION_REQUEST_SCHEMA:
+            issues.append(
+                GovernanceIssue(
+                    "error",
+                    "metadata_suggestion_request_schema_invalid",
+                    f"request schema must be {METADATA_SUGGESTION_REQUEST_SCHEMA}",
+                    "request.schema",
+                )
+            )
+            request_paths: set[str] = set()
+        else:
+            raw_documents = request.get("documents", [])
+            request_documents = [item for item in raw_documents if isinstance(item, Mapping)] if isinstance(raw_documents, list) else []
+            request_document_count = len(request_documents)
+            request_paths = {str(item.get("path")) for item in request_documents if isinstance(item.get("path"), str)}
+        for path in sorted(candidate_paths - request_paths):
+            issues.append(
+                GovernanceIssue(
+                    "error",
+                    "metadata_suggestion_unknown_document",
+                    "candidate metadata includes a document path not present in the suggestion request",
+                    path,
+                )
+            )
+        for path in sorted(request_paths - candidate_paths):
+            issues.append(
+                GovernanceIssue(
+                    "warning",
+                    "metadata_suggestion_missing_document",
+                    "candidate metadata omits a document from the suggestion request",
+                    path,
+                )
+            )
+
+    return {
+        "ok": _ok(issues),
+        "schema": METADATA_SUGGESTION_REVIEW_REPORT_SCHEMA,
+        "created_at": _now(),
+        "metadata_schema": RAGFLOW_METADATA_SCHEMA,
+        "candidate_schema": candidate.get("schema"),
+        "summary": {
+            **_issue_counts(issues),
+            "candidate_document_count": len(candidate_paths),
+            "request_document_count": request_document_count,
+            "advisory": candidate.get("advisory") is True,
+            "lint_ok": bool(lint_report.get("ok")),
+        },
+        "issues": [issue.to_dict() for issue in issues],
+        "lint_report": {
+            "schema": lint_report.get("schema"),
+            "ok": lint_report.get("ok"),
+            "summary": lint_report.get("summary"),
+            "issues": lint_report.get("issues", []),
+        },
+        "candidate_metadata_preview": normalized,
     }
 
 

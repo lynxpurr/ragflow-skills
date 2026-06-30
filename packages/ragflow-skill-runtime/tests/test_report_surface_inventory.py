@@ -20,12 +20,12 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_report_surface_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 79)
+        self.assertEqual(report["summary"]["command_count"], 81)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
             {
-                "covered": 70,
+                "covered": 72,
                 "needs_redaction": 0,
                 "not_applicable": 9,
             },
@@ -67,6 +67,16 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
         metadata_lint = by_command["ragflow-kb-build metadata lint"]
         self.assertEqual(metadata_lint["status"], "covered")
         self.assertIn("redaction_sidecar", metadata_lint["output_categories"])
+
+        metadata_suggest_request = by_command["ragflow-kb-build metadata suggest-request"]
+        self.assertEqual(metadata_suggest_request["status"], "covered")
+        self.assertIn("redaction_sidecar", metadata_suggest_request["output_categories"])
+        self.assertIn("markdown_report", metadata_suggest_request["output_categories"])
+
+        metadata_suggest_review = by_command["ragflow-kb-build metadata suggest-review"]
+        self.assertEqual(metadata_suggest_review["status"], "covered")
+        self.assertIn("redaction_sidecar", metadata_suggest_review["output_categories"])
+        self.assertIn("markdown_report", metadata_suggest_review["output_categories"])
 
         activation_plan = by_command["ragflow-kb-build activation-plan"]
         self.assertEqual(activation_plan["status"], "covered")

@@ -711,6 +711,112 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(build_result.returncode, 0, build_result.stdout)
         self.assertTrue(build_payload["metadata_summary"]["ok"])
 
+    def test_metadata_suggestion_subcommands_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            handoff = root / "handoff"
+            docs_dir = handoff / "documents"
+            docs_dir.mkdir(parents=True)
+            (docs_dir / "sample.md").write_text("# Sample\n\nBody for suggestions.\n", encoding="utf-8")
+            doc_manifest = handoff / "doc_manifest.json"
+            doc_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [
+                            {
+                                "source_path": "source/sample.pdf",
+                                "markdown_path": "documents/sample.md",
+                                "title": "Sample",
+                                "language": "en",
+                                "sha256": "1" * 64,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            request = root / "metadata_suggestion_request.json"
+            request_md = root / "metadata_suggestion_request.md"
+            candidate = root / "metadata_suggestion_candidate.json"
+            review_json = root / "metadata_suggestion_review.json"
+            review_md = root / "metadata_suggestion_review.md"
+            candidate.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_metadata_v1",
+                        "advisory": True,
+                        "documents": [
+                            {
+                                "path": "documents/sample.md",
+                                "metadata": {
+                                    "topic": "Suggested Topic",
+                                    "entities": ["ExampleEntity"],
+                                    "summary": "Advisory metadata summary.",
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            request_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "metadata",
+                    "suggest-request",
+                    "--doc-manifest",
+                    str(doc_manifest),
+                    "--output",
+                    str(request),
+                    "--report-md",
+                    str(request_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            review_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "metadata",
+                    "suggest-review",
+                    "--candidate",
+                    str(candidate),
+                    "--request",
+                    str(request),
+                    "--report-json",
+                    str(review_json),
+                    "--report-md",
+                    str(review_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            request_payload = json.loads(request.read_text(encoding="utf-8"))
+            review_payload = json.loads(review_json.read_text(encoding="utf-8"))
+            request_md_text = request_md.read_text(encoding="utf-8") if request_md.exists() else ""
+            review_md_text = review_md.read_text(encoding="utf-8") if review_md.exists() else ""
+
+        self.assertEqual(request_result.returncode, 0, request_result.stdout)
+        self.assertEqual(request_payload["schema"], "ragflow_metadata_suggestion_request_v1")
+        self.assertFalse(request_payload["llm_invoked"])
+        self.assertEqual(request_payload["documents"][0]["path"], "documents/sample.md")
+        self.assertIn("RAGFlow Metadata Suggestion Request", request_md_text)
+        self.assertEqual(review_result.returncode, 0, review_result.stdout)
+        self.assertEqual(review_payload["schema"], "ragflow_metadata_suggestion_review_report_v1")
+        self.assertTrue(review_payload["ok"], review_payload["issues"])
+        self.assertIn("RAGFlow Metadata Suggestion Review", review_md_text)
+
     def test_tagset_governance_subcommands_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -896,6 +1002,130 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertNotIn("metadata-secret", combined)
         self.assertIn("[REDACTED]", combined)
         self.assertIn("metadata-secret", merged_text)
+
+    def test_metadata_suggestion_reports_are_redacted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            handoff = root / "handoff.local-token=metadata-suggest-secret"
+            docs_dir = handoff / "documents"
+            docs_dir.mkdir(parents=True)
+            (docs_dir / "sample.md").write_text("# Sample\n\napi_key=metadata-suggest-secret\n", encoding="utf-8")
+            doc_manifest = handoff / "doc_manifest.json"
+            doc_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [
+                            {
+                                "source_path": "source/sample-token=metadata-suggest-secret.pdf",
+                                "markdown_path": "documents/sample.md",
+                                "title": "Metadata Suggest",
+                                "sha256": "1" * 64,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            request = root / "metadata_suggestion_request.json"
+            request_json = root / "metadata_suggestion_request_report.json"
+            request_md = root / "metadata_suggestion_request.md"
+            request_redaction = root / "metadata_suggestion_request_redaction.json"
+            candidate = root / "candidate.local-token=metadata-suggest-secret.json"
+            candidate.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_metadata_v1",
+                        "advisory": True,
+                        "documents": [
+                            {
+                                "path": "documents/sample.md",
+                                "metadata": {
+                                    "topic": "Suggested",
+                                    "private_note": "token=metadata-suggest-secret",
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            review_json = root / "metadata_suggestion_review.json"
+            review_md = root / "metadata_suggestion_review.md"
+            review_redaction = root / "metadata_suggestion_review_redaction.json"
+
+            request_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "metadata",
+                    "suggest-request",
+                    "--doc-manifest",
+                    str(doc_manifest),
+                    "--output",
+                    str(request),
+                    "--report-json",
+                    str(request_json),
+                    "--report-md",
+                    str(request_md),
+                    "--redaction-report",
+                    str(request_redaction),
+                    "--include-excerpts",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            review_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "metadata",
+                    "suggest-review",
+                    "--candidate",
+                    str(candidate),
+                    "--request",
+                    str(request),
+                    "--report-json",
+                    str(review_json),
+                    "--report-md",
+                    str(review_md),
+                    "--redaction-report",
+                    str(review_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            combined = "\n".join(
+                [
+                    request_result.stdout,
+                    review_result.stdout,
+                    request.read_text(encoding="utf-8"),
+                    request_json.read_text(encoding="utf-8"),
+                    request_md.read_text(encoding="utf-8"),
+                    request_redaction.read_text(encoding="utf-8"),
+                    review_json.read_text(encoding="utf-8"),
+                    review_md.read_text(encoding="utf-8"),
+                    review_redaction.read_text(encoding="utf-8"),
+                ]
+            )
+            request_redaction_payload = json.loads(request_redaction.read_text(encoding="utf-8"))
+            review_redaction_payload = json.loads(review_redaction.read_text(encoding="utf-8"))
+
+        self.assertEqual(request_result.returncode, 0, request_result.stdout)
+        self.assertNotEqual(review_result.returncode, 0, review_result.stdout)
+        self.assertEqual(request_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertEqual(review_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(request_redaction_payload["target_counts"]["explicit_secrets"], 1)
+        self.assertGreaterEqual(review_redaction_payload["target_counts"]["explicit_secrets"], 1)
+        self.assertNotIn("metadata-suggest-secret", combined)
+        self.assertIn("<redacted:", combined)
 
     def test_tagset_governance_writes_redaction_reports(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

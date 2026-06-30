@@ -2173,6 +2173,90 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         required_stdout='"schema": "ragflow_metadata_lint_report_v1"',
     )
     _record_redaction_sidecar_check(checks, "kb metadata lint redaction", metadata_lint_redaction)
+    metadata_suggestion_request = artifacts_dir / "metadata_suggestion_request.json"
+    metadata_suggestion_request_md = artifacts_dir / "metadata_suggestion_request.md"
+    metadata_suggestion_request_redaction = artifacts_dir / "metadata_suggestion_request_redaction.json"
+    metadata_suggestion_request_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "metadata",
+            "suggest-request",
+            "--doc-manifest",
+            str(doc_manifest),
+            "--metadata",
+            str(metadata_template),
+            "--output",
+            str(metadata_suggestion_request),
+            "--report-md",
+            str(metadata_suggestion_request_md),
+            "--redaction-report",
+            str(metadata_suggestion_request_redaction),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb metadata suggest-request",
+        metadata_suggestion_request_result,
+        required_stdout='"schema": "ragflow_metadata_suggestion_request_v1"',
+    )
+    _record_redaction_sidecar_check(checks, "kb metadata suggest-request redaction", metadata_suggestion_request_redaction)
+    metadata_suggestion_candidate = artifacts_dir / "metadata_suggestion_candidate.json"
+    metadata_suggestion_candidate.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_metadata_v1",
+                "advisory": True,
+                "documents": [
+                    {
+                        "path": "documents/platform-smoke.md",
+                        "metadata": {
+                            "topic": "Platform smoke metadata",
+                            "summary": "Advisory metadata fixture for platform smoke.",
+                        },
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    metadata_suggestion_review_json = artifacts_dir / "metadata_suggestion_review.json"
+    metadata_suggestion_review_md = artifacts_dir / "metadata_suggestion_review.md"
+    metadata_suggestion_review_redaction = artifacts_dir / "metadata_suggestion_review_redaction.json"
+    metadata_suggestion_review_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "metadata",
+            "suggest-review",
+            "--candidate",
+            str(metadata_suggestion_candidate),
+            "--request",
+            str(metadata_suggestion_request),
+            "--report-json",
+            str(metadata_suggestion_review_json),
+            "--report-md",
+            str(metadata_suggestion_review_md),
+            "--redaction-report",
+            str(metadata_suggestion_review_redaction),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb metadata suggest-review",
+        metadata_suggestion_review_result,
+        required_stdout='"schema": "ragflow_metadata_suggestion_review_report_v1"',
+    )
+    _record_redaction_sidecar_check(checks, "kb metadata suggest-review redaction", metadata_suggestion_review_redaction)
     topology_advice = artifacts_dir / "kb_topology_advice.json"
     topology_advice_md = artifacts_dir / "kb_topology_advice.md"
     topology_advice_redaction = artifacts_dir / "kb_topology_advice_redaction.json"
@@ -4006,6 +4090,13 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "metadata.template.json",
         artifacts_dir / "metadata_lint.json",
         artifacts_dir / "metadata_lint_redaction.json",
+        artifacts_dir / "metadata_suggestion_request.json",
+        artifacts_dir / "metadata_suggestion_request.md",
+        artifacts_dir / "metadata_suggestion_request_redaction.json",
+        artifacts_dir / "metadata_suggestion_candidate.json",
+        artifacts_dir / "metadata_suggestion_review.json",
+        artifacts_dir / "metadata_suggestion_review.md",
+        artifacts_dir / "metadata_suggestion_review_redaction.json",
         artifacts_dir / "kb_topology_advice.json",
         artifacts_dir / "kb_topology_advice.md",
         artifacts_dir / "kb_topology_advice_redaction.json",
