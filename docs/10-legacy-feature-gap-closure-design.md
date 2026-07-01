@@ -1630,7 +1630,8 @@ Finish the remaining gated work in this order:
    design gate.
 3. Plan optional script-owned LLM adapters as a single backend track before any model call.
    Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries
-   are complete; script-owned LLM/RAGAS backend execution remains deferred.
+   are complete; script-owned LLM/RAGAS backend execution remains deferred behind the
+   Phase 38 planning gate in `docs/14-optional-llm-backend-planning.md`.
 4. Keep private dedao bridging outside public release artifacts unless a private adapter is
    explicitly needed.
 
@@ -1647,7 +1648,7 @@ Current calibration:
   the release contract and are checked by default release hygiene. Broader report-schema
   migration tooling should be added only when compatibility pressure appears.
 - The next development decision should choose one explicit gate: a concrete host workflow
-  for `ragflow-query serve` implementation, an approved script-owned LLM/backend plan, or
+  for `ragflow-query serve` implementation, the Phase 38 script-owned LLM/backend plan, or
   a private dedao bridge request. Without one of those gates, maintenance should focus on
   keeping the archive and optional runtime-wheel release path green.
 - Phase 37 starts that offline post-CLI adapter planning track in
@@ -1659,6 +1660,9 @@ Current calibration:
   wrapper. Phase 37.3 now documents the intake gate for the remaining post-CLI product
   adapters, so remote conversion, provider, reranker, and web/API work starts only after
   a concrete endpoint, provider, product, fixture, and acceptance shape is recorded.
+  Phase 38 now documents the optional LLM backend execution gate; model calls remain
+  disabled until explicit config, deterministic fake-provider fixtures, advisory-output
+  marking, citation/evidence compatibility, redaction, and release gates are satisfied.
 
 ## Implementation Notes And Pitfalls
 
@@ -1730,6 +1734,7 @@ Recommended implementation order is the Phase 24-37 task list in
 12. Phase 35: Parser Performance and KB Health Telemetry.
 13. Phase 36: Generated Report Safety Closure and Runtime Helper Pilot.
 14. Phase 37: Post-CLI Adapter Planning.
+15. Phase 38: Optional LLM Backend Planning Gate.
 
 This order kept the foundation document-centric before adding more complex query-time and
 LLM-assisted behavior, then closed release governance, post-ingest operational guidance,
@@ -1737,5 +1742,6 @@ and generated-report safety. After the current Phase 36 closure, remaining compl
 should prioritize explicitly gated live validation, or, when live mutation is not approved,
 Phase 37 post-CLI adapter planning before local service, provider, reranker, and web/API
 product adapters. The runtime wheel smoke/export gate is implemented as an optional
-adapter check; script-owned LLM/RAGAS evaluator execution remains deferred behind explicit
-config, deterministic fixtures, redaction, and release gates.
+adapter check; Phase 38 documents the optional script-owned LLM/RAGAS execution gate and
+keeps backend execution deferred behind explicit config, deterministic fixtures,
+advisory-output marking, citation/evidence compatibility, redaction, and release gates.

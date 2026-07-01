@@ -39,6 +39,9 @@ Completed or closed for the current public command surface:
   runtime wheel export while keeping archive release artifacts canonical. Phase 37.3 adds
   an intake gate for the remaining post-CLI product adapters so implementation starts only
   from concrete endpoint, provider, product, fixture, and acceptance evidence.
+- Phase 38 optional LLM backend planning defines the unified config, deterministic
+  fixture, advisory-output, citation-audit, redaction, and acceptance gate for future
+  script-owned LLM/RAGAS execution without enabling model calls.
 
 Partially completed and still active:
 
@@ -71,8 +74,9 @@ Deferred or outside the active public-suite completion path:
 - Private dedao bridging stays out of public skills unless a private adapter is needed.
 - Optional LLM-assisted grounded-QA generation, script-owned agentic answers, reflection, and
   LLM/RAGAS evaluators must stay disabled until explicit LLM config and deterministic
-  fixtures exist. Metadata suggestions, grounded-QA suggestions, and agentic-answer
-  synthesis now have no-LLM request/review boundaries, but no script-owned model call.
+  fixtures exist. Metadata suggestions, grounded-QA suggestions, agentic-answer
+  synthesis, and answer-evaluator scoring now have no-LLM request/review boundaries, but
+  no script-owned model call.
 - Any future live mutation/query resilience checks remain gated by credentials plus
   explicit user approval.
 - Wheel packaging now has a runtime-only no-network smoke/export gate. Web/UI wrappers,
@@ -112,7 +116,7 @@ normal offline continuation unless their gate is satisfied.
 | --- | ---: | --- | --- | --- |
 | Local service / post-CLI host wrapper | 2 | Phase 3 optional `serve`, Backlog post-CLI service adapters | A real host workflow confirms that one-shot CLI commands are insufficient | Use the completed Phase 37.2 design gate and host-workflow intake checklist before any optional `serve` implementation. |
 | Other post-CLI product adapters | 4 | Remote conversion client, provider abstraction, reranker abstraction, web/API wrapper | Known endpoint/provider/product requirements plus fake fixtures and acceptance gates | Use the Phase 37.3 intake gate; keep deferred until one concrete contract has fixtures and acceptance criteria. |
-| Optional script-owned LLM/backend execution | 7 | Grounded-QA LLM adapter, agentic-answer execution, reflection, evidence-only synthesis, LLM/RAGAS evaluator, related Phase 30 synthesis backlog | Explicit LLM config, deterministic fixtures, advisory-output marking, citation-audit compatibility, and redaction gates | Plan as one adapter track before any script-owned model call. |
+| Optional script-owned LLM/backend execution | 7 | Grounded-QA LLM adapter, agentic-answer execution, reflection, evidence-only synthesis, LLM/RAGAS evaluator, related Phase 30 synthesis backlog | Explicit LLM config, deterministic fixtures, advisory-output marking, citation-audit compatibility, and redaction gates | Use the Phase 38 planning gate; keep request/review boundaries as the default before any script-owned model call. |
 | Private dedao bridge | 4 | Preserve current dedao skills, optional private adapter, private handoff shape, no public references | A private adapter is explicitly needed and remains outside public release artifacts | Keep outside public `skills/`; consume public handoff contracts only. |
 
 ## Release Path Checkpoint
@@ -222,9 +226,10 @@ Recommended completion queue:
    `ragflow-query serve` from the completed Phase 37.2 design gate: lifecycle, auth
    boundary, health/direct/host-assisted schemas, shutdown behavior, redaction, and local
    fake-client smoke.
-2. If optional script-owned LLM/RAGAS execution is approved, plan metadata/grounded-QA,
-   agentic-answer, reflection, and evaluator backends together with deterministic fixtures,
-   advisory-output marking, citation-audit compatibility, and redaction gates.
+2. If optional script-owned LLM/RAGAS execution is approved, use the Phase 38 planning gate
+   in `docs/14-optional-llm-backend-planning.md` before code starts. Grounded-QA LLM
+   generation is the first candidate only after fake-provider fixtures, advisory-output
+   marking, citation/evidence compatibility, and redaction gates are recorded.
 3. If a private dedao bridge is needed, implement it outside public release artifacts and
    make it consume the public `doc_manifest.json` handoff shape.
 4. Otherwise, keep the public CLI/archive/wheel release path green with periodic release
@@ -1768,6 +1773,21 @@ adapters, and web/API wrappers. Those adapters remain explicitly deferred until 
 endpoint, provider, product, fixture, and acceptance shapes are known. The Phase 37.1
 wheel smoke and full offline release-facing validation chain passed on 2026-07-01, so the
 archive release path remains green after the post-CLI adapter planning work.
+
+## Phase 38: Optional LLM Backend Planning Gate
+
+Goal: define the gate for future script-owned LLM/RAGAS backend execution while keeping
+the current request/review boundaries and deterministic no-network defaults intact.
+
+Design source: `docs/14-optional-llm-backend-planning.md`.
+
+Status note: Phase 38 is a planning gate only. It does not enable model calls, add default
+hosted endpoints, add script-owned answer synthesis, or close any of the remaining
+optional LLM/backend checklist items. The first implementation candidate, if the gate is
+approved later, should be grounded-QA LLM generation with a fake provider because it can be
+validated by `qa validate`, evidence mapping, advisory/generated markings, redaction
+sidecars, consumer acceptance, and strict-vendor platform smoke before affecting
+benchmarks.
 
 ## Definition of Done
 
