@@ -1,7 +1,7 @@
 # Post-CLI Adapter Planning
 
-Status: planning gate; Phase 37.2 serve design gate complete
-Date: 2026-07-01
+Status: planning gate; Phase 37.3 adapter intake gate documented
+Date: 2026-07-02
 
 ## Objective
 
@@ -142,6 +142,24 @@ Host workflow assumption:
 - The first implementation must stay local-only, optional, no-network by default in tests,
   and compatible with the existing `ragflow-query ask` output shape.
 
+Host workflow intake:
+
+Before opening a `serve` implementation, record a concrete host workflow with enough
+detail to prove that the one-shot CLI path is the wrong shape. Unanswered intake fields do
+not block design discussion, but they do block service code.
+
+| Field | Required evidence |
+| --- | --- |
+| Target host | Name the host surface, such as Hermes, OpenClaw, Claude Code, opencode, or a product-owned wrapper, and identify who owns process lifecycle. |
+| CLI insufficiency | Explain which part of the current one-shot CLI handoff fails: process startup cost, repeated tool calls, health checks, request correlation, state reuse, artifact handoff, timeout handling, or another concrete constraint. |
+| Request profile | Estimate expected request volume, concurrency, latency expectations, and whether requests are interactive, batch, or host-triggered background work. |
+| Configuration and auth | Describe how RAGFlow endpoint, API key, dataset IDs, local bearer token, and optional config files are supplied without logging secrets. |
+| Artifact and trace handling | Define whether responses are enough on stdout/HTTP, whether trace files must be written, and which host consumes those artifacts. |
+| Lifecycle ownership | State who starts the process, how the port is discovered, how shutdown happens, and how stale processes are detected. |
+| Security and redaction | List required log, trace, request, response, and config redaction expectations, including token handling and private endpoint/path handling. |
+| Success criteria | Define the smallest endpoint subset, fake-client smoke result, consumer acceptance behavior, and platform smoke behavior needed to call the host workflow supported. |
+| Failure criteria | Define what makes `serve` unacceptable for the host, such as leaked secrets, port conflicts, incomplete shutdown, missing direct-query parity, or unsupported host-assisted evidence shape. |
+
 Non-goals:
 
 - Do not replace the canonical archive CLI path.
@@ -192,6 +210,28 @@ No-network fake-client smoke plan:
 6. Call `/shutdown` and assert the process exits cleanly without leftover listeners.
 7. Verify generated logs and optional trace files pass redaction checks.
 
+Implementation acceptance checklist:
+
+The `serve` command can be marked implemented only when all of these are true:
+
+- An approved host workflow intake is recorded in this document or a linked design note.
+- The MVP endpoint subset is selected explicitly; it may be `/health` plus one query
+  endpoint before the full draft contract is implemented.
+- Fake-client tests cover startup, health, direct query, host-assisted query when in
+  scope, shutdown, invalid auth, and port-conflict behavior.
+- Local smoke starts on `127.0.0.1` with an ephemeral default port and exits without
+  leftover listeners.
+- The implementation does not perform live RAGFlow mutation and does not introduce
+  script-owned LLM synthesis.
+- Any non-test or fixed-port mode requires an explicit local auth secret, and logs/traces
+  never expose bearer tokens, API keys, raw private endpoints, full config paths, or full
+  retrieved chunk text.
+- HTTP responses preserve the existing `ragflow-query ask` semantics so CLI and service
+  results can be compared with neutral fixtures.
+- Release hygiene covers generated logs/traces, consumer acceptance covers the documented
+  optional surface, and strict-vendor platform smoke is updated before closing the command
+  implementation.
+
 Implementation gate:
 
 - Open a code implementation only after a host workflow confirms that one-shot CLI
@@ -215,10 +255,76 @@ Validation record (2026-07-01):
   `python3 tools/consumer_acceptance.py --work-dir /tmp/ragflow-consumer-acceptance-20260701-phase37-serve-design --overwrite`,
   and `python3 tools/platform_smoke_matrix.py --profile strict-vendor-env --work-dir /tmp/ragflow-platform-strict-vendor-20260701-phase37-serve-design`.
 
+## Phase 37.3: Product Adapter Intake Gate
+
+Implementation status: complete for the intake gate only. No remote conversion client,
+provider abstraction, reranker adapter, web/API wrapper, hosted endpoint, or new daemon is
+implemented by this phase.
+
+Purpose:
+
+- Turn the remaining post-CLI product adapters into concrete intake decisions instead of
+  generic abstraction work.
+- Require endpoint, provider, product, fixture, and acceptance evidence before code starts.
+- Keep the portable archive CLI path green while optional adapters stay behind explicit
+  go/no-go gates.
+
+Common intake:
+
+Before opening code for any remaining post-CLI product adapter, record these fields in
+this document or a linked design note:
+
+| Field | Required evidence |
+| --- | --- |
+| Adapter candidate | Name exactly one candidate: remote conversion client, provider abstraction, reranker adapter, or web/API wrapper. |
+| Product or host workflow | Identify the consuming product, host agent, or operator workflow and the user-visible problem it solves. |
+| Endpoint or provider contract | Provide the concrete API shape, protocol, auth method, request/response examples, error model, and timeout expectations. |
+| Current gap | Explain why existing CLI commands, generic remote conversion, OpenAI-compatible config, `rerank-ab`, release archives, or runtime wheels are insufficient. |
+| Configuration and auth | Describe config keys, environment variables, local secret handling, endpoint redaction, and default behavior when config is absent. |
+| Offline fixtures | Define fake server, fake provider, saved query, benchmark, or product-workflow fixtures that validate behavior without network access. |
+| Public surface impact | State whether the adapter changes a public command, adds a new optional flag, emits a new report, or remains outside public release artifacts. |
+| Release acceptance | Name the unit, CLI, release hygiene, consumer acceptance, and platform smoke gates required before closing the implementation. |
+| Non-goals | State what the adapter must not do, such as default hosted endpoints, live mutation, implicit model calls, daemon supervision, or private product references. |
+
+Candidate-specific gates:
+
+| Candidate | Go condition | Minimum implementation slice | No-go condition |
+| --- | --- | --- | --- |
+| Remote conversion client | A user-owned conversion endpoint has a known sync or async protocol, auth scheme, file/result format, and fake-server fixture. | Add one optional `ragflow-doc-to-md` backend or backend mode, no default endpoint, fake HTTP coverage, config/auth redaction, and preserved `doc_manifest.json` semantics. | The request is only "support remote conversion" without a concrete endpoint, or the existing generic remote/MinerU backends already cover the workflow. |
+| Provider abstraction | A concrete non-OpenAI-compatible model, embedding, evaluator, or provider contract is needed and has deterministic fake-provider fixtures. | Add request/review artifacts, config validation, or read-only probe first; defer script-owned model calls until explicit LLM config and citation/redaction gates exist. | The goal is a broad provider interface without a named provider, fixtures, and downstream acceptance criteria. |
+| Reranker adapter | Saved-query or benchmark fixtures show a ranking-quality workflow that cannot be handled by current retrieval, fusion, rewrite, or `rerank-ab` comparison alone. | Add a fake reranker contract, optional rerank execution path or stricter `rerank-ab` adapter mode, metrics comparison, and direct retrieval fallback. | There is no quality fixture, no expected metric movement, or the adapter would silently alter default `ask` behavior. |
+| Web/API wrapper | A product workflow defines users, auth model, deployment target, lifecycle owner, and which CLI/report artifacts become API responses. | Start with a wrapper design or product-owned external service boundary; only add public-skill code if it can be optional, local/testable, and release-hygiene clean. | The request is a generic UI/API wish, or it would make hosted services, daemon management, or product auth mandatory for the portable suite. |
+
+Priority guidance:
+
+1. Remote conversion client is the best first code candidate only when a real converter
+   endpoint exists because it can be fake-server tested without affecting query defaults.
+2. Reranker adapter is the next candidate when saved-query or benchmark fixtures define
+   ranking acceptance.
+3. Provider abstraction should wait for a named provider contract; start with
+   request/review or probe boundaries before any script-owned backend call.
+4. Web/API wrapper should usually stay outside the public skill suite until product
+   workflow, auth, lifecycle, and deployment responsibilities are known.
+
+Implementation acceptance checklist:
+
+- A completed intake identifies one adapter, one concrete contract, and one owner workflow.
+- Neutral offline fixtures cover success, timeout/error, auth failure, malformed response,
+  and redaction behavior.
+- Defaults preserve the current CLI/archive behavior when the adapter is not configured.
+- No default hosted endpoint, real secret, private product name, or private path is added
+  to public examples or release artifacts.
+- Public command or report changes include focused tests plus release hygiene updates.
+- Consumer acceptance and strict-vendor platform smoke are updated before marking the
+  adapter implementation complete.
+
 ## Deferred Tracks
 
-- Remote conversion client: start only when a user-owned converter endpoint and fixture
-  shape are known.
-- Provider abstraction: start only when at least one concrete provider contract is needed.
-- Reranker adapter: start only after saved-query or benchmark fixtures define acceptance.
-- Web/API wrapper: start only with a product workflow, auth model, and deployment target.
+- Remote conversion client: start only when Phase 37.3 intake records a user-owned
+  converter endpoint and fake-server fixture shape.
+- Provider abstraction: start only when Phase 37.3 intake records at least one concrete
+  provider contract and deterministic fake-provider fixtures.
+- Reranker adapter: start only after Phase 37.3 intake records saved-query or benchmark
+  fixtures that define ranking acceptance.
+- Web/API wrapper: start only when Phase 37.3 intake records a product workflow, auth
+  model, lifecycle owner, and deployment target.

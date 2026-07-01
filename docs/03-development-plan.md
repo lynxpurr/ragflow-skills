@@ -36,7 +36,9 @@ Completed or closed for the current public command surface:
 - Phase 37 post-CLI adapter planning now ranks optional packaging, service, conversion,
   provider, reranker, and web/API adapters without changing the stable CLI baseline.
   Phase 37.1 adds a no-network runtime wheel build/install/import smoke gate and optional
-  runtime wheel export while keeping archive release artifacts canonical.
+  runtime wheel export while keeping archive release artifacts canonical. Phase 37.3 adds
+  an intake gate for the remaining post-CLI product adapters so implementation starts only
+  from concrete endpoint, provider, product, fixture, and acceptance evidence.
 
 Partially completed and still active:
 
@@ -108,8 +110,8 @@ normal offline continuation unless their gate is satisfied.
 
 | Category | Open items | Owning tasks | Gate before work starts | Next action |
 | --- | ---: | --- | --- | --- |
-| Local service / post-CLI host wrapper | 2 | Phase 3 optional `serve`, Backlog post-CLI service adapters | A real host workflow confirms that one-shot CLI commands are insufficient | Use the completed Phase 37.2 design gate before any optional `serve` implementation. |
-| Other post-CLI product adapters | 4 | Remote conversion client, provider abstraction, reranker abstraction, web/API wrapper | Known endpoint/provider/product requirements plus fake fixtures and acceptance gates | Keep deferred; do not add generic adapter contracts. |
+| Local service / post-CLI host wrapper | 2 | Phase 3 optional `serve`, Backlog post-CLI service adapters | A real host workflow confirms that one-shot CLI commands are insufficient | Use the completed Phase 37.2 design gate and host-workflow intake checklist before any optional `serve` implementation. |
+| Other post-CLI product adapters | 4 | Remote conversion client, provider abstraction, reranker abstraction, web/API wrapper | Known endpoint/provider/product requirements plus fake fixtures and acceptance gates | Use the Phase 37.3 intake gate; keep deferred until one concrete contract has fixtures and acceptance criteria. |
 | Optional script-owned LLM/backend execution | 7 | Grounded-QA LLM adapter, agentic-answer execution, reflection, evidence-only synthesis, LLM/RAGAS evaluator, related Phase 30 synthesis backlog | Explicit LLM config, deterministic fixtures, advisory-output marking, citation-audit compatibility, and redaction gates | Plan as one adapter track before any script-owned model call. |
 | Private dedao bridge | 4 | Preserve current dedao skills, optional private adapter, private handoff shape, no public references | A private adapter is explicitly needed and remains outside public release artifacts | Keep outside public `skills/`; consume public handoff contracts only. |
 
@@ -1756,13 +1758,16 @@ public skill archive release path. The selected priority is validated against th
 Hermes/OpenClaw/Claude Code/opencode-style controlled CLI-agent handoff workflow. Phase
 37.2 now documents the optional `ragflow-query serve` design gate: health, direct query,
 host-assisted query, shutdown, localhost binding, auth/redaction boundaries, and
-fake-client no-network smoke. The `serve` command implementation remains deferred until a
-host confirms it needs a persistent local tool endpoint instead of one-shot
-artifact-producing CLI commands. Remote conversion clients, provider abstraction, reranker
-adapters, and web/API wrappers are explicitly deferred until concrete endpoint, provider,
-fixture, and acceptance shapes are known. The Phase 37.1 wheel smoke and full offline
-release-facing validation chain passed on 2026-07-01, so the archive release path remains
-green after the post-CLI adapter planning work.
+fake-client no-network smoke. It also defines the host-workflow intake and implementation
+acceptance checklist that must be satisfied before service code can close the optional
+surface. The `serve` command implementation remains deferred until a host confirms it
+needs a persistent local tool endpoint instead of one-shot artifact-producing CLI
+commands. Phase 37.3 now defines the intake, go/no-go, minimum implementation, and
+acceptance requirements for remote conversion clients, provider abstraction, reranker
+adapters, and web/API wrappers. Those adapters remain explicitly deferred until concrete
+endpoint, provider, product, fixture, and acceptance shapes are known. The Phase 37.1
+wheel smoke and full offline release-facing validation chain passed on 2026-07-01, so the
+archive release path remains green after the post-CLI adapter planning work.
 
 ## Definition of Done
 

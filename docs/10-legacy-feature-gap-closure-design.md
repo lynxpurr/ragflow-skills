@@ -1656,7 +1656,9 @@ Current calibration:
   validates that priority against the current controlled CLI-agent handoff workflow. Phase
   37.2 now documents the optional `ragflow-query serve` design gate; the command
   implementation remains deferred until a concrete host workflow needs a local service
-  wrapper.
+  wrapper. Phase 37.3 now documents the intake gate for the remaining post-CLI product
+  adapters, so remote conversion, provider, reranker, and web/API work starts only after
+  a concrete endpoint, provider, product, fixture, and acceptance shape is recorded.
 
 ## Implementation Notes And Pitfalls
 
