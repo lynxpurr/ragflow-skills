@@ -2848,6 +2848,9 @@ raise SystemExit(code)
     optimization_cleanup_plan = work_root / "optimization_cleanup_plan.json"
     optimization_cleanup_plan_md = work_root / "optimization_cleanup_plan.md"
     optimization_cleanup_plan_redaction = work_root / "optimization_cleanup_plan_redaction.json"
+    optimization_readiness_report = work_root / "optimization_live_readiness_report.json"
+    optimization_readiness_report_md = work_root / "optimization_live_readiness_report.md"
+    optimization_readiness_redaction = work_root / "optimization_live_readiness_redaction.json"
     profile_experiment_results = work_root / "profile_experiment_results.json"
     best_profile_report_md = work_root / "best_profile_report.md"
     best_profile_report_redaction = work_root / "best_profile_report_redaction.json"
@@ -3273,6 +3276,49 @@ raise SystemExit(code)
         result=optimize_cleanup_plan_result,
         checked_paths=(optimization_cleanup_plan, optimization_cleanup_plan_md),
     )
+    optimize_readiness_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "optimize",
+            "readiness",
+            "--plan",
+            str(optimization_plan),
+            "--cleanup-plan",
+            str(optimization_cleanup_plan),
+            "--output",
+            str(optimization_readiness_report),
+            "--report-md",
+            str(optimization_readiness_report_md),
+            "--base-url",
+            "https://ragflow.example.test",
+            "--api-key",
+            "fake-acceptance-key",
+            "--confirm-live-build",
+            "--confirm-kb-name",
+            "kb:consumer-acceptance",
+            "--confirm-run-id",
+            "acceptance",
+            "--redaction-report",
+            str(optimization_readiness_redaction),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build optimize readiness",
+        optimize_readiness_result,
+        required_output='"schema": "ragflow_optimization_live_readiness_report_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build optimize readiness redaction",
+        optimization_readiness_redaction,
+        result=optimize_readiness_result,
+        checked_paths=(optimization_readiness_report, optimization_readiness_report_md),
+    )
     optimize_summary_result = _run_command(
         [
             python_executable,
@@ -3578,6 +3624,9 @@ raise SystemExit(code)
         optimization_cleanup_plan,
         optimization_cleanup_plan_md,
         optimization_cleanup_plan_redaction,
+        optimization_readiness_report,
+        optimization_readiness_report_md,
+        optimization_readiness_redaction,
         profile_experiment_results,
         best_profile_report_md,
         best_profile_report_redaction,

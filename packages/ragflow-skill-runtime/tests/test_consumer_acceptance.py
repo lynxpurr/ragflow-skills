@@ -120,6 +120,7 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("kb-build optimize command manifest dry-run", check_names)
         self.assertIn("kb-build optimize plan-only redaction", check_names)
         self.assertIn("kb-build optimize cleanup-plan redaction", check_names)
+        self.assertIn("kb-build optimize readiness redaction", check_names)
         self.assertIn("kb-build optimize summarize redaction", check_names)
         self.assertIn("kb-build benchmark import redaction", check_names)
         self.assertIn("kb-build benchmark preflight redaction", check_names)

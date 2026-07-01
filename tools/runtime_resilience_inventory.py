@@ -114,7 +114,7 @@ _COVERED = {
         status="covered",
         features=("checkpoint_resume", "partial_failure"),
         rationale="Plan-only optimization can batch candidate-profile plans with checkpoint/resume and partial-run summaries without enabling live disposable KB creation.",
-        next_action="Keep optimize --execute deferred behind explicit live mutation gating; use doc-to-md split as the next runtime candidate.",
+        next_action="Keep optimize --execute behind readiness, exact confirmation, and cleanup artifact gates.",
     ),
     "ragflow-query cache-report": RuntimeClassification(
         status="covered",

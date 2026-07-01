@@ -54,8 +54,8 @@ Partially completed and still active:
     backend execution remain future adapters.
 - Phase 31 runtime resilience
   - Report redaction and generated-report safety are closed for the current inventory.
-  - Runtime helper coverage currently tracks 87 public command surfaces: 19 `covered`,
-    0 `candidate`, 2 `deferred`, and 66 `not_applicable`.
+  - Runtime helper coverage currently tracks 88 public command surfaces: 19 `covered`,
+    0 `candidate`, 2 `deferred`, and 67 `not_applicable`.
   - The bounded non-live checkpoint/resume and partial-failure candidate inventory is
     closed; remaining resilience work is explicitly gated live mutation or future
     adapter scope.
@@ -91,10 +91,10 @@ remain in their owning phases below.
 
 | Track | Existing open items | Current status | Completion rule |
 | --- | --- | --- | --- |
-| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory closed | Runtime inventory stays at 19 `covered`, 0 `candidate`, 2 intentionally `deferred`, and 66 `not_applicable` command surfaces. |
+| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory closed | Runtime inventory stays at 19 `covered`, 0 `candidate`, 2 intentionally `deferred`, and 67 `not_applicable` command surfaces. |
 | Document split packaging | Phase 16 optional manifest rewrite/package mode | Complete for current CLI scope | Split outputs can be resumed and optionally repackaged without breaking existing segment-directory ingestion. |
 | Query service and agentic adapters | Phase 3 `serve`, Phase 21/30 script-owned synthesis and reflection | Host-assisted agentic retrieval and agentic-answer request/review complete; local service and script-owned answer synthesis deferred | Implement script-owned synthesis only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
-| Live disposable optimization | Phase 17 live probe tests, Phase 26 live disposable tests, Phase 27 live enrichment tests | Build, validation, and cleanup execution gates complete for current CLI scope; live tests deferred | Requires credentials, explicit confirmation, exact cleanup confirmation, retained dataset IDs, and user approval. |
+| Live disposable optimization | Phase 17 live probe tests, Phase 26 live disposable tests, Phase 27 live enrichment tests | Build, validation, cleanup execution, and live-readiness gates complete for current CLI scope; live tests deferred | Requires credentials, explicit confirmation, exact cleanup confirmation, retained dataset IDs, and user approval. |
 | Optional LLM-assisted adapters | Phase 26 grounded QA, Phase 30 agentic answer synthesis, Phase 30 LLM/RAGAS-style evaluator | Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries complete; script-owned LLM/RAGAS backends remain deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
 | Packaging and platform adapters | Backlog wheel path, remote conversion service client, provider abstractions, web/API wrapper | Post-CLI backlog | Start only after the portable archive release path remains green and users need a non-archive deployment model. |
 | Private dedao bridge | Deferred private adapter tasks | Outside public release scope | Keep private examples and adapter logic outside public `skills/`; consume only public handoff shapes. |
@@ -914,6 +914,7 @@ Tasks:
 - [x] Produce `profile_experiment_results.json`.
 - [x] Produce `best_profile_report.md` with metric tradeoffs and recommendation rationale.
 - [x] Add `optimize cleanup-plan` for non-mutating `cleanup_plan.json` generation with exact-confirmation commands.
+- [x] Add `optimize readiness` for non-mutating live execution gate review before disposable KB mutation.
 - [x] Add exact-confirmation cleanup execution for optimization disposable KBs.
 - [x] Add `ragflow-kb-build snapshot-chunks`.
 - [x] Add chunk snapshot schema with stable content hashes.
@@ -1167,7 +1168,7 @@ Status note: `--redaction-report` currently covers `ragflow-query endpoint-repor
 `ragflow-kb-build tagset report`, `ragflow-kb-build topology advise`,
 `ragflow-kb-build topology split-plan`, `ragflow-kb-build activation-plan`,
 `ragflow-kb-build optimize --plan-only`, `ragflow-kb-build optimize cleanup-plan`,
-`ragflow-kb-build optimize summarize`,
+`ragflow-kb-build optimize readiness`, `ragflow-kb-build optimize summarize`,
 `ragflow-doc-to-md`, `ragflow-doc-to-md inspect`,
 `ragflow-doc-to-md backend probe`, `ragflow-doc-to-md backend warmup`,
 `ragflow-doc-to-md postprocess`, `ragflow-doc-to-md segment-plan`, and
@@ -1179,8 +1180,8 @@ sanitized reports and redaction sidecars should be stored and what must stay out
 transcripts.
 `tools/runtime_resilience_inventory.py` now emits
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene to track Phase 31
-runtime helper coverage without broadening live behavior. The current inventory names 87
-public commands: 19 `covered`, 0 `candidate`, 2 `deferred`, and 66 `not_applicable`, with
+runtime helper coverage without broadening live behavior. The current inventory names 88
+public commands: 19 `covered`, 0 `candidate`, 2 `deferred`, and 67 `not_applicable`, with
 no stale classification findings. Covered surfaces include `ragflow-query endpoint-report`,
 `ragflow-query fallback-test`, `ragflow-query cache-report`, `ragflow-query centroid build`,
 `ragflow-doc-to-md` process cleanup reporting, `ragflow-doc-to-md backend probe`,
@@ -1230,7 +1231,7 @@ Recommended next slices:
    checkpoint/resume are now covered, `ragflow-doc-to-md split` now supports bounded
    checkpoint/resume, and `inspect-kb`, `validate`, `snapshot-chunks`, `qa validate`,
    plus `qa map-evidence` now have partial-failure coverage. The Phase 31 non-live
-   inventory now records 19 `covered`, 0 `candidate`, 2 explicitly `deferred`, and 60
+   inventory now records 19 `covered`, 0 `candidate`, 2 explicitly `deferred`, and 67
    `not_applicable` public command surfaces in
    `ragflow_runtime_resilience_inventory_v1`.
 
@@ -1412,7 +1413,8 @@ Tasks:
   `ragflow-kb-build topology split-plan`, and `ragflow-kb-build activation-plan` advisory
   plan reports.
 - [x] Add `--redaction-report` coverage to `ragflow-kb-build optimize --plan-only`,
-  `ragflow-kb-build optimize cleanup-plan`, and `ragflow-kb-build optimize summarize`
+  `ragflow-kb-build optimize cleanup-plan`, `ragflow-kb-build optimize readiness`, and
+  `ragflow-kb-build optimize summarize`
   offline optimization report surfaces.
 - [x] Add `--redaction-report` coverage to remaining `ragflow-doc-to-md` report surfaces
   that may echo local paths, converter endpoints, runtime process details, or fixture
@@ -1436,7 +1438,7 @@ Tasks:
 Status note: `tools/report_surface_inventory.py` now emits
 `ragflow_report_surface_inventory_v1`, dynamically enumerates public argparse command
 leaves, and overlays an explicit Phase 36 classification. The verified inventory currently
-names 87 public commands: 78 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with
+names 88 public commands: 79 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with
 no uncatalogued or stale classification findings. Generated-report redaction coverage is
 now closed across inventoried public command surfaces; `ragflow-doc-to-md`
 and `ragflow-query` report commands are currently classified as covered or not applicable.
@@ -1462,11 +1464,12 @@ focused CLI tests cover fake assignment-style path tokens and verify that raw
 `ragflow-kb-build activation-plan` now emit redaction sidecars and render Markdown from
 the sanitized advisory plan payload when redaction is enabled; focused CLI tests cover
 fake local path tokens, private hosts, and query-style fake secrets.
-`ragflow-kb-build optimize --plan-only`, `ragflow-kb-build optimize cleanup-plan`, and
-`ragflow-kb-build optimize summarize` now emit redaction sidecars for offline optimization
-plan/result surfaces. JSON stdout, JSON artifacts, and Markdown reports are rendered from
-the sanitized payload when redaction is enabled, including plan-derived candidate artifact
-paths and validation report paths.
+`ragflow-kb-build optimize --plan-only`, `ragflow-kb-build optimize cleanup-plan`,
+`ragflow-kb-build optimize readiness`, and `ragflow-kb-build optimize summarize` now emit
+redaction sidecars for offline optimization plan/readiness/result surfaces. JSON stdout,
+JSON artifacts, and Markdown reports are rendered from the sanitized payload when
+redaction is enabled, including plan-derived candidate artifact paths, cleanup artifact
+state, and validation report paths.
 `ragflow-kb-build benchmark import`, `ragflow-kb-build benchmark sample`,
 `ragflow-kb-build benchmark preflight`, `ragflow-kb-build benchmark summarize`,
 `ragflow-kb-build benchmark gate`, `ragflow-kb-build benchmark trend`,

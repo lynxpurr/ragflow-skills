@@ -36,6 +36,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     create_grounded_qa_suggestion_request,
     create_metadata_suggestion_request,
     create_optimization_cleanup_plan,
+    create_optimization_live_readiness_report,
     create_optimization_plan,
     discover_markdown_documents,
     inspect_rich_handoff,
@@ -75,6 +76,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_best_profile_markdown,
     render_benchmark_governance_markdown,
     render_optimization_cleanup_plan_markdown,
+    render_optimization_live_readiness_markdown,
     render_suppression_report_markdown,
     sample_benchmark_dataset,
     segment_metadata_report_file,
@@ -1902,6 +1904,68 @@ def _run_optimize_cleanup_plan(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _readiness_config_state(args: argparse.Namespace) -> tuple[bool, bool, str | None]:
+    overrides = {}
+    if args.base_url:
+        overrides["base_url"] = args.base_url
+    if args.api_key:
+        overrides["api_key"] = args.api_key
+    try:
+        config = load_config(config_file=args.config, overrides=overrides)
+    except ConfigError as exc:
+        return False, False, str(exc)
+    return bool(config.base_url), bool(config.api_key), None
+
+
+def _cleanup_readiness_confirmations(args: argparse.Namespace) -> list[tuple[str, str | None]]:
+    dataset_ids = list(args.confirm_cleanup_dataset_id or [])
+    kb_names = list(args.confirm_cleanup_kb_name or [])
+    if len(dataset_ids) != len(kb_names):
+        raise BuildError("optimize readiness requires matching repeated --confirm-cleanup-dataset-id and --confirm-cleanup-kb-name values")
+    return [(dataset_id, kb_name) for dataset_id, kb_name in zip(dataset_ids, kb_names, strict=True)]
+
+
+def _run_optimize_readiness(args: argparse.Namespace) -> int:
+    try:
+        context_secrets, context_hosts, context_paths = _collect_redaction_context_from_json_paths([args.plan, args.cleanup_plan])
+        base_url_configured, api_key_configured, credential_error = _readiness_config_state(args)
+        report = create_optimization_live_readiness_report(
+            plan_path=args.plan,
+            cleanup_plan_path=args.cleanup_plan,
+            config_path=args.config,
+            ragflow_base_url_configured=base_url_configured,
+            ragflow_api_key_configured=api_key_configured,
+            credential_error=credential_error,
+            confirm_live_build=args.confirm_live_build,
+            confirm_kb_name=args.confirm_kb_name,
+            confirm_run_id=args.confirm_run_id,
+            cleanup_confirmations=_cleanup_readiness_confirmations(args),
+            require_cleanup_ready=args.require_cleanup_ready,
+        )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[
+                    args.plan,
+                    args.cleanup_plan,
+                    args.config,
+                    *context_paths,
+                    *_collect_path_like_literals(report),
+                ],
+                output_paths=[args.output, args.report_md, args.redaction_report],
+                extra_secret_literals=[getattr(args, "api_key", None), *context_secrets],
+                extra_private_hosts=[*context_hosts, *configured_private_hosts_from_urls([getattr(args, "base_url", None)])],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.output, report)
+        _write_text_file(args.report_md, render_optimization_live_readiness_markdown(report))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (BuildError, ProfileError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _cleanup_target_key(dataset_id: str, dataset_name: str | None) -> tuple[str, str | None]:
     return dataset_id, dataset_name or None
 
@@ -2713,6 +2777,27 @@ def build_optimize_cleanup_plan_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_optimize_readiness_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Review live disposable optimization readiness without contacting RAGFlow")
+    parser.add_argument("--plan", required=True, help="ragflow_optimization_plan_v1 JSON")
+    parser.add_argument("--cleanup-plan", required=True, help="ragflow_optimization_cleanup_plan_v1 JSON")
+    parser.add_argument("--output", default="optimization_live_readiness_report.json", help="Output live readiness report JSON")
+    parser.add_argument("--report-md", help="Optional live readiness Markdown report path")
+    parser.add_argument("--config", help="Runtime config file checked for credentials without network access")
+    parser.add_argument("--base-url", help="RAGFlow base URL override checked without network access")
+    parser.add_argument("--api-key", help="RAGFlow API key override checked without network access")
+    parser.add_argument("--confirm-live-build", action="store_true", help="Required to mark live build readiness")
+    parser.add_argument("--confirm-kb-name", help="Must exactly match the optimization plan base KB name")
+    parser.add_argument("--confirm-run-id", help="Must exactly match the optimization plan run_id")
+    parser.add_argument("--confirm-cleanup-dataset-id", action="append", default=[], help="Ready cleanup dataset ID confirmation; repeatable")
+    parser.add_argument("--confirm-cleanup-kb-name", action="append", default=[], help="Ready cleanup KB name confirmation; repeatable")
+    parser.add_argument("--require-cleanup-ready", action="store_true", help="Require retained KB manifests and exact cleanup confirmations")
+    parser.add_argument("--redaction-report", help="Optional redaction sidecar for live readiness reports")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    parser.set_defaults(func=_run_optimize_readiness)
+    return parser
+
+
 def build_optimize_cleanup_execute_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Execute exact-confirmation cleanup for profile optimization KBs")
     parser.add_argument("--cleanup-plan", required=True, help="ragflow_optimization_cleanup_plan_v1 JSON")
@@ -2916,6 +3001,9 @@ def main(argv: list[str] | None = None) -> int:
             if command_args and command_args[0] == "cleanup-plan":
                 optimize_cleanup_args = build_optimize_cleanup_plan_parser().parse_args(command_args[1:])
                 return optimize_cleanup_args.func(optimize_cleanup_args)
+            if command_args and command_args[0] == "readiness":
+                optimize_readiness_args = build_optimize_readiness_parser().parse_args(command_args[1:])
+                return optimize_readiness_args.func(optimize_readiness_args)
             if command_args and command_args[0] == "cleanup-execute":
                 optimize_cleanup_execute_args = build_optimize_cleanup_execute_parser().parse_args(command_args[1:])
                 return optimize_cleanup_execute_args.func(optimize_cleanup_execute_args)

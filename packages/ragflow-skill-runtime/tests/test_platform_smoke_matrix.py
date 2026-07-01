@@ -89,6 +89,7 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("kb optimize command manifest dry-run", check_names)
         self.assertIn("kb optimize plan-only redaction", check_names)
         self.assertIn("kb optimize cleanup-plan redaction", check_names)
+        self.assertIn("kb optimize readiness redaction", check_names)
         self.assertIn("kb optimize summarize redaction", check_names)
         self.assertIn("kb profile lint redaction", check_names)
         self.assertIn("kb profile experiment resume", check_names)

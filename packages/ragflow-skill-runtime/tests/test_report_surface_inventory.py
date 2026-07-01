@@ -20,12 +20,12 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_report_surface_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 87)
+        self.assertEqual(report["summary"]["command_count"], 88)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
             {
-                "covered": 78,
+                "covered": 79,
                 "needs_redaction": 0,
                 "not_applicable": 9,
             },
@@ -115,6 +115,11 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
         optimize = by_command["ragflow-kb-build optimize"]
         self.assertEqual(optimize["status"], "covered")
         self.assertIn("redaction_sidecar", optimize["output_categories"])
+
+        optimize_readiness = by_command["ragflow-kb-build optimize readiness"]
+        self.assertEqual(optimize_readiness["status"], "covered")
+        self.assertIn("redaction_sidecar", optimize_readiness["output_categories"])
+        self.assertIn("markdown_report", optimize_readiness["output_categories"])
 
         benchmark_import = by_command["ragflow-kb-build benchmark import"]
         self.assertEqual(benchmark_import["status"], "covered")

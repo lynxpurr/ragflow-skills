@@ -43,6 +43,7 @@ SANITIZED_MARKDOWN_VERIFIED_COMMANDS = (
     "ragflow-kb-build model-providers probe",
     "ragflow-kb-build optimize",
     "ragflow-kb-build optimize cleanup-plan",
+    "ragflow-kb-build optimize readiness",
     "ragflow-kb-build optimize summarize",
     "ragflow-kb-build parse-report",
     "ragflow-kb-build probe",

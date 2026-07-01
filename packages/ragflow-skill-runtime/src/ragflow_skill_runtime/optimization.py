@@ -21,6 +21,7 @@ CANDIDATE_PROFILE_SET_SCHEMA = "ragflow_candidate_profile_set_v1"
 OPTIMIZATION_PLAN_SCHEMA = "ragflow_optimization_plan_v1"
 PROFILE_EXPERIMENT_RESULTS_SCHEMA = "ragflow_profile_experiment_results_v1"
 OPTIMIZATION_CLEANUP_PLAN_SCHEMA = "ragflow_optimization_cleanup_plan_v1"
+OPTIMIZATION_LIVE_READINESS_REPORT_SCHEMA = "ragflow_optimization_live_readiness_report_v1"
 PROFILE_FILE_SUFFIXES = {".json", ".yaml", ".yml"}
 
 
@@ -1324,6 +1325,424 @@ def create_optimization_cleanup_plan(
         "targets": targets,
         "issues": [issue.to_dict() for issue in issues],
     }
+
+
+def _cleanup_target_key(dataset_id: str, dataset_name: str | None) -> tuple[str, str | None]:
+    return dataset_id, dataset_name or None
+
+
+def _cleanup_ready_targets(cleanup_plan: Mapping[str, Any], issues: list[OptimizationIssue]) -> list[dict[str, Any]]:
+    targets = cleanup_plan.get("targets")
+    if not isinstance(targets, list):
+        issues.append(OptimizationIssue("error", "cleanup_targets_invalid", "cleanup plan targets must be a list", "cleanup_plan.targets"))
+        return []
+
+    ready: list[dict[str, Any]] = []
+    for index, target in enumerate(targets):
+        if not isinstance(target, Mapping):
+            issues.append(OptimizationIssue("error", "cleanup_target_invalid", "cleanup target must be an object", f"cleanup_plan.targets[{index}]"))
+            continue
+        if target.get("status") != "ready":
+            continue
+        target_payload = target.get("target") if isinstance(target.get("target"), Mapping) else {}
+        dataset_id = target_payload.get("dataset_id")
+        dataset_name = target_payload.get("dataset_name")
+        if not isinstance(dataset_id, str) or not dataset_id:
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "cleanup_ready_target_missing_dataset_id",
+                    "ready cleanup target is missing target.dataset_id",
+                    f"cleanup_plan.targets[{index}].target.dataset_id",
+                )
+            )
+            continue
+        if dataset_name is not None and not isinstance(dataset_name, str):
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "cleanup_ready_target_invalid_dataset_name",
+                    "ready cleanup target target.dataset_name must be a string when present",
+                    f"cleanup_plan.targets[{index}].target.dataset_name",
+                )
+            )
+            continue
+        ready.append(
+            {
+                "index": index,
+                "profile_id": target.get("profile_id"),
+                "disposable_kb_name": target.get("disposable_kb_name"),
+                "dataset_id": dataset_id,
+                "dataset_name": dataset_name,
+            }
+        )
+    return ready
+
+
+def _cleanup_status_counts(cleanup_plan: Mapping[str, Any]) -> dict[str, int]:
+    targets = cleanup_plan.get("targets") if isinstance(cleanup_plan.get("targets"), list) else []
+    return {
+        "target_count": len(targets),
+        "ready_target_count": sum(1 for target in targets if isinstance(target, Mapping) and target.get("status") == "ready"),
+        "pending_target_count": sum(
+            1 for target in targets if isinstance(target, Mapping) and str(target.get("status", "")).startswith("pending")
+        ),
+        "invalid_target_count": sum(
+            1 for target in targets if isinstance(target, Mapping) and str(target.get("status", "")).startswith("invalid")
+        ),
+    }
+
+
+def create_optimization_live_readiness_report(
+    *,
+    plan_path: str | Path,
+    cleanup_plan_path: str | Path | None = None,
+    config_path: str | Path | None = None,
+    ragflow_base_url_configured: bool = False,
+    ragflow_api_key_configured: bool = False,
+    credential_error: str | None = None,
+    confirm_live_build: bool = False,
+    confirm_kb_name: str | None = None,
+    confirm_run_id: str | None = None,
+    cleanup_confirmations: Iterable[tuple[str, str | None]] | None = None,
+    require_cleanup_ready: bool = False,
+) -> dict[str, Any]:
+    """Review live disposable optimization prerequisites without contacting RAGFlow."""
+
+    issues: list[OptimizationIssue] = []
+    plan = _read_json_mapping(plan_path, label="optimization plan")
+    if plan.get("schema") != OPTIMIZATION_PLAN_SCHEMA:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "optimization_plan_schema_invalid",
+                f"optimization plan schema must be {OPTIMIZATION_PLAN_SCHEMA}",
+                "plan.schema",
+            )
+        )
+    if not plan.get("ok"):
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "optimization_plan_not_ok",
+                "live optimization requires an optimization plan with ok=true",
+                "plan.ok",
+                "Fix plan errors before reviewing live execution.",
+            )
+        )
+
+    candidates = plan.get("candidates") if isinstance(plan.get("candidates"), list) else []
+    if not candidates:
+        issues.append(OptimizationIssue("error", "optimization_candidates_missing", "optimization plan has no candidates", "plan.candidates"))
+
+    if credential_error:
+        issues.append(OptimizationIssue("error", "ragflow_config_invalid", credential_error, "config"))
+    if not ragflow_base_url_configured:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "ragflow_base_url_missing",
+                "RAGFlow base URL is required before live disposable optimization",
+                "config.base_url",
+            )
+        )
+    if not ragflow_api_key_configured:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "ragflow_api_key_missing",
+                "RAGFlow API key is required before live disposable optimization",
+                "config.api_key",
+            )
+        )
+
+    base_kb_name = plan.get("base_kb_name")
+    run_id = plan.get("run_id")
+    if not isinstance(base_kb_name, str) or not base_kb_name:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "base_kb_name_missing",
+                "optimization plan must include base_kb_name for exact live confirmation",
+                "plan.base_kb_name",
+            )
+        )
+    if not isinstance(run_id, str) or not run_id:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "run_id_missing",
+                "optimization plan must include run_id for exact live confirmation",
+                "plan.run_id",
+            )
+        )
+    if not confirm_live_build:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "confirm_live_build_missing",
+                "live optimization requires --confirm-live-build",
+                "confirmation.confirm_live_build",
+            )
+        )
+    if confirm_kb_name != base_kb_name:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "confirm_kb_name_mismatch",
+                "live optimization requires --confirm-kb-name to match the planned base KB name exactly",
+                "confirmation.confirm_kb_name",
+            )
+        )
+    if confirm_run_id != run_id:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "confirm_run_id_mismatch",
+                "live optimization requires --confirm-run-id to match the planned run_id exactly",
+                "confirmation.confirm_run_id",
+            )
+        )
+
+    cleanup_plan: dict[str, Any] | None = None
+    cleanup_counts = {"target_count": 0, "ready_target_count": 0, "pending_target_count": 0, "invalid_target_count": 0}
+    ready_targets: list[dict[str, Any]] = []
+    cleanup_exact = False
+    confirmation_pairs = list(cleanup_confirmations or [])
+    if cleanup_plan_path is None:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "cleanup_plan_missing",
+                "live disposable optimization requires a reviewed cleanup plan artifact",
+                "cleanup_plan",
+                "Run optimize cleanup-plan and retain the output before requesting live execution.",
+            )
+        )
+    else:
+        cleanup_plan = _read_json_mapping(cleanup_plan_path, label="optimization cleanup plan")
+        if cleanup_plan.get("schema") != OPTIMIZATION_CLEANUP_PLAN_SCHEMA:
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "cleanup_plan_schema_invalid",
+                    f"cleanup plan schema must be {OPTIMIZATION_CLEANUP_PLAN_SCHEMA}",
+                    "cleanup_plan.schema",
+                )
+            )
+        if cleanup_plan.get("ok") is False:
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "cleanup_plan_not_ok",
+                    "live optimization requires a cleanup plan with ok=true",
+                    "cleanup_plan.ok",
+                    "Regenerate cleanup-plan after resolving cleanup target errors.",
+                )
+            )
+        cleanup_counts = _cleanup_status_counts(cleanup_plan)
+        ready_targets = _cleanup_ready_targets(cleanup_plan, issues)
+        if cleanup_counts["target_count"] != len(candidates):
+            issues.append(
+                OptimizationIssue(
+                    "warning",
+                    "cleanup_target_count_mismatch",
+                    "cleanup plan target count does not match optimization candidate count",
+                    "cleanup_plan.targets",
+                    "Regenerate cleanup-plan from the current optimization plan before live execution.",
+                )
+            )
+        if require_cleanup_ready and cleanup_counts["pending_target_count"]:
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "cleanup_targets_pending",
+                    "cleanup readiness requires all cleanup targets to have retained KB manifests and dataset IDs",
+                    "cleanup_plan.targets",
+                )
+            )
+        if require_cleanup_ready and not ready_targets:
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "cleanup_ready_targets_missing",
+                    "cleanup readiness requires at least one ready cleanup target",
+                    "cleanup_plan.targets",
+                )
+            )
+
+    expected_cleanup = {
+        _cleanup_target_key(str(target["dataset_id"]), target.get("dataset_name") if isinstance(target.get("dataset_name"), str) else None)
+        for target in ready_targets
+    }
+    confirmed_cleanup = {_cleanup_target_key(str(dataset_id), kb_name) for dataset_id, kb_name in confirmation_pairs}
+    if confirmation_pairs and len(confirmed_cleanup) != len(confirmation_pairs):
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "cleanup_confirmation_duplicate",
+                "cleanup confirmations must not contain duplicate dataset ID and KB name pairs",
+                "cleanup_confirmation",
+            )
+        )
+    if ready_targets:
+        if not confirmation_pairs:
+            issues.append(
+                OptimizationIssue(
+                    "error" if require_cleanup_ready else "warning",
+                    "cleanup_confirmation_missing",
+                    "ready cleanup targets need exact dataset ID and KB name confirmations before cleanup execution",
+                    "cleanup_confirmation",
+                )
+            )
+        elif confirmed_cleanup != expected_cleanup:
+            missing = sorted(expected_cleanup - confirmed_cleanup)
+            extra = sorted(confirmed_cleanup - expected_cleanup)
+            details = []
+            if missing:
+                details.append("missing " + ", ".join(f"{dataset_id}:{kb_name or ''}" for dataset_id, kb_name in missing))
+            if extra:
+                details.append("unexpected " + ", ".join(f"{dataset_id}:{kb_name or ''}" for dataset_id, kb_name in extra))
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "cleanup_confirmation_mismatch",
+                    "cleanup confirmations must exactly match ready targets" + (f" ({'; '.join(details)})" if details else ""),
+                    "cleanup_confirmation",
+                )
+            )
+        else:
+            cleanup_exact = True
+    elif confirmation_pairs:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "cleanup_confirmation_unexpected",
+                "cleanup confirmations were supplied but the cleanup plan has no ready targets",
+                "cleanup_confirmation",
+            )
+        )
+
+    issue_summary = _issue_counts(issues)
+    ready_for_live_execution = _ok(issues)
+    cleanup_state = "missing"
+    if cleanup_plan is not None:
+        if cleanup_counts["invalid_target_count"]:
+            cleanup_state = "invalid_targets"
+        elif cleanup_counts["pending_target_count"]:
+            cleanup_state = "pending_manifests"
+        elif cleanup_counts["ready_target_count"]:
+            cleanup_state = "ready_targets"
+        else:
+            cleanup_state = "empty"
+
+    return {
+        "ok": ready_for_live_execution,
+        "schema": OPTIMIZATION_LIVE_READINESS_REPORT_SCHEMA,
+        "created_at": _now(),
+        "mode": "live-readiness",
+        "mutation_allowed": False,
+        "network_checked": False,
+        "plan": str(plan_path),
+        "cleanup_plan": str(cleanup_plan_path) if cleanup_plan_path else None,
+        "config": {
+            "config_path": str(config_path) if config_path else None,
+            "ragflow_base_url_configured": bool(ragflow_base_url_configured),
+            "ragflow_api_key_configured": bool(ragflow_api_key_configured),
+            "credential_error": credential_error,
+        },
+        "confirmation": {
+            "confirm_live_build": bool(confirm_live_build),
+            "confirm_kb_name_matches": confirm_kb_name == base_kb_name,
+            "confirm_run_id_matches": confirm_run_id == run_id,
+            "expected_kb_name": base_kb_name,
+            "expected_run_id": run_id,
+        },
+        "cleanup": {
+            "state": cleanup_state,
+            "require_cleanup_ready": bool(require_cleanup_ready),
+            "target_count": cleanup_counts["target_count"],
+            "ready_target_count": cleanup_counts["ready_target_count"],
+            "pending_target_count": cleanup_counts["pending_target_count"],
+            "invalid_target_count": cleanup_counts["invalid_target_count"],
+            "ready_targets": [
+                {
+                    "profile_id": target.get("profile_id"),
+                    "disposable_kb_name": target.get("disposable_kb_name"),
+                    "dataset_id": target.get("dataset_id"),
+                    "dataset_name": target.get("dataset_name"),
+                }
+                for target in ready_targets
+            ],
+            "confirmation_expected_count": len(expected_cleanup),
+            "confirmation_supplied_count": len(confirmation_pairs),
+            "confirmation_exact": cleanup_exact,
+        },
+        "summary": {
+            **issue_summary,
+            "candidate_count": len(candidates),
+            "ready_for_live_execution": ready_for_live_execution,
+            "cleanup_target_count": cleanup_counts["target_count"],
+            "cleanup_ready_target_count": cleanup_counts["ready_target_count"],
+            "cleanup_pending_target_count": cleanup_counts["pending_target_count"],
+        },
+        "next_steps": [
+            "Run optimize --execute only after explicit user approval."
+            if ready_for_live_execution
+            else "Resolve readiness errors before running optimize --execute.",
+            "Retain every candidate kb_manifest.json produced by live execution.",
+            "Regenerate optimize cleanup-plan after live execution before cleanup-execute.",
+            "Delete disposable KBs only with exact dataset ID and KB name confirmation.",
+        ],
+        "issues": [issue.to_dict() for issue in issues],
+    }
+
+
+def render_optimization_live_readiness_markdown(report: Mapping[str, Any]) -> str:
+    """Render a live optimization readiness report as Markdown."""
+
+    summary = report.get("summary") if isinstance(report.get("summary"), Mapping) else {}
+    config = report.get("config") if isinstance(report.get("config"), Mapping) else {}
+    confirmation = report.get("confirmation") if isinstance(report.get("confirmation"), Mapping) else {}
+    cleanup = report.get("cleanup") if isinstance(report.get("cleanup"), Mapping) else {}
+    lines = [
+        "# RAGFlow Optimization Live Readiness Report",
+        "",
+        f"- Status: `{'passed' if report.get('ok') else 'failed'}`",
+        f"- Mutates RAGFlow: `{str(bool(report.get('mutation_allowed'))).lower()}`",
+        f"- Network checked: `{str(bool(report.get('network_checked'))).lower()}`",
+        f"- Candidates: `{summary.get('candidate_count', 0)}`",
+        f"- Errors: `{summary.get('errors', 0)}`",
+        f"- Warnings: `{summary.get('warnings', 0)}`",
+        "",
+        "## Required Gates",
+        "",
+        "| gate | status |",
+        "|---|---|",
+        f"| RAGFlow base URL configured | `{'yes' if config.get('ragflow_base_url_configured') else 'no'}` |",
+        f"| RAGFlow API key configured | `{'yes' if config.get('ragflow_api_key_configured') else 'no'}` |",
+        f"| Live build confirmation | `{'yes' if confirmation.get('confirm_live_build') else 'no'}` |",
+        f"| KB name confirmation matches | `{'yes' if confirmation.get('confirm_kb_name_matches') else 'no'}` |",
+        f"| Run ID confirmation matches | `{'yes' if confirmation.get('confirm_run_id_matches') else 'no'}` |",
+        f"| Cleanup plan state | `{cleanup.get('state', 'missing')}` |",
+        "",
+        "## Cleanup",
+        "",
+        f"- Targets: `{cleanup.get('target_count', 0)}`",
+        f"- Ready targets: `{cleanup.get('ready_target_count', 0)}`",
+        f"- Pending targets: `{cleanup.get('pending_target_count', 0)}`",
+        f"- Exact cleanup confirmation: `{str(bool(cleanup.get('confirmation_exact'))).lower()}`",
+        "",
+        "## Issues",
+        "",
+        "| severity | code | field | message |",
+        "|---|---|---|---|",
+    ]
+    for issue in report.get("issues", []) if isinstance(report.get("issues"), list) else []:
+        if isinstance(issue, Mapping):
+            lines.append(f"| {issue.get('severity')} | `{issue.get('code')}` | {issue.get('field', '-')} | {issue.get('message')} |")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def render_optimization_cleanup_plan_markdown(plan: Mapping[str, Any]) -> str:

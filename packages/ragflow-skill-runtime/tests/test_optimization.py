@@ -7,13 +7,16 @@ from pathlib import Path
 
 from ragflow_skill_runtime.optimization import (
     OPTIMIZATION_CLEANUP_PLAN_SCHEMA,
+    OPTIMIZATION_LIVE_READINESS_REPORT_SCHEMA,
     OPTIMIZATION_PLAN_SCHEMA,
     PROFILE_EXPERIMENT_RESULTS_SCHEMA,
     create_optimization_cleanup_plan,
+    create_optimization_live_readiness_report,
     create_optimization_plan,
     load_candidate_profile_set,
     render_best_profile_markdown,
     render_optimization_cleanup_plan_markdown,
+    render_optimization_live_readiness_markdown,
     render_optimization_plan_markdown,
     summarize_optimization_results,
 )
@@ -361,6 +364,96 @@ class OptimizationTests(unittest.TestCase):
         self.assertEqual(cleanup["summary"]["warnings"], 1)
         self.assertEqual(cleanup["summary"]["pending_target_count"], 1)
         self.assertIsNone(cleanup["targets"][0]["commands"]["execute"])
+
+    def test_create_optimization_live_readiness_allows_pending_cleanup_manifests(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            _write_profile(profile, "readiness-profile")
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[profile],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            plan_path = root / "optimization_plan.json"
+            cleanup_path = root / "cleanup_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            cleanup = create_optimization_cleanup_plan(plan_path=plan_path)
+            cleanup_path.write_text(json.dumps(cleanup), encoding="utf-8")
+
+            report = create_optimization_live_readiness_report(
+                plan_path=plan_path,
+                cleanup_plan_path=cleanup_path,
+                ragflow_base_url_configured=True,
+                ragflow_api_key_configured=True,
+                confirm_live_build=True,
+                confirm_kb_name="kb:optimize-test",
+                confirm_run_id="run1",
+            )
+
+        self.assertEqual(report["schema"], OPTIMIZATION_LIVE_READINESS_REPORT_SCHEMA)
+        self.assertTrue(report["ok"], report["issues"])
+        self.assertFalse(report["mutation_allowed"])
+        self.assertFalse(report["network_checked"])
+        self.assertEqual(report["cleanup"]["state"], "pending_manifests")
+        self.assertEqual(report["summary"]["cleanup_pending_target_count"], 1)
+        self.assertIn("RAGFlow Optimization Live Readiness Report", render_optimization_live_readiness_markdown(report))
+
+    def test_create_optimization_live_readiness_requires_strict_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            _write_profile(profile, "strict-profile")
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[profile],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            plan_path = root / "optimization_plan.json"
+            cleanup_path = root / "cleanup_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            cleanup = create_optimization_cleanup_plan(plan_path=plan_path)
+            cleanup_path.write_text(json.dumps(cleanup), encoding="utf-8")
+
+            report = create_optimization_live_readiness_report(
+                plan_path=plan_path,
+                cleanup_plan_path=cleanup_path,
+                credential_error="config file not found: ragflow.yaml",
+                confirm_live_build=False,
+                confirm_kb_name="kb:wrong",
+                confirm_run_id="wrong",
+                require_cleanup_ready=True,
+            )
+
+        self.assertFalse(report["ok"])
+        codes = {issue["code"] for issue in report["issues"]}
+        self.assertIn("ragflow_config_invalid", codes)
+        self.assertIn("confirm_live_build_missing", codes)
+        self.assertIn("confirm_kb_name_mismatch", codes)
+        self.assertIn("confirm_run_id_mismatch", codes)
+        self.assertIn("cleanup_targets_pending", codes)
 
 
 if __name__ == "__main__":

@@ -4471,6 +4471,137 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("--confirm-dataset-id", cleanup_payload["targets"][0]["commands"]["execute"])
         self.assertIn("RAGFlow Optimization Cleanup Plan", cleanup_md_text)
 
+    def test_optimize_readiness_subcommand_emits_redacted_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_host = "optimize-readiness.local"
+            fake_secret = "optimize-readiness-secret"
+            kb_name = f"kb:http://{fake_host}:9380?token={fake_secret}"
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "sample.md").write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "readiness-profile",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                        "parser_config": {
+                            "chunk_token_num": 512,
+                            "auto_keywords": 0,
+                            "auto_questions": 0,
+                            "__language__": "English",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            optimization_plan = root / "optimization_plan.json"
+            cleanup_plan = root / "cleanup_plan.json"
+            readiness_report = root / "optimization_live_readiness_report.json"
+            readiness_md = root / "optimization_live_readiness_report.md"
+            readiness_redaction = root / "optimization_live_readiness_redaction.json"
+
+            plan_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "--plan-only",
+                    "--input",
+                    str(docs),
+                    "--kb-name",
+                    kb_name,
+                    "--profile",
+                    str(profile),
+                    "--queries",
+                    str(queries),
+                    "--qrels",
+                    str(qrels),
+                    "--run-id",
+                    "readiness",
+                    "--artifact-dir",
+                    str(root / "opt-artifacts"),
+                    "--output",
+                    str(optimization_plan),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            cleanup_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "cleanup-plan",
+                    "--plan",
+                    str(optimization_plan),
+                    "--output",
+                    str(cleanup_plan),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            readiness_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "readiness",
+                    "--plan",
+                    str(optimization_plan),
+                    "--cleanup-plan",
+                    str(cleanup_plan),
+                    "--output",
+                    str(readiness_report),
+                    "--report-md",
+                    str(readiness_md),
+                    "--base-url",
+                    "https://ragflow.example.test",
+                    "--api-key",
+                    "fake-readiness-key",
+                    "--confirm-live-build",
+                    "--confirm-kb-name",
+                    kb_name,
+                    "--confirm-run-id",
+                    "readiness",
+                    "--redaction-report",
+                    str(readiness_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            readiness_payload = json.loads(readiness_report.read_text(encoding="utf-8")) if readiness_report.exists() else {}
+            readiness_md_text = readiness_md.read_text(encoding="utf-8") if readiness_md.exists() else ""
+            redaction_payload = json.loads(readiness_redaction.read_text(encoding="utf-8")) if readiness_redaction.exists() else {}
+            combined = readiness_result.stdout + json.dumps(readiness_payload, ensure_ascii=False) + readiness_md_text
+
+        self.assertEqual(plan_result.returncode, 0, plan_result.stdout + plan_result.stderr)
+        self.assertEqual(cleanup_result.returncode, 0, cleanup_result.stdout + cleanup_result.stderr)
+        self.assertEqual(readiness_result.returncode, 0, readiness_result.stdout + readiness_result.stderr)
+        self.assertEqual(readiness_payload["schema"], "ragflow_optimization_live_readiness_report_v1")
+        self.assertTrue(readiness_payload["ok"], readiness_payload["issues"])
+        self.assertEqual(readiness_payload["cleanup"]["state"], "pending_manifests")
+        self.assertFalse(readiness_payload["mutation_allowed"])
+        self.assertIn("RAGFlow Optimization Live Readiness Report", readiness_md_text)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertNotIn(fake_host, combined)
+        self.assertNotIn(fake_secret, combined)
+
     def test_optimize_cleanup_execute_requires_exact_target_confirmation(self) -> None:
         module = load_build_module()
         FakeOptimizeBuildClient.instances = []

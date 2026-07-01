@@ -3193,6 +3193,46 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         required_stdout='"schema": "ragflow_optimization_cleanup_plan_v1"',
     )
     _record_redaction_sidecar_check(checks, "kb optimize cleanup-plan redaction", optimization_cleanup_plan_redaction)
+    optimization_readiness_report = artifacts_dir / "optimization_live_readiness_report.json"
+    optimization_readiness_report_md = artifacts_dir / "optimization_live_readiness_report.md"
+    optimization_readiness_redaction = artifacts_dir / "optimization_live_readiness_redaction.json"
+    optimize_readiness_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "optimize",
+            "readiness",
+            "--plan",
+            str(optimization_plan),
+            "--cleanup-plan",
+            str(optimization_cleanup_plan),
+            "--output",
+            str(optimization_readiness_report),
+            "--report-md",
+            str(optimization_readiness_report_md),
+            "--base-url",
+            "https://ragflow.example.test",
+            "--api-key",
+            "fake-platform-key",
+            "--confirm-live-build",
+            "--confirm-kb-name",
+            "kb:platform-smoke",
+            "--confirm-run-id",
+            "platform",
+            "--redaction-report",
+            str(optimization_readiness_redaction),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb optimize readiness",
+        optimize_readiness_result,
+        required_stdout='"schema": "ragflow_optimization_live_readiness_report_v1"',
+    )
+    _record_redaction_sidecar_check(checks, "kb optimize readiness redaction", optimization_readiness_redaction)
     benchmark_sample_dir = artifacts_dir / "benchmark-sample"
     benchmark_sample_redaction = artifacts_dir / "benchmark_sample_redaction.json"
     benchmark_sample_result = _run_command(
@@ -4361,6 +4401,9 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         artifacts_dir / "optimization_cleanup_plan.json",
         artifacts_dir / "optimization_cleanup_plan.md",
         artifacts_dir / "optimization_cleanup_plan_redaction.json",
+        artifacts_dir / "optimization_live_readiness_report.json",
+        artifacts_dir / "optimization_live_readiness_report.md",
+        artifacts_dir / "optimization_live_readiness_redaction.json",
         artifacts_dir / "profile_experiment_results.json",
         artifacts_dir / "best_profile_report.md",
         artifacts_dir / "best_profile_report_redaction.json",

@@ -20,7 +20,7 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_runtime_resilience_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 87)
+        self.assertEqual(report["summary"]["command_count"], 88)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
@@ -28,7 +28,7 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
                 "candidate": 0,
                 "covered": 19,
                 "deferred": 2,
-                "not_applicable": 66,
+                "not_applicable": 67,
             },
         )
 
@@ -118,6 +118,10 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
         qa_suggest_review = by_command["ragflow-kb-build qa suggest-review"]
         self.assertEqual(qa_suggest_review["status"], "not_applicable")
         self.assertEqual(qa_suggest_review["features"], [])
+
+        optimize_readiness = by_command["ragflow-kb-build optimize readiness"]
+        self.assertEqual(optimize_readiness["status"], "not_applicable")
+        self.assertEqual(optimize_readiness["features"], [])
 
         agentic_answer_request = by_command["ragflow-query agentic-answer request"]
         self.assertEqual(agentic_answer_request["status"], "not_applicable")

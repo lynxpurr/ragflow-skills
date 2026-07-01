@@ -177,7 +177,7 @@ schema production and the later phase owns consumption or live workflow integrat
 | 1. Rich Handoff 2.0 | `ragflow-doc-to-md`, `ragflow-kb-build` | Phase 24 | `ragflow-doc-to-md package --rich`, `ragflow-kb-build inspect-handoff` | `ragflow_handoff_package_v1`, `metadata.json`, `artifact_index.json`, `package_readme.md` | schema unit tests, CLI tests, consumer acceptance, platform smoke |
 | 2. Markdown Post-Processing | `ragflow-doc-to-md` | Phase 24 | post-process profiles `none`, `safe`, `ocr`, `chunk-markers` | `postprocess_report.json` | deterministic rewrite tests, no-write-by-default tests, quality gate tests |
 | 3. Metadata And Tagset Governance | `ragflow-kb-build` | Phase 25 | `metadata lint/merge/generate-template`, `tagset lint/export/report` | `ragflow_metadata_v1`, `ragflow_tagset_v1` | offline schema tests, merge precedence tests, redaction tests |
-| 4. Optimization Loop | `ragflow-kb-build` | Phase 26 | `optimize --plan-only`, `optimize --execute` | `optimization_plan.json`, `profile_experiment_results.json`, `best_profile_report.md`, `cleanup_plan.json` | fake-client tests, explicit-mutation tests, live disposable tests when approved |
+| 4. Optimization Loop | `ragflow-kb-build` | Phase 26 | `optimize --plan-only`, `optimize readiness`, `optimize --execute` | `optimization_plan.json`, `optimization_live_readiness_report.json`, `profile_experiment_results.json`, `best_profile_report.md`, `cleanup_plan.json` | fake-client tests, explicit-mutation tests, live disposable tests when approved |
 | 5. Chunk Snapshot And Strict Chunk Recall | `ragflow-kb-build` | Phase 26 | `snapshot-chunks`, `validate --level benchmark` extensions | chunk snapshot schema, qrels `expected_chunks` extension | stable-hash tests, strict-recall metrics tests |
 | 6. Retrieval Enrichment Experiments | `ragflow-kb-build`, `ragflow-query` | Phase 27 | `profile experiment` or `optimize`, `suppression-report`, `pollution-report`, `rerank-ab` | enrichment experiment matrix, pollution/suppression reports | no-network fake reports, optional live disposable tests |
 | 7. Multi-KB Fusion And RRF | `ragflow-query` | Phase 28 | `ask --fusion rrf`, `fusion`, `fusion-test` | `ragflow_fusion_report_v1` | offline fusion fixtures, no-LLM acceptance tests |
@@ -397,6 +397,11 @@ selected disposable candidate KBs, retaining each candidate `kb_manifest.json`, 
 `--validate-benchmark` is present, running benchmark validation for each built candidate and
 retaining the candidate validation reports. It requires credentials plus
 `--confirm-live-build`, exact `--confirm-kb-name`, and exact `--confirm-run-id`.
+`optimize readiness` is the non-mutating pre-live review gate. It reads the optimization
+plan plus cleanup plan, checks credential presence without network access, verifies exact
+live-build KB/run confirmations, reports whether cleanup targets are still pending
+manifests or already have retained dataset IDs, and can require exact cleanup
+confirmations with `--require-cleanup-ready` before final cleanup execution reviews.
 MVP `optimize summarize` then reads the plan plus existing validation reports and
 produces `ragflow_profile_experiment_results_v1` plus a Markdown best-profile report with
 metric tradeoffs and recommendation rationale. When a candidate validation report is
@@ -1375,8 +1380,8 @@ breaker pilots must stay default-off, read-only, and scoped to `endpoint-report`
 Inventory implemented. `tools/report_surface_inventory.py` emits
 `ragflow_report_surface_inventory_v1`, imports the public CLI parsers offline, and fails
 the inventory when a public command lacks an explicit `covered`, `not_applicable`, or
-`needs_redaction` classification. The current verified inventory names 87 public commands:
-78 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
+`needs_redaction` classification. The current verified inventory names 88 public commands:
+79 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
 classification findings.
 
 `ragflow-kb-build parse-report` and `ragflow-kb-build health-report` now support
@@ -1421,14 +1426,15 @@ from the sanitized payload when redaction is enabled. Focused CLI tests cover fa
 path tokens, private hosts, and query-style fake secrets; consumer acceptance and platform
 smoke retain the new sidecars as release artifacts.
 
-`ragflow-kb-build optimize --plan-only`, `ragflow-kb-build optimize cleanup-plan`, and
-`ragflow-kb-build optimize summarize` now support `--redaction-report` for offline
-optimization plan/result surfaces. JSON stdout, JSON artifacts, and Markdown reports are
-written from the sanitized payload when redaction is enabled. The CLI redaction context
-also reads input optimization plans and explicit validation reports to redact plan-derived
-candidate artifact paths, disposable KB names, private hosts, and fake secrets that no
-longer appear as raw URLs in the generated summary or cleanup reports. Focused CLI tests,
-consumer acceptance, and platform smoke retain the new optimization redaction sidecars.
+`ragflow-kb-build optimize --plan-only`, `ragflow-kb-build optimize cleanup-plan`,
+`ragflow-kb-build optimize readiness`, and `ragflow-kb-build optimize summarize` now
+support `--redaction-report` for offline optimization plan/readiness/result surfaces. JSON
+stdout, JSON artifacts, and Markdown reports are written from the sanitized payload when
+redaction is enabled. The CLI redaction context also reads input optimization plans,
+cleanup plans, and explicit validation reports to redact plan-derived candidate artifact
+paths, disposable KB names, private hosts, and fake secrets that no longer appear as raw
+URLs in the generated readiness, summary, or cleanup reports. Focused CLI tests, consumer
+acceptance, and platform smoke retain the new optimization redaction sidecars.
 
 `ragflow-kb-build benchmark import`, `ragflow-kb-build benchmark sample`,
 `ragflow-kb-build benchmark preflight`, `ragflow-kb-build benchmark summarize`,
@@ -1560,7 +1566,7 @@ remain open Phase 31 work.
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene as a static Phase
 31 governance surface. It reuses the public command inventory and classifies current
 runtime-helper coverage as 19 covered commands, 0 candidate commands, 2 deferred live
-commands, and 66 not-applicable commands with no stale classification findings. Covered
+commands, and 67 not-applicable commands with no stale classification findings. Covered
 commands include the endpoint-report helper pilot, query fallback partial-failure reports,
 query-output cache reports, centroid build checkpoints, doc-to-md process cleanup
 reporting, backend probe/warmup reporting, bounded offline `doc-to-md split`
@@ -1576,7 +1582,7 @@ mutation or future optional adapter scope.
 The final generated-Markdown audit is implemented in `tools/generated_markdown_audit.py`.
 It consumes the report-surface inventory, selects covered report surfaces with generated
 Markdown outputs, and requires each one to have explicit sanitized-rendering evidence.
-The current audit emits `ragflow_generated_markdown_audit_v1`, verifies 68 Markdown report
+The current audit emits `ragflow_generated_markdown_audit_v1`, verifies 71 Markdown report
 surfaces with 0 missing and 0 stale entries, and runs from release hygiene together with
 generated-report safety. This closes the Phase 36 report-safety audit without broadening
 the runtime helper scope.
@@ -1592,15 +1598,15 @@ hygiene.
 
 The active non-live Phase 31 candidate inventory is closed. The runtime-resilience
 inventory is the authoritative ledger: 19 command surfaces are currently `covered`, 0 are
-`candidate`, 2 are intentionally `deferred` live surfaces, and 66 are `not_applicable`.
+`candidate`, 2 are intentionally `deferred` live surfaces, and 67 are `not_applicable`.
 
 Finish the remaining work in this order:
 
 1. Keep the portable archive release path green while new work keeps deterministic,
    no-network defaults.
 2. Add optional LLM adapters as request/review boundaries before any script-owned model
-   calls. Metadata, grounded-QA, and agentic-answer boundaries are complete; the remaining
-   deferred boundary is the LLM/RAGAS-style evaluator.
+   calls. Metadata, grounded-QA, agentic-answer, and answer-evaluator boundaries are
+   complete; script-owned LLM/RAGAS backend execution remains deferred.
 3. Add live disposable tests only in credentialed environments with exact confirmation,
    retained cleanup artifacts, and explicit approval.
 4. Treat `serve`, wheel packaging, provider abstractions, remote conversion clients, and
