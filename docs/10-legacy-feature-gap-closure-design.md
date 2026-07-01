@@ -416,6 +416,8 @@ manifests stay pending until disposable KB execution creates the manifests.
 `optimize cleanup-execute` reads the aggregate cleanup plan, requires `--execute`, and
 requires repeated exact `--confirm-dataset-id` plus matching `--confirm-kb-name` values for
 every ready target before deleting those datasets.
+Cleanup deletion uses RAGFlow's batch dataset-delete endpoint and treats non-zero API
+response codes as failed cleanup rather than successful deletion.
 
 ## Feature Design 5: Chunk Snapshot And Strict Chunk Recall
 
@@ -1628,9 +1630,9 @@ Current calibration:
   roadmap checkboxes are intentionally outside that default path: approved live disposable
   validation, optional script-owned LLM/RAGAS backends, post-CLI deployment adapters, and
   private dedao bridging.
-- The current open task list has 22 items across five gated categories: 3 local service or
+- The current open task list has 20 items across five gated categories: 3 local service or
   post-CLI host-wrapper items, 4 other post-CLI product-adapter items, 7 optional
-  script-owned LLM/backend items, 4 live disposable/resilience validation items, and 4
+  script-owned LLM/backend items, 2 live enrichment/resilience validation items, and 4
   private dedao bridge items.
 - Primary `doc_manifest.json` and `kb_manifest.json` JSON Schema templates are now part of
   the release contract and are checked by default release hygiene. Broader report-schema

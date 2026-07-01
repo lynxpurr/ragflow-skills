@@ -88,7 +88,7 @@ class RAGFlowClient:
     def delete_dataset(self, dataset_id: str) -> Any:
         """Delete one dataset by ID."""
 
-        return self.delete(f"/datasets/{dataset_id}")
+        return self.delete("/datasets", {"ids": [dataset_id]})
 
     def trigger_parse(self, dataset_id: str, document_ids: list[str]) -> Any:
         """Trigger parsing for uploaded documents."""

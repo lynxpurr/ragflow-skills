@@ -50,6 +50,14 @@ def load_build_module():
     return module
 
 
+def load_cleanup_module():
+    spec = importlib.util.spec_from_file_location("ragflow_kb_cleanup_cli", CLEANUP_SCRIPT)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class FakeOptimizeBuildClient:
     instances: list["FakeOptimizeBuildClient"] = []
 
@@ -101,6 +109,19 @@ class FakeOptimizeBuildClient:
     def delete_dataset(self, dataset_id):
         self.deleted.append(str(dataset_id))
         return {"data": {"id": dataset_id, "deleted": True}}
+
+
+class FakeDeleteFailureClient:
+    instances: list["FakeDeleteFailureClient"] = []
+
+    def __init__(self, config):
+        self.config = config
+        self.deleted: list[str] = []
+        FakeDeleteFailureClient.instances.append(self)
+
+    def delete_dataset(self, dataset_id):
+        self.deleted.append(str(dataset_id))
+        return {"code": 100, "message": "<MethodNotAllowed '405: Method Not Allowed'>"}
 
 
 class FakeValidationClient:
@@ -4709,6 +4730,55 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(len(FakeOptimizeBuildClient.instances), 1)
         self.assertEqual(FakeOptimizeBuildClient.instances[0].deleted, ["ds-cleanup-a"])
 
+    def test_optimize_cleanup_execute_rejects_failed_delete_response(self) -> None:
+        module = load_build_module()
+        FakeDeleteFailureClient.instances = []
+        module.RAGFlowClient = FakeDeleteFailureClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cleanup_plan = root / "cleanup_plan.json"
+            cleanup_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_optimization_cleanup_plan_v1",
+                        "targets": [
+                            {
+                                "profile_id": "candidate-a",
+                                "disposable_kb_name": "kb:cleanup-a",
+                                "status": "ready",
+                                "target": {"dataset_id": "ds-cleanup-a", "dataset_name": "kb:cleanup-a"},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "optimize",
+                        "cleanup-execute",
+                        "--cleanup-plan",
+                        str(cleanup_plan),
+                        "--execute",
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "fake-key",
+                        "--confirm-dataset-id",
+                        "ds-cleanup-a",
+                        "--confirm-kb-name",
+                        "kb:cleanup-a",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(code, 2, stdout.getvalue())
+        self.assertIn("cleanup-execute delete failed", json.loads(stdout.getvalue())["error"])
+        self.assertEqual(len(FakeDeleteFailureClient.instances), 1)
+        self.assertEqual(FakeDeleteFailureClient.instances[0].deleted, ["ds-cleanup-a"])
+
     def test_optimize_report_surfaces_emit_redaction_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -5591,6 +5661,47 @@ class KbBuildCliTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("confirm-dataset-id", json.loads(result.stdout)["error"])
+
+    def test_cleanup_execute_rejects_failed_delete_response(self) -> None:
+        module = load_cleanup_module()
+        FakeDeleteFailureClient.instances = []
+        module.RAGFlowClient = FakeDeleteFailureClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "kb_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-cleanup", "name": "kb:cleanup"},
+                        "documents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--kb-manifest",
+                        str(manifest),
+                        "--execute",
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "fake-key",
+                        "--confirm-dataset-id",
+                        "ds-cleanup",
+                        "--confirm-kb-name",
+                        "kb:cleanup",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(code, 2, stdout.getvalue())
+        self.assertIn("cleanup delete failed", json.loads(stdout.getvalue())["error"])
+        self.assertEqual(len(FakeDeleteFailureClient.instances), 1)
+        self.assertEqual(FakeDeleteFailureClient.instances[0].deleted, ["ds-cleanup"])
 
     def test_cleanup_help_renders(self) -> None:
         result = subprocess.run(

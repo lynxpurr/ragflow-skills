@@ -101,6 +101,15 @@ def _validate_confirmation(args: argparse.Namespace, *, dataset_id: str, dataset
         raise BuildError("cleanup --execute requires --confirm-kb-name matching the target KB name")
 
 
+def _validate_delete_response(response: Any) -> None:
+    if not isinstance(response, Mapping) or "code" not in response:
+        return
+    if response.get("code") == 0:
+        return
+    message = response.get("message") or response.get("msg") or response
+    raise BuildError(f"cleanup delete failed: {message}")
+
+
 def _run(args: argparse.Namespace) -> int:
     try:
         dataset_id, dataset_name = _target(args)
@@ -123,6 +132,7 @@ def _run(args: argparse.Namespace) -> int:
         config = _load_config(args)
         client = RAGFlowClient(config)
         delete_response = client.delete_dataset(dataset_id)
+        _validate_delete_response(delete_response)
         payload = {
             **payload,
             "dry_run": False,

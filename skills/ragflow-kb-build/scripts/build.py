@@ -2037,6 +2037,15 @@ def _require_cleanup_execute_confirmation(args: argparse.Namespace, ready_target
         raise BuildError("cleanup-execute confirmations must exactly match ready targets" + (f" ({'; '.join(details)})" if details else ""))
 
 
+def _validate_delete_response(response: Any, *, dataset_id: str) -> None:
+    if not isinstance(response, Mapping) or "code" not in response:
+        return
+    if response.get("code") == 0:
+        return
+    message = response.get("message") or response.get("msg") or response
+    raise BuildError(f"cleanup-execute delete failed for dataset {dataset_id}: {message}")
+
+
 def _run_optimize_cleanup_execute(args: argparse.Namespace) -> int:
     try:
         context_secrets, context_hosts, context_paths = _collect_redaction_context_from_json_paths([args.cleanup_plan])
@@ -2052,6 +2061,7 @@ def _run_optimize_cleanup_execute(args: argparse.Namespace) -> int:
             target_payload = target["target"]
             dataset_id = str(target_payload["dataset_id"])
             delete_response = client.delete_dataset(dataset_id)
+            _validate_delete_response(delete_response, dataset_id=dataset_id)
             results.append(
                 {
                     **target,

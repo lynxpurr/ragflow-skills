@@ -91,12 +91,12 @@ Completion priorities:
 
 Progress assessment:
 
-- Roadmap checklist status is 541 completed items out of 563 tracked items, about 96%.
+- Roadmap checklist status is 543 completed items out of 563 tracked items, about 96%.
 - The current non-live public CLI suite is complete for the planned portable archive
   release path: core commands, release packaging, redaction, report inventories, runtime
   helper pilots, contract gates, installed archive smoke, and primary manifest JSON Schema
   checks are all closed.
-- The 22 remaining open checklist items are not ordinary implementation gaps. They are
+- The 20 remaining open checklist items are not ordinary implementation gaps. They are
   explicitly gated live work, optional script-owned LLM/backend work, Phase 37 post-CLI
   adapter decisions/implementation, or private dedao bridge work outside the public release
   boundary.
@@ -113,7 +113,7 @@ normal offline continuation unless their gate is satisfied.
 | Local service / post-CLI host wrapper | 3 | Phase 3 optional `serve`, Backlog post-CLI service adapters, Phase 37.2 `serve` design gate | A real host workflow needs a persistent local tool endpoint instead of one-shot CLI commands | Collect the host workflow, then write a no-network `serve` design gate before code. |
 | Other post-CLI product adapters | 4 | Remote conversion client, provider abstraction, reranker abstraction, web/API wrapper | Known endpoint/provider/product requirements plus fake fixtures and acceptance gates | Keep deferred; do not add generic adapter contracts. |
 | Optional script-owned LLM/backend execution | 7 | Grounded-QA LLM adapter, agentic-answer execution, reflection, evidence-only synthesis, LLM/RAGAS evaluator, related Phase 30 synthesis backlog | Explicit LLM config, deterministic fixtures, advisory-output marking, citation-audit compatibility, and redaction gates | Plan as one adapter track before any script-owned model call. |
-| Live disposable and resilience validation | 4 | Live probe tests, live disposable optimization tests, live enrichment tests, live mutation/query resilience | Credentials, exact user confirmation, disposable KB IDs, retained cleanup artifacts, and post-cleanup verification | Run only as an approved live validation track. |
+| Live enrichment and resilience validation | 2 | Live enrichment tests, live mutation/query resilience | Credentials, exact user confirmation, disposable KB IDs, retained cleanup artifacts, and post-cleanup verification | Run only as an approved live validation track. |
 | Private dedao bridge | 4 | Preserve current dedao skills, optional private adapter, private handoff shape, no public references | A private adapter is explicitly needed and remains outside public release artifacts | Keep outside public `skills/`; consume public handoff contracts only. |
 
 ## Release Path Checkpoint
@@ -136,6 +136,35 @@ Validated commands:
 - `python3 tools/platform_smoke_matrix.py --profile strict-vendor-env --work-dir /tmp/ragflow-platform-strict-vendor-20260701-roadmap-calibration`
 - `python3 tools/export_runtime_wheel.py --output-dir /tmp/ragflow-runtime-wheel-export-20260701-roadmap-calibration --work-dir /tmp/ragflow-runtime-wheel-work-20260701-roadmap-calibration --overwrite`
 
+## Live Disposable Validation Checkpoint
+
+Checkpoint date: 2026-07-01
+
+Credentialed local RAGFlow validation completed against a disposable KB after explicit user
+approval. Artifacts were retained under `/tmp/ragflow-live-disposable-20260701`.
+
+Validated flow:
+
+- Read-only `ragflow-kb-build probe` against the local RAGFlow endpoint passed.
+- `ragflow-kb-build optimize --plan-only` produced a command manifest with disabled
+  mutation commands.
+- `optimize cleanup-plan` plus `optimize readiness` passed before live build execution.
+- `optimize --execute --validate-benchmark` created one disposable KB, uploaded one tiny
+  Markdown fixture, waited for parse, and passed one benchmark query.
+- `optimize summarize` produced `ragflow_profile_experiment_results_v1`.
+- Post-build `optimize cleanup-plan` found one ready cleanup target.
+- `optimize readiness --require-cleanup-ready` passed with exact dataset ID and KB name
+  confirmation.
+- Cleanup verification found that the wrapper's original single-dataset DELETE path was
+  incompatible with the current local RAGFlow API; the disposable KB was then removed with
+  the compatible batch delete endpoint and read-back verification showed zero matches.
+
+Follow-up fix:
+
+- `RAGFlowClient.delete_dataset` now uses the current batch delete endpoint.
+- Cleanup execution paths now reject non-zero RAGFlow API response codes instead of
+  reporting deletion success on a `405 Method Not Allowed` payload.
+
 ## Remaining Work Ledger
 
 This ledger reviews the open task list without duplicating it. The authoritative checkboxes
@@ -146,7 +175,7 @@ remain in their owning phases below.
 | Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory closed | Runtime inventory stays at 19 `covered`, 0 `candidate`, 2 intentionally `deferred`, and 67 `not_applicable` command surfaces. |
 | Document split packaging | Phase 16 optional manifest rewrite/package mode | Complete for current CLI scope | Split outputs can be resumed and optionally repackaged without breaking existing segment-directory ingestion. |
 | Query service and agentic adapters | Phase 3 `serve`, Phase 21/30 script-owned synthesis and reflection | Host-assisted agentic retrieval and agentic-answer request/review complete; local service and script-owned answer synthesis deferred | Implement script-owned synthesis only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
-| Live disposable optimization | Phase 17 live probe tests, Phase 26 live disposable tests, Phase 27 live enrichment tests | Build, validation, cleanup execution, and live-readiness gates complete for current CLI scope; live tests deferred | Requires credentials, explicit confirmation, exact cleanup confirmation, retained dataset IDs, and user approval. |
+| Live disposable optimization | Phase 27 live enrichment tests plus Phase 31 live mutation/query resilience | Probe and basic disposable optimization build/validate/cleanup are complete; enrichment and broad live resilience remain gated | Requires credentials, explicit confirmation, exact cleanup confirmation, retained dataset IDs, and user approval. |
 | Optional LLM-assisted adapters | Phase 26 grounded QA, Phase 30 agentic answer synthesis, Phase 30 LLM/RAGAS-style evaluator | Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries complete; script-owned LLM/RAGAS backends remain deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
 | Contract and manifest schema gates | Phase 33 release governance | Complete for primary handoff manifests and current release reports | Keep `tools/manifest_schema_check.py`, schema identity, rename governance, release hygiene, installed archive smoke, consumer acceptance, and platform smoke green whenever public contracts change. |
 | Packaging and platform adapters | Phase 37 plus backlog wheel path, `serve`, remote conversion service client, provider abstractions, reranker abstraction, web/API wrapper | Runtime wheel smoke implemented and priority validated against controlled CLI-agent handoff; other adapters deferred | Rank adapters by host workflow, release impact, testability, and risk before implementation; keep archive CLI release green. |
@@ -154,9 +183,9 @@ remain in their owning phases below.
 
 Recommended completion queue:
 
-1. If the user approves live credentials and disposable KB mutation, run the live
-   optimization validation track: probe, disposable build, benchmark validation, readiness
-   review, cleanup execution, and post-cleanup verification.
+1. If the user approves additional live disposable validation, run the remaining live
+   enrichment or live mutation/query resilience track with disposable KBs, exact cleanup
+   confirmation, retained artifacts, and post-cleanup verification.
 2. If a concrete host needs a persistent local endpoint, run Phase 37.2 as a design-only
    `ragflow-query serve` gate first: lifecycle, auth boundary, health/direct/host-assisted
    schemas, shutdown behavior, redaction, and local fake-client smoke.
@@ -659,7 +688,7 @@ Tasks:
 - [x] Make append execution parse only newly uploaded document IDs by default.
 - [x] Add `ragflow-kb-build/scripts/cleanup.py` with non-mutating previews.
 - [x] Require explicit dataset ID and KB name confirmation before cleanup execution.
-- [ ] Add live disposable probe tests where credentials are present.
+- [x] Add live disposable probe tests where credentials are present.
 
 Exit criteria:
 
@@ -987,7 +1016,7 @@ Tasks:
 - [x] Add strict chunk recall, expected chunk hit rate, and expected evidence rank metrics.
 - [x] Add evidence mapping confidence, segment metadata coverage, and chunk coverage metrics.
 - [x] Add unit tests with fake RAGFlow clients and deterministic chunk snapshots.
-- [ ] Add live disposable tests gated by credentials and explicit confirmation.
+- [x] Add live disposable tests gated by credentials and explicit confirmation.
 
 MVP note: `qa suggest-request` creates an advisory, no-LLM request artifact with source
 hashes, QA policy, optional bounded excerpts, and redaction metadata for host-approved
