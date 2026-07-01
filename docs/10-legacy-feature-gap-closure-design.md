@@ -1608,18 +1608,19 @@ The active non-live Phase 31 candidate inventory is closed. The runtime-resilien
 inventory is the authoritative ledger: 19 command surfaces are currently `covered`, 0 are
 `candidate`, 2 are intentionally `deferred` live surfaces, and 67 are `not_applicable`.
 
-Finish the remaining work in this order:
+Finish the remaining gated work in this order:
 
 1. Keep the portable archive release path green while new work keeps deterministic,
    no-network defaults.
-2. Add optional LLM adapters as request/review boundaries before any script-owned model
-   calls. Metadata, grounded-QA, agentic-answer, and answer-evaluator boundaries are
-   complete; script-owned LLM/RAGAS backend execution remains deferred.
-3. Add live disposable tests only in credentialed environments with exact confirmation,
+2. Add live disposable tests only in credentialed environments with exact confirmation,
    retained cleanup artifacts, and explicit approval.
-4. Treat `serve`, wheel packaging, provider abstractions, remote conversion clients, and
-   web/API wrappers as post-CLI adapters instead of blockers for the portable public skill
-   suite.
+3. Add a local `serve` wrapper only after a concrete host workflow needs a persistent
+   endpoint instead of one-shot CLI commands.
+4. Plan optional script-owned LLM adapters as a single backend track before any model call.
+   Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries
+   are complete; script-owned LLM/RAGAS backend execution remains deferred.
+5. Keep private dedao bridging outside public release artifacts unless a private adapter is
+   explicitly needed.
 
 Current calibration:
 
@@ -1627,13 +1628,18 @@ Current calibration:
   roadmap checkboxes are intentionally outside that default path: approved live disposable
   validation, optional script-owned LLM/RAGAS backends, post-CLI deployment adapters, and
   private dedao bridging.
+- The current open task list has 22 items across five gated categories: 3 local service or
+  post-CLI host-wrapper items, 4 other post-CLI product-adapter items, 7 optional
+  script-owned LLM/backend items, 4 live disposable/resilience validation items, and 4
+  private dedao bridge items.
 - Primary `doc_manifest.json` and `kb_manifest.json` JSON Schema templates are now part of
   the release contract and are checked by default release hygiene. Broader report-schema
   migration tooling should be added only when compatibility pressure appears.
-- The next development decision should choose one of two tracks: an approved credentialed
-  live validation run, or an offline post-CLI adapter planning slice that ranks `serve`,
-  wheel packaging, provider abstractions, remote conversion clients, reranker adapters,
-  and web/API wrappers against real host workflows.
+- The next development decision should choose one explicit gate: an approved credentialed
+  live validation run, a concrete host workflow for `ragflow-query serve`, an approved
+  script-owned LLM/backend plan, or a private dedao bridge request. Without one of those
+  gates, maintenance should focus on keeping the archive and optional runtime-wheel release
+  path green.
 - Phase 37 starts that offline post-CLI adapter planning track in
   `docs/13-post-cli-adapter-planning.md`. Phase 37.1 now implements the runtime-only wheel
   packaging smoke/export gate without changing the canonical archive release path and

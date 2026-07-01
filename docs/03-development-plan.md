@@ -101,6 +101,41 @@ Progress assessment:
   adapter decisions/implementation, or private dedao bridge work outside the public release
   boundary.
 
+## Open Task Review
+
+Review date: 2026-07-01
+
+The remaining open checkboxes are intentionally gated. They should not be pulled into a
+normal offline continuation unless their gate is satisfied.
+
+| Category | Open items | Owning tasks | Gate before work starts | Next action |
+| --- | ---: | --- | --- | --- |
+| Local service / post-CLI host wrapper | 3 | Phase 3 optional `serve`, Backlog post-CLI service adapters, Phase 37.2 `serve` design gate | A real host workflow needs a persistent local tool endpoint instead of one-shot CLI commands | Collect the host workflow, then write a no-network `serve` design gate before code. |
+| Other post-CLI product adapters | 4 | Remote conversion client, provider abstraction, reranker abstraction, web/API wrapper | Known endpoint/provider/product requirements plus fake fixtures and acceptance gates | Keep deferred; do not add generic adapter contracts. |
+| Optional script-owned LLM/backend execution | 7 | Grounded-QA LLM adapter, agentic-answer execution, reflection, evidence-only synthesis, LLM/RAGAS evaluator, related Phase 30 synthesis backlog | Explicit LLM config, deterministic fixtures, advisory-output marking, citation-audit compatibility, and redaction gates | Plan as one adapter track before any script-owned model call. |
+| Live disposable and resilience validation | 4 | Live probe tests, live disposable optimization tests, live enrichment tests, live mutation/query resilience | Credentials, exact user confirmation, disposable KB IDs, retained cleanup artifacts, and post-cleanup verification | Run only as an approved live validation track. |
+| Private dedao bridge | 4 | Preserve current dedao skills, optional private adapter, private handoff shape, no public references | A private adapter is explicitly needed and remains outside public release artifacts | Keep outside public `skills/`; consume public handoff contracts only. |
+
+## Release Path Checkpoint
+
+Checkpoint date: 2026-07-01
+
+The release path remains green after the roadmap calibration. This checkpoint did not start
+live disposable mutation, script-owned LLM/RAGAS execution, `ragflow-query serve`, or private
+dedao bridge work.
+
+Validated commands:
+
+- `python3 -m pytest packages/ragflow-skill-runtime/tests -q`
+- `git diff --check`
+- `python3 tools/manifest_schema_check.py`
+- `python3 tools/release_hygiene_check.py`
+- `python3 tools/build_release.py --check`
+- `python3 tools/export_release_archives.py`
+- `python3 tools/consumer_acceptance.py --work-dir /tmp/ragflow-consumer-acceptance-20260701-roadmap-calibration --overwrite`
+- `python3 tools/platform_smoke_matrix.py --profile strict-vendor-env --work-dir /tmp/ragflow-platform-strict-vendor-20260701-roadmap-calibration`
+- `python3 tools/export_runtime_wheel.py --output-dir /tmp/ragflow-runtime-wheel-export-20260701-roadmap-calibration --work-dir /tmp/ragflow-runtime-wheel-work-20260701-roadmap-calibration --overwrite`
+
 ## Remaining Work Ledger
 
 This ledger reviews the open task list without duplicating it. The authoritative checkboxes
@@ -122,13 +157,16 @@ Recommended completion queue:
 1. If the user approves live credentials and disposable KB mutation, run the live
    optimization validation track: probe, disposable build, benchmark validation, readiness
    review, cleanup execution, and post-cleanup verification.
-2. If live mutation is not approved, begin the post-CLI adapter planning track with a
-   no-network design gate: decide whether `serve`, wheel packaging, remote conversion
-   client, provider abstraction, reranker abstraction, or web/API wrapper has a real
-   near-term host workflow.
-3. Keep script-owned LLM/RAGAS backends deferred until explicit LLM config, deterministic
-   fixtures, advisory-output marking, citation audit compatibility, and redaction gates
-   are planned together.
+2. If a concrete host needs a persistent local endpoint, run Phase 37.2 as a design-only
+   `ragflow-query serve` gate first: lifecycle, auth boundary, health/direct/host-assisted
+   schemas, shutdown behavior, redaction, and local fake-client smoke.
+3. If optional script-owned LLM/RAGAS execution is approved, plan metadata/grounded-QA,
+   agentic-answer, reflection, and evaluator backends together with deterministic fixtures,
+   advisory-output marking, citation-audit compatibility, and redaction gates.
+4. If a private dedao bridge is needed, implement it outside public release artifacts and
+   make it consume the public `doc_manifest.json` handoff shape.
+5. Otherwise, keep the public CLI/archive/wheel release path green with periodic release
+   validation rather than adding ungated product adapters.
 
 ## Phase 0: Architecture Skeleton
 
