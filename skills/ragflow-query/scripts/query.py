@@ -47,6 +47,8 @@ from ragflow_skill_runtime import (  # noqa: E402
     build_centroid_index,
     build_centroid_plan,
     build_host_synthesis_contract,
+    build_runtime_metrics_summary,
+    build_runtime_partial_failure_report,
     create_agentic_answer_request,
     build_query_rewrite_plan,
     build_query_output_cache_report,
@@ -124,10 +126,12 @@ from ragflow_skill_runtime import (  # noqa: E402
     run_route_diagnose,
     run_route_report,
     run_route_tests,
+    run_with_retry,
     sanitize_report_payload,
     weight_evidence,
     write_centroid_plan,
     write_centroid_report,
+    RuntimeRetryPolicy,
 )
 
 
@@ -296,6 +300,59 @@ def _build_retrieval_payload(
     }
 
 
+def _retrieve_once_with_runtime(
+    *,
+    client: RAGFlowClient,
+    question: str,
+    dataset_ids: list[str],
+    top_k: int,
+    similarity_threshold: float | None,
+    retry_budget: int,
+    retry_backoff_seconds: float,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    def operation() -> dict[str, Any]:
+        try:
+            raw = client.retrieve(
+                question=question,
+                dataset_ids=dataset_ids,
+                top_k=top_k,
+                similarity_threshold=similarity_threshold,
+            )
+            chunks = normalize_retrieval_response(raw)
+            evidence = weight_evidence(question, chunks)
+            status_report = normalize_retrieval_status(chunks=chunks, evidence=evidence)
+            return {
+                "ok": bool(status_report["ok"]),
+                "chunks": chunks,
+                "status": status_report["status"],
+                "status_report": status_report,
+                "error": None,
+            }
+        except Exception as exc:  # Keep multi-query and fusion retrievals observable.
+            status_report = normalize_retrieval_status(error=exc)
+            return {
+                "ok": False,
+                "chunks": [],
+                "status": status_report["status"],
+                "status_report": status_report,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            }
+
+    retry_result = run_with_retry(
+        operation,
+        status_getter=lambda value: str(value.get("status") if isinstance(value, dict) else "error"),
+        policy=RuntimeRetryPolicy(retry_budget=retry_budget, backoff_seconds=retry_backoff_seconds),
+    )
+    result = retry_result.result if isinstance(retry_result.result, dict) else {
+        "ok": False,
+        "chunks": [],
+        "status": "error",
+        "error": "retrieval failed",
+    }
+    return result, retry_result.trace
+
+
 def _retrieve_query_payloads(
     *,
     client: RAGFlowClient,
@@ -305,10 +362,73 @@ def _retrieve_query_payloads(
     similarity_threshold: float | None,
     fusion: str,
     include_raw: bool,
-) -> tuple[list[dict[str, Any]], list[NormalizedChunk], dict[str, Any] | None, int]:
+    retry_budget: int,
+    retry_backoff_seconds: float,
+) -> tuple[
+    list[dict[str, Any]],
+    list[NormalizedChunk],
+    dict[str, Any] | None,
+    int,
+    dict[str, Any],
+    dict[str, Any],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
     payloads: list[dict[str, Any]] = []
     normalized_by_payload: list[list[NormalizedChunk]] = []
     retrieval_calls = 0
+    runtime_items: list[dict[str, Any]] = []
+    retry_traces: list[dict[str, Any]] = []
+    retrieval_errors: list[dict[str, Any]] = []
+
+    def record_result(
+        *,
+        query: str,
+        query_id: str,
+        query_kind: str,
+        source: str,
+        target_dataset_ids: list[str],
+        result: dict[str, Any],
+        retry_trace: dict[str, Any],
+    ) -> None:
+        nonlocal retrieval_calls
+        retrieval_calls += int(retry_trace.get("attempt_count") or 0)
+        status = str(result.get("status") or "error")
+        runtime_items.append({"label": source, "status": status})
+        retry_traces.append({"label": source, **retry_trace})
+        chunks = list(result.get("chunks") or [])
+        if result.get("ok"):
+            normalized_by_payload.append(chunks)
+            payload = _build_retrieval_payload(
+                question=query,
+                source=source,
+                query_id=query_id,
+                query_kind=query_kind,
+                dataset_ids=target_dataset_ids,
+                chunks=chunks,
+                include_raw=include_raw,
+            )
+            payload["runtime_retry_trace"] = retry_trace
+            payloads.append(payload)
+            return
+        error_payload = {
+            "ok": False,
+            "question": query,
+            "source": source,
+            "query_id": query_id,
+            "query_kind": query_kind,
+            "dataset_ids": target_dataset_ids,
+            "chunks": [],
+            "evidence": [],
+            "retrieval_status": status,
+            "retrieval_status_report": result.get("status_report"),
+            "error": result.get("error") or "retrieval failed",
+            "error_type": result.get("error_type"),
+            "runtime_retry_trace": retry_trace,
+        }
+        retrieval_errors.append(error_payload)
+        payloads.append(error_payload)
+
     for query_item in retrieval_queries:
         query = str(query_item["query"])
         query_id = str(query_item.get("id") or "query")
@@ -316,51 +436,92 @@ def _retrieve_query_payloads(
         source_prefix = str(query_item.get("source") or query_id)
         if fusion == "rrf" and len(dataset_ids) > 1:
             for dataset_id in dataset_ids:
-                raw = client.retrieve(
+                source = f"{source_prefix}:{query_id}:{dataset_id}"
+                result, retry_trace = _retrieve_once_with_runtime(
+                    client=client,
                     question=query,
                     dataset_ids=[dataset_id],
                     top_k=top_k,
                     similarity_threshold=similarity_threshold,
+                    retry_budget=retry_budget,
+                    retry_backoff_seconds=retry_backoff_seconds,
                 )
-                retrieval_calls += 1
-                chunks = normalize_retrieval_response(raw)
-                normalized_by_payload.append(chunks)
-                payloads.append(
-                    _build_retrieval_payload(
-                        question=query,
-                        source=f"{source_prefix}:{query_id}:{dataset_id}",
-                        query_id=query_id,
-                        query_kind=query_kind,
-                        dataset_ids=[dataset_id],
-                        chunks=chunks,
-                        include_raw=include_raw,
-                    )
+                record_result(
+                    query=query,
+                    query_id=query_id,
+                    query_kind=query_kind,
+                    source=source,
+                    target_dataset_ids=[dataset_id],
+                    result=result,
+                    retry_trace=retry_trace,
                 )
         else:
-            raw = client.retrieve(
+            source = f"{source_prefix}:{query_id}"
+            result, retry_trace = _retrieve_once_with_runtime(
+                client=client,
                 question=query,
                 dataset_ids=dataset_ids,
                 top_k=top_k,
                 similarity_threshold=similarity_threshold,
+                retry_budget=retry_budget,
+                retry_backoff_seconds=retry_backoff_seconds,
             )
-            retrieval_calls += 1
-            chunks = normalize_retrieval_response(raw)
-            normalized_by_payload.append(chunks)
-            payloads.append(
-                _build_retrieval_payload(
-                    question=query,
-                    source=f"{source_prefix}:{query_id}",
-                    query_id=query_id,
-                    query_kind=query_kind,
-                    dataset_ids=dataset_ids,
-                    chunks=chunks,
-                    include_raw=include_raw,
-                )
+            record_result(
+                query=query,
+                query_id=query_id,
+                query_kind=query_kind,
+                source=source,
+                target_dataset_ids=dataset_ids,
+                result=result,
+                retry_trace=retry_trace,
             )
+    runtime_partial_failure = build_runtime_partial_failure_report(
+        "ragflow_query_ask",
+        runtime_items,
+        success_statuses=("success",),
+        warning_statuses=("empty", "low_quality", "needs_refinement", "partial"),
+        failure_statuses=("error", "timeout"),
+        skipped_statuses=(),
+        timeout_statuses=("timeout",),
+    )
+    runtime_metrics = build_runtime_metrics_summary(
+        "ragflow_query_ask",
+        counters={
+            "planned_retrieval_count": len(runtime_items),
+            "retrieval_call_count": retrieval_calls,
+            "retrieval_error_count": len(retrieval_errors),
+            "retry_count": sum(int(trace.get("retry_count") or 0) for trace in retry_traces),
+        },
+        latency_samples_ms=[
+            float(attempt.get("latency_ms") or 0.0)
+            for trace in retry_traces
+            for attempt in trace.get("attempts", [])
+            if isinstance(attempt, dict)
+        ],
+    )
     if len(payloads) == 1 and not (fusion == "rrf" and len(dataset_ids) > 1):
-        return payloads, normalized_by_payload[0], None, retrieval_calls
+        chunks = normalized_by_payload[0] if normalized_by_payload else []
+        return (
+            payloads,
+            chunks,
+            None,
+            retrieval_calls,
+            runtime_partial_failure,
+            runtime_metrics,
+            retry_traces,
+            retrieval_errors,
+        )
     fusion_report = query_fusion_report(payloads, top_k=top_k)
-    return payloads, _fused_chunks(fusion_report), fusion_report, retrieval_calls
+    return (
+        payloads,
+        _fused_chunks(fusion_report),
+        fusion_report,
+        retrieval_calls,
+        runtime_partial_failure,
+        runtime_metrics,
+        retry_traces,
+        retrieval_errors,
+    )
 
 
 def _ask(args: argparse.Namespace) -> int:
@@ -377,6 +538,18 @@ def _ask(args: argparse.Namespace) -> int:
     agentic_trace = None
     host_synthesis_contract = None
     retrieval_payloads: list[dict[str, Any]] = []
+    retrieval_errors: list[dict[str, Any]] = []
+    runtime_retry_traces: list[dict[str, Any]] = []
+    runtime_partial_failure = build_runtime_partial_failure_report(
+        "ragflow_query_ask",
+        [],
+        success_statuses=("success",),
+        warning_statuses=("empty", "low_quality", "needs_refinement", "partial"),
+        failure_statuses=("error", "timeout"),
+        skipped_statuses=(),
+        timeout_statuses=("timeout",),
+    )
+    runtime_metrics = build_runtime_metrics_summary("ragflow_query_ask")
     agentic_active = mode == "agentic" and args.host_assisted
     rewrite_active = bool(args.multi_query or args.rewrite != "none") and not agentic_active
 
@@ -438,7 +611,16 @@ def _ask(args: argparse.Namespace) -> int:
             retrieval_queries = rewrite_plan["retrieval_queries"]
         retrieval_start = time.perf_counter()
         if retrieval_queries:
-            retrieval_payloads, chunks, fusion_report, retrieval_calls = _retrieve_query_payloads(
+            (
+                retrieval_payloads,
+                chunks,
+                fusion_report,
+                retrieval_calls,
+                runtime_partial_failure,
+                runtime_metrics,
+                runtime_retry_traces,
+                retrieval_errors,
+            ) = _retrieve_query_payloads(
                 client=client,
                 retrieval_queries=retrieval_queries,
                 dataset_ids=dataset_ids,
@@ -446,6 +628,8 @@ def _ask(args: argparse.Namespace) -> int:
                 similarity_threshold=effective_similarity_threshold,
                 fusion=args.fusion,
                 include_raw=args.include_raw,
+                retry_budget=args.retry_budget if args.retry_budget is not None else 1,
+                retry_backoff_seconds=args.retry_backoff_seconds,
             )
         else:
             chunks = []
@@ -461,6 +645,22 @@ def _ask(args: argparse.Namespace) -> int:
                 "retrieval_status_report": status_report,
             },
         )
+    if retrieval_errors and not chunks:
+        first_error = retrieval_errors[0]
+        status_report = first_error.get("retrieval_status_report")
+        if not isinstance(status_report, dict):
+            status_report = normalize_retrieval_status(error=first_error.get("error"))
+        return _error(
+            str(first_error.get("error") or "retrieval failed"),
+            json_output=args.json,
+            details={
+                "retrieval_status": status_report["status"],
+                "retrieval_status_report": status_report,
+                "runtime_partial_failure": runtime_partial_failure,
+                "runtime_metrics": runtime_metrics,
+                "retrievals": retrieval_payloads,
+            },
+        )
 
     total_duration_ms = (time.perf_counter() - total_start) * 1000
     finished_at = _utc_now()
@@ -473,6 +673,7 @@ def _ask(args: argparse.Namespace) -> int:
         chunks=chunks,
         evidence=evidence,
         intent_status=agentic_retrieval_status,
+        partial=bool(retrieval_errors),
     )
     if agentic_plan:
         agentic_trace = build_agentic_execution_trace(
@@ -520,6 +721,9 @@ def _ask(args: argparse.Namespace) -> int:
         trace["host_synthesis_contract"] = host_synthesis_contract
     if fusion_report:
         trace["fusion"] = fusion_report
+    trace["runtime_partial_failure"] = runtime_partial_failure
+    trace["runtime_metrics"] = runtime_metrics
+    trace["runtime_retry_traces"] = runtime_retry_traces
     _write_json(args.trace_json, trace)
     _write_text(args.trace_md, render_query_trace_markdown(trace))
     result = QueryResult(
@@ -538,6 +742,9 @@ def _ask(args: argparse.Namespace) -> int:
             "retrieval_status": status_report["status"],
             "retrieval_status_report": status_report,
             "chunk_count": len(chunks),
+            "runtime_partial_failure_status": runtime_partial_failure["summary"]["status"],
+            "runtime_failure_count": runtime_partial_failure["summary"]["failure_count"],
+            "runtime_timeout_count": runtime_partial_failure["summary"]["timeout_count"],
             "synthesis": "host-assisted" if args.host_assisted else "not-requested",
             "duration_ms": round(total_duration_ms, 3),
             "retrieval_ms": round(retrieval_duration_ms, 3),
@@ -557,6 +764,8 @@ def _ask(args: argparse.Namespace) -> int:
         "evidence": evidence,
         "retrieval_status": status_report["status"],
         "retrieval_status_report": status_report,
+        "runtime_partial_failure": runtime_partial_failure,
+        "runtime_metrics": runtime_metrics,
     }
     if retrieval_payloads and (agentic_plan or args.multi_query or args.rewrite != "none" or args.fusion == "rrf"):
         payload["retrievals"] = retrieval_payloads
@@ -2520,6 +2729,8 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--kb-manifest", help="Path to kb_manifest.json")
     ask.add_argument("--top-k", type=int)
     ask.add_argument("--similarity-threshold", type=float)
+    ask.add_argument("--retry-budget", type=int, default=1, help="Bounded retrieval retry attempts for live ask; defaults to 1")
+    ask.add_argument("--retry-backoff-seconds", type=float, default=0.0, help="Backoff seconds between retryable retrieval attempts")
     ask.add_argument("--fusion", choices=["none", "rrf"], default="none", help="Fuse per-dataset retrieval results when multiple dataset IDs are selected")
     ask.add_argument("--rewrite", choices=["none", "simple", "translate", "hyde"], default="none", help="Opt-in query rewrite planning before retrieval")
     ask.add_argument("--multi-query", help="JSON file with additional host-owned query variants")

@@ -33,6 +33,8 @@ from ragflow_skill_runtime import (  # noqa: E402
     HandoffError,
     RAGFlowClient,
     attach_benchmark_evaluation,
+    build_runtime_metrics_summary,
+    build_runtime_partial_failure_report,
     create_grounded_qa_suggestion_request,
     create_metadata_suggestion_request,
     create_optimization_cleanup_plan,
@@ -735,6 +737,8 @@ def _sanitize_governance_report(
 
 def _run(args: argparse.Namespace) -> int:
     try:
+        stage_results: list[dict[str, Any]] = []
+        stage_latency_ms: list[float] = []
         profile = load_profile(args.profile)
         doc_manifest = load_doc_manifest(args.doc_manifest) if args.doc_manifest else None
         _guard_quality_gate(doc_manifest, allow_blocked=args.allow_blocked)
@@ -761,22 +765,32 @@ def _run(args: argparse.Namespace) -> int:
 
         config = _load_config(args)
         client = RAGFlowClient(config)
+        stage_start = datetime.now(timezone.utc)
         dataset_response = client.create_dataset(args.kb_name, profile=profile.to_dataset_payload())
+        stage_latency_ms.append((datetime.now(timezone.utc) - stage_start).total_seconds() * 1000)
         dataset_id = extract_dataset_id(dataset_response)
+        stage_results.append({"label": "create_dataset", "status": "success"})
 
         uploaded = []
         document_ids: list[str] = []
         for doc in docs:
+            stage_start = datetime.now(timezone.utc)
             response = client.upload_document(dataset_id, doc.path)
+            stage_latency_ms.append((datetime.now(timezone.utc) - stage_start).total_seconds() * 1000)
             document_id = extract_uploaded_document_id(response)
             document_ids.append(document_id)
             uploaded.append((doc, document_id, "uploaded", None))
+            stage_results.append({"label": f"upload:{doc.path.name}", "status": "success"})
 
         parse_response = None
         live_states = {}
         if document_ids and not args.no_parse:
+            stage_start = datetime.now(timezone.utc)
             parse_response = client.trigger_parse(dataset_id, document_ids)
+            stage_latency_ms.append((datetime.now(timezone.utc) - stage_start).total_seconds() * 1000)
+            stage_results.append({"label": "trigger_parse", "status": "success"})
             if not args.no_wait:
+                stage_start = datetime.now(timezone.utc)
                 live_states = wait_for_document_states(
                     client,
                     dataset_id=dataset_id,
@@ -784,6 +798,13 @@ def _run(args: argparse.Namespace) -> int:
                     timeout=args.parse_timeout,
                     poll_interval=args.poll_interval,
                 )
+                stage_latency_ms.append((datetime.now(timezone.utc) - stage_start).total_seconds() * 1000)
+                failed_states = [
+                    str(item.get("status") or "")
+                    for item in live_states.values()
+                    if isinstance(item, Mapping) and str(item.get("status") or "").lower() not in {"done", "parsed", "success"}
+                ]
+                stage_results.append({"label": "wait_parse", "status": "warning" if failed_states else "success"})
                 uploaded = [
                     (
                         doc,
@@ -793,6 +814,31 @@ def _run(args: argparse.Namespace) -> int:
                     )
                     for doc, document_id, status, chunk_count in uploaded
                 ]
+            else:
+                stage_results.append({"label": "wait_parse", "status": "skipped"})
+        else:
+            stage_results.append({"label": "trigger_parse", "status": "skipped"})
+            stage_results.append({"label": "wait_parse", "status": "skipped"})
+
+        runtime_partial_failure = build_runtime_partial_failure_report(
+            "ragflow_kb_build_live",
+            stage_results,
+            success_statuses=("success",),
+            warning_statuses=("warning",),
+            failure_statuses=("error", "timeout"),
+            skipped_statuses=("skipped",),
+            timeout_statuses=("timeout",),
+        )
+        runtime_metrics = build_runtime_metrics_summary(
+            "ragflow_kb_build_live",
+            counters={
+                "stage_count": len(stage_results),
+                "document_count": len(uploaded),
+                "parse_triggered": 1 if document_ids and not args.no_parse else 0,
+                "parse_waited": 1 if document_ids and not args.no_parse and not args.no_wait else 0,
+            },
+            latency_samples_ms=stage_latency_ms,
+        )
 
         payload = make_kb_manifest_payload(
             base_url=config.base_url,
@@ -803,6 +849,8 @@ def _run(args: argparse.Namespace) -> int:
         )
         if metadata_summary:
             payload["metadata_summary"] = metadata_summary
+        payload["runtime_partial_failure"] = runtime_partial_failure
+        payload["runtime_metrics"] = runtime_metrics
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -816,6 +864,8 @@ def _run(args: argparse.Namespace) -> int:
                 "parse_triggered": not args.no_parse,
                 "parse_waited": not args.no_parse and not args.no_wait,
                 "parse_response": parse_response,
+                "runtime_partial_failure": runtime_partial_failure,
+                "runtime_metrics": runtime_metrics,
             }
         )
         return 0

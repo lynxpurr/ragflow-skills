@@ -1578,24 +1578,27 @@ keeping the raw evidence-map artifact focused on deterministic chunk mapping.
 `ragflow-kb-build inspect-kb` emits it for manifest-only not-checked rows and optional
 live parsed, failed, in-progress, and missing document rows without mutating RAGFlow.
 Broad checkpoint/resume helpers and the remaining cross-skill partial-failure rollout
-remain open Phase 31 work.
+are closed for the current Phase 31 public command inventory, including the approved live
+mutation/query rollout.
 
 `tools/runtime_resilience_inventory.py` now emits
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene as a static Phase
 31 governance surface. It reuses the public command inventory and classifies current
-runtime-helper coverage as 19 covered commands, 0 candidate commands, 2 deferred live
+runtime-helper coverage as 21 covered commands, 0 candidate commands, 0 deferred
 commands, and 67 not-applicable commands with no stale classification findings. Covered
 commands include the endpoint-report helper pilot, query fallback partial-failure reports,
-query-output cache reports, centroid build checkpoints, doc-to-md process cleanup
-reporting, backend probe/warmup reporting, bounded offline `doc-to-md split`
+live `ragflow-query ask` retry/partial-failure/metrics reporting, query-output cache
+reports, centroid build checkpoints, top-level live `ragflow-kb-build` stage
+partial-failure/metrics reporting, doc-to-md process cleanup reporting, backend
+probe/warmup reporting, bounded offline `doc-to-md split`
 checkpoint/resume, model-provider probe partial-failure reports, KB probe and inspect
 partial-failure reports, validate and snapshot-chunks partial-failure reports,
 grounded-QA validation and evidence-map partial-failure reports, and offline
 `ragflow-kb-build benchmark import` plus deterministic `ragflow-kb-build qa generate`
 checkpoint/resume plus offline `ragflow-kb-build profile experiment` and
 `ragflow-kb-build optimize --plan-only` checkpoint/resume. No public command surface
-remains in candidate status; the remaining resilience work is explicitly gated live
-mutation or future optional adapter scope.
+remains in candidate or deferred status; any future resilience expansion is future
+optional adapter scope.
 
 The final generated-Markdown audit is implemented in `tools/generated_markdown_audit.py`.
 It consumes the report-surface inventory, selects covered report surfaces with generated
@@ -1614,42 +1617,38 @@ sanitized JSON/Markdown rendering when `--redaction-report` is enabled, consumer
 acceptance or platform smoke coverage when release artifacts change, and generated-report
 hygiene.
 
-The active non-live Phase 31 candidate inventory is closed. The runtime-resilience
-inventory is the authoritative ledger: 19 command surfaces are currently `covered`, 0 are
-`candidate`, 2 are intentionally `deferred` live surfaces, and 67 are `not_applicable`.
+The active Phase 31 runtime-resilience inventory is closed. The runtime-resilience
+inventory is the authoritative ledger: 21 command surfaces are currently `covered`, 0 are
+`candidate`, 0 are `deferred`, and 67 are `not_applicable`.
 
 Finish the remaining gated work in this order:
 
 1. Keep the portable archive release path green while new work keeps deterministic,
    no-network defaults.
-2. Add remaining live mutation/query resilience tests only in credentialed environments
-   with exact confirmation, retained cleanup artifacts, and explicit approval.
-3. Add a local `serve` wrapper only after a concrete host workflow needs a persistent
+2. Add a local `serve` wrapper only after a concrete host workflow needs a persistent
    endpoint instead of one-shot CLI commands.
-4. Plan optional script-owned LLM adapters as a single backend track before any model call.
+3. Plan optional script-owned LLM adapters as a single backend track before any model call.
    Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries
    are complete; script-owned LLM/RAGAS backend execution remains deferred.
-5. Keep private dedao bridging outside public release artifacts unless a private adapter is
+4. Keep private dedao bridging outside public release artifacts unless a private adapter is
    explicitly needed.
 
 Current calibration:
 
-- The portable public CLI suite is complete for the non-live release path. The remaining
-  roadmap checkboxes are intentionally outside that default path: approved live disposable
-  validation, optional script-owned LLM/RAGAS backends, post-CLI deployment adapters, and
-  private dedao bridging.
-- The current open task list has 19 items across five gated categories: 3 local service or
+- The portable public CLI suite is complete for the release path, and the approved live
+  disposable validation track is closed. The remaining roadmap checkboxes are
+  intentionally outside that default path: optional script-owned LLM/RAGAS backends,
+  post-CLI deployment adapters, and private dedao bridging.
+- The current open task list has 18 items across four gated categories: 3 local service or
   post-CLI host-wrapper items, 4 other post-CLI product-adapter items, 7 optional
-  script-owned LLM/backend items, 1 live mutation/query resilience validation item, and 4
-  private dedao bridge items.
+  script-owned LLM/backend items, and 4 private dedao bridge items.
 - Primary `doc_manifest.json` and `kb_manifest.json` JSON Schema templates are now part of
   the release contract and are checked by default release hygiene. Broader report-schema
   migration tooling should be added only when compatibility pressure appears.
-- The next development decision should choose one explicit gate: an approved credentialed
-  live validation run, a concrete host workflow for `ragflow-query serve`, an approved
-  script-owned LLM/backend plan, or a private dedao bridge request. Without one of those
-  gates, maintenance should focus on keeping the archive and optional runtime-wheel release
-  path green.
+- The next development decision should choose one explicit gate: a concrete host workflow
+  for `ragflow-query serve`, an approved script-owned LLM/backend plan, or a private dedao
+  bridge request. Without one of those gates, maintenance should focus on keeping the
+  archive and optional runtime-wheel release path green.
 - Phase 37 starts that offline post-CLI adapter planning track in
   `docs/13-post-cli-adapter-planning.md`. Phase 37.1 now implements the runtime-only wheel
   packaging smoke/export gate without changing the canonical archive release path and

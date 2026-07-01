@@ -639,6 +639,60 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(payload["retrieval_status"], "success")
         self.assertEqual(payload["retrieval_status_report"]["schema"], "ragflow_retrieval_status_v1")
         self.assertEqual(payload["metadata"]["retrieval_status"], "success")
+        self.assertEqual(payload["runtime_partial_failure"]["schema"], "ragflow_runtime_partial_failure_report_v1")
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["status"], "completed")
+        self.assertEqual(payload["runtime_metrics"]["schema"], "ragflow_runtime_metrics_v1")
+        self.assertEqual(payload["metadata"]["runtime_partial_failure_status"], "completed")
+
+    def test_direct_mode_retries_retryable_retrieval_failure(self) -> None:
+        class FlakyClient(FakeQueryClient):
+            calls = 0
+
+            def retrieve(self, *, question, dataset_ids, top_k=5, similarity_threshold=None):
+                FlakyClient.calls += 1
+                if FlakyClient.calls == 1:
+                    raise TimeoutError("retrieval timed out")
+                return super().retrieve(
+                    question=question,
+                    dataset_ids=dataset_ids,
+                    top_k=top_k,
+                    similarity_threshold=similarity_threshold,
+                )
+
+        module = load_query_module()
+        module.RAGFlowClient = FlakyClient
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = module.main(
+                [
+                    "--base-url",
+                    "https://ragflow.example.test",
+                    "--api-key",
+                    "test-key",
+                    "ask",
+                    "question",
+                    "--mode",
+                    "direct",
+                    "--dataset-id",
+                    "ds-1",
+                    "--retry-budget",
+                    "2",
+                    "--include-trace",
+                    "--json",
+                ]
+            )
+        payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(FlakyClient.calls, 2)
+        self.assertEqual(payload["retrieval_status"], "success")
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["status"], "completed")
+        self.assertEqual(payload["runtime_metrics"]["counters"]["retrieval_call_count"], 2)
+        self.assertEqual(payload["runtime_metrics"]["counters"]["retry_count"], 1)
+        retry_trace = payload["trace"]["runtime_retry_traces"][0]
+        self.assertEqual(retry_trace["retry_budget"], 2)
+        self.assertEqual(retry_trace["retry_count"], 1)
+        self.assertEqual(retry_trace["final_status"], "success")
 
     def test_direct_mode_marks_empty_retrieval_status(self) -> None:
         class EmptyClient(FakeQueryClient):

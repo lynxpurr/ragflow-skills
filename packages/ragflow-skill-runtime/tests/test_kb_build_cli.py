@@ -336,6 +336,46 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["kb_name"], "kb:test")
         self.assertEqual(len(payload["documents"]), 1)
 
+    def test_build_live_path_reports_runtime_resilience_with_fake_client(self) -> None:
+        module = load_build_module()
+        FakeOptimizeBuildClient.instances = []
+        module.RAGFlowClient = FakeOptimizeBuildClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "docs"
+            input_dir.mkdir()
+            (input_dir / "sample.md").write_text("# Title\n\nKnown answer\n", encoding="utf-8")
+            output = root / "kb_manifest.json"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--input",
+                        str(input_dir),
+                        "--kb-name",
+                        "kb:test",
+                        "--profile",
+                        str(PROFILE_PATH),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "test-key",
+                        "--output",
+                        str(output),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            manifest = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(payload["runtime_partial_failure"]["schema"], "ragflow_runtime_partial_failure_report_v1")
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["status"], "completed")
+        self.assertEqual(payload["runtime_metrics"]["schema"], "ragflow_runtime_metrics_v1")
+        self.assertEqual(payload["runtime_metrics"]["counters"]["document_count"], 1)
+        self.assertEqual(manifest["runtime_partial_failure"]["summary"]["status"], "completed")
+        self.assertEqual(manifest["runtime_metrics"]["counters"]["parse_triggered"], 1)
+
     def test_build_dry_run_accepts_doc_manifest_paths_relative_to_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             handoff = Path(tmp) / "handoff"

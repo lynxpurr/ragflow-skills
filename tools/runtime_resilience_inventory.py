@@ -116,6 +116,12 @@ _COVERED = {
         rationale="Plan-only optimization can batch candidate-profile plans with checkpoint/resume and partial-run summaries without enabling live disposable KB creation.",
         next_action="Keep optimize --execute behind readiness, exact confirmation, and cleanup artifact gates.",
     ),
+    "ragflow-kb-build": RuntimeClassification(
+        status="covered",
+        features=("metrics", "partial_failure"),
+        rationale="Live KB build records create/upload/parse/wait stage outcomes and metrics while leaving mutating retries disabled to avoid duplicate side effects.",
+        next_action="Keep live build validation behind disposable KBs, exact cleanup confirmation, and post-cleanup read-back verification.",
+    ),
     "ragflow-query cache-report": RuntimeClassification(
         status="covered",
         features=("query_output_cache",),
@@ -140,24 +146,17 @@ _COVERED = {
         rationale="Offline fallback profiles emit ragflow_runtime_partial_failure_report_v1 for timeout, malformed, skipped, and partial cases.",
         next_action="Keep fallback fixtures deterministic and offline.",
     ),
+    "ragflow-query ask": RuntimeClassification(
+        status="covered",
+        features=("metrics", "partial_failure", "retry"),
+        rationale="Live query execution records retrieval-level partial failures, bounded retry traces, and retrieval metrics without invoking script-owned synthesis.",
+        next_action="Keep retry budgets explicit and preserve host-assisted evidence-only behavior.",
+    ),
 }
 
 _CANDIDATES: dict[str, RuntimeClassification] = {}
 
-_DEFERRED = {
-    "ragflow-kb-build": RuntimeClassification(
-        status="deferred",
-        features=("checkpoint_resume", "partial_failure", "retry"),
-        rationale="Live KB build is mutating and should wait until offline/read-only helpers are stable and explicitly gated.",
-        next_action="Do not add new mutation behavior while closing Phase 31 governance.",
-    ),
-    "ragflow-query ask": RuntimeClassification(
-        status="deferred",
-        features=("partial_failure", "retry"),
-        rationale="Live query execution can use runtime helpers later, but endpoint-report and fallback-test are safer pilot surfaces.",
-        next_action="Defer broad live query resilience until read-only coverage is committed.",
-    ),
-}
+_DEFERRED: dict[str, RuntimeClassification] = {}
 
 
 def _utc_now() -> str:

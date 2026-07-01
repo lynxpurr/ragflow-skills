@@ -58,11 +58,11 @@ Partially completed and still active:
     backend execution remain future adapters.
 - Phase 31 runtime resilience
   - Report redaction and generated-report safety are closed for the current inventory.
-  - Runtime helper coverage currently tracks 88 public command surfaces: 19 `covered`,
-    0 `candidate`, 2 `deferred`, and 67 `not_applicable`.
-  - The bounded non-live checkpoint/resume and partial-failure candidate inventory is
-    closed; remaining resilience work is explicitly gated live mutation or future
-    adapter scope.
+  - Runtime helper coverage currently tracks 88 public command surfaces: 21 `covered`,
+    0 `candidate`, 0 `deferred`, and 67 `not_applicable`.
+  - The bounded non-live checkpoint/resume and partial-failure candidate inventory plus
+    the approved live mutation/query helper rollout are closed; any future resilience
+    expansion is future adapter scope.
 
 Deferred or outside the active public-suite completion path:
 
@@ -71,8 +71,8 @@ Deferred or outside the active public-suite completion path:
   LLM/RAGAS evaluators must stay disabled until explicit LLM config and deterministic
   fixtures exist. Metadata suggestions, grounded-QA suggestions, and agentic-answer
   synthesis now have no-LLM request/review boundaries, but no script-owned model call.
-- Further live mutation/query resilience checks remain gated by credentials plus explicit
-  user approval.
+- Any future live mutation/query resilience checks remain gated by credentials plus
+  explicit user approval.
 - Wheel packaging now has a runtime-only no-network smoke/export gate. Web/UI wrappers,
   provider abstractions, and hosted service clients remain backlog items after the
   portable CLI suite is complete.
@@ -84,21 +84,19 @@ Completion priorities:
 2. Add optional LLM adapters as request/review boundaries before any script-owned model
    call. Metadata, grounded-QA, agentic-answer, and answer-evaluator boundaries are
    complete.
-3. Add any remaining live mutation/query resilience tests only when credentials, exact
-   confirmation, retained cleanup artifacts, and explicit approval are present.
-4. Consider `serve`, wheel packaging, provider abstractions, remote conversion clients,
+3. Consider `serve`, wheel packaging, provider abstractions, remote conversion clients,
    and web/API wrappers only as post-CLI product adapters.
 
 Progress assessment:
 
-- Roadmap checklist status is 544 completed items out of 563 tracked items, about 97%.
+- Roadmap checklist status is 545 completed items out of 563 tracked items, about 97%.
 - The current non-live public CLI suite is complete for the planned portable archive
   release path: core commands, release packaging, redaction, report inventories, runtime
   helper pilots, contract gates, installed archive smoke, and primary manifest JSON Schema
   checks are all closed.
-- The 19 remaining open checklist items are not ordinary implementation gaps. They are
-  explicitly gated live work, optional script-owned LLM/backend work, Phase 37 post-CLI
-  adapter decisions/implementation, or private dedao bridge work outside the public release
+- The 18 remaining open checklist items are not ordinary implementation gaps. They are
+  optional script-owned LLM/backend work, Phase 37 post-CLI adapter
+  decisions/implementation, or private dedao bridge work outside the public release
   boundary.
 
 ## Open Task Review
@@ -113,7 +111,6 @@ normal offline continuation unless their gate is satisfied.
 | Local service / post-CLI host wrapper | 3 | Phase 3 optional `serve`, Backlog post-CLI service adapters, Phase 37.2 `serve` design gate | A real host workflow needs a persistent local tool endpoint instead of one-shot CLI commands | Collect the host workflow, then write a no-network `serve` design gate before code. |
 | Other post-CLI product adapters | 4 | Remote conversion client, provider abstraction, reranker abstraction, web/API wrapper | Known endpoint/provider/product requirements plus fake fixtures and acceptance gates | Keep deferred; do not add generic adapter contracts. |
 | Optional script-owned LLM/backend execution | 7 | Grounded-QA LLM adapter, agentic-answer execution, reflection, evidence-only synthesis, LLM/RAGAS evaluator, related Phase 30 synthesis backlog | Explicit LLM config, deterministic fixtures, advisory-output marking, citation-audit compatibility, and redaction gates | Plan as one adapter track before any script-owned model call. |
-| Live mutation/query resilience validation | 1 | Phase 31 live mutation/query resilience | Credentials, exact user confirmation, disposable KB IDs, retained cleanup artifacts, and post-cleanup verification | Run only as an approved live validation track. |
 | Private dedao bridge | 4 | Preserve current dedao skills, optional private adapter, private handoff shape, no public references | A private adapter is explicitly needed and remains outside public release artifacts | Keep outside public `skills/`; consume public handoff contracts only. |
 
 ## Release Path Checkpoint
@@ -187,6 +184,21 @@ Phase 27 live enrichment checkpoint:
   `optimize summarize` and `optimize cleanup-plan`; sanitized/redacted plan copies are
   suitable for sharing, but redacted artifact paths are not reusable as workflow state.
 
+Phase 31 live runtime resilience checkpoint:
+
+- A final approved local live validation run was retained under
+  `/tmp/ragflow-live-resilience-20260701`.
+- Read-only `ragflow-kb-build probe` passed before mutation.
+- Top-level `ragflow-kb-build` created one disposable KB, uploaded one tiny Markdown
+  fixture, triggered parse, waited for completion, and emitted `runtime_partial_failure`
+  plus `runtime_metrics` in both stdout and `kb_manifest.json`.
+- `ragflow-query ask --mode direct` retrieved the fixture marker with explicit retry
+  budget enabled and emitted retrieval-level `runtime_partial_failure`,
+  `runtime_metrics`, and runtime metadata in stdout and trace artifacts.
+- Cleanup used exact dataset ID and KB name confirmation, the delete response reported
+  one successful deletion, and post-cleanup read-back verification found zero remaining
+  matching dataset IDs or names.
+
 ## Remaining Work Ledger
 
 This ledger reviews the open task list without duplicating it. The authoritative checkboxes
@@ -194,10 +206,10 @@ remain in their owning phases below.
 
 | Track | Existing open items | Current status | Completion rule |
 | --- | --- | --- | --- |
-| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory closed | Runtime inventory stays at 19 `covered`, 0 `candidate`, 2 intentionally `deferred`, and 67 `not_applicable` command surfaces. |
+| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory and approved live mutation/query coverage closed | Runtime inventory stays at 21 `covered`, 0 `candidate`, 0 `deferred`, and 67 `not_applicable` command surfaces. |
 | Document split packaging | Phase 16 optional manifest rewrite/package mode | Complete for current CLI scope | Split outputs can be resumed and optionally repackaged without breaking existing segment-directory ingestion. |
 | Query service and agentic adapters | Phase 3 `serve`, Phase 21/30 script-owned synthesis and reflection | Host-assisted agentic retrieval and agentic-answer request/review complete; local service and script-owned answer synthesis deferred | Implement script-owned synthesis only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
-| Live disposable optimization | Phase 31 live mutation/query resilience | Probe, basic disposable optimization build/validate/cleanup, and Phase 27 enrichment validation are complete; broad live mutation/query resilience remains gated | Requires credentials, explicit confirmation, exact cleanup confirmation, retained dataset IDs, and user approval. |
+| Live disposable optimization | None currently open; Phase 31 live mutation/query resilience is closed | Probe, disposable optimization build/validate/cleanup, Phase 27 enrichment validation, and Phase 31 live runtime resilience are complete | Future live runs still require credentials, explicit confirmation, exact cleanup confirmation, retained artifacts, and user approval. |
 | Optional LLM-assisted adapters | Phase 26 grounded QA, Phase 30 agentic answer synthesis, Phase 30 LLM/RAGAS-style evaluator | Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries complete; script-owned LLM/RAGAS backends remain deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
 | Contract and manifest schema gates | Phase 33 release governance | Complete for primary handoff manifests and current release reports | Keep `tools/manifest_schema_check.py`, schema identity, rename governance, release hygiene, installed archive smoke, consumer acceptance, and platform smoke green whenever public contracts change. |
 | Packaging and platform adapters | Phase 37 plus backlog wheel path, `serve`, remote conversion service client, provider abstractions, reranker abstraction, web/API wrapper | Runtime wheel smoke implemented and priority validated against controlled CLI-agent handoff; other adapters deferred | Rank adapters by host workflow, release impact, testability, and risk before implementation; keep archive CLI release green. |
@@ -205,18 +217,15 @@ remain in their owning phases below.
 
 Recommended completion queue:
 
-1. If the user approves additional live disposable validation, run the remaining live
-   mutation/query resilience track with disposable KBs, exact cleanup confirmation,
-   retained artifacts, and post-cleanup verification.
-2. If a concrete host needs a persistent local endpoint, run Phase 37.2 as a design-only
+1. If a concrete host needs a persistent local endpoint, run Phase 37.2 as a design-only
    `ragflow-query serve` gate first: lifecycle, auth boundary, health/direct/host-assisted
    schemas, shutdown behavior, redaction, and local fake-client smoke.
-3. If optional script-owned LLM/RAGAS execution is approved, plan metadata/grounded-QA,
+2. If optional script-owned LLM/RAGAS execution is approved, plan metadata/grounded-QA,
    agentic-answer, reflection, and evaluator backends together with deterministic fixtures,
    advisory-output marking, citation-audit compatibility, and redaction gates.
-4. If a private dedao bridge is needed, implement it outside public release artifacts and
+3. If a private dedao bridge is needed, implement it outside public release artifacts and
    make it consume the public `doc_manifest.json` handoff shape.
-5. Otherwise, keep the public CLI/archive/wheel release path green with periodic release
+4. Otherwise, keep the public CLI/archive/wheel release path green with periodic release
    validation rather than adding ungated product adapters.
 
 ## Phase 0: Architecture Skeleton
@@ -1244,7 +1253,7 @@ Tasks:
   optimize plan-only, and document split.
 - [x] Add partial-failure report schemas for verified non-live or read-only timeout,
   partial, skipped, warning, invalid, and not-checked outcomes.
-- [ ] Add live mutation/query resilience only after explicit approval for live
+- [x] Add live mutation/query resilience only after explicit approval for live
   `ragflow-kb-build` and `ragflow-query ask` helper rollout.
 - [x] Add a shared report sanitizer for API keys, bearer tokens, configured private hosts, home paths, and local config paths.
 - [x] Add `--redaction-report` to relevant commands.
@@ -1297,9 +1306,10 @@ transcripts.
 `tools/runtime_resilience_inventory.py` now emits
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene to track Phase 31
 runtime helper coverage without broadening live behavior. The current inventory names 88
-public commands: 19 `covered`, 0 `candidate`, 2 `deferred`, and 67 `not_applicable`, with
+public commands: 21 `covered`, 0 `candidate`, 0 `deferred`, and 67 `not_applicable`, with
 no stale classification findings. Covered surfaces include `ragflow-query endpoint-report`,
-`ragflow-query fallback-test`, `ragflow-query cache-report`, `ragflow-query centroid build`,
+`ragflow-query ask`, `ragflow-query fallback-test`, `ragflow-query cache-report`,
+`ragflow-query centroid build`, top-level live `ragflow-kb-build`,
 `ragflow-doc-to-md` process cleanup reporting, `ragflow-doc-to-md backend probe`,
 `ragflow-doc-to-md backend warmup`, `ragflow-doc-to-md split` checkpoint/resume,
 `ragflow-kb-build model-providers probe`,
@@ -1309,8 +1319,9 @@ no stale classification findings. Covered surfaces include `ragflow-query endpoi
 checkpoint/resume, deterministic `ragflow-kb-build qa generate` checkpoint/resume, and
 offline `ragflow-kb-build profile experiment` and `ragflow-kb-build optimize --plan-only`
 checkpoint/resume.
-No public command surface remains in candidate status; the remaining Phase 31 work is
-gated live mutation or future optional adapter scope.
+No public command surface remains in candidate or deferred status; the approved Phase 31
+live mutation/query resilience rollout is closed, and any future expansion is optional
+adapter scope.
 
 Recommended next slices:
 
@@ -1341,13 +1352,14 @@ Recommended next slices:
    the schema for mapped, unmapped, partially mapped, invalid, and warning evidence-map
    rows.
 3. Keep broad checkpoint/resume helpers and cross-skill partial-failure rollout bounded
-   to the verified non-live Phase 31 surfaces. Offline `ragflow-kb-build benchmark import`,
+   to the verified Phase 31 surfaces. Offline `ragflow-kb-build benchmark import`,
    `ragflow-kb-build qa generate`, `ragflow-kb-build profile experiment`, and
    `ragflow-kb-build optimize --plan-only`
    checkpoint/resume are now covered, `ragflow-doc-to-md split` now supports bounded
-   checkpoint/resume, and `inspect-kb`, `validate`, `snapshot-chunks`, `qa validate`,
-   plus `qa map-evidence` now have partial-failure coverage. The Phase 31 non-live
-   inventory now records 19 `covered`, 0 `candidate`, 2 explicitly `deferred`, and 67
+   checkpoint/resume, `inspect-kb`, `validate`, `snapshot-chunks`, `qa validate`,
+   plus `qa map-evidence` now have partial-failure coverage, and approved live
+   `ragflow-kb-build` plus `ragflow-query ask` now record runtime resilience blocks. The
+   Phase 31 inventory now records 21 `covered`, 0 `candidate`, 0 `deferred`, and 67
    `not_applicable` public command surfaces in
    `ragflow_runtime_resilience_inventory_v1`.
 
