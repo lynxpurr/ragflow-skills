@@ -418,6 +418,9 @@ requires repeated exact `--confirm-dataset-id` plus matching `--confirm-kb-name`
 every ready target before deleting those datasets.
 Cleanup deletion uses RAGFlow's batch dataset-delete endpoint and treats non-zero API
 response codes as failed cleanup rather than successful deletion.
+For live operational workflows, keep the local workflow plan with raw artifact paths until
+summarize and cleanup are complete. Redacted plan copies are shareable reports, but
+redacted artifact paths are not reusable as follow-up command state.
 
 ## Feature Design 5: Chunk Snapshot And Strict Chunk Recall
 
@@ -498,6 +501,11 @@ MVP profile comparison and optimization summary reports also surface query laten
 time, empty-result rate, average chunk count, and benchmark quality scores when those
 fields are present in existing validation or benchmark reports. They do not collect live
 timing data on their own.
+Phase 27 live enrichment validation ran on 2026-07-01 with explicit approval, one tiny
+fixture, two disposable KBs, and retained artifacts under
+`/tmp/ragflow-live-enrichment-20260701`. A baseline profile and an `auto_keywords=1`
+profile both built, parsed, passed two-query benchmark validation, summarized successfully,
+and were deleted with exact cleanup confirmations plus read-back verification.
 
 Enrichment reports should also call out pollution risk:
 
@@ -1614,8 +1622,8 @@ Finish the remaining gated work in this order:
 
 1. Keep the portable archive release path green while new work keeps deterministic,
    no-network defaults.
-2. Add live disposable tests only in credentialed environments with exact confirmation,
-   retained cleanup artifacts, and explicit approval.
+2. Add remaining live mutation/query resilience tests only in credentialed environments
+   with exact confirmation, retained cleanup artifacts, and explicit approval.
 3. Add a local `serve` wrapper only after a concrete host workflow needs a persistent
    endpoint instead of one-shot CLI commands.
 4. Plan optional script-owned LLM adapters as a single backend track before any model call.
@@ -1630,9 +1638,9 @@ Current calibration:
   roadmap checkboxes are intentionally outside that default path: approved live disposable
   validation, optional script-owned LLM/RAGAS backends, post-CLI deployment adapters, and
   private dedao bridging.
-- The current open task list has 20 items across five gated categories: 3 local service or
+- The current open task list has 19 items across five gated categories: 3 local service or
   post-CLI host-wrapper items, 4 other post-CLI product-adapter items, 7 optional
-  script-owned LLM/backend items, 2 live enrichment/resilience validation items, and 4
+  script-owned LLM/backend items, 1 live mutation/query resilience validation item, and 4
   private dedao bridge items.
 - Primary `doc_manifest.json` and `kb_manifest.json` JSON Schema templates are now part of
   the release contract and are checked by default release hygiene. Broader report-schema
