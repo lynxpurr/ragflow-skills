@@ -91,12 +91,12 @@ Completion priorities:
 
 Progress assessment:
 
-- Roadmap checklist status is 538 completed items out of 563 tracked items, about 96%.
+- Roadmap checklist status is 539 completed items out of 563 tracked items, about 96%.
 - The current non-live public CLI suite is complete for the planned portable archive
   release path: core commands, release packaging, redaction, report inventories, runtime
   helper pilots, contract gates, installed archive smoke, and primary manifest JSON Schema
   checks are all closed.
-- The 25 remaining open checklist items are not ordinary implementation gaps. They are
+- The 24 remaining open checklist items are not ordinary implementation gaps. They are
   explicitly gated live work, optional script-owned LLM/backend work, Phase 37 post-CLI
   adapter decisions/implementation, or private dedao bridge work outside the public release
   boundary.
@@ -114,7 +114,7 @@ remain in their owning phases below.
 | Live disposable optimization | Phase 17 live probe tests, Phase 26 live disposable tests, Phase 27 live enrichment tests | Build, validation, cleanup execution, and live-readiness gates complete for current CLI scope; live tests deferred | Requires credentials, explicit confirmation, exact cleanup confirmation, retained dataset IDs, and user approval. |
 | Optional LLM-assisted adapters | Phase 26 grounded QA, Phase 30 agentic answer synthesis, Phase 30 LLM/RAGAS-style evaluator | Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries complete; script-owned LLM/RAGAS backends remain deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
 | Contract and manifest schema gates | Phase 33 release governance | Complete for primary handoff manifests and current release reports | Keep `tools/manifest_schema_check.py`, schema identity, rename governance, release hygiene, installed archive smoke, consumer acceptance, and platform smoke green whenever public contracts change. |
-| Packaging and platform adapters | Phase 37 plus backlog wheel path, `serve`, remote conversion service client, provider abstractions, reranker abstraction, web/API wrapper | Phase 37.1 runtime wheel smoke implemented; other adapters deferred | Rank adapters by host workflow, release impact, testability, and risk before implementation; keep archive CLI release green. |
+| Packaging and platform adapters | Phase 37 plus backlog wheel path, `serve`, remote conversion service client, provider abstractions, reranker abstraction, web/API wrapper | Runtime wheel smoke implemented and priority validated against controlled CLI-agent handoff; other adapters deferred | Rank adapters by host workflow, release impact, testability, and risk before implementation; keep archive CLI release green. |
 | Private dedao bridge | Deferred private adapter tasks | Outside public release scope | Keep private examples and adapter logic outside public `skills/`; consume only public handoff shapes. |
 
 Recommended completion queue:
@@ -1627,7 +1627,7 @@ Tasks:
   testability, and release impact.
 - [x] Recommend wheel packaging as the lowest-risk first implementation slice unless a
   real host workflow requires `ragflow-query serve` first.
-- [ ] Validate the selected adapter priority against a concrete user or host workflow.
+- [x] Validate the selected adapter priority against a concrete user or host workflow.
 - [x] Implement Phase 37.1 wheel packaging design gate with no-network build/install smoke.
 - [ ] Implement Phase 37.2 `ragflow-query serve` design gate only if a host workflow needs
   a local service wrapper.
@@ -1647,7 +1647,10 @@ temporary environment, and imports `ragflow_skill_runtime` without relying on ed
 installs. On hosts with `python3-venv`, the installer uses a temporary venv; on minimal
 Ubuntu hosts without `ensurepip`, it falls back to `pip install --target` plus
 `python -I` import smoke. The gate is optional and does not replace the canonical public
-skill archive release path.
+skill archive release path. The selected priority is validated against the current
+Hermes/OpenClaw/Claude Code/opencode-style controlled CLI-agent handoff workflow; `serve`
+remains deferred until a host needs a persistent local tool endpoint instead of one-shot
+artifact-producing CLI commands.
 
 ## Definition of Done
 

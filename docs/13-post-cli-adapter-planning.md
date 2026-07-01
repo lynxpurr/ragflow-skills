@@ -31,10 +31,36 @@ manager, model-provider, or web-service assumptions mandatory.
 | Reranker adapter | Improve retrieval ranking with optional external rerank service | Medium-high | Medium with saved query fixtures and fake adapter | Affects query quality surfaces; must preserve direct retrieval defaults | Defer until route/fusion users need it |
 | Web/API wrapper | Hosted UI/API around the suite | High | Medium-low without product requirements | Creates new deployment surface | Defer until product workflow is defined |
 
+## Validated Host Workflow
+
+Concrete workflow used for the current priority decision:
+
+- A user gives the release archives or repository checkout to a controllable CLI agent such
+  as Hermes, OpenClaw, Claude Code, or opencode.
+- The host agent reads the public skill docs, prepares local config from user-provided
+  RAGFlow/MinerU settings, and runs one-shot CLI commands that produce handoff artifacts.
+- The host can preserve artifact paths between steps and can pass config through files,
+  environment variables, or explicit CLI flags.
+
+Decision:
+
+- Keep the archive CLI path canonical. It has no daemon lifecycle, port allocation,
+  shutdown, auth boundary, or background-log redaction problem, and it already matches the
+  Hermes/OpenClaw/Claude Code/opencode handoff model.
+- Keep runtime wheel packaging as an optional adapter gate. It helps hosts that can install
+  Python packages or want to verify non-editable runtime installation, but it does not
+  replace vendored runtime archives.
+- Do not implement `ragflow-query serve` yet. A local service wrapper becomes justified
+  only when a real host cannot efficiently spawn CLI commands, needs a persistent tool
+  endpoint, or has request/response lifecycle requirements that the current artifact-based
+  CLI cannot satisfy.
+- Keep remote conversion, provider abstraction, reranker adapter, and web/API wrapper
+  deferred until their endpoint/provider/fixture shapes are known.
+
 ## Recommended Track
 
-Start with a docs-and-test design for wheel packaging unless the user explicitly chooses a
-host workflow that needs `ragflow-query serve`.
+The validated near-term track is runtime wheel packaging first, unless the user explicitly
+chooses a host workflow that needs `ragflow-query serve`.
 
 Wheel packaging is the lowest-risk first adapter because it can be validated offline:
 

@@ -1636,7 +1636,8 @@ Current calibration:
   and web/API wrappers against real host workflows.
 - Phase 37 starts that offline post-CLI adapter planning track in
   `docs/13-post-cli-adapter-planning.md`. Phase 37.1 now implements the runtime-only wheel
-  packaging smoke gate without changing the canonical archive release path. The
+  packaging smoke gate without changing the canonical archive release path and validates
+  that priority against the current controlled CLI-agent handoff workflow. The
   `ragflow-query serve` command remains the next adapter design candidate only if a
   concrete host workflow needs a local service wrapper.
 
