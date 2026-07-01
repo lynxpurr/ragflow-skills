@@ -306,6 +306,18 @@ Priority guidance:
 4. Web/API wrapper should usually stay outside the public skill suite until product
    workflow, auth, lifecycle, and deployment responsibilities are known.
 
+Remote conversion intake status (2026-07-02):
+
+| Intake field | Current finding |
+| --- | --- |
+| Adapter candidate | Remote conversion client. |
+| Product or host workflow | Current host-agent workflows still fit `ragflow-doc-to-md` one-shot CLI conversion. No separate product-owned conversion API has been identified. |
+| Existing coverage | The suite already supports generic JSON remote conversion, MinerU Agent API task polling, synchronous multipart `/parse`, local MinerU CLI, backend probe, backend warmup, redaction sidecars, consumer acceptance coverage, and strict-vendor platform smoke coverage. |
+| Current gap | No uncovered converter protocol is known yet. A new client would need a concrete contract not covered by the existing generic remote or MinerU backends, such as an async job protocol with different task URLs, custom multipart fields, signed upload/download flow, archive result package, or extra OCR/layout metadata contract. |
+| Offline fixtures | Not ready. A future implementation must start with a fake server that covers success, HTTP error, timeout, malformed response, auth failure, and redacted reports. |
+| Public surface impact | Not ready. The smallest likely impact would be one optional backend mode or a stricter protocol option on `ragflow-doc-to-md`; defaults must remain unchanged. |
+| Gate decision | No-go for code implementation until a user-owned endpoint and fixture shape are recorded. Keep the existing `remote`, `mineru`, `mineru-sync`, and `mineru-cli` paths as the supported conversion adapters. |
+
 Implementation acceptance checklist:
 
 - A completed intake identifies one adapter, one concrete contract, and one owner workflow.
