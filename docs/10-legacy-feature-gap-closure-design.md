@@ -1635,9 +1635,10 @@ Current calibration:
   wheel packaging, provider abstractions, remote conversion clients, reranker adapters,
   and web/API wrappers against real host workflows.
 - Phase 37 starts that offline post-CLI adapter planning track in
-  `docs/13-post-cli-adapter-planning.md`. Wheel packaging is currently the lowest-risk
-  first implementation slice unless a concrete host workflow requires `ragflow-query serve`
-  first.
+  `docs/13-post-cli-adapter-planning.md`. Phase 37.1 now implements the runtime-only wheel
+  packaging smoke gate without changing the canonical archive release path. The
+  `ragflow-query serve` command remains the next adapter design candidate only if a
+  concrete host workflow needs a local service wrapper.
 
 ## Implementation Notes And Pitfalls
 
@@ -1714,6 +1715,7 @@ This order kept the foundation document-centric before adding more complex query
 LLM-assisted behavior, then closed release governance, post-ingest operational guidance,
 and generated-report safety. After the current Phase 36 closure, remaining completion work
 should prioritize explicitly gated live validation, or, when live mutation is not approved,
-Phase 37 post-CLI adapter planning before local service, packaging, provider, reranker, and
-web/API product adapters. Script-owned LLM/RAGAS evaluator execution remains deferred
-behind explicit config, deterministic fixtures, redaction, and release gates.
+Phase 37 post-CLI adapter planning before local service, provider, reranker, and web/API
+product adapters. The runtime wheel smoke gate is implemented as an optional adapter check;
+script-owned LLM/RAGAS evaluator execution remains deferred behind explicit config,
+deterministic fixtures, redaction, and release gates.

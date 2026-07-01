@@ -24,7 +24,7 @@ manager, model-provider, or web-service assumptions mandatory.
 
 | Candidate | Primary user value | Risk | Testability | Release impact | Current recommendation |
 | --- | --- | --- | --- | --- | --- |
-| Wheel packaging | Easier install for platforms that support Python packages | Low | High: build/install/import smoke in temp venv | Adds package artifact, no command behavior change | Best first implementation slice if distribution friction is the problem |
+| Wheel packaging | Easier install for platforms that support Python packages | Low | High: build/install/import smoke in a temp venv or isolated target install | Adds package artifact, no command behavior change | Best first implementation slice if distribution friction is the problem |
 | `ragflow-query serve` | Local HTTP/tool endpoint for OpenClaw/Hermes-style integration | Medium | Medium: local server smoke, lifecycle and port handling | Adds optional long-running mode; must stay disabled by default | Design next, implement only for a real host workflow |
 | Remote conversion client | Integrate user-owned conversion services behind `ragflow-doc-to-md` | Medium | High with fake server fixtures | Adds backend behavior and config surface | Useful when a reachable converter exists; keep no default endpoint |
 | Provider abstraction | Normalize model/embedding/rerank provider contracts | Medium | Medium with fake adapters | Adds adapter contracts and compatibility burden | Plan after a concrete provider integration is needed |
@@ -39,7 +39,7 @@ host workflow that needs `ragflow-query serve`.
 Wheel packaging is the lowest-risk first adapter because it can be validated offline:
 
 - build a local wheel/sdist for `ragflow-skill-runtime`;
-- install into a clean temporary virtual environment;
+- install into a clean temporary venv or isolated target directory;
 - run import and CLI bootstrap smoke without editable installs;
 - keep public skill archives unchanged unless a later release explicitly publishes wheels.
 
@@ -49,14 +49,30 @@ schemas, shutdown behavior, and no-network defaults before implementation.
 
 ## Phase 37.1: Wheel Packaging Design Gate
 
-Planned outputs:
+Implementation status: complete for the runtime-only design gate.
+
+Wheel packaging starts with `ragflow-skill-runtime` only. Public skill archives remain the
+canonical release artifact because they vendor the runtime and work without package
+installation. Public skill entrypoints, console scripts, and wheel publication stay out of
+scope until a target platform explicitly needs package-manager installation.
+
+Implemented outputs:
 
 - A packaging design section that decides wheel scope: runtime-only first, public skill
   entrypoints later.
-- A no-network wheel build/install smoke command.
+- A no-network wheel build/install smoke command:
+  `python3 tools/wheel_packaging_smoke.py --work-dir /tmp/ragflow-wheel-smoke --overwrite`.
 - A release-governance rule that wheel artifacts are optional and do not replace public
   skill archives.
-- Focused tests that prove no editable install is required.
+- Focused tests that prove no editable install is required:
+  `packages/ragflow-skill-runtime/tests/test_wheel_packaging_smoke.py`.
+
+The smoke command builds with `pip wheel --no-index --no-deps --no-build-isolation`, then
+installs the produced wheel without an index and imports `ragflow_skill_runtime` from the
+installed location. It prefers a temporary venv when `python3-venv` is available. On
+minimal Ubuntu hosts without `ensurepip`, it falls back to `pip install --target` plus
+`python -I` with an explicit temporary `sys.path` entry, which still avoids editable
+installs and user-site imports during the runtime import smoke.
 
 Exit criteria:
 

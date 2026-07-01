@@ -76,6 +76,22 @@ python3 tools/export_release_archives.py --dist dist --output-dir release-artifa
 
 Do not commit `dist/` or `release-artifacts/`.
 
+## Optional Wheel Smoke
+
+The canonical public release path is still the per-skill archive export above. Wheel
+packaging is an optional adapter gate for hosts that can install Python packages.
+
+To verify the runtime wheel without network access or editable installs:
+
+```bash
+python3 tools/wheel_packaging_smoke.py --work-dir /tmp/ragflow-wheel-smoke --overwrite
+```
+
+The smoke builds `ragflow-skill-runtime`, installs the produced wheel with `--no-index`
+and `--no-deps`, then imports `ragflow_skill_runtime` from the installed location. It uses
+a temporary venv when available and falls back to an isolated `--target` install on
+minimal Ubuntu hosts without `python3-venv`.
+
 ## Live Integration
 
 `tools/live_integration_check.py` is opt-in. It exits successfully with `skipped: true` unless all required settings are present:
