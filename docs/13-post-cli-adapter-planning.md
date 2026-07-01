@@ -79,8 +79,9 @@ Implementation status: complete for the runtime-only design gate.
 
 Wheel packaging starts with `ragflow-skill-runtime` only. Public skill archives remain the
 canonical release artifact because they vendor the runtime and work without package
-installation. Public skill entrypoints, console scripts, and wheel publication stay out of
-scope until a target platform explicitly needs package-manager installation.
+installation. Runtime wheel export is optional; public skill entrypoints, console scripts,
+and package-index publication stay out of scope until a target platform explicitly needs
+package-manager installation.
 
 Implemented outputs:
 
@@ -88,10 +89,14 @@ Implemented outputs:
   entrypoints later.
 - A no-network wheel build/install smoke command:
   `python3 tools/wheel_packaging_smoke.py --work-dir /tmp/ragflow-wheel-smoke --overwrite`.
+- A no-network runtime wheel export command that copies only a smoke-validated wheel and
+  emits `ragflow_runtime_wheel_export_v1`:
+  `python3 tools/export_runtime_wheel.py --output-dir /tmp/ragflow-runtime-wheel-export --work-dir /tmp/ragflow-runtime-wheel-work --overwrite`.
 - A release-governance rule that wheel artifacts are optional and do not replace public
   skill archives.
 - Focused tests that prove no editable install is required:
-  `packages/ragflow-skill-runtime/tests/test_wheel_packaging_smoke.py`.
+  `packages/ragflow-skill-runtime/tests/test_wheel_packaging_smoke.py` and
+  `packages/ragflow-skill-runtime/tests/test_export_runtime_wheel.py`.
 
 The smoke command builds with `pip wheel --no-index --no-deps --no-build-isolation`, then
 installs the produced wheel without an index and imports `ragflow_skill_runtime` from the
@@ -112,6 +117,8 @@ Validation record (2026-07-01):
 - `python3 tools/wheel_packaging_smoke.py --work-dir /tmp/ragflow-wheel-smoke-phase37-final --overwrite`
   passed. The current Ubuntu host lacks `python3-venv`, so the smoke used the isolated
   `--target` fallback and imported `ragflow_skill_runtime-0.1.0` from the installed wheel.
+- `python3 tools/export_runtime_wheel.py --output-dir /tmp/ragflow-runtime-wheel-export --work-dir /tmp/ragflow-runtime-wheel-work --overwrite`
+  passed and exported the smoke-validated runtime wheel plus `runtime-wheel-manifest.json`.
 - The full offline release-facing chain passed after the Phase 37.1 wheel gate:
   `python3 -m pytest packages/ragflow-skill-runtime/tests -q`,
   `git diff --check`, `python3 tools/manifest_schema_check.py`,

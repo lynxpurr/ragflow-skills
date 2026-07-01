@@ -35,8 +35,8 @@ Completed or closed for the current public command surface:
   primary manifest JSON Schema gates, and the first read-only runtime helper pilots.
 - Phase 37 post-CLI adapter planning now ranks optional packaging, service, conversion,
   provider, reranker, and web/API adapters without changing the stable CLI baseline.
-  Phase 37.1 adds a no-network runtime wheel build/install/import smoke gate while
-  keeping archive release artifacts canonical.
+  Phase 37.1 adds a no-network runtime wheel build/install/import smoke gate and optional
+  runtime wheel export while keeping archive release artifacts canonical.
 
 Partially completed and still active:
 
@@ -73,9 +73,9 @@ Deferred or outside the active public-suite completion path:
   synthesis now have no-LLM request/review boundaries, but no script-owned model call.
 - Live disposable KB optimization, cleanup execution, and live tests remain gated by
   credentials plus explicit user approval.
-- Wheel packaging now has a runtime-only no-network smoke gate. Web/UI wrappers, provider
-  abstractions, and hosted service clients remain backlog items after the portable CLI
-  suite is complete.
+- Wheel packaging now has a runtime-only no-network smoke/export gate. Web/UI wrappers,
+  provider abstractions, and hosted service clients remain backlog items after the
+  portable CLI suite is complete.
 
 Completion priorities:
 
@@ -91,12 +91,12 @@ Completion priorities:
 
 Progress assessment:
 
-- Roadmap checklist status is 540 completed items out of 563 tracked items, about 96%.
+- Roadmap checklist status is 541 completed items out of 563 tracked items, about 96%.
 - The current non-live public CLI suite is complete for the planned portable archive
   release path: core commands, release packaging, redaction, report inventories, runtime
   helper pilots, contract gates, installed archive smoke, and primary manifest JSON Schema
   checks are all closed.
-- The 23 remaining open checklist items are not ordinary implementation gaps. They are
+- The 22 remaining open checklist items are not ordinary implementation gaps. They are
   explicitly gated live work, optional script-owned LLM/backend work, Phase 37 post-CLI
   adapter decisions/implementation, or private dedao bridge work outside the public release
   boundary.
@@ -415,7 +415,8 @@ Exit criteria:
   contracts, with public template files and release hygiene checks.
 - [ ] Post-CLI service adapters beyond the optional Phase 3 `serve` wrapper, with no
   required daemon in release artifacts.
-- [ ] Wheel-based release path for platforms that support package installation.
+- [x] Runtime wheel-based release path for platforms that support package installation.
+  Public skill entrypoint wheels remain future adapter scope.
 - [ ] Remote document conversion service client with fake-client tests and no default
   hosted endpoint.
 - [ ] LLM provider abstraction beyond OpenAI-compatible APIs, starting with
@@ -1628,7 +1629,8 @@ Tasks:
 - [x] Recommend wheel packaging as the lowest-risk first implementation slice unless a
   real host workflow requires `ragflow-query serve` first.
 - [x] Validate the selected adapter priority against a concrete user or host workflow.
-- [x] Implement Phase 37.1 wheel packaging design gate with no-network build/install smoke.
+- [x] Implement Phase 37.1 wheel packaging design gate with no-network build/install smoke
+  and optional runtime wheel export.
 - [ ] Implement Phase 37.2 `ragflow-query serve` design gate only if a host workflow needs
   a local service wrapper.
 - [x] Keep remote conversion, provider abstraction, reranker adapter, and web/API wrapper
@@ -1646,8 +1648,10 @@ Status note: `tools/wheel_packaging_smoke.py` now builds the runtime wheel with
 temporary environment, and imports `ragflow_skill_runtime` without relying on editable
 installs. On hosts with `python3-venv`, the installer uses a temporary venv; on minimal
 Ubuntu hosts without `ensurepip`, it falls back to `pip install --target` plus
-`python -I` import smoke. The gate is optional and does not replace the canonical public
-skill archive release path. The selected priority is validated against the current
+`python -I` import smoke. `tools/export_runtime_wheel.py` now copies the smoke-validated
+wheel into an optional runtime-wheel artifact directory and writes
+`ragflow_runtime_wheel_export_v1`. The gate is optional and does not replace the canonical
+public skill archive release path. The selected priority is validated against the current
 Hermes/OpenClaw/Claude Code/opencode-style controlled CLI-agent handoff workflow; `serve`
 remains deferred until a host needs a persistent local tool endpoint instead of one-shot
 artifact-producing CLI commands. Remote conversion clients, provider abstraction, reranker
