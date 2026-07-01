@@ -1621,6 +1621,20 @@ Finish the remaining work in this order:
    web/API wrappers as post-CLI adapters instead of blockers for the portable public skill
    suite.
 
+Current calibration:
+
+- The portable public CLI suite is complete for the non-live release path. The remaining
+  roadmap checkboxes are intentionally outside that default path: approved live disposable
+  validation, optional script-owned LLM/RAGAS backends, post-CLI deployment adapters, and
+  private dedao bridging.
+- Primary `doc_manifest.json` and `kb_manifest.json` JSON Schema templates are now part of
+  the release contract and are checked by default release hygiene. Broader report-schema
+  migration tooling should be added only when compatibility pressure appears.
+- The next development decision should choose one of two tracks: an approved credentialed
+  live validation run, or an offline post-CLI adapter planning slice that ranks `serve`,
+  wheel packaging, provider abstractions, remote conversion clients, reranker adapters,
+  and web/API wrappers against real host workflows.
+
 ## Implementation Notes And Pitfalls
 
 - Keep public fixtures neutral. Convert old private benchmarks, hints, and KB names into

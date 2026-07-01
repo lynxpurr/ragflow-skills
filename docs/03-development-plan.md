@@ -32,7 +32,7 @@ Completed or closed for the current public command surface:
   reports, fusion/rewrite, and routing quality upgrades.
 - Phase 32-36 skill-suite drift control, contract/package gates, topology and
   assistant review reports, parser/KB health telemetry, generated-report safety,
-  and the first read-only runtime helper pilots.
+  primary manifest JSON Schema gates, and the first read-only runtime helper pilots.
 
 Partially completed and still active:
 
@@ -84,6 +84,17 @@ Completion priorities:
 4. Consider `serve`, wheel packaging, provider abstractions, remote conversion clients,
    and web/API wrappers only as post-CLI product adapters.
 
+Progress assessment:
+
+- Roadmap checklist status is 534 completed items out of 556 tracked items, about 96%.
+- The current non-live public CLI suite is complete for the planned portable archive
+  release path: core commands, release packaging, redaction, report inventories, runtime
+  helper pilots, contract gates, installed archive smoke, and primary manifest JSON Schema
+  checks are all closed.
+- The 22 remaining open checklist items are not ordinary implementation gaps. They are
+  explicitly gated live work, optional script-owned LLM/backend work, post-CLI adapters,
+  or private dedao bridge work outside the public release boundary.
+
 ## Remaining Work Ledger
 
 This ledger reviews the open task list without duplicating it. The authoritative checkboxes
@@ -96,14 +107,22 @@ remain in their owning phases below.
 | Query service and agentic adapters | Phase 3 `serve`, Phase 21/30 script-owned synthesis and reflection | Host-assisted agentic retrieval and agentic-answer request/review complete; local service and script-owned answer synthesis deferred | Implement script-owned synthesis only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
 | Live disposable optimization | Phase 17 live probe tests, Phase 26 live disposable tests, Phase 27 live enrichment tests | Build, validation, cleanup execution, and live-readiness gates complete for current CLI scope; live tests deferred | Requires credentials, explicit confirmation, exact cleanup confirmation, retained dataset IDs, and user approval. |
 | Optional LLM-assisted adapters | Phase 26 grounded QA, Phase 30 agentic answer synthesis, Phase 30 LLM/RAGAS-style evaluator | Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries complete; script-owned LLM/RAGAS backends remain deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
+| Contract and manifest schema gates | Phase 33 release governance | Complete for primary handoff manifests and current release reports | Keep `tools/manifest_schema_check.py`, schema identity, rename governance, release hygiene, installed archive smoke, consumer acceptance, and platform smoke green whenever public contracts change. |
 | Packaging and platform adapters | Backlog wheel path, remote conversion service client, provider abstractions, web/API wrapper | Post-CLI backlog | Start only after the portable archive release path remains green and users need a non-archive deployment model. |
 | Private dedao bridge | Deferred private adapter tasks | Outside public release scope | Keep private examples and adapter logic outside public `skills/`; consume only public handoff shapes. |
 
 Recommended completion queue:
 
-1. Add live disposable optimization tests only in an approved credentialed environment.
-2. Evaluate `serve`, wheel packaging, provider abstractions, remote conversion clients,
-   and web/API wrappers as post-CLI product adapters.
+1. If the user approves live credentials and disposable KB mutation, run the live
+   optimization validation track: probe, disposable build, benchmark validation, readiness
+   review, cleanup execution, and post-cleanup verification.
+2. If live mutation is not approved, begin the post-CLI adapter planning track with a
+   no-network design gate: decide whether `serve`, wheel packaging, remote conversion
+   client, provider abstraction, reranker abstraction, or web/API wrapper has a real
+   near-term host workflow.
+3. Keep script-owned LLM/RAGAS backends deferred until explicit LLM config, deterministic
+   fixtures, advisory-output marking, citation audit compatibility, and redaction gates
+   are planned together.
 
 ## Phase 0: Architecture Skeleton
 
