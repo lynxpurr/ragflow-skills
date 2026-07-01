@@ -117,9 +117,9 @@ normal offline continuation unless their gate is satisfied.
 
 Checkpoint date: 2026-07-01
 
-The release path remains green after the roadmap calibration. This checkpoint did not start
-live disposable mutation, script-owned LLM/RAGAS execution, `ragflow-query serve`, or private
-dedao bridge work.
+The release path remains green after the Phase 37.2 serve design gate. This checkpoint did
+not start live disposable mutation, script-owned LLM/RAGAS execution, `ragflow-query serve`
+implementation, or private dedao bridge work.
 
 Validated commands:
 
@@ -129,9 +129,8 @@ Validated commands:
 - `python3 tools/release_hygiene_check.py`
 - `python3 tools/build_release.py --check`
 - `python3 tools/export_release_archives.py`
-- `python3 tools/consumer_acceptance.py --work-dir /tmp/ragflow-consumer-acceptance-20260701-roadmap-calibration --overwrite`
-- `python3 tools/platform_smoke_matrix.py --profile strict-vendor-env --work-dir /tmp/ragflow-platform-strict-vendor-20260701-roadmap-calibration`
-- `python3 tools/export_runtime_wheel.py --output-dir /tmp/ragflow-runtime-wheel-export-20260701-roadmap-calibration --work-dir /tmp/ragflow-runtime-wheel-work-20260701-roadmap-calibration --overwrite`
+- `python3 tools/consumer_acceptance.py --work-dir /tmp/ragflow-consumer-acceptance-20260701-phase37-serve-design --overwrite`
+- `python3 tools/platform_smoke_matrix.py --profile strict-vendor-env --work-dir /tmp/ragflow-platform-strict-vendor-20260701-phase37-serve-design`
 
 ## Live Disposable Validation Checkpoint
 

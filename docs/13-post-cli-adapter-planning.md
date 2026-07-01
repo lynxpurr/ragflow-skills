@@ -208,6 +208,12 @@ Validation record (2026-07-01):
   implementation-gate requirements.
 - The public release path is unchanged; no command behavior or release artifact was
   modified by this design gate.
+- The full release-facing validation chain passed after the design gate:
+  `python3 -m pytest packages/ragflow-skill-runtime/tests -q`, `git diff --check`,
+  `python3 tools/manifest_schema_check.py`, `python3 tools/release_hygiene_check.py`,
+  `python3 tools/build_release.py --check`, `python3 tools/export_release_archives.py`,
+  `python3 tools/consumer_acceptance.py --work-dir /tmp/ragflow-consumer-acceptance-20260701-phase37-serve-design --overwrite`,
+  and `python3 tools/platform_smoke_matrix.py --profile strict-vendor-env --work-dir /tmp/ragflow-platform-strict-vendor-20260701-phase37-serve-design`.
 
 ## Deferred Tracks
 
