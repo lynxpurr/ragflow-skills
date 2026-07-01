@@ -91,12 +91,12 @@ Completion priorities:
 
 Progress assessment:
 
-- Roadmap checklist status is 539 completed items out of 563 tracked items, about 96%.
+- Roadmap checklist status is 540 completed items out of 563 tracked items, about 96%.
 - The current non-live public CLI suite is complete for the planned portable archive
   release path: core commands, release packaging, redaction, report inventories, runtime
   helper pilots, contract gates, installed archive smoke, and primary manifest JSON Schema
   checks are all closed.
-- The 24 remaining open checklist items are not ordinary implementation gaps. They are
+- The 23 remaining open checklist items are not ordinary implementation gaps. They are
   explicitly gated live work, optional script-owned LLM/backend work, Phase 37 post-CLI
   adapter decisions/implementation, or private dedao bridge work outside the public release
   boundary.
@@ -1631,7 +1631,7 @@ Tasks:
 - [x] Implement Phase 37.1 wheel packaging design gate with no-network build/install smoke.
 - [ ] Implement Phase 37.2 `ragflow-query serve` design gate only if a host workflow needs
   a local service wrapper.
-- [ ] Keep remote conversion, provider abstraction, reranker adapter, and web/API wrapper
+- [x] Keep remote conversion, provider abstraction, reranker adapter, and web/API wrapper
   deferred until their fixture shapes and acceptance gates are known.
 
 Exit criteria:
@@ -1650,7 +1650,9 @@ Ubuntu hosts without `ensurepip`, it falls back to `pip install --target` plus
 skill archive release path. The selected priority is validated against the current
 Hermes/OpenClaw/Claude Code/opencode-style controlled CLI-agent handoff workflow; `serve`
 remains deferred until a host needs a persistent local tool endpoint instead of one-shot
-artifact-producing CLI commands.
+artifact-producing CLI commands. Remote conversion clients, provider abstraction, reranker
+adapters, and web/API wrappers are explicitly deferred until concrete endpoint, provider,
+fixture, and acceptance shapes are known.
 
 ## Definition of Done
 
