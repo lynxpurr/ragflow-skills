@@ -15,6 +15,7 @@ from typing import Any, Iterable
 from build_release import DIST_DIR, PUBLIC_SKILLS, ROOT, build_release
 from forward_test_prompt_check import run_forward_test_prompt_check
 from generated_markdown_audit import run_generated_markdown_audit
+from manifest_schema_check import run_manifest_schema_check
 from rename_governance_check import run_rename_governance_check
 from runtime_resilience_inventory import run_runtime_resilience_inventory
 from schema_identity_check import run_schema_identity_check
@@ -791,6 +792,7 @@ def run_hygiene_check(
     scan_source: bool = True,
     suite_review: bool = False,
     schema_identity: bool = True,
+    manifest_schema: bool = True,
     rename_governance: bool = True,
     forward_test_prompts: bool = True,
     version_date_drift: bool = True,
@@ -835,6 +837,10 @@ def run_hygiene_check(
         schema_identity_payload = run_schema_identity_check(root=ROOT)
         payload["schema_identity"] = schema_identity_payload
         payload["ok"] = bool(payload["ok"] and schema_identity_payload["ok"])
+    if manifest_schema:
+        manifest_schema_payload = run_manifest_schema_check(root=ROOT)
+        payload["manifest_schema"] = manifest_schema_payload
+        payload["ok"] = bool(payload["ok"] and manifest_schema_payload["ok"])
     if rename_governance:
         rename_governance_payload = run_rename_governance_check(root=ROOT)
         payload["rename_governance"] = rename_governance_payload
@@ -868,6 +874,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dist-only", action="store_true", help="Skip public source checks")
     parser.add_argument("--suite-review", action="store_true", help="Run static public skill suite drift checks")
     parser.add_argument("--skip-schema-identity", action="store_true", help="Skip static schema identity checks")
+    parser.add_argument("--skip-manifest-schema", action="store_true", help="Skip public manifest JSON Schema checks")
     parser.add_argument("--skip-rename-governance", action="store_true", help="Skip static rename governance checks")
     parser.add_argument("--skip-forward-test-prompts", action="store_true", help="Skip host-agent forward-test prompt checks")
     parser.add_argument("--skip-version-date-drift", action="store_true", help="Skip static version/date drift checks")
@@ -881,6 +888,7 @@ def main(argv: list[str] | None = None) -> int:
         scan_source=not args.dist_only,
         suite_review=args.suite_review,
         schema_identity=not args.skip_schema_identity,
+        manifest_schema=not args.skip_manifest_schema,
         rename_governance=not args.skip_rename_governance,
         forward_test_prompts=not args.skip_forward_test_prompts,
         version_date_drift=not args.skip_version_date_drift,

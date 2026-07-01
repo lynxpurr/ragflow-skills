@@ -1124,6 +1124,7 @@ Extend release tooling with:
 - command-manifest dry-run for live acceptance flows;
 - compatibility facade checks for deprecated command aliases or schema names;
 - schema identity checks for manifests and reports;
+- public JSON Schema templates for primary handoff manifests;
 - naming drift checks for accidental old/new product names;
 - explicit rename policy requiring CLI aliases, schema migration, docs, downstream gates,
   release notes, and rollback plan before any public rename.
@@ -1179,6 +1180,13 @@ implemented in `tools/schema_identity_check.py` and run by default from
 requires source plus test/smoke evidence for versioned `doc_manifest`/`kb_manifest`
 identity and quality, benchmark, query, trace, diagnostic, route, topology, KB health,
 and release-governance report schemas.
+Primary manifest JSON Schema coverage is implemented in
+`tools/manifest_schema_check.py` and run by default from `tools/release_hygiene_check.py`.
+It compares the public `templates/doc_manifest.schema.json` and
+`templates/kb_manifest.schema.json` files with the runtime schema definitions, then
+validates the shipped example manifests against both the JSON Schema subset and runtime
+dataclass loaders. This covers the primary handoff manifests only; report-schema migration
+machinery remains future compatibility work.
 Rename governance is implemented in `tools/rename_governance_check.py` and also runs by
 default from `tools/release_hygiene_check.py`. It emits
 `ragflow_rename_governance_check_v1`, validates the explicit public rename policy in

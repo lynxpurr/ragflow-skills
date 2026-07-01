@@ -580,6 +580,15 @@ EXPECTED_IDENTITIES = (
         source_roots=(Path("tools/release_hygiene_check.py"),),
     ),
     SchemaIdentity(
+        key="manifest_schema_check",
+        group="release",
+        identity="ragflow_manifest_schema_check_v1",
+        source_patterns=("ragflow_manifest_schema_check_v1", "SCHEMA"),
+        coverage_patterns=("ragflow_manifest_schema_check_v1", "run_manifest_schema_check"),
+        description="Release governance report for primary manifest JSON Schema templates and examples.",
+        source_roots=(Path("tools/manifest_schema_check.py"),),
+    ),
+    SchemaIdentity(
         key="generated_markdown_audit",
         group="release",
         identity="ragflow_generated_markdown_audit_v1",

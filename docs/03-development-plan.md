@@ -386,7 +386,8 @@ Exit criteria:
 
 ## Backlog
 
-- [ ] Formal JSON Schema for manifests after multiple independent consumers exist.
+- [x] Formal JSON Schema for primary `doc_manifest.json` and `kb_manifest.json`
+  contracts, with public template files and release hygiene checks.
 - [ ] Post-CLI service adapters beyond the optional Phase 3 `serve` wrapper, with no
   required daemon in release artifacts.
 - [ ] Wheel-based release path for platforms that support package installation.
@@ -1301,6 +1302,9 @@ Tasks:
 - [x] Add command-manifest dry-run support for live acceptance flows.
 - [x] Include local configuration checks, redacted command arrays, expected artifacts, mutation labels, and cleanup notes in command manifests.
 - [x] Add schema identity checks for `doc_manifest`, `kb_manifest`, quality, benchmark, query, trace, diagnostic, route, topology, KB health, and release-governance reports.
+- [x] Add public JSON Schema templates for primary `doc_manifest.json` and
+  `kb_manifest.json`, plus a release hygiene check that validates template/runtime
+  drift and example compatibility.
 - [x] Add compatibility facade checks for deprecated command aliases or schema names when aliases exist.
 - [x] Add explicit rename policy documentation for CLI aliases, schema migration, docs updates, downstream gates, release notes, and rollback plan.
 - [x] Add release hygiene checks for accidental public rename drift.
@@ -1313,6 +1317,7 @@ Exit criteria:
 - Handoff contracts between the three skills are validated with neutral fixtures.
 - Live acceptance can be reviewed from a redacted dry-run command manifest before mutation.
 - Public naming/schema changes cannot slip in without compatibility and rollback planning.
+- Primary handoff manifests have public JSON Schema templates in release archives.
 
 ## Phase 34: KB Topology, Routing Activation, And Assistant Profiles
 

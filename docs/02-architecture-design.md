@@ -332,7 +332,10 @@ Minimum fields:
 }
 ```
 
-Validation can be implemented with dataclasses and explicit required-field checks. Formal JSON Schema and compatibility migration are deferred until multiple independent consumers need them.
+Primary handoff manifests now publish public JSON Schema templates for `doc_manifest.json`
+and `kb_manifest.json`, while runtime dataclasses keep the in-process validation path
+lightweight. Compatibility migration machinery remains deferred until a breaking schema
+change or additional independent consumers require it.
 
 ## Validation Model
 

@@ -83,6 +83,7 @@ When a host agent should prepare config, run smoke checks, or perform end-to-end
 Notes:
 
 - `build.py` creates the dataset, uploads Markdown, triggers parse, waits for parse completion by default, and emits `kb_manifest.json`.
+- `templates/kb_manifest.schema.json` documents the public `kb_manifest.json` contract for host agents and downstream consumers.
 - When a `doc_manifest.json` contains `quality_gate.status: BLOCKED`, `build.py` refuses to upload by default. Use `--allow-blocked` only after the user explicitly accepts the risk.
 - Use `--dry-run` to validate local inputs without touching RAGFlow; dry-run prints JSON and does not write `kb_manifest.json`.
 - Use `--no-wait` only when the host platform should continue while RAGFlow parses asynchronously.

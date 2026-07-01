@@ -64,6 +64,8 @@ class ReleaseHygieneTests(unittest.TestCase):
         self.assertEqual(payload["findings"], [])
         self.assertTrue(payload["schema_identity"]["ok"])
         self.assertEqual(payload["schema_identity"]["schema"], "ragflow_schema_identity_check_v1")
+        self.assertTrue(payload["manifest_schema"]["ok"])
+        self.assertEqual(payload["manifest_schema"]["schema"], "ragflow_manifest_schema_check_v1")
         self.assertTrue(payload["rename_governance"]["ok"])
         self.assertEqual(payload["rename_governance"]["schema"], "ragflow_rename_governance_check_v1")
         self.assertTrue(payload["forward_test_prompts"]["ok"])

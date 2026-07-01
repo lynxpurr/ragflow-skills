@@ -3,13 +3,177 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
+
+
+DOC_MANIFEST_JSON_SCHEMA_ID = "https://github.com/lynxpurr/ragflow-skills/schemas/doc_manifest-0.1.schema.json"
+KB_MANIFEST_JSON_SCHEMA_ID = "https://github.com/lynxpurr/ragflow-skills/schemas/kb_manifest-0.1.schema.json"
+
+DOC_MANIFEST_JSON_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": DOC_MANIFEST_JSON_SCHEMA_ID,
+    "title": "RAGFlow document handoff manifest",
+    "type": "object",
+    "required": ["version", "documents"],
+    "additionalProperties": True,
+    "properties": {
+        "version": {"type": "string", "const": "0.1"},
+        "created_at": {"type": ["string", "null"]},
+        "source_root": {"type": ["string", "null"]},
+        "quality_report": {"type": ["string", "null"]},
+        "quality_gate": {"type": ["object", "null"], "additionalProperties": True},
+        "documents": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "required": ["source_path", "markdown_path"],
+                "additionalProperties": True,
+                "properties": {
+                    "source_path": {"type": "string", "minLength": 1},
+                    "markdown_path": {"type": "string", "minLength": 1},
+                    "sha256": {"type": ["string", "null"]},
+                    "title": {"type": ["string", "null"]},
+                    "language": {"type": ["string", "null"]},
+                    "warnings": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+        },
+    },
+}
+
+KB_MANIFEST_JSON_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": KB_MANIFEST_JSON_SCHEMA_ID,
+    "title": "RAGFlow KB handoff manifest",
+    "type": "object",
+    "required": ["version", "dataset", "documents"],
+    "additionalProperties": True,
+    "properties": {
+        "version": {"type": "string", "const": "0.1"},
+        "created_at": {"type": ["string", "null"]},
+        "ragflow_base_url": {"type": ["string", "null"]},
+        "dataset": {
+            "type": "object",
+            "required": ["id", "name"],
+            "additionalProperties": True,
+            "properties": {
+                "id": {"type": "string", "minLength": 1},
+                "name": {"type": "string", "minLength": 1},
+            },
+        },
+        "profile": {"type": "object", "additionalProperties": True},
+        "documents": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["document_id"],
+                "additionalProperties": True,
+                "properties": {
+                    "document_id": {"type": "string", "minLength": 1},
+                    "source_path": {"type": ["string", "null"]},
+                    "markdown_path": {"type": ["string", "null"]},
+                    "status": {"type": ["string", "null"]},
+                    "chunk_count": {"type": ["integer", "null"], "minimum": 0},
+                },
+            },
+        },
+    },
+}
 
 
 class ManifestError(RuntimeError):
     """Raised when a handoff manifest is missing required fields."""
+
+
+def manifest_json_schemas() -> dict[str, dict[str, Any]]:
+    """Return the public JSON Schema contracts for primary handoff manifests."""
+
+    return {
+        "doc_manifest": deepcopy(DOC_MANIFEST_JSON_SCHEMA),
+        "kb_manifest": deepcopy(KB_MANIFEST_JSON_SCHEMA),
+    }
+
+
+def _json_type_matches(value: Any, expected_type: str) -> bool:
+    if expected_type == "object":
+        return isinstance(value, dict)
+    if expected_type == "array":
+        return isinstance(value, list)
+    if expected_type == "string":
+        return isinstance(value, str)
+    if expected_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected_type == "boolean":
+        return isinstance(value, bool)
+    if expected_type == "null":
+        return value is None
+    return False
+
+
+def validate_payload_with_json_schema(
+    payload: Any,
+    schema: Mapping[str, Any],
+    *,
+    path: str = "$",
+) -> None:
+    """Validate payloads against the JSON Schema subset used by public manifests."""
+
+    expected = schema.get("type")
+    expected_types: list[str]
+    if isinstance(expected, str):
+        expected_types = [expected]
+    elif isinstance(expected, list) and all(isinstance(item, str) for item in expected):
+        expected_types = list(expected)
+    else:
+        expected_types = []
+    if expected_types and not any(_json_type_matches(payload, item) for item in expected_types):
+        raise ManifestError(f"{path} must be one of: {', '.join(expected_types)}")
+
+    if "const" in schema and payload != schema["const"]:
+        raise ManifestError(f"{path} must equal {schema['const']!r}")
+
+    if isinstance(payload, str) and "minLength" in schema and len(payload) < int(schema["minLength"]):
+        raise ManifestError(f"{path} must contain at least {schema['minLength']} characters")
+
+    if isinstance(payload, int) and not isinstance(payload, bool) and "minimum" in schema:
+        if payload < int(schema["minimum"]):
+            raise ManifestError(f"{path} must be greater than or equal to {schema['minimum']}")
+
+    if isinstance(payload, dict):
+        required = schema.get("required", [])
+        if not isinstance(required, list):
+            raise ManifestError(f"{path}.required must be a list")
+        for key in required:
+            if not isinstance(key, str):
+                raise ManifestError(f"{path}.required entries must be strings")
+            if key not in payload:
+                raise ManifestError(f"{path}.{key} is required")
+        properties = schema.get("properties", {})
+        if not isinstance(properties, dict):
+            raise ManifestError(f"{path}.properties must be an object")
+        additional_properties = schema.get("additionalProperties", True)
+        for key, value in payload.items():
+            if key in properties:
+                child_schema = properties[key]
+                if not isinstance(child_schema, Mapping):
+                    raise ManifestError(f"{path}.{key} schema must be an object")
+                validate_payload_with_json_schema(value, child_schema, path=f"{path}.{key}")
+            elif additional_properties is False:
+                raise ManifestError(f"{path}.{key} is not allowed")
+
+    if isinstance(payload, list):
+        if "minItems" in schema and len(payload) < int(schema["minItems"]):
+            raise ManifestError(f"{path} must contain at least {schema['minItems']} item(s)")
+        item_schema = schema.get("items")
+        if isinstance(item_schema, Mapping):
+            for index, item in enumerate(payload):
+                validate_payload_with_json_schema(item, item_schema, path=f"{path}[{index}]")
 
 
 def _require_mapping(data: Any, name: str) -> dict[str, Any]:

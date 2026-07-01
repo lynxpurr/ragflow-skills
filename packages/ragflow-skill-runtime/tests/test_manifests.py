@@ -5,7 +5,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ragflow_skill_runtime.manifests import ManifestError, load_doc_manifest, load_kb_manifest
+from ragflow_skill_runtime.manifests import (
+    DOC_MANIFEST_JSON_SCHEMA,
+    KB_MANIFEST_JSON_SCHEMA,
+    ManifestError,
+    load_doc_manifest,
+    load_kb_manifest,
+    manifest_json_schemas,
+    validate_payload_with_json_schema,
+)
 
 
 class ManifestTests(unittest.TestCase):
@@ -74,6 +82,52 @@ class ManifestTests(unittest.TestCase):
             path.write_text(json.dumps({"version": "0.1", "documents": []}), encoding="utf-8")
             with self.assertRaises(ManifestError):
                 load_kb_manifest(path)
+
+    def test_manifest_json_schemas_are_defensive_copies(self) -> None:
+        schemas = manifest_json_schemas()
+
+        schemas["doc_manifest"]["properties"]["version"]["const"] = "mutated"
+
+        self.assertEqual(DOC_MANIFEST_JSON_SCHEMA["properties"]["version"]["const"], "0.1")
+        self.assertEqual(KB_MANIFEST_JSON_SCHEMA["properties"]["version"]["const"], "0.1")
+
+    def test_doc_manifest_json_schema_accepts_current_shape(self) -> None:
+        payload = {
+            "version": "0.1",
+            "source_root": ".",
+            "documents": [
+                {
+                    "source_path": "source.pdf",
+                    "markdown_path": "documents/source.md",
+                    "warnings": [],
+                }
+            ],
+        }
+
+        validate_payload_with_json_schema(payload, DOC_MANIFEST_JSON_SCHEMA)
+
+    def test_doc_manifest_json_schema_rejects_empty_documents(self) -> None:
+        with self.assertRaisesRegex(ManifestError, "documents"):
+            validate_payload_with_json_schema(
+                {"version": "0.1", "documents": []},
+                DOC_MANIFEST_JSON_SCHEMA,
+            )
+
+    def test_kb_manifest_json_schema_rejects_invalid_chunk_count(self) -> None:
+        with self.assertRaisesRegex(ManifestError, "chunk_count"):
+            validate_payload_with_json_schema(
+                {
+                    "version": "0.1",
+                    "dataset": {"id": "dataset-id", "name": "kb:project"},
+                    "documents": [
+                        {
+                            "document_id": "doc-id",
+                            "chunk_count": -1,
+                        }
+                    ],
+                },
+                KB_MANIFEST_JSON_SCHEMA,
+            )
 
 
 if __name__ == "__main__":

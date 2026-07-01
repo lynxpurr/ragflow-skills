@@ -75,6 +75,7 @@ DOC_TO_MD_TIMEOUT=120
 Notes:
 
 - The output directory contains `documents/*.md`, `doc_manifest.json`, and `quality_report.json`.
+- `templates/doc_manifest.schema.json` documents the public `doc_manifest.json` contract for host agents and downstream consumers.
 - Use `package --rich` when the handoff should carry optional audit and review sidecars such as `metadata.json`, `artifact_index.json`, `profile_suggestions.json`, `retrieval_hints.json`, `assistant_profile.json`, `assistant_test_plan.json`, and `package_readme.md`.
 - Use `postprocess` with profiles `none`, `safe`, `ocr`, or `chunk-markers` when Markdown needs deterministic cleanup before ingestion. Use `--output` for non-destructive writes; `--write` is required for in-place rewrites.
 - `doc_manifest.json` uses `source_root: "."`, so downstream `ragflow-kb-build` can consume it after the handoff directory moves.
