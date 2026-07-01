@@ -1634,6 +1634,10 @@ Current calibration:
   live validation run, or an offline post-CLI adapter planning slice that ranks `serve`,
   wheel packaging, provider abstractions, remote conversion clients, reranker adapters,
   and web/API wrappers against real host workflows.
+- Phase 37 starts that offline post-CLI adapter planning track in
+  `docs/13-post-cli-adapter-planning.md`. Wheel packaging is currently the lowest-risk
+  first implementation slice unless a concrete host workflow requires `ragflow-query serve`
+  first.
 
 ## Implementation Notes And Pitfalls
 
@@ -1688,7 +1692,7 @@ must not replace the Markdown handoff contract or bypass document quality report
 
 ## Phased Roadmap
 
-Recommended implementation order is the Phase 24-36 task list in
+Recommended implementation order is the Phase 24-37 task list in
 `docs/03-development-plan.md`:
 
 1. Phase 24: Rich Handoff 2.0 and Markdown Post-Processing.
@@ -1704,10 +1708,12 @@ Recommended implementation order is the Phase 24-36 task list in
 11. Phase 34: KB Topology, Routing Activation, and Assistant Profiles.
 12. Phase 35: Parser Performance and KB Health Telemetry.
 13. Phase 36: Generated Report Safety Closure and Runtime Helper Pilot.
+14. Phase 37: Post-CLI Adapter Planning.
 
 This order kept the foundation document-centric before adding more complex query-time and
 LLM-assisted behavior, then closed release governance, post-ingest operational guidance,
 and generated-report safety. After the current Phase 36 closure, remaining completion work
-should prioritize explicitly gated live validation, then local service, packaging,
-provider, and web/API product adapters. Script-owned LLM/RAGAS evaluator execution remains
-deferred behind explicit config, deterministic fixtures, redaction, and release gates.
+should prioritize explicitly gated live validation, or, when live mutation is not approved,
+Phase 37 post-CLI adapter planning before local service, packaging, provider, reranker, and
+web/API product adapters. Script-owned LLM/RAGAS evaluator execution remains deferred
+behind explicit config, deterministic fixtures, redaction, and release gates.

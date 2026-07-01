@@ -33,6 +33,8 @@ Completed or closed for the current public command surface:
 - Phase 32-36 skill-suite drift control, contract/package gates, topology and
   assistant review reports, parser/KB health telemetry, generated-report safety,
   primary manifest JSON Schema gates, and the first read-only runtime helper pilots.
+- Phase 37 post-CLI adapter planning now ranks optional packaging, service, conversion,
+  provider, reranker, and web/API adapters without changing the stable CLI baseline.
 
 Partially completed and still active:
 
@@ -86,14 +88,15 @@ Completion priorities:
 
 Progress assessment:
 
-- Roadmap checklist status is 534 completed items out of 556 tracked items, about 96%.
+- Roadmap checklist status is 537 completed items out of 563 tracked items, about 95%.
 - The current non-live public CLI suite is complete for the planned portable archive
   release path: core commands, release packaging, redaction, report inventories, runtime
   helper pilots, contract gates, installed archive smoke, and primary manifest JSON Schema
   checks are all closed.
-- The 22 remaining open checklist items are not ordinary implementation gaps. They are
-  explicitly gated live work, optional script-owned LLM/backend work, post-CLI adapters,
-  or private dedao bridge work outside the public release boundary.
+- The 26 remaining open checklist items are not ordinary implementation gaps. They are
+  explicitly gated live work, optional script-owned LLM/backend work, Phase 37 post-CLI
+  adapter decisions/implementation, or private dedao bridge work outside the public release
+  boundary.
 
 ## Remaining Work Ledger
 
@@ -108,7 +111,7 @@ remain in their owning phases below.
 | Live disposable optimization | Phase 17 live probe tests, Phase 26 live disposable tests, Phase 27 live enrichment tests | Build, validation, cleanup execution, and live-readiness gates complete for current CLI scope; live tests deferred | Requires credentials, explicit confirmation, exact cleanup confirmation, retained dataset IDs, and user approval. |
 | Optional LLM-assisted adapters | Phase 26 grounded QA, Phase 30 agentic answer synthesis, Phase 30 LLM/RAGAS-style evaluator | Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries complete; script-owned LLM/RAGAS backends remain deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
 | Contract and manifest schema gates | Phase 33 release governance | Complete for primary handoff manifests and current release reports | Keep `tools/manifest_schema_check.py`, schema identity, rename governance, release hygiene, installed archive smoke, consumer acceptance, and platform smoke green whenever public contracts change. |
-| Packaging and platform adapters | Backlog wheel path, remote conversion service client, provider abstractions, web/API wrapper | Post-CLI backlog | Start only after the portable archive release path remains green and users need a non-archive deployment model. |
+| Packaging and platform adapters | Phase 37 plus backlog wheel path, `serve`, remote conversion service client, provider abstractions, reranker abstraction, web/API wrapper | Planning gate started | Rank adapters by host workflow, release impact, testability, and risk before implementation; keep archive CLI release green. |
 | Private dedao bridge | Deferred private adapter tasks | Outside public release scope | Keep private examples and adapter logic outside public `skills/`; consume only public handoff shapes. |
 
 Recommended completion queue:
@@ -1605,6 +1608,35 @@ Exit criteria:
 - The first retry/backoff or metrics helper is consumed by a narrow read-only command with
   offline deterministic tests.
 - No new live RAGFlow mutation, LLM answer generation, or private repair workflow is added.
+
+## Phase 37: Post-CLI Adapter Planning
+
+Goal: choose optional post-CLI adapters only after an offline decision gate ranks real host
+workflow value, release impact, testability, and operational risk.
+
+Design source: `docs/13-post-cli-adapter-planning.md`.
+
+Tasks:
+
+- [x] Create a post-CLI adapter planning document and candidate matrix.
+- [x] Classify wheel packaging, `ragflow-query serve`, remote conversion clients,
+  provider abstractions, reranker adapters, and web/API wrappers by value, risk,
+  testability, and release impact.
+- [x] Recommend wheel packaging as the lowest-risk first implementation slice unless a
+  real host workflow requires `ragflow-query serve` first.
+- [ ] Validate the selected adapter priority against a concrete user or host workflow.
+- [ ] Implement Phase 37.1 wheel packaging design gate with no-network build/install smoke.
+- [ ] Implement Phase 37.2 `ragflow-query serve` design gate only if a host workflow needs
+  a local service wrapper.
+- [ ] Keep remote conversion, provider abstraction, reranker adapter, and web/API wrapper
+  deferred until their fixture shapes and acceptance gates are known.
+
+Exit criteria:
+
+- The next adapter implementation starts from a ranked decision, not from generic backlog
+  pressure.
+- The first adapter slice remains no-network by default and does not require a daemon.
+- Existing archive release gates remain green.
 
 ## Definition of Done
 
