@@ -318,6 +318,18 @@ Remote conversion intake status (2026-07-02):
 | Public surface impact | Not ready. The smallest likely impact would be one optional backend mode or a stricter protocol option on `ragflow-doc-to-md`; defaults must remain unchanged. |
 | Gate decision | No-go for code implementation until a user-owned endpoint and fixture shape are recorded. Keep the existing `remote`, `mineru`, `mineru-sync`, and `mineru-cli` paths as the supported conversion adapters. |
 
+Reranker adapter intake status (2026-07-02):
+
+| Intake field | Current finding |
+| --- | --- |
+| Adapter candidate | Reranker adapter. |
+| Product or host workflow | Current host-agent workflows can already run retrieval, fusion, rewrite, saved-output `rerank-ab`, and benchmark validation as one-shot CLI/report steps. No product workflow has been identified that requires the public scripts to invoke a reranker service during `ask`. |
+| Existing coverage | `ragflow-query rerank-ab` compares saved `ask --json` output against optional external rerank JSON, reports rank movement, top-k overlap, expected-term/chunk changes, and redaction sidecars. `ragflow-kb-build model-providers probe` can probe explicit rerank adapter URLs with fake empty-input request shapes. Consumer acceptance and strict-vendor platform smoke cover both the offline rerank A/B report and rerank-adapter probe surfaces. |
+| Current gap | No concrete reranker endpoint/provider contract, model shape, request/response schema, latency budget, or ranking-quality target has been recorded. A future execution adapter must prove that direct retrieval, fusion, rewrite, saved external rerank JSON, and benchmark/profile tuning are insufficient. |
+| Offline fixtures | Partially ready for report comparison, not ready for service execution. Existing fixtures cover saved external rerank JSON; a true adapter implementation still needs a fake reranker server plus saved-query or benchmark fixtures that define expected metric movement and fallback behavior. |
+| Public surface impact | Not ready. Candidate surfaces include an optional stricter adapter mode for `rerank-ab` or an explicit default-off `ask` rerank flag, but `ask` defaults must not silently change ranking behavior. |
+| Gate decision | No-go for code implementation until a named reranker service contract, fake server, saved-query or benchmark acceptance fixture, and direct-retrieval fallback policy are recorded. Keep rerank work in advisory report/probe mode for now. |
+
 Implementation acceptance checklist:
 
 - A completed intake identifies one adapter, one concrete contract, and one owner workflow.
