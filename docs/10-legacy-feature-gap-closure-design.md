@@ -1625,8 +1625,9 @@ Finish the remaining gated work in this order:
 
 1. Keep the portable archive release path green while new work keeps deterministic,
    no-network defaults.
-2. Add a local `serve` wrapper only after a concrete host workflow needs a persistent
-   endpoint instead of one-shot CLI commands.
+2. Implement a local `serve` wrapper only after a concrete host workflow needs a
+   persistent endpoint instead of one-shot CLI commands, using the completed Phase 37.2
+   design gate.
 3. Plan optional script-owned LLM adapters as a single backend track before any model call.
    Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries
    are complete; script-owned LLM/RAGAS backend execution remains deferred.
@@ -1639,22 +1640,23 @@ Current calibration:
   disposable validation track is closed. The remaining roadmap checkboxes are
   intentionally outside that default path: optional script-owned LLM/RAGAS backends,
   post-CLI deployment adapters, and private dedao bridging.
-- The current open task list has 18 items across four gated categories: 3 local service or
+- The current open task list has 17 items across four gated categories: 2 local service or
   post-CLI host-wrapper items, 4 other post-CLI product-adapter items, 7 optional
   script-owned LLM/backend items, and 4 private dedao bridge items.
 - Primary `doc_manifest.json` and `kb_manifest.json` JSON Schema templates are now part of
   the release contract and are checked by default release hygiene. Broader report-schema
   migration tooling should be added only when compatibility pressure appears.
 - The next development decision should choose one explicit gate: a concrete host workflow
-  for `ragflow-query serve`, an approved script-owned LLM/backend plan, or a private dedao
-  bridge request. Without one of those gates, maintenance should focus on keeping the
-  archive and optional runtime-wheel release path green.
+  for `ragflow-query serve` implementation, an approved script-owned LLM/backend plan, or
+  a private dedao bridge request. Without one of those gates, maintenance should focus on
+  keeping the archive and optional runtime-wheel release path green.
 - Phase 37 starts that offline post-CLI adapter planning track in
   `docs/13-post-cli-adapter-planning.md`. Phase 37.1 now implements the runtime-only wheel
   packaging smoke/export gate without changing the canonical archive release path and
-  validates that priority against the current controlled CLI-agent handoff workflow. The
-  `ragflow-query serve` command remains the next adapter design candidate only if a
-  concrete host workflow needs a local service wrapper.
+  validates that priority against the current controlled CLI-agent handoff workflow. Phase
+  37.2 now documents the optional `ragflow-query serve` design gate; the command
+  implementation remains deferred until a concrete host workflow needs a local service
+  wrapper.
 
 ## Implementation Notes And Pitfalls
 

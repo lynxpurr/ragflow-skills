@@ -1,6 +1,6 @@
 # Post-CLI Adapter Planning
 
-Status: planning gate
+Status: planning gate; Phase 37.2 serve design gate complete
 Date: 2026-07-01
 
 ## Objective
@@ -25,7 +25,7 @@ manager, model-provider, or web-service assumptions mandatory.
 | Candidate | Primary user value | Risk | Testability | Release impact | Current recommendation |
 | --- | --- | --- | --- | --- | --- |
 | Wheel packaging | Easier install for platforms that support Python packages | Low | High: build/install/import smoke in a temp venv or isolated target install | Adds package artifact, no command behavior change | Best first implementation slice if distribution friction is the problem |
-| `ragflow-query serve` | Local HTTP/tool endpoint for OpenClaw/Hermes-style integration | Medium | Medium: local server smoke, lifecycle and port handling | Adds optional long-running mode; must stay disabled by default | Design next, implement only for a real host workflow |
+| `ragflow-query serve` | Local HTTP/tool endpoint for OpenClaw/Hermes-style integration | Medium | Medium: local server smoke, lifecycle and port handling | Adds optional long-running mode; must stay disabled by default | Design gate complete; implement only for a real host workflow |
 | Remote conversion client | Integrate user-owned conversion services behind `ragflow-doc-to-md` | Medium | High with fake server fixtures | Adds backend behavior and config surface | Useful when a reachable converter exists; keep no default endpoint |
 | Provider abstraction | Normalize model/embedding/rerank provider contracts | Medium | Medium with fake adapters | Adds adapter contracts and compatibility burden | Plan after a concrete provider integration is needed |
 | Reranker adapter | Improve retrieval ranking with optional external rerank service | Medium-high | Medium with saved query fixtures and fake adapter | Affects query quality surfaces; must preserve direct retrieval defaults | Defer until route/fusion users need it |
@@ -69,9 +69,10 @@ Wheel packaging is the lowest-risk first adapter because it can be validated off
 - run import and CLI bootstrap smoke without editable installs;
 - keep public skill archives unchanged unless a later release explicitly publishes wheels.
 
-`ragflow-query serve` should be treated as the second candidate. It has higher integration
-value, but the design must settle lifecycle, port selection, auth boundary, request/response
-schemas, shutdown behavior, and no-network defaults before implementation.
+`ragflow-query serve` is the second candidate after the wheel gate. It has higher
+integration value, but implementation remains gated: the service contract is now defined,
+while service code should start only when a host workflow needs a persistent local endpoint
+instead of one-shot CLI commands.
 
 ## Phase 37.1: Wheel Packaging Design Gate
 
@@ -129,20 +130,84 @@ Validation record (2026-07-01):
 
 ## Phase 37.2: Serve Design Gate
 
-Planned outputs:
+Implementation status: complete for the design gate only. No `serve` command, daemon,
+HTTP listener, or background process is implemented by this phase.
 
-- A `ragflow-query serve` contract draft with health, direct query, host-assisted query,
-  and shutdown endpoints.
-- A local-only fake-client smoke plan with ephemeral port handling.
-- Redaction and trace rules for request/response logs.
-- A clear statement that `serve` is optional and never required by release artifacts.
+Host workflow assumption:
 
-Exit criteria before implementation:
+- A controllable local host agent can already run one-shot CLI commands.
+- A future service wrapper is useful only if that host needs repeated local tool calls,
+  explicit health checks, or request/response lifecycle semantics that are awkward to
+  express through process spawning and artifact paths.
+- The first implementation must stay local-only, optional, no-network by default in tests,
+  and compatible with the existing `ragflow-query ask` output shape.
 
-- A real host workflow needs the local service wrapper.
-- Request and response schemas are stable enough for tests.
-- Server lifecycle can be exercised without live RAGFlow.
-- The default CLI path stays unchanged.
+Non-goals:
+
+- Do not replace the canonical archive CLI path.
+- Do not add a hosted API, web UI, remote auth model, service supervisor, or public daemon
+  requirement.
+- Do not introduce script-owned LLM synthesis.
+- Do not perform live RAGFlow mutation from `serve`.
+
+Local service contract draft:
+
+| Endpoint | Method | Purpose | Request | Response |
+| --- | --- | --- | --- | --- |
+| `/health` | `GET` | Check local server readiness. | None. | `{"ok": true, "schema": "ragflow_query_serve_health_v1", "version": "...", "uptime_ms": ...}` |
+| `/v1/query/direct` | `POST` | Execute the same retrieval path as `ragflow-query ask --mode direct`. | `question`, one of `dataset_ids`/`kb_manifest`/`routing_config`, optional `top_k`, `similarity_threshold`, `retry_budget`, `include_trace`. | Existing `ask` JSON payload plus `served_by`, `request_id`, and no raw secrets. |
+| `/v1/query/host-assisted` | `POST` | Execute `ask --mode agentic --host-assisted` without script-owned synthesis. | Direct-query fields plus optional `max_subqueries`, `rewrite`, `fusion`, and citation requirements. | Existing host-assisted payload with evidence, plan, trace, and host synthesis contract. |
+| `/shutdown` | `POST` | Stop a local ephemeral server in smoke tests or host-managed runs. | Optional `request_id`. | `{"ok": true, "schema": "ragflow_query_serve_shutdown_v1"}` before orderly shutdown. |
+
+Lifecycle and binding rules:
+
+- Default bind address must be `127.0.0.1`.
+- Default port should be `0` for an ephemeral OS-selected port in tests and smoke runs;
+  user-supplied fixed ports are allowed only through explicit CLI flags.
+- Startup output must include a local endpoint, process ID, and config source summary,
+  with secrets redacted.
+- Shutdown must be explicit through `/shutdown`, signal handling, or parent-process exit.
+- A future implementation should support a foreground mode first; background supervision
+  belongs to the host, not to public skill release artifacts.
+
+Auth and redaction rules:
+
+- Localhost-only smoke may run without auth when using an ephemeral port.
+- Any non-ephemeral or non-test mode must support an explicit bearer token or equivalent
+  local secret supplied by the host; the token must never appear in logs or traces.
+- Request logs may include route, mode, status, timing, and request IDs, but not API keys,
+  bearer tokens, full config paths, raw private endpoints, or full retrieved chunk text.
+- Responses should reuse existing sanitizer sidecars when reports are written to disk.
+
+No-network fake-client smoke plan:
+
+1. Start `ragflow-query serve --base-url https://ragflow.example.test --api-key test-key`
+   on `127.0.0.1:0` with a fake `RAGFlowClient`.
+2. Read the startup JSON to discover the ephemeral port.
+3. Call `/health` and assert schema, version, uptime, and `ok`.
+4. Call `/v1/query/direct` and assert it matches `ask --mode direct` JSON semantics,
+   including retrieval status and runtime resilience blocks.
+5. Call `/v1/query/host-assisted` and assert no script-owned LLM call is made; returned
+   evidence, plan, trace, and host synthesis contract remain audit-compatible.
+6. Call `/shutdown` and assert the process exits cleanly without leftover listeners.
+7. Verify generated logs and optional trace files pass redaction checks.
+
+Implementation gate:
+
+- Open a code implementation only after a host workflow confirms that one-shot CLI
+  commands are insufficient.
+- Add fake-client unit tests, local server smoke, release hygiene coverage for generated
+  logs/traces, and strict-vendor platform smoke before marking the `serve` command itself
+  complete.
+- Keep `ragflow-query serve` out of default release examples until the optional surface is
+  implemented and validated.
+
+Validation record (2026-07-01):
+
+- Design gate documented with endpoint, lifecycle, auth, redaction, no-network smoke, and
+  implementation-gate requirements.
+- The public release path is unchanged; no command behavior or release artifact was
+  modified by this design gate.
 
 ## Deferred Tracks
 

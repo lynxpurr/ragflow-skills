@@ -89,12 +89,12 @@ Completion priorities:
 
 Progress assessment:
 
-- Roadmap checklist status is 545 completed items out of 563 tracked items, about 97%.
-- The current non-live public CLI suite is complete for the planned portable archive
+- Roadmap checklist status is 546 completed items out of 563 tracked items, about 97%.
+- The portable public CLI suite is complete for the planned portable archive
   release path: core commands, release packaging, redaction, report inventories, runtime
   helper pilots, contract gates, installed archive smoke, and primary manifest JSON Schema
   checks are all closed.
-- The 18 remaining open checklist items are not ordinary implementation gaps. They are
+- The 17 remaining open checklist items are not ordinary implementation gaps. They are
   optional script-owned LLM/backend work, Phase 37 post-CLI adapter
   decisions/implementation, or private dedao bridge work outside the public release
   boundary.
@@ -108,7 +108,7 @@ normal offline continuation unless their gate is satisfied.
 
 | Category | Open items | Owning tasks | Gate before work starts | Next action |
 | --- | ---: | --- | --- | --- |
-| Local service / post-CLI host wrapper | 3 | Phase 3 optional `serve`, Backlog post-CLI service adapters, Phase 37.2 `serve` design gate | A real host workflow needs a persistent local tool endpoint instead of one-shot CLI commands | Collect the host workflow, then write a no-network `serve` design gate before code. |
+| Local service / post-CLI host wrapper | 2 | Phase 3 optional `serve`, Backlog post-CLI service adapters | A real host workflow confirms that one-shot CLI commands are insufficient | Use the completed Phase 37.2 design gate before any optional `serve` implementation. |
 | Other post-CLI product adapters | 4 | Remote conversion client, provider abstraction, reranker abstraction, web/API wrapper | Known endpoint/provider/product requirements plus fake fixtures and acceptance gates | Keep deferred; do not add generic adapter contracts. |
 | Optional script-owned LLM/backend execution | 7 | Grounded-QA LLM adapter, agentic-answer execution, reflection, evidence-only synthesis, LLM/RAGAS evaluator, related Phase 30 synthesis backlog | Explicit LLM config, deterministic fixtures, advisory-output marking, citation-audit compatibility, and redaction gates | Plan as one adapter track before any script-owned model call. |
 | Private dedao bridge | 4 | Preserve current dedao skills, optional private adapter, private handoff shape, no public references | A private adapter is explicitly needed and remains outside public release artifacts | Keep outside public `skills/`; consume public handoff contracts only. |
@@ -217,9 +217,10 @@ remain in their owning phases below.
 
 Recommended completion queue:
 
-1. If a concrete host needs a persistent local endpoint, run Phase 37.2 as a design-only
-   `ragflow-query serve` gate first: lifecycle, auth boundary, health/direct/host-assisted
-   schemas, shutdown behavior, redaction, and local fake-client smoke.
+1. If a concrete host needs a persistent local endpoint, implement optional
+   `ragflow-query serve` from the completed Phase 37.2 design gate: lifecycle, auth
+   boundary, health/direct/host-assisted schemas, shutdown behavior, redaction, and local
+   fake-client smoke.
 2. If optional script-owned LLM/RAGAS execution is approved, plan metadata/grounded-QA,
    agentic-answer, reflection, and evaluator backends together with deterministic fixtures,
    advisory-output marking, citation-audit compatibility, and redaction gates.
@@ -1732,8 +1733,8 @@ Tasks:
 - [x] Validate the selected adapter priority against a concrete user or host workflow.
 - [x] Implement Phase 37.1 wheel packaging design gate with no-network build/install smoke
   and optional runtime wheel export.
-- [ ] Implement Phase 37.2 `ragflow-query serve` design gate only if a host workflow needs
-  a local service wrapper.
+- [x] Document Phase 37.2 `ragflow-query serve` design gate for a future host workflow
+  that needs a local service wrapper.
 - [x] Keep remote conversion, provider abstraction, reranker adapter, and web/API wrapper
   deferred until their fixture shapes and acceptance gates are known.
 
@@ -1753,8 +1754,11 @@ Ubuntu hosts without `ensurepip`, it falls back to `pip install --target` plus
 wheel into an optional runtime-wheel artifact directory and writes
 `ragflow_runtime_wheel_export_v1`. The gate is optional and does not replace the canonical
 public skill archive release path. The selected priority is validated against the current
-Hermes/OpenClaw/Claude Code/opencode-style controlled CLI-agent handoff workflow; `serve`
-remains deferred until a host needs a persistent local tool endpoint instead of one-shot
+Hermes/OpenClaw/Claude Code/opencode-style controlled CLI-agent handoff workflow. Phase
+37.2 now documents the optional `ragflow-query serve` design gate: health, direct query,
+host-assisted query, shutdown, localhost binding, auth/redaction boundaries, and
+fake-client no-network smoke. The `serve` command implementation remains deferred until a
+host confirms it needs a persistent local tool endpoint instead of one-shot
 artifact-producing CLI commands. Remote conversion clients, provider abstraction, reranker
 adapters, and web/API wrappers are explicitly deferred until concrete endpoint, provider,
 fixture, and acceptance shapes are known. The Phase 37.1 wheel smoke and full offline
