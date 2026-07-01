@@ -107,6 +107,19 @@ Exit criteria:
 - No new runtime dependency or host daemon is required.
 - Public skill behavior remains unchanged.
 
+Validation record (2026-07-01):
+
+- `python3 tools/wheel_packaging_smoke.py --work-dir /tmp/ragflow-wheel-smoke-phase37-final --overwrite`
+  passed. The current Ubuntu host lacks `python3-venv`, so the smoke used the isolated
+  `--target` fallback and imported `ragflow_skill_runtime-0.1.0` from the installed wheel.
+- The full offline release-facing chain passed after the Phase 37.1 wheel gate:
+  `python3 -m pytest packages/ragflow-skill-runtime/tests -q`,
+  `git diff --check`, `python3 tools/manifest_schema_check.py`,
+  `python3 tools/release_hygiene_check.py`, `python3 tools/build_release.py --check`,
+  `python3 tools/export_release_archives.py`,
+  `python3 tools/consumer_acceptance.py --work-dir /tmp/ragflow-consumer-acceptance-20260701-phase37 --overwrite`,
+  and `python3 tools/platform_smoke_matrix.py --profile strict-vendor-env --work-dir /tmp/ragflow-platform-strict-vendor-20260701-phase37`.
+
 ## Phase 37.2: Serve Design Gate
 
 Planned outputs:

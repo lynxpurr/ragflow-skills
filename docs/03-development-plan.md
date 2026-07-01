@@ -1652,7 +1652,9 @@ Hermes/OpenClaw/Claude Code/opencode-style controlled CLI-agent handoff workflow
 remains deferred until a host needs a persistent local tool endpoint instead of one-shot
 artifact-producing CLI commands. Remote conversion clients, provider abstraction, reranker
 adapters, and web/API wrappers are explicitly deferred until concrete endpoint, provider,
-fixture, and acceptance shapes are known.
+fixture, and acceptance shapes are known. The Phase 37.1 wheel smoke and full offline
+release-facing validation chain passed on 2026-07-01, so the archive release path remains
+green after the post-CLI adapter planning work.
 
 ## Definition of Done
 
