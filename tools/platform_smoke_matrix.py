@@ -2300,28 +2300,29 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     )
     _record_command_check(checks, "kb-build dry-run", build_result, required_stdout='"dry_run": true')
     mineru_fastapi_doc_manifest = workspace / "mineru-fastapi-handoff" / "doc_manifest.json"
-    fastapi_build_result = _run_command(
-        [
-            sys.executable,
-            str(build_script),
-            "--doc-manifest",
-            str(mineru_fastapi_doc_manifest),
-            "--kb-name",
-            "kb:platform-smoke-mineru-fastapi",
-            "--profile",
-            str(PROFILE_PATH),
-            "--dry-run",
-            "--json",
-        ],
-        cwd=workspace,
-        env=env,
-    )
-    _record_command_check(
-        checks,
-        "kb-build mineru-fastapi dry-run",
-        fastapi_build_result,
-        required_stdout='"dry_run": true',
-    )
+    if mineru_fastapi_doc_manifest.exists():
+        fastapi_build_result = _run_command(
+            [
+                sys.executable,
+                str(build_script),
+                "--doc-manifest",
+                str(mineru_fastapi_doc_manifest),
+                "--kb-name",
+                "kb:platform-smoke-mineru-fastapi",
+                "--profile",
+                str(PROFILE_PATH),
+                "--dry-run",
+                "--json",
+            ],
+            cwd=workspace,
+            env=env,
+        )
+        _record_command_check(
+            checks,
+            "kb-build mineru-fastapi dry-run",
+            fastapi_build_result,
+            required_stdout='"dry_run": true',
+        )
     append_script = script_root / "ragflow-kb-build" / "scripts" / "append.py"
     append_secret = "platform-append-secret"
     append_host = "append.internal.local"

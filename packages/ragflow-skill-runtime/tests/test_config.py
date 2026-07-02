@@ -69,7 +69,8 @@ class ConfigTests(unittest.TestCase):
                 "  cli_path: ${MINERU_CLI_PATH}\n"
                 "  cli_backend: pipeline\n"
                 "  timeout: 123\n"
-                "  enable_table: true\n",
+                "  enable_table: true\n"
+                "  verify_ssl: false\n",
                 encoding="utf-8",
             )
             data = read_config_file(
@@ -88,6 +89,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(data["mineru"]["cli_backend"], "pipeline")
         self.assertEqual(data["mineru"]["timeout"], 123)
         self.assertTrue(data["mineru"]["enable_table"])
+        self.assertFalse(data["mineru"]["verify_ssl"])
 
     def test_load_skill_config_merges_project_local_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -131,6 +133,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.mineru.cli_path, "/opt/mineru/bin/mineru")
         self.assertEqual(config.mineru.cli_backend, "pipeline")
         self.assertEqual(config.mineru.timeout, 120)
+        self.assertTrue(config.mineru.verify_ssl)
 
     def test_load_skill_config_reads_mineru_cli_from_environment(self) -> None:
         config = load_skill_config(
@@ -152,6 +155,16 @@ class ConfigTests(unittest.TestCase):
         )
 
         self.assertFalse(config.verify_ssl)
+
+    def test_environment_overrides_mineru_verify_ssl(self) -> None:
+        config = load_skill_config(
+            env={
+                "MINERU_BASE_URL": "https://mineru.example.test",
+                "MINERU_VERIFY_SSL": "false",
+            }
+        )
+
+        self.assertFalse(config.mineru.verify_ssl)
 
     def test_missing_base_url_raises_when_normalized_property_used(self) -> None:
         config = load_config(env={})

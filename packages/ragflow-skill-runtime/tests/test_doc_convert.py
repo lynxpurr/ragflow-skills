@@ -203,6 +203,7 @@ class DocConvertTests(unittest.TestCase):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
+        remote_attempts: list[dict[str, object]] = []
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 source_path = Path(tmp) / "paper.pdf"
@@ -218,6 +219,7 @@ class DocConvertTests(unittest.TestCase):
                     enable_table=False,
                     is_ocr=True,
                     enable_formula=False,
+                    remote_attempts=remote_attempts,
                 )
         finally:
             server.shutdown()
@@ -241,6 +243,17 @@ class DocConvertTests(unittest.TestCase):
         self.assertIn('name="end_page_id"', body)
         self.assertIn("3", body)
         self.assertEqual(captured["status_calls"], 1)
+        self.assertEqual(len(remote_attempts), 1)
+        attempt = remote_attempts[0]
+        self.assertEqual(attempt["status"], "success")
+        self.assertEqual(attempt["task_id"], "task-fastapi")
+        self.assertEqual(attempt["poll_count"], 1)
+        self.assertEqual(attempt["status_history"], ["completed"])
+        self.assertEqual(attempt["final_status"], "completed")
+        self.assertEqual(attempt["http_attempts"], 3)
+        self.assertEqual(attempt["retry_count"], 0)
+        self.assertEqual(attempt["endpoint"], "http://<redacted-host>")
+        self.assertNotIn(str(server.server_port), str(attempt["endpoint"]))
 
     def test_mineru_fastapi_convert_task_failed(self) -> None:
         class Handler(BaseHTTPRequestHandler):
@@ -267,6 +280,7 @@ class DocConvertTests(unittest.TestCase):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
+        remote_attempts: list[dict[str, object]] = []
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 source_path = Path(tmp) / "paper.pdf"
@@ -277,11 +291,64 @@ class DocConvertTests(unittest.TestCase):
                         base_url=f"http://127.0.0.1:{server.server_port}",
                         timeout=5,
                         poll_interval=0.01,
+                        remote_attempts=remote_attempts,
                     )
         finally:
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+        self.assertEqual(len(remote_attempts), 1)
+        self.assertEqual(remote_attempts[0]["status"], "failed")
+        self.assertEqual(remote_attempts[0]["error_category"], "task_failed")
+        self.assertEqual(remote_attempts[0]["failed_stage"], "poll")
+        self.assertEqual(remote_attempts[0]["final_status"], "failed")
+
+    def test_mineru_fastapi_error_status_is_task_failed(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                raw = json.dumps({"task_id": "task-error"}).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self) -> None:  # noqa: N802
+                raw = json.dumps({"task_id": "task-error", "status": "error", "message": "remote error"}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        remote_attempts: list[dict[str, object]] = []
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                source_path = Path(tmp) / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake")
+                with self.assertRaisesRegex(DocConvertError, "remote error"):
+                    mineru_fastapi_convert(
+                        SourceDocument(path=source_path, source_path="paper.pdf"),
+                        base_url=f"http://127.0.0.1:{server.server_port}",
+                        timeout=5,
+                        poll_interval=0.01,
+                        remote_attempts=remote_attempts,
+                    )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(remote_attempts[0]["error_category"], "task_failed")
+        self.assertEqual(remote_attempts[0]["final_status"], "error")
 
     def test_mineru_fastapi_convert_timeout(self) -> None:
         class Handler(BaseHTTPRequestHandler):
@@ -323,6 +390,225 @@ class DocConvertTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_mineru_fastapi_retries_transient_http_error(self) -> None:
+        captured: dict[str, object] = {"post_calls": 0}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                captured["post_calls"] = int(captured["post_calls"]) + 1
+                if captured["post_calls"] == 1:
+                    body = b"temporary overload"
+                    self.send_response(503)
+                    self.send_header("Content-Type", "text/plain")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                raw = json.dumps({"task_id": "task-retry"}).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/tasks/task-retry":
+                    raw = json.dumps({"task_id": "task-retry", "status": "done"}).encode("utf-8")
+                else:
+                    raw = json.dumps({"markdown": "# Retried\n"}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        remote_attempts: list[dict[str, object]] = []
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                source_path = Path(tmp) / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake")
+                markdown = mineru_fastapi_convert(
+                    SourceDocument(path=source_path, source_path="paper.pdf"),
+                    base_url=f"http://127.0.0.1:{server.server_port}",
+                    timeout=5,
+                    poll_interval=0.01,
+                    remote_attempts=remote_attempts,
+                    retry_backoff_seconds=0.01,
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(markdown, "# Retried\n")
+        self.assertEqual(captured["post_calls"], 2)
+        self.assertEqual(remote_attempts[0]["status"], "success")
+        self.assertEqual(remote_attempts[0]["retry_count"], 1)
+        self.assertEqual(remote_attempts[0]["http_attempts"], 4)
+
+    def test_mineru_fastapi_records_pending_state_sequence(self) -> None:
+        states = ["pending", "queued", "processing", "running", "completed"]
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                raw = json.dumps({"task_id": "task-states"}).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/tasks/task-states":
+                    state = states.pop(0)
+                    raw = json.dumps({"task_id": "task-states", "status": state}).encode("utf-8")
+                else:
+                    raw = json.dumps({"markdown": "# States\n"}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        remote_attempts: list[dict[str, object]] = []
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                source_path = Path(tmp) / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake")
+                mineru_fastapi_convert(
+                    SourceDocument(path=source_path, source_path="paper.pdf"),
+                    base_url=f"http://127.0.0.1:{server.server_port}",
+                    timeout=5,
+                    poll_interval=0.01,
+                    remote_attempts=remote_attempts,
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(
+            remote_attempts[0]["status_history"],
+            ["pending", "queued", "processing", "running", "completed"],
+        )
+        self.assertEqual(remote_attempts[0]["poll_count"], 5)
+
+    def test_mineru_fastapi_result_missing_and_empty_have_stable_categories(self) -> None:
+        scenarios = [
+            ({"results": {"paper": {"pages": 1}}}, "result_missing"),
+            ({"results": {"paper": {"md_content": "   "}}}, "result_empty"),
+        ]
+        for result_payload, expected_category in scenarios:
+            with self.subTest(expected_category=expected_category):
+                class Handler(BaseHTTPRequestHandler):
+                    def do_POST(self) -> None:  # noqa: N802
+                        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                        raw = json.dumps({"task_id": "task-result"}).encode("utf-8")
+                        self.send_response(202)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(raw)))
+                        self.end_headers()
+                        self.wfile.write(raw)
+
+                    def do_GET(self) -> None:  # noqa: N802
+                        if self.path == "/tasks/task-result":
+                            raw = json.dumps({"task_id": "task-result", "status": "completed"}).encode("utf-8")
+                        else:
+                            raw = json.dumps(result_payload).encode("utf-8")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(raw)))
+                        self.end_headers()
+                        self.wfile.write(raw)
+
+                    def log_message(self, _format: str, *args: object) -> None:
+                        return
+
+                server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                remote_attempts: list[dict[str, object]] = []
+                try:
+                    with tempfile.TemporaryDirectory() as tmp:
+                        source_path = Path(tmp) / "paper.pdf"
+                        source_path.write_bytes(b"%PDF fake")
+                        with self.assertRaises(DocConvertError):
+                            mineru_fastapi_convert(
+                                SourceDocument(path=source_path, source_path="paper.pdf"),
+                                base_url=f"http://127.0.0.1:{server.server_port}",
+                                timeout=5,
+                                poll_interval=0.01,
+                                remote_attempts=remote_attempts,
+                            )
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=2)
+
+                self.assertEqual(remote_attempts[0]["status"], "failed")
+                self.assertEqual(remote_attempts[0]["error_category"], expected_category)
+                self.assertEqual(remote_attempts[0]["failed_stage"], "result")
+
+    def test_mineru_fastapi_unknown_status_is_protocol_error(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                raw = json.dumps({"task_id": "task-unknown"}).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self) -> None:  # noqa: N802
+                raw = json.dumps({"task_id": "task-unknown", "status": "mystery"}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        remote_attempts: list[dict[str, object]] = []
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                source_path = Path(tmp) / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake")
+                with self.assertRaisesRegex(DocConvertError, "unknown state"):
+                    mineru_fastapi_convert(
+                        SourceDocument(path=source_path, source_path="paper.pdf"),
+                        base_url=f"http://127.0.0.1:{server.server_port}",
+                        timeout=5,
+                        poll_interval=0.01,
+                        remote_attempts=remote_attempts,
+                    )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(remote_attempts[0]["error_category"], "protocol_error")
+        self.assertEqual(remote_attempts[0]["final_status"], "mystery")
 
     def test_probe_mineru_fastapi_available(self) -> None:
         captured: dict[str, object] = {}
@@ -372,6 +658,37 @@ class DocConvertTests(unittest.TestCase):
         self.assertEqual(report["runtime_partial_failure"]["summary"]["status"], "completed")
         self.assertEqual(captured["path"], "/health")
         self.assertEqual(captured["auth"], "Bearer probe-secret")
+
+    def test_probe_mineru_fastapi_rejects_missing_protocol_version(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                raw = json.dumps({"status": "healthy", "version": "3.2.1"}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            report = probe_conversion_backends(
+                backend="mineru-fastapi",
+                mineru_base_url=f"http://127.0.0.1:{server.server_port}",
+                network_check=True,
+                timeout=2,
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(report["backends"][0]["status"], "wrong_protocol")
+        self.assertIn("protocol_version must be 2", report["backends"][0]["reasons"][0])
 
     def test_probe_mineru_fastapi_skips_network_without_network_check(self) -> None:
         report = probe_conversion_backends(

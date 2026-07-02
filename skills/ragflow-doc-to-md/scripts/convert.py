@@ -625,12 +625,14 @@ def _make_runtime_report(
     *,
     output_root: Path,
     process_attempts: list[dict[str, Any]],
+    remote_attempts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
-    if not process_attempts:
+    if not process_attempts and not remote_attempts:
         return None
     return make_doc_runtime_report_payload(
         output_root=output_root,
         process_attempts=process_attempts,
+        remote_attempts=remote_attempts,
     )
 
 
@@ -783,6 +785,13 @@ def _run(args: argparse.Namespace) -> int:
             3.0,
             label="MINERU_POLL_INTERVAL",
         )
+        mineru_verify_ssl = _bool_config_or_arg(
+            args,
+            "mineru_verify_ssl",
+            config.mineru.verify_ssl,
+            True,
+            label="MINERU_VERIFY_SSL",
+        )
         output_root = Path(args.output).expanduser().resolve()
         sources = discover_source_documents(args.input, recursive=not args.no_recursive)
         sources = [
@@ -799,6 +808,7 @@ def _run(args: argparse.Namespace) -> int:
         converted: list[ConvertedDocument] = []
         skipped: list[dict[str, str]] = []
         process_attempts: list[dict[str, Any]] = []
+        remote_attempts: list[dict[str, Any]] = []
 
         for source in sources:
             output_name = safe_markdown_name(source, used=used_names)
@@ -815,6 +825,7 @@ def _run(args: argparse.Namespace) -> int:
                     mineru_api_key=mineru_api_key,
                     mineru_timeout=mineru_timeout,
                     mineru_poll_interval=mineru_poll_interval,
+                    mineru_verify_ssl=mineru_verify_ssl,
                     mineru_cli_path=mineru_cli_path,
                     mineru_cli_backend=_config_or_arg(
                         args,
@@ -848,6 +859,7 @@ def _run(args: argparse.Namespace) -> int:
                         label="MINERU_ENABLE_FORMULA",
                     ),
                     process_attempts=process_attempts,
+                    remote_attempts=remote_attempts,
                     allow_image_fallback=not args.no_image_fallback,
                 )
             except (UnicodeDecodeError, OSError, DocConvertError) as exc:
@@ -855,6 +867,7 @@ def _run(args: argparse.Namespace) -> int:
                     runtime_report = _make_runtime_report(
                         output_root=output_root,
                         process_attempts=process_attempts,
+                        remote_attempts=remote_attempts,
                     )
                     _, runtime_report = _sanitize_conversion_reports(
                         quality_report=None,
@@ -891,8 +904,26 @@ def _run(args: argparse.Namespace) -> int:
         runtime_report = _make_runtime_report(
             output_root=output_root,
             process_attempts=process_attempts,
+            remote_attempts=remote_attempts,
         )
         if not converted:
+            _, runtime_report = _sanitize_conversion_reports(
+                quality_report=None,
+                runtime_report=runtime_report,
+                args=args,
+                config=config,
+                output_root=output_root,
+                remote_url=remote_url,
+                remote_api_key=remote_api_key,
+                mineru_base_url=mineru_base_url,
+                mineru_api_key=mineru_api_key,
+                mineru_cli_path=mineru_cli_path,
+            )
+            _write_runtime_report_payload(
+                output_root=output_root,
+                args=args,
+                report=runtime_report,
+            )
             raise DocConvertError("no documents were converted")
 
         manifest = make_doc_manifest_payload(output_root=output_root, documents=converted)
@@ -1227,12 +1258,20 @@ def _run_backend_probe(args: argparse.Namespace) -> int:
         mineru_base_url = _config_or_arg(args, "mineru_base_url", config.mineru.base_url)
         mineru_api_key = _config_or_arg(args, "mineru_api_key", config.mineru.api_key)
         mineru_cli_path = _config_or_arg(args, "mineru_cli_path", config.mineru.cli_path)
+        mineru_verify_ssl = _bool_config_or_arg(
+            args,
+            "mineru_verify_ssl",
+            config.mineru.verify_ssl,
+            True,
+            label="MINERU_VERIFY_SSL",
+        )
         report = probe_conversion_backends(
             backend=backend,
             remote_url=remote_url,
             mineru_base_url=mineru_base_url,
             mineru_api_key=mineru_api_key,
             mineru_cli_path=mineru_cli_path,
+            mineru_verify_ssl=mineru_verify_ssl,
             network_check=args.network_check,
             timeout=args.probe_timeout,
         )
@@ -1299,6 +1338,13 @@ def _run_backend_warmup(args: argparse.Namespace) -> int:
                 config.mineru.poll_interval,
                 3.0,
                 label="MINERU_POLL_INTERVAL",
+            ),
+            mineru_verify_ssl=_bool_config_or_arg(
+                args,
+                "mineru_verify_ssl",
+                config.mineru.verify_ssl,
+                True,
+                label="MINERU_VERIFY_SSL",
             ),
             mineru_cli_path=_config_or_arg(args, "mineru_cli_path", config.mineru.cli_path),
             mineru_cli_backend=_config_or_arg(
@@ -1452,6 +1498,7 @@ def _add_backend_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--remote-url", help="Remote conversion endpoint; defaults to DOC_TO_MD_REMOTE_URL")
     parser.add_argument("--mineru-base-url", help="MinerU service base URL")
     parser.add_argument("--mineru-api-key", help="MinerU API key; probe reports presence only, warmup uses it for service calls")
+    parser.add_argument("--mineru-verify-ssl", help="MinerU TLS certificate verification true/false; defaults to MINERU_VERIFY_SSL or true")
     parser.add_argument("--mineru-cli-path", help="Local MinerU CLI path; defaults to MINERU_CLI_PATH or PATH lookup")
 
 
@@ -1508,6 +1555,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mineru-api-key", help="MinerU API key; defaults to MINERU_API_KEY")
     parser.add_argument("--mineru-timeout", type=float, help="MinerU parse timeout in seconds; defaults to MINERU_TIMEOUT or 300")
     parser.add_argument("--mineru-poll-interval", type=float, help="MinerU parse polling interval; defaults to MINERU_POLL_INTERVAL or 3")
+    parser.add_argument("--mineru-verify-ssl", help="MinerU TLS certificate verification true/false; defaults to MINERU_VERIFY_SSL or true")
     parser.add_argument("--mineru-cli-path", help="Local MinerU CLI path; defaults to MINERU_CLI_PATH, mineru.cli_path, or PATH lookup")
     parser.add_argument("--mineru-cli-backend", help="Local MinerU CLI backend passed with -b; defaults to MINERU_CLI_BACKEND, mineru.cli_backend, or pipeline")
     parser.add_argument("--mineru-language", help="MinerU language option; defaults to MINERU_LANGUAGE or ch")

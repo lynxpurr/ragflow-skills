@@ -29,6 +29,7 @@ mineru:
   api_key: ${MINERU_API_KEY}
   timeout: 1800
   poll_interval: 3
+  verify_ssl: true
   language: ch
   page_range:
   enable_table: true

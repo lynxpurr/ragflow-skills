@@ -11,6 +11,7 @@ import re
 import shutil
 import signal
 import socket
+import ssl
 import subprocess
 import tempfile
 import time
@@ -28,6 +29,25 @@ from .runtime_resilience import build_runtime_partial_failure_report
 
 class DocConvertError(RuntimeError):
     """Raised when document conversion cannot proceed."""
+
+
+class MinerUFastAPIError(DocConvertError):
+    """Raised for categorized MinerU FastAPI async protocol failures."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str,
+        stage: str | None = None,
+        http_status: int | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(message)
+        self.category = category
+        self.stage = stage
+        self.http_status = http_status
+        self.retryable = retryable
 
 
 MARKDOWN_EXTENSIONS = {".md", ".markdown", ".mdown", ".mkd"}
@@ -86,6 +106,7 @@ MINERU_FAILED_STATE = "failed"
 MINERU_FASTAPI_DONE_STATES = {"completed", "done"}
 MINERU_FASTAPI_FAILED_STATES = {"failed", "fail", "error"}
 MINERU_FASTAPI_PENDING_STATES = {"pending", "processing", "queued", "running"}
+MINERU_FASTAPI_RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
 MINERU_FASTAPI_DEFAULT_END_PAGE_ID = 99999
 MARKDOWN_IMAGE_RE = re.compile(r"(!\[[^\]]*]\()([^)]+)(\))")
 HTML_IMAGE_SRC_RE = re.compile(r"(<img\b[^>]*?\bsrc=[\"'])([^\"']+)([\"'][^>]*>)", re.IGNORECASE)
@@ -372,10 +393,16 @@ def _json_request(
     return data
 
 
-def _download_text(url: str, *, timeout: float) -> str:
+def _ssl_context(*, verify_ssl: bool) -> ssl.SSLContext | None:
+    if verify_ssl:
+        return None
+    return ssl._create_unverified_context()
+
+
+def _download_text(url: str, *, timeout: float, verify_ssl: bool = True) -> str:
     req = request.Request(url, headers={"Accept": "text/markdown,text/plain,*/*"})
     try:
-        with request.urlopen(req, timeout=timeout) as resp:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
             return resp.read().decode("utf-8")
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
@@ -438,7 +465,12 @@ def _multipart_body(
     return b"".join(chunks), boundary
 
 
-def _extract_markdown_from_mapping(data: Mapping[str, Any], *, timeout: float) -> str | None:
+def _extract_markdown_from_mapping(
+    data: Mapping[str, Any],
+    *,
+    timeout: float,
+    verify_ssl: bool = True,
+) -> str | None:
     for key in ("markdown", "content", "md", "text", "result"):
         value = data.get(key)
         if isinstance(value, str) and value.strip():
@@ -451,27 +483,90 @@ def _extract_markdown_from_mapping(data: Mapping[str, Any], *, timeout: float) -
     for key in ("markdown_url", "md_url", "url"):
         value = data.get(key)
         if isinstance(value, str) and value.strip():
-            return _download_text(value, timeout=timeout)
+            return _download_text(value, timeout=timeout, verify_ssl=verify_ssl)
 
     for key in ("data", "result", "results", "output"):
         value = data.get(key)
         if isinstance(value, Mapping):
-            markdown = _extract_markdown_from_mapping(value, timeout=timeout)
+            markdown = _extract_markdown_from_mapping(value, timeout=timeout, verify_ssl=verify_ssl)
             if markdown is not None:
                 return markdown
 
     for value in data.values():
         if isinstance(value, Mapping):
-            markdown = _extract_markdown_from_mapping(value, timeout=timeout)
+            markdown = _extract_markdown_from_mapping(value, timeout=timeout, verify_ssl=verify_ssl)
             if markdown is not None:
                 return markdown
         if isinstance(value, list):
             for item in value:
                 if isinstance(item, Mapping):
-                    markdown = _extract_markdown_from_mapping(item, timeout=timeout)
+                    markdown = _extract_markdown_from_mapping(item, timeout=timeout, verify_ssl=verify_ssl)
                     if markdown is not None:
                         return markdown
     return None
+
+
+def _extract_markdown_candidate_from_mapping(
+    data: Mapping[str, Any],
+    *,
+    timeout: float,
+    verify_ssl: bool = True,
+) -> tuple[bool, str | None]:
+    for key in ("markdown", "content", "md", "text", "result", "md_content"):
+        if key not in data:
+            continue
+        value = data.get(key)
+        if isinstance(value, str):
+            return True, value
+        if isinstance(value, Mapping):
+            found, markdown = _extract_markdown_candidate_from_mapping(
+                value,
+                timeout=timeout,
+                verify_ssl=verify_ssl,
+            )
+            if found:
+                return found, markdown
+
+    for key in ("markdown_url", "md_url", "url"):
+        if key not in data:
+            continue
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return True, _download_text(value, timeout=timeout, verify_ssl=verify_ssl)
+        if isinstance(value, str):
+            return True, ""
+
+    for key in ("data", "result", "results", "output"):
+        value = data.get(key)
+        if isinstance(value, Mapping):
+            found, markdown = _extract_markdown_candidate_from_mapping(
+                value,
+                timeout=timeout,
+                verify_ssl=verify_ssl,
+            )
+            if found:
+                return found, markdown
+
+    for value in data.values():
+        if isinstance(value, Mapping):
+            found, markdown = _extract_markdown_candidate_from_mapping(
+                value,
+                timeout=timeout,
+                verify_ssl=verify_ssl,
+            )
+            if found:
+                return found, markdown
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, Mapping):
+                    found, markdown = _extract_markdown_candidate_from_mapping(
+                        item,
+                        timeout=timeout,
+                        verify_ssl=verify_ssl,
+                    )
+                    if found:
+                        return found, markdown
+    return False, None
 
 
 def _validate_mineru_response_status(data: Mapping[str, Any]) -> None:
@@ -687,6 +782,233 @@ def _multipart_json_request(
     return data
 
 
+def _redacted_endpoint(url: str | None) -> str | None:
+    if not url:
+        return None
+    parsed = urlparse(str(url))
+    if parsed.scheme not in {"http", "https"}:
+        return "<redacted-endpoint>"
+    path = parsed.path.rstrip("/")
+    return f"{parsed.scheme}://<redacted-host>{path}"
+
+
+def _trim_remote_detail(detail: str, *, limit: int = 500) -> str:
+    value = re.sub(r"https?://[^\s\"'<>]+", "<redacted-url>", detail.strip())
+    value = re.sub(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer <redacted>", value)
+    if len(value) <= limit:
+        return value
+    return value[: limit - 3] + "..."
+
+
+def _mineru_fastapi_http_category(code: int) -> str:
+    if code in {401, 403}:
+        return "auth_failed"
+    if code in {408, 504}:
+        return "request_timeout"
+    if code == 429 or 500 <= code <= 599:
+        return "transient_remote_error"
+    return "protocol_error"
+
+
+def _mineru_fastapi_request_json_once(
+    url: str,
+    *,
+    method: str = "GET",
+    payload: Mapping[str, Any] | None = None,
+    api_key: str | None = None,
+    timeout: float = 120.0,
+    verify_ssl: bool = True,
+    stage: str,
+) -> Mapping[str, Any]:
+    headers = {"Accept": "application/json"}
+    body = None
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except error.HTTPError as exc:
+        detail = _trim_remote_detail(exc.read().decode("utf-8", errors="replace"))
+        category = _mineru_fastapi_http_category(exc.code)
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} failed with HTTP {exc.code}: {detail}",
+            category=category,
+            stage=stage,
+            http_status=exc.code,
+            retryable=exc.code in MINERU_FASTAPI_RETRY_HTTP_CODES,
+        ) from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} timed out after {timeout:g}s",
+            category="request_timeout",
+            stage=stage,
+            retryable=True,
+        ) from exc
+    except error.URLError as exc:
+        reason = exc.reason
+        category = "request_timeout" if isinstance(reason, (TimeoutError, socket.timeout)) else "transient_remote_error"
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} request failed: {reason}",
+            category=category,
+            stage=stage,
+            retryable=True,
+        ) from exc
+    except OSError as exc:
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} request failed: {exc}",
+            category="transient_remote_error",
+            stage=stage,
+            retryable=True,
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} response is not valid JSON",
+            category="protocol_error",
+            stage=stage,
+        ) from exc
+    if not isinstance(data, Mapping):
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} response must be a JSON object",
+            category="protocol_error",
+            stage=stage,
+        )
+    code = data.get("code")
+    if code not in (None, 0, "0", 200, "200"):
+        message = data.get("msg") or data.get("message") or data.get("error") or "unknown MinerU FastAPI error"
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} response returned code {code}: {message}",
+            category="protocol_error",
+            stage=stage,
+        )
+    return data
+
+
+def _mineru_fastapi_multipart_json_once(
+    url: str,
+    *,
+    fields: Mapping[str, Any],
+    file_field: str,
+    filename: str,
+    file_content: bytes,
+    api_key: str | None = None,
+    timeout: float = 120.0,
+    verify_ssl: bool = True,
+    stage: str,
+) -> Mapping[str, Any]:
+    body, boundary = _multipart_body(
+        fields=fields,
+        file_field=file_field,
+        filename=filename,
+        file_content=file_content,
+    )
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except error.HTTPError as exc:
+        detail = _trim_remote_detail(exc.read().decode("utf-8", errors="replace"))
+        category = _mineru_fastapi_http_category(exc.code)
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} failed with HTTP {exc.code}: {detail}",
+            category=category,
+            stage=stage,
+            http_status=exc.code,
+            retryable=exc.code in MINERU_FASTAPI_RETRY_HTTP_CODES,
+        ) from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} timed out after {timeout:g}s",
+            category="request_timeout",
+            stage=stage,
+            retryable=True,
+        ) from exc
+    except error.URLError as exc:
+        reason = exc.reason
+        category = "request_timeout" if isinstance(reason, (TimeoutError, socket.timeout)) else "transient_remote_error"
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} request failed: {reason}",
+            category=category,
+            stage=stage,
+            retryable=True,
+        ) from exc
+    except OSError as exc:
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} request failed: {exc}",
+            category="transient_remote_error",
+            stage=stage,
+            retryable=True,
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} response is not valid JSON",
+            category="protocol_error",
+            stage=stage,
+        ) from exc
+    if not isinstance(data, Mapping):
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} response must be a JSON object",
+            category="protocol_error",
+            stage=stage,
+        )
+    code = data.get("code")
+    if code not in (None, 0, "0", 200, "200"):
+        message = data.get("msg") or data.get("message") or data.get("error") or "unknown MinerU FastAPI error"
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} response returned code {code}: {message}",
+            category="protocol_error",
+            stage=stage,
+        )
+    return data
+
+
+def _mineru_fastapi_retry_delay(backoff: float, retry_index: int, *, deadline: float) -> float:
+    delay = max(backoff, 0.0) * (2 ** max(retry_index - 1, 0))
+    remaining = max(deadline - time.monotonic(), 0.0)
+    return min(delay, remaining)
+
+
+def _mineru_fastapi_call_with_retries(
+    operation,
+    *,
+    stage: str,
+    deadline: float,
+    retry_budget: int,
+    retry_backoff_seconds: float,
+    metrics: dict[str, int],
+) -> Mapping[str, Any]:
+    retries = 0
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise MinerUFastAPIError(
+                f"MinerU FastAPI {stage} timed out before the next request",
+                category="request_timeout",
+                stage=stage,
+            )
+        metrics["http_attempts"] = int(metrics.get("http_attempts", 0)) + 1
+        try:
+            return operation(timeout=min(max(remaining, 0.1), 120.0))
+        except MinerUFastAPIError as exc:
+            if not exc.retryable or retries >= retry_budget:
+                raise
+            delay = _mineru_fastapi_retry_delay(retry_backoff_seconds, retries + 1, deadline=deadline)
+            if delay <= 0:
+                raise
+            retries += 1
+            metrics["retry_count"] = int(metrics.get("retry_count", 0)) + 1
+            time.sleep(delay)
+
+
 def _mineru_fastapi_page_bounds(page_range: str | None) -> tuple[int, int]:
     if not page_range:
         return 0, MINERU_FASTAPI_DEFAULT_END_PAGE_ID
@@ -723,7 +1045,26 @@ def _extract_mineru_task_id(data: Mapping[str, Any]) -> str:
         task_id = nested.get("task_id")
         if isinstance(task_id, str) and task_id:
             return task_id
-    raise DocConvertError("MinerU FastAPI create-task response missing task_id")
+    raise MinerUFastAPIError(
+        "MinerU FastAPI create-task response missing task_id",
+        category="protocol_error",
+        stage="submit",
+    )
+
+
+def _mineru_fastapi_status_state(data: Mapping[str, Any]) -> str:
+    state = data.get("status") or data.get("state")
+    if not isinstance(state, str):
+        nested = data.get("data")
+        if isinstance(nested, Mapping):
+            state = nested.get("status") or nested.get("state")
+    if not isinstance(state, str):
+        raise MinerUFastAPIError(
+            "MinerU FastAPI status response missing status",
+            category="protocol_error",
+            stage="poll",
+        )
+    return state
 
 
 def _mineru_fastapi_error_message(data: Mapping[str, Any]) -> str:
@@ -741,6 +1082,7 @@ def _probe_mineru_fastapi_backend(
     api_key: str | None,
     network_check: bool,
     timeout: float,
+    verify_ssl: bool = True,
 ) -> dict[str, Any]:
     valid, reason = _valid_http_url(base_url)
     checks = [
@@ -765,7 +1107,7 @@ def _probe_mineru_fastapi_backend(
         headers["Authorization"] = f"Bearer {api_key}"
     req = request.Request(f"{base_url.rstrip('/')}/health", headers=headers, method="GET")
     try:
-        with request.urlopen(req, timeout=timeout) as resp:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
@@ -824,6 +1166,14 @@ def _probe_mineru_fastapi_backend(
     protocol_version = payload.get("protocol_version")
     checks.append({"name": "health_status", "ok": status == "healthy"})
     checks.append({"name": "protocol_version", "ok": protocol_version == 2})
+    checks.append({"name": "verify_ssl", "ok": bool(verify_ssl)})
+    if not isinstance(status, str):
+        return _backend_probe_entry(
+            backend,
+            "wrong_protocol",
+            ["health endpoint status field must be a string"],
+            checks,
+        )
     if status == "healthy" and protocol_version == 2:
         return _backend_probe_entry(
             backend,
@@ -863,11 +1213,15 @@ def mineru_fastapi_convert(
     api_key: str | None = None,
     timeout: float = 300.0,
     poll_interval: float = 3.0,
+    verify_ssl: bool = True,
     language: str = "ch",
     page_range: str | None = None,
     enable_table: bool = True,
     is_ocr: bool = False,
     enable_formula: bool = True,
+    remote_attempts: list[dict[str, Any]] | None = None,
+    retry_budget: int = 2,
+    retry_backoff_seconds: float = 0.25,
 ) -> str:
     """Convert one file through the MinerU 3.2+ FastAPI async task API."""
 
@@ -875,6 +1229,10 @@ def mineru_fastapi_convert(
         raise DocConvertError("MinerU FastAPI timeout must be greater than zero")
     if poll_interval <= 0:
         raise DocConvertError("MinerU FastAPI poll interval must be greater than zero")
+    if retry_budget < 0:
+        raise DocConvertError("MinerU FastAPI retry budget must be zero or greater")
+    if retry_backoff_seconds < 0:
+        raise DocConvertError("MinerU FastAPI retry backoff must be zero or greater")
     if not base_url:
         raise DocConvertError("mineru-fastapi backend requires --mineru-base-url or MINERU_BASE_URL")
 
@@ -899,55 +1257,159 @@ def mineru_fastapi_convert(
         "end_page_id": end_page_id,
     }
 
+    metrics = {"http_attempts": 0, "retry_count": 0}
     deadline = time.monotonic() + timeout
-    create = _multipart_json_request(
-        f"{root}/tasks",
-        fields=fields,
-        file_field="files",
-        filename=source.path.name,
-        file_content=source.path.read_bytes(),
-        api_key=api_key,
-        timeout=min(timeout, 120.0),
-    )
-    task_id = _extract_mineru_task_id(create)
-
-    last_state = "unknown"
-    while time.monotonic() < deadline:
-        remaining = max(deadline - time.monotonic(), 1.0)
-        status_payload = _json_request(
-            f"{root}/tasks/{task_id}",
-            api_key=api_key,
-            timeout=min(remaining, 120.0),
-        )
-        state = status_payload.get("status") or status_payload.get("state")
-        if not isinstance(state, str):
-            nested = status_payload.get("data")
-            if isinstance(nested, Mapping):
-                state = nested.get("status") or nested.get("state")
-        if not isinstance(state, str):
-            raise DocConvertError("MinerU FastAPI status response missing status")
-        normalized_state = state.lower()
-        last_state = state
-        if normalized_state in MINERU_FASTAPI_DONE_STATES:
-            result_payload = _json_request(
-                f"{root}/tasks/{task_id}/result",
+    started = time.monotonic()
+    attempt: dict[str, Any] = {
+        "source_path": source.source_path,
+        "backend": "mineru-fastapi",
+        "endpoint": _redacted_endpoint(root),
+        "status": "failed",
+        "task_id": None,
+        "poll_count": 0,
+        "status_history": [],
+        "final_status": None,
+        "submit_duration_ms": None,
+        "result_fetch_duration_ms": None,
+        "total_duration_ms": None,
+        "timeout_seconds": timeout,
+        "poll_interval_seconds": poll_interval,
+        "http_attempts": 0,
+        "retry_count": 0,
+        "retry_budget": retry_budget,
+        "retry_backoff_seconds": retry_backoff_seconds,
+        "verify_ssl": bool(verify_ssl),
+        "error_category": None,
+        "error": None,
+        "failed_stage": None,
+    }
+    task_id: str | None = None
+    stage = "submit"
+    try:
+        submit_started = time.monotonic()
+        create = _mineru_fastapi_call_with_retries(
+            lambda *, timeout: _mineru_fastapi_multipart_json_once(
+                f"{root}/tasks",
+                fields=fields,
+                file_field="files",
+                filename=source.path.name,
+                file_content=source.path.read_bytes(),
                 api_key=api_key,
-                timeout=min(remaining, 120.0),
-            )
-            markdown = _extract_markdown_from_mapping(result_payload, timeout=min(remaining, 120.0))
-            if not isinstance(markdown, str):
-                raise DocConvertError(
-                    "MinerU FastAPI result response must include md_content, markdown, content, text, result, or markdown_url"
-                )
-            return markdown
-        if normalized_state in MINERU_FASTAPI_FAILED_STATES:
-            message = _mineru_fastapi_error_message(status_payload)
-            raise DocConvertError(f"MinerU FastAPI parsing failed: {message}")
-        if normalized_state not in MINERU_FASTAPI_PENDING_STATES:
-            raise DocConvertError(f"MinerU FastAPI status response returned unknown state: {state}")
-        time.sleep(min(poll_interval, max(deadline - time.monotonic(), 0.0)))
+                timeout=timeout,
+                verify_ssl=verify_ssl,
+                stage="submit",
+            ),
+            stage="submit",
+            deadline=deadline,
+            retry_budget=retry_budget,
+            retry_backoff_seconds=retry_backoff_seconds,
+            metrics=metrics,
+        )
+        attempt["submit_duration_ms"] = round((time.monotonic() - submit_started) * 1000, 3)
+        task_id = _extract_mineru_task_id(create)
+        attempt["task_id"] = task_id
 
-    raise DocConvertError(f"MinerU FastAPI parsing timed out after {timeout:g}s; last state: {last_state}")
+        last_state = "unknown"
+        while time.monotonic() < deadline:
+            remaining = max(deadline - time.monotonic(), 0.1)
+            stage = "poll"
+            status_payload = _mineru_fastapi_call_with_retries(
+                lambda *, timeout: _mineru_fastapi_request_json_once(
+                    f"{root}/tasks/{task_id}",
+                    api_key=api_key,
+                    timeout=timeout,
+                    verify_ssl=verify_ssl,
+                    stage="poll",
+                ),
+                stage="poll",
+                deadline=deadline,
+                retry_budget=retry_budget,
+                retry_backoff_seconds=retry_backoff_seconds,
+                metrics=metrics,
+            )
+            state = _mineru_fastapi_status_state(status_payload)
+            normalized_state = state.lower()
+            last_state = state
+            attempt["poll_count"] = int(attempt["poll_count"]) + 1
+            attempt["final_status"] = state
+            status_history = attempt["status_history"]
+            if isinstance(status_history, list):
+                status_history.append(state)
+            if normalized_state in MINERU_FASTAPI_DONE_STATES:
+                stage = "result"
+                result_started = time.monotonic()
+                result_payload = _mineru_fastapi_call_with_retries(
+                    lambda *, timeout: _mineru_fastapi_request_json_once(
+                        f"{root}/tasks/{task_id}/result",
+                        api_key=api_key,
+                        timeout=timeout,
+                        verify_ssl=verify_ssl,
+                        stage="result",
+                    ),
+                    stage="result",
+                    deadline=deadline,
+                    retry_budget=retry_budget,
+                    retry_backoff_seconds=retry_backoff_seconds,
+                    metrics=metrics,
+                )
+                attempt["result_fetch_duration_ms"] = round((time.monotonic() - result_started) * 1000, 3)
+                found, markdown = _extract_markdown_candidate_from_mapping(
+                    result_payload,
+                    timeout=remaining,
+                    verify_ssl=verify_ssl,
+                )
+                if not found:
+                    raise MinerUFastAPIError(
+                        "MinerU FastAPI result response must include md_content, markdown, content, text, result, or markdown_url",
+                        category="result_missing",
+                        stage="result",
+                    )
+                if not isinstance(markdown, str) or not markdown.strip():
+                    raise MinerUFastAPIError(
+                        "MinerU FastAPI task completed but produced empty Markdown",
+                        category="result_empty",
+                        stage="result",
+                    )
+                attempt["status"] = "success"
+                return markdown
+            if normalized_state in MINERU_FASTAPI_FAILED_STATES:
+                message = _mineru_fastapi_error_message(status_payload)
+                raise MinerUFastAPIError(
+                    f"MinerU FastAPI parsing failed: {message}",
+                    category="task_failed",
+                    stage="poll",
+                )
+            if normalized_state not in MINERU_FASTAPI_PENDING_STATES:
+                raise MinerUFastAPIError(
+                    f"MinerU FastAPI status response returned unknown state: {state}",
+                    category="protocol_error",
+                    stage="poll",
+                )
+            time.sleep(min(poll_interval, max(deadline - time.monotonic(), 0.0)))
+
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI parsing timed out after {timeout:g}s; last state: {last_state}",
+            category="request_timeout",
+            stage="poll",
+        )
+    except MinerUFastAPIError as exc:
+        attempt["status"] = "timeout" if exc.category == "request_timeout" else "failed"
+        attempt["error_category"] = exc.category
+        attempt["failed_stage"] = exc.stage or stage
+        attempt["error"] = str(exc)
+        raise
+    except DocConvertError as exc:
+        attempt["status"] = "failed"
+        attempt["error_category"] = "protocol_error"
+        attempt["failed_stage"] = stage
+        attempt["error"] = str(exc)
+        raise
+    finally:
+        attempt["http_attempts"] = int(metrics.get("http_attempts", 0))
+        attempt["retry_count"] = int(metrics.get("retry_count", 0))
+        attempt["total_duration_ms"] = round((time.monotonic() - started) * 1000, 3)
+        if remote_attempts is not None:
+            remote_attempts.append(attempt)
 
 
 def resolve_mineru_cli_path(cli_path: str | None = None) -> str | None:
@@ -1061,6 +1523,7 @@ def _probe_single_backend(
     mineru_base_url: str | None = None,
     mineru_api_key: str | None = None,
     mineru_cli_path: str | None = None,
+    mineru_verify_ssl: bool = True,
     network_check: bool = False,
     timeout: float = 2.0,
 ) -> dict[str, Any]:
@@ -1118,6 +1581,7 @@ def _probe_single_backend(
             api_key=mineru_api_key,
             network_check=network_check,
             timeout=timeout,
+            verify_ssl=mineru_verify_ssl,
         )
     if backend in {"mineru-sync", "mineru-local"}:
         if mineru_base_url and str(mineru_base_url).rstrip("/").endswith("/agent"):
@@ -1149,6 +1613,7 @@ def probe_conversion_backends(
     mineru_base_url: str | None = None,
     mineru_api_key: str | None = None,
     mineru_cli_path: str | None = None,
+    mineru_verify_ssl: bool = True,
     network_check: bool = False,
     timeout: float = 2.0,
 ) -> dict[str, Any]:
@@ -1168,6 +1633,7 @@ def probe_conversion_backends(
             mineru_base_url=mineru_base_url,
             mineru_api_key=mineru_api_key,
             mineru_cli_path=mineru_cli_path,
+            mineru_verify_ssl=mineru_verify_ssl,
             network_check=network_check,
             timeout=timeout,
         )
@@ -1624,14 +2090,21 @@ def make_doc_runtime_report_payload(
     *,
     output_root: str | Path,
     process_attempts: list[Mapping[str, Any]],
+    remote_attempts: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Create a portable report for local process-backed conversion attempts."""
+    """Create a portable report for conversion runtime attempts."""
 
     normalized = [dict(attempt) for attempt in process_attempts]
+    normalized_remote = [dict(attempt) for attempt in (remote_attempts or [])]
     cleanups = [
         item.get("cleanup", {}) if isinstance(item.get("cleanup"), Mapping) else {}
         for item in normalized
     ]
+    remote_error_categories: dict[str, int] = {}
+    for item in normalized_remote:
+        category = item.get("error_category")
+        if isinstance(category, str) and category:
+            remote_error_categories[category] = remote_error_categories.get(category, 0) + 1
     summary = {
         "process_attempts": len(normalized),
         "success": sum(1 for item in normalized if item.get("status") == "success"),
@@ -1643,6 +2116,14 @@ def make_doc_runtime_report_payload(
             int(cleanup.get("leftover_process_count", 0) or 0)
             for cleanup in cleanups
         ),
+        "remote_attempts": len(normalized_remote),
+        "remote_success": sum(1 for item in normalized_remote if item.get("status") == "success"),
+        "remote_failed": sum(1 for item in normalized_remote if item.get("status") == "failed"),
+        "remote_timeout": sum(1 for item in normalized_remote if item.get("status") == "timeout"),
+        "remote_retry_count": sum(int(item.get("retry_count", 0) or 0) for item in normalized_remote),
+        "http_attempts": sum(int(item.get("http_attempts", 0) or 0) for item in normalized_remote),
+        "remote_insecure_tls": sum(1 for item in normalized_remote if item.get("verify_ssl") is False),
+        "remote_error_categories": remote_error_categories,
     }
     summary["incomplete_cleanup"] = sum(
         1
@@ -1661,6 +2142,7 @@ def make_doc_runtime_report_payload(
         "output_root": ".",
         "summary": summary,
         "process_attempts": normalized,
+        "remote_attempts": normalized_remote,
     }
 
 
@@ -1679,6 +2161,12 @@ def render_doc_runtime_markdown(report: Mapping[str, Any]) -> str:
         f"- cleanup attempts: `{summary.get('cleanup_attempts', 0)}`",
         f"- leftover processes: `{summary.get('leftover_processes', 0)}`",
         f"- incomplete cleanup: `{summary.get('incomplete_cleanup', 0)}`",
+        f"- remote attempts: `{summary.get('remote_attempts', 0)}`",
+        f"- remote success: `{summary.get('remote_success', 0)}`",
+        f"- remote failed: `{summary.get('remote_failed', 0)}`",
+        f"- remote timeout: `{summary.get('remote_timeout', 0)}`",
+        f"- remote retries: `{summary.get('remote_retry_count', 0)}`",
+        f"- http attempts: `{summary.get('http_attempts', 0)}`",
         "",
         "| Source | Backend | Status | Cleanup | Leftovers |",
         "| --- | --- | --- | --- | --- |",
@@ -1703,6 +2191,34 @@ def render_doc_runtime_markdown(report: Mapping[str, Any]) -> str:
                 )
                 + " |"
             )
+    remote_attempts = report.get("remote_attempts", [])
+    if isinstance(remote_attempts, list) and remote_attempts:
+        lines.extend(
+            [
+                "",
+                "## Remote Attempts",
+                "",
+                "| Source | Backend | Status | Task | Polls | Final | HTTP | Retries | Error Category | Stage | Endpoint |",
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            ]
+        )
+        for item in remote_attempts:
+            if not isinstance(item, Mapping):
+                continue
+            row = [
+                str(item.get("source_path", "")).replace("|", "\\|"),
+                str(item.get("backend", "")).replace("|", "\\|"),
+                str(item.get("status", "")).replace("|", "\\|"),
+                str(item.get("task_id", "") or "").replace("|", "\\|"),
+                str(item.get("poll_count", 0)).replace("|", "\\|"),
+                str(item.get("final_status", "") or "").replace("|", "\\|"),
+                str(item.get("http_attempts", 0)).replace("|", "\\|"),
+                str(item.get("retry_count", 0)).replace("|", "\\|"),
+                str(item.get("error_category", "") or "").replace("|", "\\|"),
+                str(item.get("failed_stage", "") or "").replace("|", "\\|"),
+                str(item.get("endpoint", "") or "").replace("|", "\\|"),
+            ]
+            lines.append("| " + " | ".join(row) + " |")
     return "\n".join(lines) + "\n"
 
 
@@ -1846,6 +2362,7 @@ def convert_source_to_markdown(
     mineru_api_key: str | None = None,
     mineru_timeout: float = 300.0,
     mineru_poll_interval: float = 3.0,
+    mineru_verify_ssl: bool = True,
     mineru_cli_path: str | None = None,
     mineru_cli_backend: str | None = None,
     asset_output_dir: str | Path | None = None,
@@ -1855,6 +2372,7 @@ def convert_source_to_markdown(
     mineru_is_ocr: bool = False,
     mineru_enable_formula: bool = True,
     process_attempts: list[dict[str, Any]] | None = None,
+    remote_attempts: list[dict[str, Any]] | None = None,
     allow_image_fallback: bool = False,
 ) -> tuple[str, list[str]]:
     """Convert one source document to Markdown and return warnings."""
@@ -1982,11 +2500,13 @@ def convert_source_to_markdown(
                 api_key=mineru_api_key,
                 timeout=mineru_timeout,
                 poll_interval=mineru_poll_interval,
+                verify_ssl=mineru_verify_ssl,
                 language=mineru_language,
                 page_range=mineru_page_range,
                 enable_table=mineru_enable_table,
                 is_ocr=mineru_is_ocr,
                 enable_formula=mineru_enable_formula,
+                remote_attempts=remote_attempts,
             ), warnings
         except DocConvertError:
             if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
@@ -2037,6 +2557,7 @@ def warmup_conversion_backend(
     mineru_api_key: str | None = None,
     mineru_timeout: float = 300.0,
     mineru_poll_interval: float = 3.0,
+    mineru_verify_ssl: bool = True,
     mineru_cli_path: str | None = None,
     mineru_cli_backend: str | None = None,
     mineru_language: str = "ch",
@@ -2060,6 +2581,7 @@ def warmup_conversion_backend(
         "exists": fixture.is_file(),
     }
     process_attempts: list[dict[str, Any]] = []
+    remote_attempts: list[dict[str, Any]] = []
     started = time.monotonic()
     status = "failed"
     error_message: str | None = None
@@ -2087,6 +2609,7 @@ def warmup_conversion_backend(
                     mineru_api_key=mineru_api_key,
                     mineru_timeout=mineru_timeout,
                     mineru_poll_interval=mineru_poll_interval,
+                    mineru_verify_ssl=mineru_verify_ssl,
                     mineru_cli_path=mineru_cli_path,
                     mineru_cli_backend=mineru_cli_backend,
                     asset_output_dir=asset_output_dir,
@@ -2096,6 +2619,7 @@ def warmup_conversion_backend(
                     mineru_is_ocr=mineru_is_ocr,
                     mineru_enable_formula=mineru_enable_formula,
                     process_attempts=process_attempts,
+                    remote_attempts=remote_attempts,
                 )
                 markdown_chars = len(markdown)
                 markdown_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
@@ -2111,8 +2635,12 @@ def warmup_conversion_backend(
         error_message = f"fixture file not found: {fixture.name or fixture}"
 
     runtime_report = (
-        make_doc_runtime_report_payload(output_root=".", process_attempts=process_attempts)
-        if process_attempts
+        make_doc_runtime_report_payload(
+            output_root=".",
+            process_attempts=process_attempts,
+            remote_attempts=remote_attempts,
+        )
+        if process_attempts or remote_attempts
         else None
     )
     duration_ms = round((time.monotonic() - started) * 1000, 3)
@@ -2122,6 +2650,9 @@ def warmup_conversion_backend(
         "markdown_chars": markdown_chars,
         "warning_count": len(warnings),
         "process_attempts": len(process_attempts),
+        "remote_attempts": len(remote_attempts),
+        "remote_retry_count": runtime_report["summary"]["remote_retry_count"] if runtime_report else 0,
+        "http_attempts": runtime_report["summary"]["http_attempts"] if runtime_report else 0,
         "cleanup_attempts": runtime_report["summary"]["cleanup_attempts"] if runtime_report else 0,
         "leftover_processes": runtime_report["summary"]["leftover_processes"] if runtime_report else 0,
     }
@@ -2165,6 +2696,9 @@ def render_backend_warmup_markdown(report: Mapping[str, Any]) -> str:
         f"- markdown_chars: `{summary.get('markdown_chars', 0)}`",
         f"- warnings: `{summary.get('warning_count', 0)}`",
         f"- process_attempts: `{summary.get('process_attempts', 0)}`",
+        f"- remote_attempts: `{summary.get('remote_attempts', 0)}`",
+        f"- remote_retries: `{summary.get('remote_retry_count', 0)}`",
+        f"- http_attempts: `{summary.get('http_attempts', 0)}`",
         f"- cleanup_attempts: `{summary.get('cleanup_attempts', 0)}`",
         f"- leftover_processes: `{summary.get('leftover_processes', 0)}`",
         f"- markdown_written: `{str(output.get('markdown_written', False)).lower()}`",

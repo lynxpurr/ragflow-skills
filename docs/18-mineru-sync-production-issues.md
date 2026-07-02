@@ -1,6 +1,6 @@
 # 18. MinerU FastAPI 异步协议生产问题与修正计划
 
-状态：P0 已离线验证，P1/P2 待实施
+状态：P0/P1 已离线验证，P2 待实施
 日期：2026-07-02
 适用范围：`ragflow-doc-to-md` 作为正式发布版 skill，运行在 Hermes agent 实例中，通过远程部署的 MinerU FastAPI 服务解析 PDF 文档。
 结论：不做 `mineru-sync` 或自定义同步 `/parse` wrapper 的过渡修复。正式路线一步到位切换到 MinerU 3.2+ FastAPI v2 异步协议，即 `POST /tasks` 提交任务，轮询 `GET /tasks/{task_id}`，再读取 `GET /tasks/{task_id}/result`。
@@ -86,6 +86,7 @@ mineru:
   api_key: ${MINERU_API_KEY}
   timeout: 1800
   poll_interval: 3
+  verify_ssl: true
   language: ch
   is_ocr: false
   enable_table: true
@@ -181,7 +182,7 @@ DOC_TO_MD_TIMEOUT=1800
 远程部署必须明确 TLS 策略：
 
 - 默认启用证书校验。
-- 如需企业 CA，应支持或文档化 `ca_bundle` 配置。
+- 企业 CA 通过 Python/系统信任链加载；当前首版配置面显式暴露 `verify_ssl`，不引入单独的 `ca_bundle` 文件管理。
 - 如需临时关闭校验，必须显式配置并在报告中标记为不推荐状态。
 - backend probe 的网络检查仍应由 `--network-check` 显式开启，避免文档或验收命令误触真实服务。
 
@@ -255,12 +256,12 @@ python3 skills/ragflow-doc-to-md/scripts/convert.py \
 
 ### 3.2 P1：生产可用性增强
 
-- [ ] 为 `mineru-fastapi` 转换结果补充异步任务可观测字段：`task_id`、`poll_count`、`final_status`、阶段耗时、总耗时和错误分类。
-- [ ] 增加有界 retry/backoff 机制，覆盖提交、轮询、结果拉取中的临时网络错误和 429/5xx。
-- [ ] 增强 health probe 严格性：协议版本缺失、协议版本不匹配、状态字段异常时必须返回 `wrong_protocol` 或明确错误分类。
-- [ ] 增加任务状态解析测试，覆盖 `pending`、`queued`、`processing`、`running`、`completed`、`done`、`failed`、`error` 和未知状态。
-- [ ] 增加结果缺失和空 Markdown 测试，确保失败信息可操作。
-- [ ] 明确 TLS 配置：默认校验证书，支持企业 CA 配置或记录系统信任链要求。
+- [x] 为 `mineru-fastapi` 转换结果补充异步任务可观测字段：`task_id`、`poll_count`、`final_status`、阶段耗时、总耗时和错误分类。
+- [x] 增加有界 retry/backoff 机制，覆盖提交、轮询、结果拉取中的临时网络错误和 429/5xx。
+- [x] 增强 health probe 严格性：协议版本缺失、协议版本不匹配、状态字段异常时必须返回 `wrong_protocol` 或明确错误分类。
+- [x] 增加任务状态解析测试，覆盖 `pending`、`queued`、`processing`、`running`、`completed`、`done`、`failed`、`error` 和未知状态。
+- [x] 增加结果缺失和空 Markdown 测试，确保失败信息可操作。
+- [x] 明确 TLS 配置：默认校验证书，支持企业 CA 配置或记录系统信任链要求。
 
 验收标准：
 
