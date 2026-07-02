@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
@@ -730,6 +731,117 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertIn(b'name="end_page_id"', body)
         self.assertIn(b"4", body)
         self.assertEqual(captured["status_calls"], 1)
+
+    def test_convert_mineru_fastapi_markdown_assets_passes_quality_gate(self) -> None:
+        captured: dict[str, object] = {}
+        image_payload = "data:image/png;base64," + base64.b64encode(b"fake png bytes").decode("ascii")
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0"))
+                captured["body"] = self.rfile.read(length)
+                body = json.dumps({"task_id": "task-fastapi-assets", "status": "pending"}).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/tasks/task-fastapi-assets":
+                    body = json.dumps({"task_id": "task-fastapi-assets", "status": "completed"}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if self.path == "/tasks/task-fastapi-assets/result":
+                    body = json.dumps(
+                        {
+                            "backend": "pipeline",
+                            "version": "3.2.1",
+                            "results": {
+                                "paper": {
+                                    "md_content": "# MinerU FastAPI Assets\n\n![chart](images/chart.png)\n",
+                                    "images": {"images/chart.png": image_payload},
+                                }
+                            },
+                        }
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                input_dir = root / "input"
+                output_dir = root / "handoff"
+                input_dir.mkdir()
+                (input_dir / "paper.pdf").write_bytes(b"%PDF fake fastapi assets")
+                env = _env()
+                env.update(
+                    {
+                        "DOC_TO_MD_BACKEND": "mineru-fastapi",
+                        "MINERU_BASE_URL": f"http://127.0.0.1:{server.server_port}",
+                        "MINERU_TIMEOUT": "5",
+                        "MINERU_POLL_INTERVAL": "0.01",
+                        "MINERU_ASSET_MODE": "markdown_assets",
+                    }
+                )
+
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(CONVERT_SCRIPT),
+                        "--input",
+                        str(input_dir),
+                        "--output",
+                        str(output_dir),
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    env=env,
+                )
+
+                markdown = (output_dir / "documents" / "paper.md").read_text(encoding="utf-8")
+                quality_report = json.loads((output_dir / "quality_report.json").read_text(encoding="utf-8"))
+                manifest = json.loads((output_dir / "doc_manifest.json").read_text(encoding="utf-8"))
+                runtime_report = json.loads((output_dir / "runtime_report.json").read_text(encoding="utf-8"))
+                image_exists = (output_dir / "documents" / "images" / "paper" / "chart.png").is_file()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(image_exists)
+        self.assertIn("![chart](images/paper/chart.png)", markdown)
+        self.assertEqual(quality_report["gate"]["status"], "PASS")
+        self.assertEqual(manifest["quality_gate"]["status"], "PASS")
+        self.assertEqual(manifest["documents"][0]["assets"]["images"][0]["path"], "documents/images/paper/chart.png")
+        asset_policy = runtime_report["remote_attempts"][0]["asset_policy"]
+        self.assertEqual(asset_policy["mode"], "markdown_assets")
+        self.assertTrue(asset_policy["requested"]["return_images"])
+        self.assertTrue(asset_policy["saved"]["images"])
+        self.assertEqual(asset_policy["saved"]["image_count"], 1)
+        body = captured["body"]
+        self.assertIsInstance(body, bytes)
+        self.assertIn(b'name="return_images"', body)
+        self.assertIn(b"true", body)
 
     def test_convert_mineru_cli_backend_from_environment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

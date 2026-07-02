@@ -30,6 +30,8 @@ mineru:
   timeout: 1800
   poll_interval: 3
   verify_ssl: true
+  # Use markdown_only for fast preview; use markdown_assets before formal KB ingestion.
+  asset_mode: markdown_assets
   language: ch
   page_range:
   enable_table: true

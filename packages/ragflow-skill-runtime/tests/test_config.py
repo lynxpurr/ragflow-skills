@@ -91,6 +91,30 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(data["mineru"]["enable_table"])
         self.assertFalse(data["mineru"]["verify_ssl"])
 
+    def test_load_skill_config_reads_mineru_asset_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / ".ragflow"
+            config_dir.mkdir()
+            (config_dir / "config.local.yaml").write_text(
+                "mineru:\n"
+                "  asset_mode: markdown_assets\n",
+                encoding="utf-8",
+            )
+
+            config = load_skill_config(env={}, cwd=root)
+
+        self.assertEqual(config.mineru.asset_mode, "markdown_assets")
+
+    def test_environment_overrides_mineru_asset_mode(self) -> None:
+        config = load_skill_config(
+            env={
+                "MINERU_ASSET_MODE": "markdown_assets",
+            }
+        )
+
+        self.assertEqual(config.mineru.asset_mode, "markdown_assets")
+
     def test_load_skill_config_merges_project_local_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

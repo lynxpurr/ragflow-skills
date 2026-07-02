@@ -39,6 +39,25 @@ DOC_MANIFEST_JSON_SCHEMA: dict[str, Any] = {
                     "title": {"type": ["string", "null"]},
                     "language": {"type": ["string", "null"]},
                     "warnings": {"type": "array", "items": {"type": "string"}},
+                    "assets": {
+                        "type": ["object", "null"],
+                        "additionalProperties": True,
+                        "properties": {
+                            "images": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "required": ["path"],
+                                    "additionalProperties": True,
+                                    "properties": {
+                                        "path": {"type": "string", "minLength": 1},
+                                        "sha256": {"type": ["string", "null"]},
+                                        "bytes": {"type": ["integer", "null"], "minimum": 0},
+                                    },
+                                },
+                            }
+                        },
+                    },
                 },
             },
         },

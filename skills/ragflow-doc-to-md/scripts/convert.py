@@ -136,6 +136,15 @@ def _remote_timeout(args: argparse.Namespace) -> float:
     return timeout
 
 
+def _mineru_asset_mode(args: argparse.Namespace, config) -> str:
+    mode = _config_or_arg(args, "mineru_asset_mode", config.mineru.asset_mode, "markdown_only")
+    normalized = str(mode or "markdown_only").strip().lower().replace("-", "_")
+    allowed = {"markdown_only", "markdown_assets"}
+    if normalized not in allowed:
+        raise DocConvertError("MINERU_ASSET_MODE must be one of: markdown_only, markdown_assets")
+    return normalized
+
+
 def _sidecar_path(root: Path, name: str | None) -> Path | None:
     if not name:
         return None
@@ -201,6 +210,33 @@ def _collect_manifest_paths(manifest: dict[str, Any]) -> list[str]:
                 if value:
                     paths.append(str(value))
     return paths
+
+
+def _manifest_assets_from_remote_attempts(
+    remote_attempts: list[dict[str, Any]],
+    *,
+    start_index: int,
+) -> dict[str, Any]:
+    images: list[dict[str, Any]] = []
+    for attempt in remote_attempts[start_index:]:
+        if not isinstance(attempt, dict):
+            continue
+        policy = attempt.get("asset_policy") if isinstance(attempt.get("asset_policy"), dict) else {}
+        saved = policy.get("saved") if isinstance(policy.get("saved"), dict) else {}
+        image_assets = saved.get("image_assets") if isinstance(saved.get("image_assets"), list) else []
+        for item in image_assets:
+            if not isinstance(item, dict):
+                continue
+            path = item.get("path")
+            if not isinstance(path, str) or not path:
+                continue
+            entry = {"path": f"documents/{path}"}
+            if isinstance(item.get("sha256"), str):
+                entry["sha256"] = item["sha256"]
+            if isinstance(item.get("bytes"), str) and item["bytes"].isdigit():
+                entry["bytes"] = int(item["bytes"])
+            images.append(entry)
+    return {"images": images} if images else {}
 
 
 def _sanitize_generated_report(
@@ -792,6 +828,7 @@ def _run(args: argparse.Namespace) -> int:
             True,
             label="MINERU_VERIFY_SSL",
         )
+        mineru_asset_mode = _mineru_asset_mode(args, config)
         output_root = Path(args.output).expanduser().resolve()
         sources = discover_source_documents(args.input, recursive=not args.no_recursive)
         sources = [
@@ -814,6 +851,7 @@ def _run(args: argparse.Namespace) -> int:
             output_name = safe_markdown_name(source, used=used_names)
             markdown_path = docs_dir / output_name
             try:
+                remote_attempt_start = len(remote_attempts)
                 markdown, warnings = convert_source_to_markdown(
                     source,
                     mode=args.mode,
@@ -835,6 +873,7 @@ def _run(args: argparse.Namespace) -> int:
                     )
                     or "pipeline",
                     asset_output_dir=markdown_path.parent,
+                    asset_document_stem=markdown_path.stem,
                     mineru_language=_config_or_arg(args, "mineru_language", config.mineru.language, "ch") or "ch",
                     mineru_page_range=_config_or_arg(args, "mineru_page_range", config.mineru.page_range),
                     mineru_enable_table=_bool_config_or_arg(
@@ -858,6 +897,7 @@ def _run(args: argparse.Namespace) -> int:
                         True,
                         label="MINERU_ENABLE_FORMULA",
                     ),
+                    mineru_asset_mode=mineru_asset_mode,
                     process_attempts=process_attempts,
                     remote_attempts=remote_attempts,
                     allow_image_fallback=not args.no_image_fallback,
@@ -898,6 +938,10 @@ def _run(args: argparse.Namespace) -> int:
                     sha256=sha256_file(source.path),
                     title=extract_markdown_title(markdown),
                     warnings=warnings,
+                    assets=_manifest_assets_from_remote_attempts(
+                        remote_attempts,
+                        start_index=remote_attempt_start,
+                    ),
                 )
             )
 
@@ -1563,6 +1607,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mineru-enable-table", help="MinerU table parsing true/false; defaults to MINERU_ENABLE_TABLE or true")
     parser.add_argument("--mineru-is-ocr", help="MinerU OCR mode true/false; defaults to MINERU_IS_OCR or false")
     parser.add_argument("--mineru-enable-formula", help="MinerU formula parsing true/false; defaults to MINERU_ENABLE_FORMULA or true")
+    parser.add_argument("--mineru-asset-mode", choices=["markdown_only", "markdown_assets"], help="MinerU FastAPI asset handling; defaults to MINERU_ASSET_MODE or markdown_only")
     parser.add_argument("--manifest-name", default="doc_manifest.json")
     parser.add_argument("--quality-report-name", default="quality_report.json", help="Quality report sidecar name under the output directory")
     parser.add_argument("--quality-report-md", help="Optional Markdown quality report sidecar name under the output directory")

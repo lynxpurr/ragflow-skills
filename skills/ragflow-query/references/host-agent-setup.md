@@ -28,6 +28,8 @@ Recommended real config paths:
 
 The config file may contain `${ENV_VAR}` placeholders. Put secret values in the host environment, secret store, or mounted secret path.
 
+Config precedence for the MinerU FastAPI endpoint is: `--mineru-base-url` overrides `MINERU_BASE_URL`, which overrides `mineru.base_url` in the config file.
+
 ## Sanitized Reports And Redaction Sidecars
 
 Write generated reports for a run under one private workspace, for example `/tmp/ragflow-skills-e2e/reports` or a user-approved project artifact directory. Keep sanitized `--report-json`, `--report-md`, and matching `--redaction-report` sidecars together so later reviewers can verify what was redacted without seeing raw endpoint, key, home-path, or config-path values.
@@ -64,6 +66,8 @@ mineru:
   api_key: ${MINERU_API_KEY}
   timeout: 1800
   poll_interval: 3
+  verify_ssl: true
+  asset_mode: markdown_assets
   language: ch
   page_range:
   enable_table: true

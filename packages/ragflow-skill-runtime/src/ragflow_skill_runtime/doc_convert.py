@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import html
+import io
 import json
 import os
 import re
@@ -16,13 +17,14 @@ import subprocess
 import tempfile
 import time
 import uuid
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 from urllib import error, request
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 from .runtime_resilience import build_runtime_partial_failure_report
 
@@ -109,8 +111,11 @@ MINERU_FASTAPI_FAILED_STATES = {"failed", "fail", "error"}
 MINERU_FASTAPI_PENDING_STATES = {"pending", "processing", "queued", "running"}
 MINERU_FASTAPI_RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
 MINERU_FASTAPI_DEFAULT_END_PAGE_ID = 99999
+MINERU_FASTAPI_ASSET_MODES = {"markdown_only", "markdown_assets"}
+MINERU_FASTAPI_MAX_IMAGE_BYTES = 512 * 1024 * 1024
 MARKDOWN_IMAGE_RE = re.compile(r"(!\[[^\]]*]\()([^)]+)(\))")
 HTML_IMAGE_SRC_RE = re.compile(r"(<img\b[^>]*?\bsrc=[\"'])([^\"']+)([\"'][^>]*>)", re.IGNORECASE)
+DATA_URL_RE = re.compile(r"^data:([^;,]+)?(?:;[^,]*)?;base64,(.*)$", re.IGNORECASE | re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -126,15 +131,19 @@ class ConvertedDocument:
     sha256: str
     title: str | None = None
     warnings: list[str] = field(default_factory=list)
+    assets: dict[str, Any] = field(default_factory=dict)
 
     def to_manifest_entry(self, *, output_root: Path) -> dict[str, Any]:
-        return {
+        entry = {
             "source_path": self.source.source_path,
             "markdown_path": self.markdown_path.relative_to(output_root).as_posix(),
             "sha256": self.sha256,
             "title": self.title,
             "warnings": list(self.warnings),
         }
+        if self.assets:
+            entry["assets"] = self.assets
+        return entry
 
 
 def sha256_file(path: str | Path) -> str:
@@ -1037,11 +1046,30 @@ def _mineru_fastapi_language_list(language: str) -> list[str]:
     return [item for item in values if item] or ["ch"]
 
 
-def _mineru_fastapi_asset_policy(fields: Mapping[str, Any]) -> dict[str, Any]:
+def _normalize_mineru_fastapi_asset_mode(asset_mode: str | None) -> str:
+    mode = (asset_mode or "markdown_only").strip().lower().replace("-", "_")
+    if mode not in MINERU_FASTAPI_ASSET_MODES:
+        allowed = ", ".join(sorted(MINERU_FASTAPI_ASSET_MODES))
+        raise DocConvertError(f"MinerU FastAPI asset mode must be one of: {allowed}")
+    return mode
+
+
+def _mineru_fastapi_asset_policy(
+    fields: Mapping[str, Any],
+    *,
+    asset_mode: str,
+    saved_images: int = 0,
+    image_paths: list[str] | None = None,
+    image_assets: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    saved_image_paths = list(image_paths or [])
+    sidecar_status = "not_requested" if asset_mode == "markdown_only" else "saved"
+    if asset_mode != "markdown_only" and saved_images == 0:
+        sidecar_status = "requested_empty"
     return {
-        "mode": "markdown_only",
+        "mode": asset_mode,
         "sidecar_schema": MINERU_FASTAPI_ASSET_SIDECAR_SCHEMA,
-        "sidecar_status": "deferred",
+        "sidecar_status": sidecar_status,
         "requested": {
             "return_md": bool(fields.get("return_md")),
             "return_images": bool(fields.get("return_images")),
@@ -1050,14 +1078,383 @@ def _mineru_fastapi_asset_policy(fields: Mapping[str, Any]) -> dict[str, Any]:
             "return_model_output": bool(fields.get("return_model_output")),
         },
         "saved": {
-            "images": False,
+            "images": saved_images > 0,
+            "image_count": saved_images,
+            "image_paths": saved_image_paths[:50],
+            "image_assets": [_public_image_asset_record(item) for item in list(image_assets or [])[:50]],
             "content_list": False,
             "middle_json": False,
             "model_output": False,
         },
-        "manifest_assets": False,
-        "reason": "Markdown-first release path; MinerU structured assets are not saved unless a future sidecar contract is enabled.",
+        "manifest_assets": saved_images > 0,
+        "reason": (
+            "Markdown-only release path; MinerU structured assets were not requested."
+            if asset_mode == "markdown_only"
+            else "Markdown asset mode requested MinerU images and saved recognized image assets beside Markdown."
+        ),
     }
+
+
+def _download_bytes(url: str, *, timeout: float, verify_ssl: bool = True, api_key: str | None = None) -> bytes:
+    headers = {"Accept": "image/*,application/octet-stream,*/*"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = request.Request(url, headers=headers)
+    try:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
+            return resp.read()
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise DocConvertError(f"MinerU asset download failed with HTTP {exc.code}: {detail}") from exc
+    except error.URLError as exc:
+        raise DocConvertError(f"MinerU asset download failed: {exc.reason}") from exc
+
+
+def _safe_asset_filename(value: str | None, *, default: str) -> str:
+    raw = (value or default).strip().replace("\\", "/")
+    name = PurePosixPath(raw).name or default
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip(".-") or default
+    suffix = Path(safe).suffix.lower()
+    if suffix not in IMAGE_EXTENSIONS:
+        safe = f"{safe}.png"
+    return safe
+
+
+def _looks_like_download_url(value: str | None) -> bool:
+    text = (value or "").strip()
+    if not text:
+        return False
+    parsed = urlparse(text)
+    return parsed.scheme in {"http", "https"} or text.startswith("/")
+
+
+def _resolve_asset_url(value: str, *, base_url: str) -> str:
+    text = value.strip()
+    parsed = urlparse(text)
+    if parsed.scheme in {"http", "https"}:
+        return text
+    return urljoin(f"{base_url.rstrip('/')}/", text)
+
+
+def _public_image_asset_record(item: Mapping[str, str]) -> dict[str, str]:
+    record: dict[str, str] = {"path": item.get("path", "")}
+    if item.get("sha256"):
+        record["sha256"] = item["sha256"]
+    if item.get("bytes"):
+        record["bytes"] = item["bytes"]
+    return record
+
+
+def _safe_asset_stem(source: SourceDocument) -> str:
+    stem = Path(source.source_path).stem or source.path.stem or "document"
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip(".-") or "document"
+
+
+def _safe_asset_document_stem(value: str | None, *, source: SourceDocument) -> str:
+    if not value:
+        return _safe_asset_stem(source)
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip(".-") or _safe_asset_stem(source)
+
+
+def _asset_reference_keys(value: str | None) -> set[str]:
+    if not value:
+        return set()
+    raw = value.strip()
+    if not raw:
+        return set()
+    decoded = unquote(raw).replace("\\", "/")
+    keys = {decoded, decoded.lstrip("./")}
+    basename = PurePosixPath(decoded).name
+    if basename:
+        keys.add(basename)
+    return {item for item in keys if item}
+
+
+def _decode_inline_asset(value: str) -> tuple[bytes | None, str | None]:
+    stripped = value.strip()
+    if not stripped:
+        return None, None
+    match = DATA_URL_RE.match(stripped)
+    if match:
+        media_type = (match.group(1) or "").lower()
+        payload = match.group(2).strip()
+        try:
+            return base64.b64decode(payload, validate=True), media_type
+        except (ValueError, TypeError):
+            return None, media_type
+    if stripped.lower().startswith(("http://", "https://")):
+        return None, None
+    try:
+        return base64.b64decode(stripped, validate=True), None
+    except (ValueError, TypeError):
+        return None, None
+
+
+def _image_suffix_from_media_type(media_type: str | None) -> str | None:
+    if not media_type:
+        return None
+    mapping = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/webp": ".webp",
+        "image/bmp": ".bmp",
+        "image/tiff": ".tiff",
+    }
+    return mapping.get(media_type.lower())
+
+
+def _asset_candidate_from_mapping(
+    data: Mapping[str, Any],
+    *,
+    default_key: str | None = None,
+) -> dict[str, Any] | None:
+    source_key = str(
+        data.get("source_key")
+        or data.get("key")
+        or data.get("path")
+        or data.get("relative_path")
+        or data.get("filename")
+        or data.get("file_name")
+        or data.get("name")
+        or default_key
+        or ""
+    )
+    filename = str(
+        data.get("filename")
+        or data.get("file_name")
+        or data.get("name")
+        or data.get("path")
+        or data.get("relative_path")
+        or default_key
+        or "image.png"
+    )
+    content_value = (
+        data.get("content")
+        or data.get("data")
+        or data.get("base64")
+        or data.get("b64")
+        or data.get("image_base64")
+        or data.get("data_base64")
+    )
+    url = data.get("url") or data.get("image_url") or data.get("download_url")
+    if isinstance(content_value, str):
+        return {"source_key": source_key, "filename": filename, "content": content_value}
+    if isinstance(url, str) and _looks_like_download_url(url):
+        return {"source_key": source_key or url, "filename": filename or url, "url": url}
+    return None
+
+
+def _asset_candidates_from_value(value: Any, *, default_key: str | None = None) -> list[dict[str, Any]]:
+    if isinstance(value, str):
+        if _looks_like_download_url(value):
+            return [{"source_key": default_key or value, "filename": default_key or value, "url": value}]
+        if _decode_inline_asset(value)[0] is not None:
+            return [{"source_key": default_key or value, "filename": default_key or "image.png", "content": value}]
+        return []
+    if isinstance(value, Mapping):
+        candidate = _asset_candidate_from_mapping(value, default_key=default_key)
+        return [candidate] if candidate else []
+    if isinstance(value, list):
+        output: list[dict[str, Any]] = []
+        for index, item in enumerate(value, start=1):
+            output.extend(_asset_candidates_from_value(item, default_key=default_key or f"image-{index}.png"))
+        return output
+    return []
+
+
+def _collect_mineru_fastapi_image_candidates(data: Any) -> list[dict[str, Any]]:
+    image_keys = {"images", "image", "image_artifacts", "assets", "files"}
+    zip_keys = {"zip", "zip_content", "zip_base64", "zip_data", "result_zip", "output_zip"}
+    candidates: list[dict[str, Any]] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                key_text = str(key)
+                key_lower = key_text.lower()
+                if key_lower in image_keys:
+                    if isinstance(item, Mapping):
+                        for image_key, image_value in item.items():
+                            candidates.extend(_asset_candidates_from_value(image_value, default_key=str(image_key)))
+                    else:
+                        candidates.extend(_asset_candidates_from_value(item))
+                elif key_lower in zip_keys and isinstance(item, str):
+                    candidates.append({"source_key": key_text, "filename": f"{key_text}.zip", "zip_content": item})
+                elif isinstance(item, (Mapping, list)):
+                    visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(data)
+    return candidates
+
+
+def _extract_zip_image_assets(value: str) -> list[dict[str, Any]]:
+    payload, _ = _decode_inline_asset(value)
+    if not payload:
+        return []
+    output: list[dict[str, Any]] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            for name in archive.namelist():
+                suffix = Path(name).suffix.lower()
+                if suffix not in IMAGE_EXTENSIONS:
+                    continue
+                with archive.open(name) as handle:
+                    output.append({"source_key": name, "filename": name, "bytes": handle.read()})
+    except zipfile.BadZipFile:
+        return []
+    return output
+
+
+def _write_mineru_fastapi_image_assets(
+    result_payload: Mapping[str, Any],
+    *,
+    source: SourceDocument,
+    asset_output_dir: str | Path,
+    asset_document_stem: str | None,
+    base_url: str,
+    api_key: str | None,
+    timeout: float,
+    verify_ssl: bool,
+) -> list[dict[str, str]]:
+    output_root = Path(asset_output_dir)
+    document_stem = _safe_asset_document_stem(asset_document_stem, source=source)
+    image_dir = output_root / "images" / document_stem
+    staging_dir = output_root / "images" / f".{document_stem}.tmp-{uuid.uuid4().hex}"
+    saved: list[dict[str, str]] = []
+    used_names: set[str] = set()
+
+    def unique_name(raw_name: str | None, *, default: str) -> str:
+        base = _safe_asset_filename(raw_name, default=default)
+        candidate = base
+        counter = 2
+        while candidate in used_names:
+            path = Path(base)
+            candidate = f"{path.stem}-{counter}{path.suffix}"
+            counter += 1
+        used_names.add(candidate)
+        return candidate
+
+    candidates: list[dict[str, Any]] = []
+    for candidate in _collect_mineru_fastapi_image_candidates(result_payload):
+        if "zip_content" in candidate:
+            candidates.extend(_extract_zip_image_assets(str(candidate["zip_content"])))
+        else:
+            candidates.append(candidate)
+
+    try:
+        for index, candidate in enumerate(candidates, start=1):
+            raw_bytes = candidate.get("bytes")
+            media_type = None
+            if isinstance(raw_bytes, bytes):
+                content = raw_bytes
+            elif isinstance(candidate.get("url"), str):
+                content = _download_bytes(
+                    _resolve_asset_url(str(candidate["url"]), base_url=base_url),
+                    timeout=timeout,
+                    verify_ssl=verify_ssl,
+                    api_key=api_key,
+                )
+            elif isinstance(candidate.get("content"), str):
+                content, media_type = _decode_inline_asset(str(candidate["content"]))
+                if content is None and _looks_like_download_url(str(candidate["content"])):
+                    content = _download_bytes(
+                        _resolve_asset_url(str(candidate["content"]), base_url=base_url),
+                        timeout=timeout,
+                        verify_ssl=verify_ssl,
+                        api_key=api_key,
+                    )
+            else:
+                content = None
+            if not content:
+                continue
+            if len(content) > MINERU_FASTAPI_MAX_IMAGE_BYTES:
+                raise DocConvertError(
+                    f"MinerU image asset exceeds the maximum supported size "
+                    f"({len(content)} > {MINERU_FASTAPI_MAX_IMAGE_BYTES} bytes)"
+                )
+            raw_filename = str(candidate.get("filename") or "")
+            media_suffix = _image_suffix_from_media_type(media_type)
+            default_filename = f"image-{index}{media_suffix or '.png'}"
+            raw_suffix = Path(PurePosixPath(raw_filename.replace("\\", "/")).name).suffix.lower()
+            filename_seed = raw_filename
+            if media_suffix and raw_suffix not in IMAGE_EXTENSIONS:
+                raw_stem = Path(PurePosixPath(raw_filename.replace("\\", "/")).name).stem or Path(default_filename).stem
+                filename_seed = f"{raw_stem}{media_suffix}"
+            filename = unique_name(filename_seed, default=default_filename)
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            destination = staging_dir / filename
+            destination.write_bytes(content)
+            relative = (Path("images") / document_stem / filename).as_posix()
+            source_key = str(candidate.get("source_key") or candidate.get("filename") or filename)
+            saved.append(
+                {
+                    "source_key": source_key,
+                    "path": relative,
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                    "bytes": str(len(content)),
+                }
+            )
+        if saved:
+            image_dir.parent.mkdir(parents=True, exist_ok=True)
+            if image_dir.exists():
+                shutil.rmtree(image_dir)
+            staging_dir.rename(image_dir)
+        elif staging_dir.exists():
+            shutil.rmtree(staging_dir)
+    except Exception:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+        raise
+    return saved
+
+
+def _rewrite_mineru_fastapi_asset_references(markdown: str, saved_assets: list[dict[str, str]]) -> str:
+    if not saved_assets:
+        return markdown
+    exact: dict[str, str] = {}
+    basename: dict[str, str | None] = {}
+    for item in saved_assets:
+        path = item["path"]
+        for key in _asset_reference_keys(item.get("source_key")) | _asset_reference_keys(item.get("path")):
+            exact[key] = path
+            base = PurePosixPath(key).name
+            if base:
+                basename[base] = path if base not in basename else None
+
+    def replacement_for(raw: str) -> str | None:
+        target, suffix, angle_wrapped = _split_markdown_asset_target(raw)
+        target_keys = _asset_reference_keys(target)
+        for key in target_keys:
+            if key in exact:
+                value = exact[key]
+                return f"<{value}>{suffix}" if angle_wrapped else f"{value}{suffix}"
+        base = PurePosixPath(unquote(target).replace("\\", "/")).name
+        if base and basename.get(base):
+            value = basename[base]
+            return f"<{value}>{suffix}" if angle_wrapped else f"{value}{suffix}"
+        return None
+
+    def replace_markdown(match: re.Match[str]) -> str:
+        prefix, raw_target, suffix = match.groups()
+        replacement = replacement_for(raw_target)
+        if not replacement:
+            return match.group(0)
+        return f"{prefix}{replacement}{suffix}"
+
+    def replace_html(match: re.Match[str]) -> str:
+        prefix, raw_target, suffix = match.groups()
+        replacement = replacement_for(raw_target)
+        if not replacement:
+            return match.group(0)
+        target, _, _ = _split_markdown_asset_target(replacement)
+        return f"{prefix}{target}{suffix}"
+
+    markdown = MARKDOWN_IMAGE_RE.sub(replace_markdown, markdown)
+    return HTML_IMAGE_SRC_RE.sub(replace_html, markdown)
 
 
 def _extract_mineru_task_id(data: Mapping[str, Any]) -> str:
@@ -1243,6 +1640,9 @@ def mineru_fastapi_convert(
     enable_table: bool = True,
     is_ocr: bool = False,
     enable_formula: bool = True,
+    asset_mode: str = "markdown_only",
+    asset_output_dir: str | Path | None = None,
+    asset_document_stem: str | None = None,
     remote_attempts: list[dict[str, Any]] | None = None,
     retry_budget: int = 2,
     retry_backoff_seconds: float = 0.25,
@@ -1259,9 +1659,13 @@ def mineru_fastapi_convert(
         raise DocConvertError("MinerU FastAPI retry backoff must be zero or greater")
     if not base_url:
         raise DocConvertError("mineru-fastapi backend requires --mineru-base-url or MINERU_BASE_URL")
+    normalized_asset_mode = _normalize_mineru_fastapi_asset_mode(asset_mode)
+    if normalized_asset_mode != "markdown_only" and asset_output_dir is None:
+        raise DocConvertError("MinerU FastAPI markdown_assets mode requires an asset output directory")
 
     start_page_id, end_page_id = _mineru_fastapi_page_bounds(page_range)
     root = base_url.rstrip("/")
+    request_images = normalized_asset_mode == "markdown_assets"
     fields: dict[str, Any] = {
         "lang_list": _mineru_fastapi_language_list(language),
         "backend": "pipeline",
@@ -1273,7 +1677,7 @@ def mineru_fastapi_convert(
         "return_middle_json": False,
         "return_model_output": False,
         "return_content_list": False,
-        "return_images": False,
+        "return_images": request_images,
         "response_format_zip": False,
         "return_original_file": False,
         "client_side_output_generation": False,
@@ -1303,7 +1707,7 @@ def mineru_fastapi_convert(
         "retry_budget": retry_budget,
         "retry_backoff_seconds": retry_backoff_seconds,
         "verify_ssl": bool(verify_ssl),
-        "asset_policy": _mineru_fastapi_asset_policy(fields),
+        "asset_policy": _mineru_fastapi_asset_policy(fields, asset_mode=normalized_asset_mode),
         "error_category": None,
         "error": None,
         "failed_stage": None,
@@ -1394,6 +1798,26 @@ def mineru_fastapi_convert(
                         "MinerU FastAPI task completed but produced empty Markdown",
                         category="result_empty",
                         stage="result",
+                    )
+                saved_assets: list[dict[str, str]] = []
+                if normalized_asset_mode == "markdown_assets" and asset_output_dir is not None:
+                    saved_assets = _write_mineru_fastapi_image_assets(
+                        result_payload,
+                        source=source,
+                        asset_output_dir=asset_output_dir,
+                        asset_document_stem=asset_document_stem,
+                        base_url=root,
+                        api_key=api_key,
+                        timeout=remaining,
+                        verify_ssl=verify_ssl,
+                    )
+                    markdown = _rewrite_mineru_fastapi_asset_references(markdown, saved_assets)
+                    attempt["asset_policy"] = _mineru_fastapi_asset_policy(
+                        fields,
+                        asset_mode=normalized_asset_mode,
+                        saved_images=len(saved_assets),
+                        image_paths=[item["path"] for item in saved_assets],
+                        image_assets=saved_assets,
                     )
                 attempt["status"] = "success"
                 return markdown
@@ -2391,11 +2815,13 @@ def convert_source_to_markdown(
     mineru_cli_path: str | None = None,
     mineru_cli_backend: str | None = None,
     asset_output_dir: str | Path | None = None,
+    asset_document_stem: str | None = None,
     mineru_language: str = "ch",
     mineru_page_range: str | None = None,
     mineru_enable_table: bool = True,
     mineru_is_ocr: bool = False,
     mineru_enable_formula: bool = True,
+    mineru_asset_mode: str = "markdown_only",
     process_attempts: list[dict[str, Any]] | None = None,
     remote_attempts: list[dict[str, Any]] | None = None,
     allow_image_fallback: bool = False,
@@ -2531,6 +2957,9 @@ def convert_source_to_markdown(
                 enable_table=mineru_enable_table,
                 is_ocr=mineru_is_ocr,
                 enable_formula=mineru_enable_formula,
+                asset_mode=mineru_asset_mode,
+                asset_output_dir=asset_output_dir,
+                asset_document_stem=asset_document_stem,
                 remote_attempts=remote_attempts,
             ), warnings
         except DocConvertError:

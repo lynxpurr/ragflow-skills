@@ -48,6 +48,7 @@ mineru:
   timeout: 1800
   poll_interval: 3
   verify_ssl: true
+  asset_mode: markdown_assets
 ```
 
 Config precedence for the MinerU FastAPI endpoint is: `--mineru-base-url` overrides `MINERU_BASE_URL`, which overrides `mineru.base_url` in the config file.
@@ -115,6 +116,7 @@ Notes:
 - Use `backend probe` before live conversion to classify backends as `available`, `missing`, `wrong_protocol`, `timeout`, or `not_configured`. It can emit `--redaction-report`, does not convert files, and endpoint checks require explicit `--network-check`.
 - Use `backend warmup --fixture <tiny-file>` when the user has approved a small converter fixture and wants to run one bounded conversion readiness check. Add `--fail-on-failed` for CI gates.
 - Image inputs fall back to Markdown with the source image copied into `documents/images/` when OCR/conversion is unavailable; this sets `quality_gate.status` to `PASS_WITH_REVIEW`. Use `--no-image-fallback` to skip that behavior.
+- For formal MinerU FastAPI ingestion, use `--mineru-asset-mode markdown_assets` or `mineru.asset_mode: markdown_assets` so Markdown image references are backed by local `documents/images/...` files. Keep `markdown_only` for fast text-only preview.
 - When a local process-backed converter such as `mineru-cli` runs, `runtime_report.json` records process attempt status, timeout cleanup, and leftover process counts. Use `--runtime-report-md` for a Markdown copy.
 - Use `inspect` to regenerate a quality report from an existing handoff.
 - Use `segment-plan` before splitting long Markdown; use `split` when the user wants materialized `segments/*.md` that can be ingested as an ordinary Markdown directory. Add `--manifest-output` when downstream build should consume the materialized segments through a generated `doc_manifest.json`. For large split jobs, add `--checkpoint` plus `--batch-size`, then rerun with `--resume` until `checkpoint.completed` is true.

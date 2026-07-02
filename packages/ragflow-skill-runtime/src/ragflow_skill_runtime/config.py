@@ -66,6 +66,7 @@ class MineruConfig:
     is_ocr: bool | None = None
     enable_formula: bool | None = None
     verify_ssl: bool | None = True
+    asset_mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -268,6 +269,7 @@ def _mineru_from_mapping(data: Mapping[str, Any]) -> MineruConfig:
         is_ocr=_pick(merged, "is_ocr"),
         enable_formula=_pick(merged, "enable_formula"),
         verify_ssl=_parse_bool(_pick(merged, "verify_ssl"), default=None),
+        asset_mode=_pick(merged, "asset_mode"),
     )
 
 
@@ -305,6 +307,7 @@ def _merge_mineru(base: MineruConfig, override: MineruConfig) -> MineruConfig:
         is_ocr=override.is_ocr if override.is_ocr is not None else base.is_ocr,
         enable_formula=override.enable_formula if override.enable_formula is not None else base.enable_formula,
         verify_ssl=override.verify_ssl if override.verify_ssl is not None else base.verify_ssl,
+        asset_mode=override.asset_mode or base.asset_mode,
     )
 
 
@@ -390,6 +393,7 @@ def load_skill_config(
             if env_map.get("MINERU_ENABLE_FORMULA")
             else None,
             verify_ssl=_parse_bool(env_map.get("MINERU_VERIFY_SSL"), default=None),
+            asset_mode=env_map.get("MINERU_ASSET_MODE"),
         ),
     )
     config = _merge_skill(config, env_config)

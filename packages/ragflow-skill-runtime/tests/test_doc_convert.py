@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import base64
+import io
 import json
 import tempfile
 import threading
 import unittest
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from ragflow_skill_runtime import doc_convert as doc_convert_module
 from ragflow_skill_runtime.doc_convert import (
     ConvertedDocument,
     DEFAULT_MINERU_BASE_URL,
@@ -260,6 +264,414 @@ class DocConvertTests(unittest.TestCase):
         self.assertFalse(asset_policy["requested"]["return_content_list"])
         self.assertFalse(asset_policy["requested"]["return_middle_json"])
         self.assertFalse(asset_policy["manifest_assets"])
+
+    def test_mineru_fastapi_convert_saves_base64_image_assets(self) -> None:
+        image_bytes = b"fake png bytes"
+        image_payload = "data:image/png;base64," + base64.b64encode(image_bytes).decode("ascii")
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                raw = json.dumps({"task_id": "task-assets"}).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/tasks/task-assets":
+                    raw = json.dumps({"task_id": "task-assets", "status": "completed"}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                if self.path == "/tasks/task-assets/result":
+                    raw = json.dumps(
+                        {
+                            "results": {
+                                "paper": {
+                                    "md_content": "# Assets\n\n![chart](images/chart.png)\n",
+                                    "images": {"images/chart.png": image_payload},
+                                }
+                            }
+                        }
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        remote_attempts: list[dict[str, object]] = []
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source_path = root / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake")
+                docs_dir = root / "handoff" / "documents"
+                docs_dir.mkdir(parents=True)
+                markdown = mineru_fastapi_convert(
+                    SourceDocument(path=source_path, source_path="paper.pdf"),
+                    base_url=f"http://127.0.0.1:{server.server_port}",
+                    timeout=5,
+                    poll_interval=0.01,
+                    asset_mode="markdown_assets",
+                    asset_output_dir=docs_dir,
+                    remote_attempts=remote_attempts,
+                )
+                saved_image = docs_dir / "images" / "paper" / "chart.png"
+                saved_bytes = saved_image.read_bytes()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertIn("![chart](images/paper/chart.png)", markdown)
+        self.assertEqual(saved_bytes, image_bytes)
+        asset_policy = remote_attempts[0]["asset_policy"]
+        self.assertEqual(asset_policy["mode"], "markdown_assets")
+        self.assertTrue(asset_policy["requested"]["return_images"])
+        self.assertTrue(asset_policy["saved"]["images"])
+        self.assertEqual(asset_policy["saved"]["image_count"], 1)
+        self.assertEqual(asset_policy["saved"]["image_paths"], ["images/paper/chart.png"])
+        self.assertTrue(asset_policy["manifest_assets"])
+
+    def test_mineru_fastapi_convert_saves_url_image_assets(self) -> None:
+        image_bytes = b"fake jpg bytes"
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                raw = json.dumps({"task_id": "task-url-assets"}).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/tasks/task-url-assets":
+                    raw = json.dumps({"task_id": "task-url-assets", "status": "completed"}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                if self.path == "/assets/chart.jpg":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(image_bytes)))
+                    self.end_headers()
+                    self.wfile.write(image_bytes)
+                    return
+                if self.path == "/tasks/task-url-assets/result":
+                    raw = json.dumps(
+                        {
+                            "results": {
+                                "paper": {
+                                    "md_content": "# URL Assets\n\n![chart](images/chart.jpg)\n",
+                                    "images": [
+                                        {
+                                            "path": "images/chart.jpg",
+                                            "url": f"http://127.0.0.1:{self.server.server_port}/assets/chart.jpg",
+                                        }
+                                    ],
+                                }
+                            }
+                        }
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        remote_attempts: list[dict[str, object]] = []
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source_path = root / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake")
+                docs_dir = root / "handoff" / "documents"
+                docs_dir.mkdir(parents=True)
+                markdown = mineru_fastapi_convert(
+                    SourceDocument(path=source_path, source_path="paper.pdf"),
+                    base_url=f"http://127.0.0.1:{server.server_port}",
+                    timeout=5,
+                    poll_interval=0.01,
+                    asset_mode="markdown_assets",
+                    asset_output_dir=docs_dir,
+                    remote_attempts=remote_attempts,
+                )
+                saved_bytes = (docs_dir / "images" / "paper" / "chart.jpg").read_bytes()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertIn("![chart](images/paper/chart.jpg)", markdown)
+        self.assertEqual(saved_bytes, image_bytes)
+        image_assets = remote_attempts[0]["asset_policy"]["saved"]["image_assets"]
+        self.assertEqual(image_assets[0]["path"], "images/paper/chart.jpg")
+        self.assertNotIn("source_key", image_assets[0])
+
+    def test_mineru_fastapi_convert_saves_relative_url_image_assets_with_auth(self) -> None:
+        image_bytes = b"relative png bytes"
+        captured: dict[str, object] = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                raw = json.dumps({"task_id": "task-relative-assets"}).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/tasks/task-relative-assets":
+                    raw = json.dumps({"task_id": "task-relative-assets", "status": "completed"}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                if self.path == "/assets/chart.png":
+                    captured["asset_authorization"] = self.headers.get("Authorization")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Content-Length", str(len(image_bytes)))
+                    self.end_headers()
+                    self.wfile.write(image_bytes)
+                    return
+                if self.path == "/tasks/task-relative-assets/result":
+                    raw = json.dumps(
+                        {
+                            "results": {
+                                "paper": {
+                                    "md_content": "# Relative Assets\n\n![chart](images/chart.png)\n",
+                                    "images": {"images/chart.png": "/assets/chart.png"},
+                                }
+                            }
+                        }
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source_path = root / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake")
+                docs_dir = root / "handoff" / "documents"
+                docs_dir.mkdir(parents=True)
+                markdown = mineru_fastapi_convert(
+                    SourceDocument(path=source_path, source_path="paper.pdf"),
+                    base_url=f"http://127.0.0.1:{server.server_port}",
+                    api_key="asset-secret",
+                    timeout=5,
+                    poll_interval=0.01,
+                    asset_mode="markdown_assets",
+                    asset_output_dir=docs_dir,
+                    asset_document_stem="paper-2",
+                )
+                saved_bytes = (docs_dir / "images" / "paper-2" / "chart.png").read_bytes()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertIn("![chart](images/paper-2/chart.png)", markdown)
+        self.assertEqual(saved_bytes, image_bytes)
+        self.assertEqual(captured["asset_authorization"], "Bearer asset-secret")
+
+    def test_mineru_fastapi_convert_rejects_oversized_image_assets(self) -> None:
+        image_payload = "data:image/png;base64," + base64.b64encode(b"too large").decode("ascii")
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                raw = json.dumps({"task_id": "task-large-assets"}).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/tasks/task-large-assets":
+                    raw = json.dumps({"task_id": "task-large-assets", "status": "completed"}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                if self.path == "/tasks/task-large-assets/result":
+                    raw = json.dumps(
+                        {
+                            "results": {
+                                "paper": {
+                                    "md_content": "# Large Asset\n\n![chart](images/chart.png)\n",
+                                    "images": {"images/chart.png": image_payload},
+                                }
+                            }
+                        }
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        original_limit = doc_convert_module.MINERU_FASTAPI_MAX_IMAGE_BYTES
+        doc_convert_module.MINERU_FASTAPI_MAX_IMAGE_BYTES = 4
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source_path = root / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake")
+                docs_dir = root / "handoff" / "documents"
+                docs_dir.mkdir(parents=True)
+                with self.assertRaisesRegex(DocConvertError, "exceeds the maximum supported size"):
+                    mineru_fastapi_convert(
+                        SourceDocument(path=source_path, source_path="paper.pdf"),
+                        base_url=f"http://127.0.0.1:{server.server_port}",
+                        timeout=5,
+                        poll_interval=0.01,
+                        asset_mode="markdown_assets",
+                        asset_output_dir=docs_dir,
+                    )
+                self.assertFalse((docs_dir / "images" / "paper" / "chart.png").exists())
+        finally:
+            doc_convert_module.MINERU_FASTAPI_MAX_IMAGE_BYTES = original_limit
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_mineru_fastapi_convert_saves_zip_image_assets_with_safe_names(self) -> None:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("../unsafe/chart.webp", b"fake webp bytes")
+            archive.writestr("notes.txt", b"not an image")
+        zip_payload = base64.b64encode(buffer.getvalue()).decode("ascii")
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                raw = json.dumps({"task_id": "task-zip-assets"}).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/tasks/task-zip-assets":
+                    raw = json.dumps({"task_id": "task-zip-assets", "status": "completed"}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                if self.path == "/tasks/task-zip-assets/result":
+                    raw = json.dumps(
+                        {
+                            "results": {
+                                "paper": {
+                                    "md_content": "# ZIP Assets\n\n![chart](../unsafe/chart.webp)\n",
+                                    "zip_base64": zip_payload,
+                                }
+                            }
+                        }
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source_path = root / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake")
+                docs_dir = root / "handoff" / "documents"
+                docs_dir.mkdir(parents=True)
+                markdown = mineru_fastapi_convert(
+                    SourceDocument(path=source_path, source_path="paper.pdf"),
+                    base_url=f"http://127.0.0.1:{server.server_port}",
+                    timeout=5,
+                    poll_interval=0.01,
+                    asset_mode="markdown_assets",
+                    asset_output_dir=docs_dir,
+                )
+                saved_image = docs_dir / "images" / "paper" / "chart.webp"
+                saved_bytes = saved_image.read_bytes()
+                leaked = (docs_dir / "unsafe").exists()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertIn("![chart](images/paper/chart.webp)", markdown)
+        self.assertEqual(saved_bytes, b"fake webp bytes")
+        self.assertFalse(leaked)
 
     def test_mineru_fastapi_convert_task_failed(self) -> None:
         class Handler(BaseHTTPRequestHandler):

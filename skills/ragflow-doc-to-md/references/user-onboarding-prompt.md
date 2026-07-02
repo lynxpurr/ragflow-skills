@@ -31,8 +31,9 @@ mineru:
   timeout: 1800
   poll_interval: 3
   verify_ssl: true
+  asset_mode: markdown_assets
 
-请记住优先级：--mineru-base-url 高于 MINERU_BASE_URL，高于配置文件中的 mineru.base_url。生产配置优先写入私有配置文件或环境变量；临时调试才使用命令行覆盖。
+请记住优先级：--mineru-base-url 高于 MINERU_BASE_URL，高于配置文件中的 mineru.base_url；--mineru-asset-mode 高于 MINERU_ASSET_MODE，高于配置文件中的 mineru.asset_mode。生产配置优先写入私有配置文件或环境变量；临时调试才使用命令行覆盖。正式入库前处理使用 markdown_assets，让 Markdown 图片引用落地到本地 documents/images/...；快速文本预览才使用 markdown_only。
 
 请先运行无网络 smoke test，再在我确认后运行 MinerU backend probe、warmup 和一次最小转换验证。所有报告只输出脱敏 endpoint、路径和结论，不输出 API key。
 ```
@@ -120,6 +121,8 @@ mineru:
   api_key: ${MINERU_API_KEY}
   timeout: 1800
   poll_interval: 3
+  verify_ssl: true
+  asset_mode: markdown_assets
   language: ch
   page_range:
   enable_table: true
@@ -127,7 +130,7 @@ mineru:
   enable_formula: true
 
 配置完成后，请设置 RAGFLOW_CONFIG 指向该配置文件。
-如果用户临时提供 `--mineru-base-url`，请说明它只覆盖本次命令；需要长期稳定运行时，应同步更新 `mineru.base_url` 或 `MINERU_BASE_URL`。
+如果用户临时提供 `--mineru-base-url` 或 `--mineru-asset-mode`，请说明它只覆盖本次命令；需要长期稳定运行时，应同步更新 `mineru.base_url` / `mineru.asset_mode` 或 `MINERU_BASE_URL` / `MINERU_ASSET_MODE`。
 
 第一阶段：无网络 smoke test
 
@@ -141,7 +144,7 @@ mineru:
 第二阶段：可选的 MinerU 测试
 
 如果我提供了测试 PDF / Office 文件，并且 MinerU 配置完整，请运行一次最小转换测试：
-- 如果服务是 MinerU FastAPI v2，使用 ragflow-doc-to-md --backend mineru-fastapi，并确认输出 Markdown
+- 如果服务是 MinerU FastAPI v2，使用 ragflow-doc-to-md --backend mineru-fastapi --mineru-asset-mode markdown_assets，并确认输出 Markdown 和本地图片资产
 - 如果本机 MinerU CLI 可用且用户希望本地优先，使用 ragflow-doc-to-md --backend auto 或 --backend mineru-cli，并确认输出 Markdown
 - 如果服务是 MinerU Agent API 或兼容 gateway，使用 ragflow-doc-to-md --backend mineru
 - 如果服务是同步 multipart /parse，使用 ragflow-doc-to-md --backend mineru-sync
