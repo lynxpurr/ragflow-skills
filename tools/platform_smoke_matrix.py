@@ -791,6 +791,42 @@ def _run_mineru_env_check(
             "error": "" if fastapi_ok else f"missing or invalid {fastapi_markdown_path}",
         }
     )
+    fastapi_runtime_path = mineru_fastapi_output / "runtime_report.json"
+    fastapi_asset_policy_ok = False
+    fastapi_asset_policy_error = ""
+    if fastapi_runtime_path.exists():
+        try:
+            fastapi_runtime_payload = json.loads(fastapi_runtime_path.read_text(encoding="utf-8"))
+            remote_attempts = fastapi_runtime_payload.get("remote_attempts", [])
+            asset_policy = (
+                remote_attempts[0].get("asset_policy")
+                if remote_attempts and isinstance(remote_attempts[0], dict)
+                else {}
+            )
+            requested = asset_policy.get("requested", {}) if isinstance(asset_policy, dict) else {}
+            fastapi_asset_policy_ok = (
+                isinstance(asset_policy, dict)
+                and asset_policy.get("mode") == "markdown_only"
+                and asset_policy.get("sidecar_schema") == "ragflow_mineru_fastapi_asset_sidecar_v1"
+                and asset_policy.get("manifest_assets") is False
+                and requested.get("return_images") is False
+                and requested.get("return_content_list") is False
+                and requested.get("return_middle_json") is False
+            )
+            if not fastapi_asset_policy_ok:
+                fastapi_asset_policy_error = f"unexpected mineru-fastapi asset policy: {asset_policy}"
+        except (OSError, json.JSONDecodeError) as exc:
+            fastapi_asset_policy_error = f"invalid mineru-fastapi runtime report JSON: {exc}"
+    else:
+        fastapi_asset_policy_error = f"missing {fastapi_runtime_path}"
+    checks.append(
+        {
+            "name": "mineru-fastapi asset policy is markdown-only",
+            "ok": fastapi_asset_policy_ok,
+            "returncode": 0 if fastapi_asset_policy_ok else 1,
+            "error": fastapi_asset_policy_error,
+        }
+    )
     manifest_path = mineru_output / "doc_manifest.json"
     return manifest_path if manifest_path.exists() else None
 

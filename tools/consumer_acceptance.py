@@ -1251,9 +1251,11 @@ def _run_no_network_checks(
     fastapi_manifest = mineru_fastapi_output / "doc_manifest.json"
     fastapi_markdown = mineru_fastapi_output / "documents" / "sample.md"
     fastapi_quality = mineru_fastapi_output / "quality_report.json"
+    fastapi_runtime = mineru_fastapi_output / "runtime_report.json"
     _record_file_check(checks, "mineru-fastapi doc_manifest produced", fastapi_manifest)
     _record_file_check(checks, "mineru-fastapi markdown produced", fastapi_markdown)
     _record_file_check(checks, "mineru-fastapi quality_report produced", fastapi_quality)
+    _record_file_check(checks, "mineru-fastapi runtime_report produced", fastapi_runtime)
     if fastapi_manifest.exists():
         produced.append(fastapi_manifest)
     if fastapi_markdown.exists():
@@ -1269,6 +1271,43 @@ def _run_no_network_checks(
         )
     if fastapi_quality.exists():
         produced.append(fastapi_quality)
+    if fastapi_runtime.exists():
+        produced.append(fastapi_runtime)
+    fastapi_asset_policy_ok = False
+    fastapi_asset_policy_error = ""
+    if fastapi_runtime.exists():
+        try:
+            fastapi_runtime_payload = json.loads(fastapi_runtime.read_text(encoding="utf-8"))
+            remote_attempts = fastapi_runtime_payload.get("remote_attempts", [])
+            asset_policy = (
+                remote_attempts[0].get("asset_policy")
+                if remote_attempts and isinstance(remote_attempts[0], dict)
+                else {}
+            )
+            requested = asset_policy.get("requested", {}) if isinstance(asset_policy, dict) else {}
+            fastapi_asset_policy_ok = (
+                isinstance(asset_policy, dict)
+                and asset_policy.get("mode") == "markdown_only"
+                and asset_policy.get("sidecar_schema") == "ragflow_mineru_fastapi_asset_sidecar_v1"
+                and asset_policy.get("manifest_assets") is False
+                and requested.get("return_images") is False
+                and requested.get("return_content_list") is False
+                and requested.get("return_middle_json") is False
+            )
+            if not fastapi_asset_policy_ok:
+                fastapi_asset_policy_error = f"unexpected mineru-fastapi asset policy: {asset_policy}"
+        except (OSError, json.JSONDecodeError) as exc:
+            fastapi_asset_policy_error = f"invalid mineru-fastapi runtime report JSON: {exc}"
+    else:
+        fastapi_asset_policy_error = f"missing {fastapi_runtime}"
+    checks.append(
+        {
+            "name": "mineru-fastapi asset policy is markdown-only",
+            "ok": fastapi_asset_policy_ok,
+            "path": str(fastapi_runtime),
+            "error": fastapi_asset_policy_error,
+        }
+    )
     if mineru_fastapi_redaction.exists():
         produced.append(mineru_fastapi_redaction)
     if fastapi_probe_json.exists():
@@ -1300,6 +1339,7 @@ def _run_no_network_checks(
         fastapi_manifest.read_text(encoding="utf-8") if fastapi_manifest.exists() else "",
         fastapi_markdown.read_text(encoding="utf-8") if fastapi_markdown.exists() else "",
         fastapi_quality.read_text(encoding="utf-8") if fastapi_quality.exists() else "",
+        fastapi_runtime.read_text(encoding="utf-8") if fastapi_runtime.exists() else "",
         mineru_fastapi_redaction.read_text(encoding="utf-8") if mineru_fastapi_redaction.exists() else "",
         fastapi_probe_json.read_text(encoding="utf-8") if fastapi_probe_json.exists() else "",
         fastapi_probe_md.read_text(encoding="utf-8") if fastapi_probe_md.exists() else "",

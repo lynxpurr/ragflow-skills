@@ -254,6 +254,12 @@ class DocConvertTests(unittest.TestCase):
         self.assertEqual(attempt["retry_count"], 0)
         self.assertEqual(attempt["endpoint"], "http://<redacted-host>")
         self.assertNotIn(str(server.server_port), str(attempt["endpoint"]))
+        asset_policy = attempt["asset_policy"]
+        self.assertEqual(asset_policy["mode"], "markdown_only")
+        self.assertFalse(asset_policy["requested"]["return_images"])
+        self.assertFalse(asset_policy["requested"]["return_content_list"])
+        self.assertFalse(asset_policy["requested"]["return_middle_json"])
+        self.assertFalse(asset_policy["manifest_assets"])
 
     def test_mineru_fastapi_convert_task_failed(self) -> None:
         class Handler(BaseHTTPRequestHandler):
@@ -791,6 +797,44 @@ class DocConvertTests(unittest.TestCase):
 
         self.assertEqual(report["gate"]["status"], PASS_WITH_REVIEW)
         self.assertEqual(report["gate"]["summary"]["warnings"], 1)
+
+    def test_quality_report_flags_p2_quality_risks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            documents.mkdir()
+            tiny_pdf = documents / "tiny.md"
+            garbled = documents / "garbled.md"
+            table_source = documents / "sheet.md"
+            formula = documents / "formula.md"
+            tiny_pdf.write_text("x\n", encoding="utf-8")
+            garbled.write_text("valid text " + ("\ufffd" * 20), encoding="utf-8")
+            table_source.write_text("# Sheet\n\nplain cells only\n", encoding="utf-8")
+            formula.write_text("# Formula\n\nThe value is $E=mc^2.\n", encoding="utf-8")
+
+            report = make_quality_report_payload(
+                output_root=root,
+                documents=[
+                    QualityDocument(source_path="tiny.pdf", markdown_path=tiny_pdf),
+                    QualityDocument(source_path="garbled.pdf", markdown_path=garbled),
+                    QualityDocument(source_path="sheet.xlsx", markdown_path=table_source),
+                    QualityDocument(source_path="formula.pdf", markdown_path=formula),
+                ],
+            )
+
+        issues_by_type = {
+            issue["issue_type"]: issue
+            for document in report["documents"]
+            for issue in document["issues"]
+        }
+        signals = {document["source_path"]: document["quality_signals"] for document in report["documents"]}
+        self.assertEqual(report["gate"]["status"], BLOCKED)
+        self.assertIn("page_signal_low", issues_by_type)
+        self.assertIn("garbled_text_high_ratio", issues_by_type)
+        self.assertIn("table_structure_missing", issues_by_type)
+        self.assertIn("formula_suspicious_unbalanced_delimiter", issues_by_type)
+        self.assertEqual(signals["sheet.xlsx"]["table_count"], 0)
+        self.assertGreater(signals["garbled.pdf"]["replacement_char_ratio"], 0.05)
 
     def test_plan_markdown_segmentation_uses_heading_boundaries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

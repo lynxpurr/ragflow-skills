@@ -89,6 +89,7 @@ BACKEND_PROBE_RUNTIME_SKIPPED_STATUSES = ("not_configured",)
 BACKEND_WARMUP_REPORT_SCHEMA = "ragflow_doc_backend_warmup_report_v1"
 BACKEND_WARMUP_STATUSES = ("success", "failed")
 DOC_RUNTIME_REPORT_SCHEMA = "ragflow_doc_runtime_report_v1"
+MINERU_FASTAPI_ASSET_SIDECAR_SCHEMA = "ragflow_mineru_fastapi_asset_sidecar_v1"
 PROCESS_ATTEMPT_STATUSES = ("success", "failed", "timeout", "execution_error")
 CONVERSION_BACKENDS = (
     "builtin",
@@ -1036,6 +1037,29 @@ def _mineru_fastapi_language_list(language: str) -> list[str]:
     return [item for item in values if item] or ["ch"]
 
 
+def _mineru_fastapi_asset_policy(fields: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "mode": "markdown_only",
+        "sidecar_schema": MINERU_FASTAPI_ASSET_SIDECAR_SCHEMA,
+        "sidecar_status": "deferred",
+        "requested": {
+            "return_md": bool(fields.get("return_md")),
+            "return_images": bool(fields.get("return_images")),
+            "return_content_list": bool(fields.get("return_content_list")),
+            "return_middle_json": bool(fields.get("return_middle_json")),
+            "return_model_output": bool(fields.get("return_model_output")),
+        },
+        "saved": {
+            "images": False,
+            "content_list": False,
+            "middle_json": False,
+            "model_output": False,
+        },
+        "manifest_assets": False,
+        "reason": "Markdown-first release path; MinerU structured assets are not saved unless a future sidecar contract is enabled.",
+    }
+
+
 def _extract_mineru_task_id(data: Mapping[str, Any]) -> str:
     task_id = data.get("task_id")
     if isinstance(task_id, str) and task_id:
@@ -1279,6 +1303,7 @@ def mineru_fastapi_convert(
         "retry_budget": retry_budget,
         "retry_backoff_seconds": retry_backoff_seconds,
         "verify_ssl": bool(verify_ssl),
+        "asset_policy": _mineru_fastapi_asset_policy(fields),
         "error_category": None,
         "error": None,
         "failed_stage": None,

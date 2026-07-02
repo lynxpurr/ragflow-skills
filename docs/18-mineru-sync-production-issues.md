@@ -1,6 +1,6 @@
 # 18. MinerU FastAPI 异步协议生产问题与修正计划
 
-状态：P0/P1 已离线验证，P2 待实施
+状态：P0/P1 已离线验证，P2 Markdown-first 质量增强已离线验证，结构化资产 sidecar 实现后续按需开启
 日期：2026-07-02
 适用范围：`ragflow-doc-to-md` 作为正式发布版 skill，运行在 Hermes agent 实例中，通过远程部署的 MinerU FastAPI 服务解析 PDF 文档。
 结论：不做 `mineru-sync` 或自定义同步 `/parse` wrapper 的过渡修复。正式路线一步到位切换到 MinerU 3.2+ FastAPI v2 异步协议，即 `POST /tasks` 提交任务，轮询 `GET /tasks/{task_id}`，再读取 `GET /tasks/{task_id}/result`。
@@ -194,10 +194,56 @@ DOC_TO_MD_TIMEOUT=1800
 - 必须产出 `doc_manifest.json`。
 - 必须产出质量或转换报告。
 - 默认不要求保存 MinerU 图片、middle json、model output、content list。
+- `runtime_report.json` 的 `remote_attempts[].asset_policy` 必须显式记录：
+  - `mode: markdown_only`
+  - `requested.return_images: false`
+  - `requested.return_content_list: false`
+  - `requested.return_middle_json: false`
+  - `manifest_assets: false`
 
 如果后续要支持图片和结构化 sidecar，应作为独立增强项实现，并明确输出目录、manifest schema、RAGFlow handoff 兼容方式和脱敏规则。
 
-### 2.8 验证命令
+未来资产 sidecar 草案如下，本轮不写出该 sidecar：
+
+```json
+{
+  "schema": "ragflow_mineru_fastapi_asset_sidecar_v1",
+  "source_path": "paper.pdf",
+  "markdown_path": "documents/paper.md",
+  "task_id": "task-id",
+  "assets": {
+    "images": [
+      {
+        "path": "documents/images/paper/chart.png",
+        "source_key": "chart.png",
+        "sha256": "..."
+      }
+    ],
+    "content_list": "artifacts/mineru/paper.content_list.json",
+    "middle_json": "artifacts/mineru/paper.middle.json"
+  },
+  "redaction": {
+    "endpoint_redacted": true,
+    "secrets_redacted": true
+  }
+}
+```
+
+该 schema 真正启用前必须同步更新 `doc_manifest.json` 的资产引用、`artifact_index.json`、RAGFlow handoff dry-run 验收和脱敏测试。
+
+### 2.8 Markdown 质量 gate
+
+P2 将质量报告从“文件存在/图片存在”扩展为 Markdown-first 质量信号：
+
+- 空 Markdown：`markdown_empty`，阻断。
+- PDF 内容或页信号过低：`page_signal_low`，要求人工复核。
+- 替换字符或控制字符比例过高：`garbled_text_high_ratio`，阻断。
+- 表格型源文件没有 Markdown 表格结构：`table_structure_missing`，要求人工复核。
+- 数学公式分隔符不平衡：`formula_suspicious_unbalanced_delimiter`，要求人工复核。
+
+质量报告的每个文档条目应包含 `quality_signals`，记录行数、标题数、表格数、公式标记数、页标记数、替换字符比例和控制字符比例。
+
+### 2.9 验证命令
 
 网络探测使用占位符环境变量：
 
@@ -236,6 +282,18 @@ python3 skills/ragflow-doc-to-md/scripts/convert.py \
 
 这些命令不得写入正式文档中的真实 endpoint、真实 key 或个人文件路径。
 
+### 2.10 gated live validation runbook
+
+真实远程 MinerU 验证必须由用户显式提供 endpoint、授权和批准，且仅使用可公开的小型 fixture：
+
+1. 准备占位符环境变量，不把真实值写入仓库、文档或 shell 历史片段：
+   `DOC_TO_MD_BACKEND=mineru-fastapi`、`MINERU_BASE_URL`、`MINERU_API_KEY`、`MINERU_VERIFY_SSL=true`。
+2. 先运行 `backend probe --network-check --json --redaction-report <path>`，确认 `protocol_version` 为 `2`。
+3. 再运行 `backend warmup --fixture <tiny-public.pdf> --fail-on-failed --json --redaction-report <path>`。
+4. 最后运行正式转换到一次性输出目录，并保留 `doc_manifest.json`、`quality_report.json`、`runtime_report.json` 和 redaction sidecar。
+5. 只共享脱敏后的报告摘要，不共享原始 endpoint、Authorization header、生产 PDF 路径或包含敏感文件名的输出目录。
+6. 若需要清理远端任务缓存或对象存储，必须由 MinerU 服务运维侧执行；本 skill 不调用任何远端清理或管理 API。
+
 ## 第三部分：修正开发任务清单和计划
 
 ### 3.1 P0：发布阻断项
@@ -271,21 +329,21 @@ python3 skills/ragflow-doc-to-md/scripts/convert.py \
 
 ### 3.3 P2：结果质量与资产增强
 
-- [ ] 评估是否支持 `return_images`、`return_content_list`、`return_middle_json`，并设计 sidecar 输出 schema。
-- [ ] 如果支持图片资产，补充 manifest 引用、路径规范、清理策略和 RAGFlow handoff 兼容测试。
-- [ ] 增强 Markdown 质量 gate，区分空文档、页数过低、乱码比例过高、表格丢失和公式解析异常。
-- [ ] 编写 gated live validation runbook，仅在用户显式提供 endpoint 和授权后运行真实远程 MinerU 验证。
+- [x] 评估是否支持 `return_images`、`return_content_list`、`return_middle_json`，并设计 sidecar 输出 schema。
+- [x] 明确 Markdown-only 首版不启用图片资产保存；`runtime_report.json` 记录 `asset_policy.manifest_assets=false`，后续真正启用时再补 manifest 引用、路径规范、清理策略和 RAGFlow handoff 兼容测试。
+- [x] 增强 Markdown 质量 gate，区分空文档、页数过低、乱码比例过高、表格丢失和公式解析异常。
+- [x] 编写 gated live validation runbook，仅在用户显式提供 endpoint 和授权后运行真实远程 MinerU 验证。
 
 验收标准：
 
 - Markdown-only 首版边界清晰，不误导用户以为图片或结构化 sidecar 已经进入正式交付。
-- 如果启用资产增强，生成物必须进入 manifest，并通过脱敏和平台 smoke。
+- 如果后续启用资产增强，生成物必须进入 manifest，并通过脱敏和平台 smoke；当前首版以 `asset_policy` 明确记录未启用。
 
 ### 3.4 推荐执行顺序
 
 1. 完成 P0 文档、配置模板和发布验收补齐，先保证正式路径清晰且可离线验证。
 2. 完成 P1 的可观测性、错误分类、重试和 TLS 策略，使远程生产故障可诊断。
-3. 在首版稳定后再进入 P2，决定是否扩展图片和结构化 sidecar。
+3. P2 当前完成 Markdown-first 质量增强和资产策略固化；真实图片和结构化 sidecar 输出保持为后续按需增强。
 
 ### 3.5 最终发布门槛
 

@@ -16,6 +16,14 @@ PASS_WITH_REVIEW = "PASS_WITH_REVIEW"
 BLOCKED = "BLOCKED"
 
 IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
+TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+PAGE_MARKER_RE = re.compile(r"(?im)<!--\s*page\b|^\s*(?:page|p\.)\s+\d+\s*$|\f")
+MATH_MARKER_RE = re.compile(r"(?<!\\)(?:\$\$|\$)|\\\(|\\\)|\\\[|\\\]")
+PDF_SOURCE_EXTENSIONS = {".pdf"}
+TABULAR_SOURCE_EXTENSIONS = {".csv", ".tsv", ".xls", ".xlsx"}
+PAGE_SIGNAL_LOW_CHAR_THRESHOLD = 24
+GARBLED_REPLACEMENT_RATIO_THRESHOLD = 0.05
+GARBLED_CONTROL_RATIO_THRESHOLD = 0.02
 
 
 class DocQualityError(RuntimeError):
@@ -55,6 +63,16 @@ class QualityDocumentReport:
     issues: list[QualityIssue]
     char_count: int = 0
     image_count: int = 0
+    line_count: int = 0
+    non_empty_line_count: int = 0
+    heading_count: int = 0
+    table_count: int = 0
+    formula_marker_count: int = 0
+    page_marker_count: int = 0
+    replacement_char_count: int = 0
+    control_char_count: int = 0
+    replacement_char_ratio: float = 0.0
+    control_char_ratio: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -63,6 +81,18 @@ class QualityDocumentReport:
             "status": self.status,
             "char_count": self.char_count,
             "image_count": self.image_count,
+            "quality_signals": {
+                "line_count": self.line_count,
+                "non_empty_line_count": self.non_empty_line_count,
+                "heading_count": self.heading_count,
+                "table_count": self.table_count,
+                "formula_marker_count": self.formula_marker_count,
+                "page_marker_count": self.page_marker_count,
+                "replacement_char_count": self.replacement_char_count,
+                "control_char_count": self.control_char_count,
+                "replacement_char_ratio": self.replacement_char_ratio,
+                "control_char_ratio": self.control_char_ratio,
+            },
             "issues": [issue.to_dict() for issue in self.issues],
         }
 
@@ -107,6 +137,34 @@ def _report_status(reports: list[QualityDocumentReport]) -> str:
     return PASS
 
 
+def _source_suffix(source_path: str) -> str:
+    return Path(str(source_path)).suffix.lower()
+
+
+def _count_tables(lines: list[str]) -> int:
+    count = 0
+    for index, line in enumerate(lines[:-1]):
+        if "|" not in line:
+            continue
+        if TABLE_SEPARATOR_RE.match(lines[index + 1]):
+            count += 1
+    return count
+
+
+def _count_control_chars(text: str) -> int:
+    allowed = {"\n", "\r", "\t"}
+    return sum(1 for char in text if ord(char) < 32 and char not in allowed)
+
+
+def _math_delimiters_unbalanced(text: str) -> bool:
+    unescaped_dollars = len(re.findall(r"(?<!\\)\$", text))
+    return (
+        unescaped_dollars % 2 == 1
+        or text.count(r"\(") != text.count(r"\)")
+        or text.count(r"\[") != text.count(r"\]")
+    )
+
+
 def inspect_quality_document(document: QualityDocument, *, output_root: str | Path) -> QualityDocumentReport:
     """Inspect one converted Markdown document for handoff quality."""
 
@@ -124,6 +182,16 @@ def inspect_quality_document(document: QualityDocument, *, output_root: str | Pa
     ]
     char_count = 0
     image_count = 0
+    line_count = 0
+    non_empty_line_count = 0
+    heading_count = 0
+    table_count = 0
+    formula_marker_count = 0
+    page_marker_count = 0
+    replacement_char_count = 0
+    control_char_count = 0
+    replacement_char_ratio = 0.0
+    control_char_ratio = 0.0
 
     if not markdown_path.exists():
         issues.append(
@@ -172,6 +240,19 @@ def inspect_quality_document(document: QualityDocument, *, output_root: str | Pa
         )
 
     char_count = len(text.strip())
+    lines = text.splitlines()
+    line_count = len(lines)
+    non_empty_line_count = sum(1 for line in lines if line.strip())
+    heading_count = sum(1 for line in lines if line.lstrip().startswith("#"))
+    table_count = _count_tables(lines)
+    formula_marker_count = len(MATH_MARKER_RE.findall(text))
+    page_marker_count = len(PAGE_MARKER_RE.findall(text))
+    replacement_char_count = text.count("\ufffd")
+    control_char_count = _count_control_chars(text)
+    denominator = max(len(text), 1)
+    replacement_char_ratio = round(replacement_char_count / denominator, 6)
+    control_char_ratio = round(control_char_count / denominator, 6)
+
     if char_count == 0:
         issues.append(
             QualityIssue(
@@ -181,6 +262,51 @@ def inspect_quality_document(document: QualityDocument, *, output_root: str | Pa
                 path=_relative(markdown_path, output_root_path),
             )
         )
+    else:
+        source_suffix = _source_suffix(document.source_path)
+        if (
+            source_suffix in PDF_SOURCE_EXTENSIONS
+            and char_count < PAGE_SIGNAL_LOW_CHAR_THRESHOLD
+            and page_marker_count == 0
+        ):
+            issues.append(
+                QualityIssue(
+                    severity="warning",
+                    issue_type="page_signal_low",
+                    message="converted PDF Markdown has very little content and no page markers; verify page coverage",
+                    path=_relative(markdown_path, output_root_path),
+                )
+            )
+        if (
+            replacement_char_ratio >= GARBLED_REPLACEMENT_RATIO_THRESHOLD
+            or control_char_ratio >= GARBLED_CONTROL_RATIO_THRESHOLD
+        ):
+            issues.append(
+                QualityIssue(
+                    severity="error",
+                    issue_type="garbled_text_high_ratio",
+                    message="markdown contains a high ratio of replacement or control characters",
+                    path=_relative(markdown_path, output_root_path),
+                )
+            )
+        if source_suffix in TABULAR_SOURCE_EXTENSIONS and table_count == 0:
+            issues.append(
+                QualityIssue(
+                    severity="warning",
+                    issue_type="table_structure_missing",
+                    message="tabular source converted without Markdown table structure; verify table extraction",
+                    path=_relative(markdown_path, output_root_path),
+                )
+            )
+        if _math_delimiters_unbalanced(text):
+            issues.append(
+                QualityIssue(
+                    severity="warning",
+                    issue_type="formula_suspicious_unbalanced_delimiter",
+                    message="markdown contains unbalanced math delimiters; verify formula extraction",
+                    path=_relative(markdown_path, output_root_path),
+                )
+            )
 
     for match in IMAGE_RE.finditer(text):
         raw_ref = _image_reference_path(match.group(1))
@@ -209,6 +335,16 @@ def inspect_quality_document(document: QualityDocument, *, output_root: str | Pa
         issues=issues,
         char_count=char_count,
         image_count=image_count,
+        line_count=line_count,
+        non_empty_line_count=non_empty_line_count,
+        heading_count=heading_count,
+        table_count=table_count,
+        formula_marker_count=formula_marker_count,
+        page_marker_count=page_marker_count,
+        replacement_char_count=replacement_char_count,
+        control_char_count=control_char_count,
+        replacement_char_ratio=replacement_char_ratio,
+        control_char_ratio=control_char_ratio,
     )
 
 
@@ -325,6 +461,17 @@ def render_quality_markdown(report: Mapping[str, Any]) -> str:
                 "",
             ]
         )
+        signals = document.get("quality_signals", {})
+        if isinstance(signals, Mapping):
+            lines.extend(
+                [
+                    f"- Tables: {signals.get('table_count', 0)}",
+                    f"- Formula markers: {signals.get('formula_marker_count', 0)}",
+                    f"- Page markers: {signals.get('page_marker_count', 0)}",
+                    f"- Replacement char ratio: {signals.get('replacement_char_ratio', 0)}",
+                    "",
+                ]
+            )
         issues = document.get("issues", [])
         if isinstance(issues, list) and issues:
             for issue in issues:

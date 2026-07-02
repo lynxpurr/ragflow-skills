@@ -710,6 +710,8 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(runtime_report["summary"]["remote_success"], 1)
         self.assertEqual(runtime_report["remote_attempts"][0]["task_id"], "task-fastapi-cli")
         self.assertEqual(runtime_report["remote_attempts"][0]["endpoint"], "http://<redacted-host>")
+        self.assertEqual(runtime_report["remote_attempts"][0]["asset_policy"]["mode"], "markdown_only")
+        self.assertFalse(runtime_report["remote_attempts"][0]["asset_policy"]["requested"]["return_images"])
         self.assertEqual(captured["path"], "/tasks")
         self.assertEqual(captured["auth"], "Bearer fastapi-secret")
         self.assertIn("multipart/form-data", str(captured["content_type"]))
