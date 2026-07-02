@@ -55,6 +55,8 @@ If `main` cannot fast-forward, stop and inspect the divergence instead of forcin
 ## Rules
 
 - Do not commit generated `dist/` artifacts to source branches.
+- Do not edit generated `dist/` files by hand; update `skills/` source files and rebuild
+  release artifacts instead.
 - Do not commit secrets, local auth files, or machine-specific config.
 - Keep `main` deployable and boring.
 - Keep active development on `develop`.

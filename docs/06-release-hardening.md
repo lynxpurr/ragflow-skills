@@ -76,6 +76,12 @@ python3 tools/export_release_archives.py --dist dist --output-dir release-artifa
 
 Do not commit `dist/` or `release-artifacts/`.
 
+Source of truth: edit public skills under `skills/`. The `dist/` tree is a generated
+release artifact rebuilt by `tools/build_release.py` and
+`tools/export_release_archives.py`; do not edit `dist/` by hand. If a generated
+`dist/<skill>/SKILL.md` differs from `skills/<skill>/SKILL.md`, update the source skill
+under `skills/` and rerun the release tooling.
+
 ## Optional Runtime Wheel
 
 The canonical public release path is still the per-skill archive export above. Wheel
