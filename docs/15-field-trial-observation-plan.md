@@ -129,6 +129,35 @@ Use this lightweight loop during the field trial:
 4. Run docs-only validation for planning updates and the release-facing chain for public
    command, artifact, or release-surface changes.
 
+## Metrics Aggregator
+
+Use `tools/field_trial_metrics.py` to summarize existing field-trial artifacts without
+turning observation into telemetry.
+
+The tool is intentionally narrow:
+
+- it scans only directories or JSON files passed on the command line;
+- it reads existing reports and does not call RAGFlow, converters, rerankers, or LLMs;
+- it emits sanitized JSON and Markdown summaries plus an optional redaction sidecar;
+- it can consume explicit `ragflow_field_trial_record_v1` JSON records when a run wants to
+  record a gated trigger such as `serve`, `private_bridge`, `remote_conversion`,
+  `provider`, `reranker`, or `llm_backend`;
+- it does not mark roadmap checkboxes, start services, upload reports, or inspect private
+  directories unless the operator passes them explicitly.
+
+Example:
+
+```bash
+python3 tools/field_trial_metrics.py /tmp/ragflow-field-trial-runs/run-001 \
+  --report-json /tmp/ragflow-field-trial-runs/run-001/field_trial_summary.json \
+  --report-md /tmp/ragflow-field-trial-runs/run-001/field_trial_summary.md \
+  --redaction-report /tmp/ragflow-field-trial-runs/run-001/field_trial_summary.redaction.json
+```
+
+The summary should be treated as evidence for review, not as an automatic product
+decision. A triggered track means "inspect this pattern"; it does not by itself approve
+`serve`, private bridge, remote conversion, provider, reranker, or LLM backend work.
+
 ## Current Decision
 
 The next stage is observation, not feature expansion. The public CLI/archive path remains

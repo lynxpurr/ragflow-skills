@@ -42,6 +42,8 @@ Completed or closed for the current public command surface:
 - Phase 38 optional LLM backend planning defines the unified config, deterministic
   fixture, advisory-output, citation-audit, redaction, and acceptance gate for future
   script-owned LLM/RAGAS execution without enabling model calls.
+- Phase 39 field-trial metrics starts the real-use observation stage with an offline,
+  explicit-run-root evidence aggregator instead of background telemetry.
 
 Partially completed and still active:
 
@@ -100,7 +102,7 @@ Completion priorities:
 
 Progress assessment:
 
-- Roadmap checklist status is 548 completed items out of 563 tracked items, about 97%.
+- Roadmap checklist status is 555 completed items out of 570 tracked items, about 97%.
 - The portable public CLI suite is complete for the planned portable archive
   release path: core commands, release packaging, redaction, report inventories, runtime
   helper pilots, contract gates, installed archive smoke, and primary manifest JSON Schema
@@ -1818,6 +1820,40 @@ Record sanitized workflow evidence for CLI sufficiency, handoff quality, KB buil
 stability, query quality, private handoff needs, post-CLI product adapter needs, optional
 LLM/backend pressure, and release health. Open a remaining gated implementation only when
 the observation plan's trigger rules are satisfied.
+
+## Phase 39: Field Trial Metrics MVP
+
+Goal: make field-trial observation maintainable with a no-network, explicit-run-root
+metrics aggregator that summarizes existing reports without collecting private content.
+
+Design source: `docs/15-field-trial-observation-plan.md`.
+
+Tasks:
+
+- [x] Document the field-trial metrics tool scope and usage.
+- [x] Add `tools/field_trial_metrics.py` as an offline evidence aggregator.
+- [x] Aggregate handoff, KB build/runtime, query/citation, release health, and explicit
+  field-trial record signals from user-specified run roots.
+- [x] Emit sanitized JSON and Markdown summaries plus a redaction sidecar.
+- [x] Add fake-fixture tests for pass, blocked quality, zero-result, citation failure,
+  release health, gated trigger, and redaction behavior.
+- [x] Keep the tool no-network, non-daemon, and opt-in only.
+- [x] Keep checklist and open gated implementation counts unchanged unless observation
+  evidence satisfies a trigger rule.
+
+Exit criteria:
+
+- The tool reads only explicit run directories or JSON files.
+- The tool never scans user home directories by default.
+- Generated summaries do not leak fake secrets, private hosts, home paths, or config paths.
+- Remaining gated work stays gated until field-trial evidence crosses a documented
+  trigger threshold.
+
+Status note: `tools/field_trial_metrics.py` now scans only explicit run roots or JSON
+files, summarizes existing public reports into `ragflow_field_trial_metrics_v1`, renders a
+Markdown summary, and can write a `ragflow_report_redaction_report_v1` sidecar. Focused
+tests cover blocked quality, zero-result query output, citation audit failure, release
+health, explicit gated-trigger records, CLI output files, and redaction behavior.
 
 ## Definition of Done
 

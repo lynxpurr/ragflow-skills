@@ -1725,7 +1725,7 @@ must not replace the Markdown handoff contract or bypass document quality report
 
 ## Phased Roadmap
 
-Recommended implementation order is the Phase 24-38 task list in
+Recommended implementation order is the Phase 24-39 task list in
 `docs/03-development-plan.md`:
 
 1. Phase 24: Rich Handoff 2.0 and Markdown Post-Processing.
@@ -1743,6 +1743,7 @@ Recommended implementation order is the Phase 24-38 task list in
 13. Phase 36: Generated Report Safety Closure and Runtime Helper Pilot.
 14. Phase 37: Post-CLI Adapter Planning.
 15. Phase 38: Optional LLM Backend Planning Gate.
+16. Phase 39: Field Trial Metrics MVP.
 
 This order kept the foundation document-centric before adding more complex query-time and
 LLM-assisted behavior, then closed release governance, post-ingest operational guidance,
@@ -1753,6 +1754,8 @@ backend slice with fake fixtures, or a private dedao handoff need that cannot be
 Markdown passthrough into `doc_manifest.json`. Field-trial observation should be collected
 first through `docs/15-field-trial-observation-plan.md`; if the trigger rules are not met,
 the correct action is to keep using the current CLI/archive path and run periodic release
-validation. The runtime wheel smoke/export gate remains an optional adapter check; backend
-execution stays deferred behind explicit config, deterministic fixtures, advisory-output
-marking, citation/evidence compatibility, redaction, and release gates.
+validation. Phase 39 adds a no-network metrics aggregator for that observation loop; it is
+not a daemon, telemetry channel, or approval mechanism. The runtime wheel smoke/export
+gate remains an optional adapter check; backend execution stays deferred behind explicit
+config, deterministic fixtures, advisory-output marking, citation/evidence compatibility,
+redaction, and release gates.
