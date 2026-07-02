@@ -129,6 +129,10 @@ Use this lightweight loop during the field trial:
 4. Run docs-only validation for planning updates and the release-facing chain for public
    command, artifact, or release-surface changes.
 
+Use `docs/16-system-closeout-report.md` as the current system baseline when reviewing
+field-trial evidence. Update the closeout backlog only when accumulated records change a
+decision, satisfy a trigger, reject a gated track, or reveal a new release-health risk.
+
 ## Metrics Aggregator
 
 Use `tools/field_trial_metrics.py` to summarize existing field-trial artifacts without
@@ -162,4 +166,6 @@ decision. A triggered track means "inspect this pattern"; it does not by itself 
 
 The next stage is observation, not feature expansion. The public CLI/archive path remains
 the canonical baseline. The remaining open tasks should stay gated until this plan
-produces concrete evidence that one of them is needed.
+produces concrete evidence that one of them is needed. The system-level closeout baseline
+and ongoing observation/improvement backlog are recorded in
+`docs/16-system-closeout-report.md`.

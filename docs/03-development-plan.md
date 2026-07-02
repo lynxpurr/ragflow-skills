@@ -44,6 +44,8 @@ Completed or closed for the current public command surface:
   script-owned LLM/RAGAS execution without enabling model calls.
 - Phase 39 field-trial metrics starts the real-use observation stage with an offline,
   explicit-run-root evidence aggregator instead of background telemetry.
+- Phase 40 system closeout records the design-to-implementation calibration, completed
+  work summary, remaining gated task audit, and ongoing observation/improvement backlog.
 
 Partially completed and still active:
 
@@ -102,7 +104,7 @@ Completion priorities:
 
 Progress assessment:
 
-- Roadmap checklist status is 555 completed items out of 570 tracked items, about 97%.
+- Roadmap checklist status is 561 completed items out of 576 tracked items, about 97%.
 - The portable public CLI suite is complete for the planned portable archive
   release path: core commands, release packaging, redaction, report inventories, runtime
   helper pilots, contract gates, installed archive smoke, and primary manifest JSON Schema
@@ -130,6 +132,29 @@ normal offline continuation unless their gate is satisfied.
 
 Observation source: use `docs/15-field-trial-observation-plan.md` to record sanitized
 run evidence and trigger thresholds before starting any of these gated tracks.
+
+Closeout source: `docs/16-system-closeout-report.md` records the system-level
+design-to-implementation calibration, completed work summary, remaining gated task audit,
+and sustained observation/improvement backlog for the post-build operating mode.
+
+## System Closeout Checkpoint
+
+Checkpoint date: 2026-07-02
+
+The concentrated development round is complete for the portable public CLI/archive
+release path. This checkpoint does not add command behavior, start `ragflow-query serve`,
+enable script-owned LLM/RAGAS execution, mutate RAGFlow, or add private dedao adapter
+code.
+
+Closeout decision:
+
+- Use the current CLI/archive path as the canonical baseline for real workflows.
+- Keep the 15 remaining open checklist items gated until observation evidence satisfies
+  a documented trigger rule.
+- Use `docs/15-field-trial-observation-plan.md` and `tools/field_trial_metrics.py` to
+  collect and summarize explicit run evidence.
+- Run the release-facing validation chain before changing public commands, contracts,
+  release artifacts, or generated report surfaces.
 
 ## Release Path Checkpoint
 
@@ -1854,6 +1879,38 @@ files, summarizes existing public reports into `ragflow_field_trial_metrics_v1`,
 Markdown summary, and can write a `ragflow_report_redaction_report_v1` sidecar. Focused
 tests cover blocked quality, zero-result query output, citation audit failure, release
 health, explicit gated-trigger records, CLI output files, and redaction behavior.
+
+## Phase 40: System Closeout Review And Observation Backlog
+
+Goal: close the concentrated development round with a system-level design review, task
+audit, and sustained observation/improvement plan.
+
+Design source: `docs/16-system-closeout-report.md`.
+
+Tasks:
+
+- [x] Review design intent against the current public skill, runtime, tooling, and release
+  surfaces.
+- [x] Record the release-path completion decision and the field-trial operating mode.
+- [x] Audit the remaining open checklist items by gated category.
+- [x] Preserve the 15 gated implementation items as open until their trigger evidence
+  exists.
+- [x] Publish an ongoing observation and improvement backlog for `serve`, product
+  adapters, optional LLM/backend work, private bridge work, and release health.
+- [x] Link the closeout report from the active development plan and design calibration
+  docs.
+
+Exit criteria:
+
+- The closeout report names what is complete, what remains, and why the remaining items
+  should not be implemented without evidence.
+- The checklist count reflects the docs-only closeout work while leaving gated
+  implementation tasks open.
+- Future work has an explicit observation or validation trigger instead of a broad
+  "continue development" default.
+
+Status note: Phase 40 is a docs-only closeout checkpoint. It does not broaden the public
+command surface or close the remaining gated product/private implementation items.
 
 ## Definition of Done
 

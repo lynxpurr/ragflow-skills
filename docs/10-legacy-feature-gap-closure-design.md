@@ -1645,6 +1645,10 @@ Current calibration:
 - The current open task list has 15 items across four gated categories: 2 local service or
   post-CLI host-wrapper items, 4 other post-CLI product-adapter items, 7 optional
   script-owned LLM/backend items, and 2 private dedao bridge items.
+- `docs/16-system-closeout-report.md` is the system-level checkpoint for the completed
+  concentrated build round. It compares design intent with the current implementation,
+  preserves the remaining gated items as evidence-led future tracks, and defines the
+  observation/improvement backlog for the post-build operating mode.
 - Primary `doc_manifest.json` and `kb_manifest.json` JSON Schema templates are now part of
   the release contract and are checked by default release hygiene. Broader report-schema
   migration tooling should be added only when compatibility pressure appears.
@@ -1725,7 +1729,7 @@ must not replace the Markdown handoff contract or bypass document quality report
 
 ## Phased Roadmap
 
-Recommended implementation order is the Phase 24-39 task list in
+Recommended implementation order is the Phase 24-40 task list in
 `docs/03-development-plan.md`:
 
 1. Phase 24: Rich Handoff 2.0 and Markdown Post-Processing.
@@ -1744,6 +1748,7 @@ Recommended implementation order is the Phase 24-39 task list in
 14. Phase 37: Post-CLI Adapter Planning.
 15. Phase 38: Optional LLM Backend Planning Gate.
 16. Phase 39: Field Trial Metrics MVP.
+17. Phase 40: System Closeout Review And Observation Backlog.
 
 This order kept the foundation document-centric before adding more complex query-time and
 LLM-assisted behavior, then closed release governance, post-ingest operational guidance,
@@ -1755,7 +1760,9 @@ Markdown passthrough into `doc_manifest.json`. Field-trial observation should be
 first through `docs/15-field-trial-observation-plan.md`; if the trigger rules are not met,
 the correct action is to keep using the current CLI/archive path and run periodic release
 validation. Phase 39 adds a no-network metrics aggregator for that observation loop; it is
-not a daemon, telemetry channel, or approval mechanism. The runtime wheel smoke/export
-gate remains an optional adapter check; backend execution stays deferred behind explicit
-config, deterministic fixtures, advisory-output marking, citation/evidence compatibility,
-redaction, and release gates.
+not a daemon, telemetry channel, or approval mechanism. Phase 40 records the system-level
+closeout decision: the public CLI/archive release path is the baseline, and future
+implementation should be evidence-led through the observation backlog. The runtime wheel
+smoke/export gate remains an optional adapter check; backend execution stays deferred
+behind explicit config, deterministic fixtures, advisory-output marking,
+citation/evidence compatibility, redaction, and release gates.
