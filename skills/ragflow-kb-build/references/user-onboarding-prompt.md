@@ -144,12 +144,12 @@ mineru:
 第二阶段：可选的 MinerU 测试
 
 如果我提供了测试 PDF / Office 文件，并且 MinerU 配置完整，请运行一次最小转换测试：
-- 如果服务是 MinerU FastAPI v2，使用 ragflow-doc-to-md --backend mineru-fastapi --mineru-asset-mode markdown_assets，并确认输出 Markdown 和本地图片资产
+- 如果服务是 MinerU FastAPI v2，正式入库前处理使用 ragflow-doc-to-md pipeline --backend mineru-fastapi --mineru-asset-mode markdown_assets --postprocess-profile chunk-markers，并确认输出 Markdown、本地图片资产、postprocess_report.json、retrieval_hints.json 和 ragflow_ingest_plan.yaml
 - 如果本机 MinerU CLI 可用且用户希望本地优先，使用 ragflow-doc-to-md --backend auto 或 --backend mineru-cli，并确认输出 Markdown
 - 如果服务是 MinerU Agent API 或兼容 gateway，使用 ragflow-doc-to-md --backend mineru
 - 如果服务是同步 multipart /parse，使用 ragflow-doc-to-md --backend mineru-sync
 - 如果没有可用 CLI 且服务协议无法识别，请报告协议差异并跳过，不要猜测 backend
-- 生成 Markdown handoff
+- 生成正式 Markdown handoff；快速预览才单独使用 convert
 - 报告转换产物路径和 warning
 
 如果 MinerU 信息不完整、CLI 不可用且协议无法识别，请跳过并说明缺哪些字段或协议差异。
@@ -162,7 +162,8 @@ mineru:
 kb:ragflow-skills-e2e-YYYYMMDD-HHMM
 
 然后执行：
-- ragflow-doc-to-md 生成 doc_manifest.json
+- ragflow-doc-to-md pipeline 生成 doc_manifest.json、retrieval_hints.json 和 ragflow_ingest_plan.yaml
+- ragflow-kb-build --dry-run 消费 doc_manifest.json 和用户确认的 profile
 - ragflow-kb-build 创建 RAGFlow KB、上传 Markdown、触发解析、等待完成
 - ragflow-kb-build validate --level smoke
 - ragflow-query --mode direct 查询

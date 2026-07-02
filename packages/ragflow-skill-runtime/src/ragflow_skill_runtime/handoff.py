@@ -21,6 +21,7 @@ PROFILE_SUGGESTIONS_SCHEMA = "ragflow_profile_suggestions_v1"
 RETRIEVAL_HINTS_SCHEMA = "ragflow_retrieval_hints_v1"
 ASSISTANT_PROFILE_SCHEMA = "ragflow_assistant_profile_v1"
 ASSISTANT_TEST_PLAN_SCHEMA = "ragflow_assistant_test_plan_v1"
+RAGFLOW_INGEST_PLAN_SCHEMA = "ragflow_ingest_plan_v1"
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
@@ -843,6 +844,111 @@ def create_rich_handoff_package(
         "quality_status": profile_suggestions.get("signals", {}).get("quality_status"),
     }
     return payload
+
+
+def _first_profile_suggestion(profile_suggestions: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    if not isinstance(profile_suggestions, Mapping):
+        return {}
+    suggestions = profile_suggestions.get("suggestions")
+    if isinstance(suggestions, list) and suggestions and isinstance(suggestions[0], Mapping):
+        return suggestions[0]
+    return {}
+
+
+def make_ragflow_ingest_plan_payload(
+    *,
+    handoff_root: str | Path,
+    doc_manifest_name: str = "doc_manifest.json",
+    package_payload: Mapping[str, Any] | None = None,
+    postprocess_report_name: str | None = "postprocess_report.json",
+) -> dict[str, Any]:
+    """Create a non-secret ingestion plan for the next kb-build step."""
+
+    root = Path(handoff_root)
+    doc_manifest = load_doc_manifest_payload(root / doc_manifest_name)
+    quality_gate = doc_manifest.get("quality_gate") if isinstance(doc_manifest.get("quality_gate"), Mapping) else {}
+    package = package_payload or {}
+    profile_suggestions_name = (
+        str(package.get("profile_suggestions"))
+        if isinstance(package.get("profile_suggestions"), str)
+        else "profile_suggestions.json"
+    )
+    retrieval_hints_name = (
+        str(package.get("retrieval_hints"))
+        if isinstance(package.get("retrieval_hints"), str)
+        else "retrieval_hints.json"
+    )
+    profile_suggestions = _read_json(root / profile_suggestions_name) if (root / profile_suggestions_name).is_file() else {}
+    suggestion = _first_profile_suggestion(profile_suggestions)
+    parser_profile = {
+        "chunk_method": "naive",
+        "chunk_size": int(suggestion.get("chunk_size", 512)) if str(suggestion.get("chunk_size", "")).isdigit() else 512,
+        "chunk_overlap": int(suggestion.get("chunk_overlap", 64)) if str(suggestion.get("chunk_overlap", "")).isdigit() else 64,
+        "language": suggestion.get("language") if isinstance(suggestion.get("language"), str) else None,
+    }
+    handoff: dict[str, Any] = {
+        "doc_manifest": doc_manifest_name,
+        "quality_report": doc_manifest.get("quality_report"),
+        "runtime_report": doc_manifest.get("runtime_report"),
+        "postprocess_report": postprocess_report_name,
+        "metadata": package.get("metadata", "metadata.json"),
+        "artifact_index": package.get("artifact_index", "artifact_index.json"),
+        "profile_suggestions": profile_suggestions_name,
+        "retrieval_hints": retrieval_hints_name,
+        "assistant_profile": package.get("assistant_profile", "assistant_profile.json"),
+        "assistant_test_plan": package.get("assistant_test_plan", "assistant_test_plan.json"),
+    }
+    return {
+        "schema": RAGFLOW_INGEST_PLAN_SCHEMA,
+        "created_at": _now(),
+        "handoff": handoff,
+        "quality_gate": {
+            "status": quality_gate.get("status"),
+            "required": True,
+            "allow_blocked_default": False,
+        },
+        "recommended_build": {
+            "command": "ragflow-kb-build",
+            "profile_suggestions": profile_suggestions_name,
+            "parser_profile": parser_profile,
+            "dry_run_command": [
+                "ragflow-kb-build",
+                "--doc-manifest",
+                "<handoff>/doc_manifest.json",
+                "--kb-name",
+                "<kb-name>",
+                "--profile",
+                "<reviewed-profile.json>",
+                "--dry-run",
+            ],
+            "build_command": [
+                "ragflow-kb-build",
+                "--doc-manifest",
+                "<handoff>/doc_manifest.json",
+                "--kb-name",
+                "<kb-name>",
+                "--profile",
+                "<reviewed-profile.json>",
+            ],
+        },
+        "recommended_validation": {
+            "smoke": True,
+            "regression": "optional",
+            "benchmark": "optional",
+            "query_review": "use ragflow-query with assistant_profile and assistant_test_plan after build",
+        },
+        "safety": {
+            "stores_ragflow_endpoint": False,
+            "stores_api_credentials": False,
+            "stores_secret": False,
+            "mutation_default": "dry_run_first",
+        },
+        "notes": [
+            "No RAGFlow endpoint or API key is stored in this handoff.",
+            "Review profile_suggestions.json before materializing a build profile.",
+            "Run dry_run_command before any live KB creation or upload.",
+        ],
+    }
 
 
 def inspect_rich_handoff(

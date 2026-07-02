@@ -12,9 +12,11 @@ from ragflow_skill_runtime.handoff import (
     DOCUMENT_METADATA_SCHEMA,
     HANDOFF_PACKAGE_SCHEMA,
     PROFILE_SUGGESTIONS_SCHEMA,
+    RAGFLOW_INGEST_PLAN_SCHEMA,
     RETRIEVAL_HINTS_SCHEMA,
     create_rich_handoff_package,
     inspect_rich_handoff,
+    make_ragflow_ingest_plan_payload,
     render_handoff_inspection_markdown,
 )
 
@@ -124,6 +126,42 @@ class HandoffTests(unittest.TestCase):
         self.assertIn("RAGFlow Handoff Inspection", markdown)
         self.assertIn("metadata", markdown)
         self.assertIn("Retrieval hint sections", markdown)
+
+    def test_make_ragflow_ingest_plan_is_non_secret_and_points_to_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            documents.mkdir()
+            (documents / "a.md").write_text("# A\n\nBody\n", encoding="utf-8")
+            (root / "doc_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "quality_report": "quality_report.json",
+                        "quality_gate": {"status": "PASS"},
+                        "documents": [{"source_path": "a.md", "markdown_path": "documents/a.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "quality_report.json").write_text(
+                json.dumps({"schema": "doc_quality_report_v1", "gate": {"status": "PASS"}}),
+                encoding="utf-8",
+            )
+            package = create_rich_handoff_package(handoff_root=root)
+
+            plan = make_ragflow_ingest_plan_payload(handoff_root=root, package_payload=package)
+
+        serialized = json.dumps(plan, ensure_ascii=False)
+        self.assertEqual(plan["schema"], RAGFLOW_INGEST_PLAN_SCHEMA)
+        self.assertEqual(plan["handoff"]["doc_manifest"], "doc_manifest.json")
+        self.assertEqual(plan["handoff"]["retrieval_hints"], "retrieval_hints.json")
+        self.assertEqual(plan["quality_gate"]["status"], "PASS")
+        self.assertEqual(plan["recommended_build"]["dry_run_command"][0], "ragflow-kb-build")
+        self.assertFalse(plan["safety"]["stores_api_credentials"])
+        self.assertNotIn("api_key:", serialized)
+        self.assertNotIn("base_url:", serialized)
 
 
 if __name__ == "__main__":

@@ -215,6 +215,124 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(assistant_test_plan["schema"], "ragflow_assistant_test_plan_v1")
         self.assertTrue(readme_exists)
 
+    def test_pipeline_creates_rich_handoff_and_ingest_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "handoff"
+            input_dir.mkdir()
+            (input_dir / "alpha.md").write_text(
+                "# Alpha\n\nIntro\n\n## Specs\n\nBody\n",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "pipeline",
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                    "--mode",
+                    "passthrough",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+            markdown = (output_dir / "documents" / "alpha.md").read_text(encoding="utf-8")
+            manifest = json.loads((output_dir / "doc_manifest.json").read_text(encoding="utf-8"))
+            package_readme_exists = (output_dir / "package_readme.md").is_file()
+            retrieval_hints = json.loads((output_dir / "retrieval_hints.json").read_text(encoding="utf-8"))
+            ingest_plan = (output_dir / "ragflow_ingest_plan.yaml").read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["quality_gate"]["status"], "PASS")
+        self.assertEqual(payload["pipeline"]["stages"]["postprocess"]["profile"], "chunk-markers")
+        self.assertIn("<!-- chunk -->", markdown)
+        self.assertEqual(manifest["postprocess_report"], "postprocess_report.json")
+        self.assertTrue(package_readme_exists)
+        self.assertEqual(retrieval_hints["schema"], "ragflow_retrieval_hints_v1")
+        self.assertIn('schema: "ragflow_ingest_plan_v1"', ingest_plan)
+        self.assertIn('command: "ragflow-kb-build"', ingest_plan)
+        self.assertNotIn("api_key", ingest_plan)
+        self.assertNotIn("base_url", ingest_plan)
+
+    def test_pipeline_can_write_non_secret_ragflow_config_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "handoff"
+            input_dir.mkdir()
+            (input_dir / "alpha.md").write_text("# Alpha\n\nBody\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "pipeline",
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                    "--mode",
+                    "passthrough",
+                    "--ragflow-config-alias",
+                    "ragflow_config.yaml",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            alias_text = (output_dir / "ragflow_config.yaml").read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('schema: "ragflow_ingest_plan_v1"', alias_text)
+        self.assertNotIn("api_key", alias_text)
+        self.assertNotIn("base_url", alias_text)
+
+    def test_pipeline_rejects_unsafe_sidecar_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "handoff"
+            input_dir.mkdir()
+            (input_dir / "alpha.md").write_text("# Alpha\n\nBody\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "pipeline",
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                    "--mode",
+                    "passthrough",
+                    "--ingest-plan-name",
+                    "../ragflow_ingest_plan.yaml",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertIn("relative handoff path", payload["error"])
+
     def test_postprocess_single_markdown_cli(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -997,6 +997,47 @@ def _run_no_network_checks(
         if rich_path.exists():
             produced.append(rich_path)
 
+    pipeline_input = work_root / "pipeline-input"
+    pipeline_input.mkdir(parents=True, exist_ok=True)
+    (pipeline_input / "pipeline.md").write_text("# Pipeline\n\nIntro\n\n## Details\n\nBody\n", encoding="utf-8")
+    pipeline_handoff = work_root / "pipeline-handoff"
+    pipeline_result = _run_command(
+        [
+            python_executable,
+            str(convert_script),
+            "pipeline",
+            "--input",
+            str(pipeline_input),
+            "--output",
+            str(pipeline_handoff),
+            "--mode",
+            "passthrough",
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(checks, "doc-to-md pipeline handoff", pipeline_result, required_output='"ragflow_ingest_plan"')
+    for pipeline_name in (
+        "postprocess_report.json",
+        "retrieval_hints.json",
+        "ragflow_ingest_plan.yaml",
+    ):
+        pipeline_path = pipeline_handoff / pipeline_name
+        _record_file_check(checks, f"pipeline {pipeline_name} produced", pipeline_path)
+        if pipeline_path.exists():
+            produced.append(pipeline_path)
+    pipeline_markdown = pipeline_handoff / "documents" / "pipeline.md"
+    marker_ok = pipeline_markdown.is_file() and "<!-- chunk -->" in pipeline_markdown.read_text(encoding="utf-8")
+    checks.append(
+        {
+            "name": "pipeline writes chunk markers",
+            "ok": marker_ok,
+            "path": str(pipeline_markdown),
+            "error": "" if marker_ok else "missing chunk marker",
+        }
+    )
+
     mineru_cli_input = work_root / "mineru-cli-input"
     mineru_cli_input.mkdir(parents=True, exist_ok=True)
     (mineru_cli_input / "sample.pdf").write_bytes(b"%PDF fake mineru cli acceptance")
@@ -2494,6 +2535,23 @@ def _run_no_network_checks(
         env=env,
     )
     _record_command_check(checks, "kb-build dry-run", build_result, required_output='"dry_run": true')
+    pipeline_build_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "--doc-manifest",
+            str(pipeline_handoff / "doc_manifest.json"),
+            "--kb-name",
+            "kb:consumer-acceptance-pipeline",
+            "--profile",
+            str(profile),
+            "--dry-run",
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(checks, "kb-build pipeline dry-run", pipeline_build_result, required_output='"dry_run": true')
     fastapi_build_result = _run_command(
         [
             python_executable,

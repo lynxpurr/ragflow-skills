@@ -5,8 +5,10 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import contextlib
 from datetime import datetime, timezone
 import hashlib
+import io
 import json
 import os
 import re
@@ -49,6 +51,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     load_skill_config,
     make_doc_manifest_payload,
     make_doc_runtime_report_payload,
+    make_ragflow_ingest_plan_payload,
     make_quality_report_payload,
     materialize_segments,
     plan_markdown_segmentation,
@@ -97,6 +100,53 @@ def _utc_now() -> str:
 def _stable_digest(data: Any) -> str:
     payload = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _yaml_scalar(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def _render_simple_yaml(value: Any, *, indent: int = 0) -> str:
+    prefix = " " * indent
+    if isinstance(value, dict):
+        lines: list[str] = []
+        for key, item in value.items():
+            if isinstance(item, (dict, list)):
+                lines.append(f"{prefix}{key}:")
+                lines.append(_render_simple_yaml(item, indent=indent + 2))
+            else:
+                lines.append(f"{prefix}{key}: {_yaml_scalar(item)}")
+        return "\n".join(lines)
+    if isinstance(value, list):
+        lines = []
+        for item in value:
+            if isinstance(item, (dict, list)):
+                lines.append(f"{prefix}-")
+                lines.append(_render_simple_yaml(item, indent=indent + 2))
+            else:
+                lines.append(f"{prefix}- {_yaml_scalar(item)}")
+        return "\n".join(lines)
+    return f"{prefix}{_yaml_scalar(value)}"
+
+
+def _write_yaml_payload(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_render_simple_yaml(payload) + "\n", encoding="utf-8")
+
+
+def _safe_handoff_sidecar_name(value: str | None, *, label: str) -> str | None:
+    if not value:
+        return None
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts:
+        raise DocConvertError(f"{label} must be a relative handoff path without '..'")
+    return path.as_posix()
 
 
 def _error(message: str, *, json_output: bool) -> int:
@@ -1050,6 +1100,146 @@ def _run(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_convert_captured(args: argparse.Namespace) -> tuple[int, dict[str, Any], str]:
+    buffer = io.StringIO()
+    convert_args = argparse.Namespace(**vars(args))
+    convert_args.json = True
+    with contextlib.redirect_stdout(buffer):
+        return_code = _run(convert_args)
+    raw = buffer.getvalue().strip()
+    payload: dict[str, Any] = {}
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                payload = parsed
+        except json.JSONDecodeError:
+            payload = {"ok": False, "raw_stdout": raw}
+    return return_code, payload, raw
+
+
+def _update_manifest_postprocess_report(manifest_path: Path, *, postprocess_report_name: str) -> None:
+    manifest = load_doc_manifest_payload(manifest_path)
+    updated = dict(manifest)
+    updated["postprocess_report"] = postprocess_report_name
+    manifest_path.write_text(json.dumps(updated, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _run_pipeline(args: argparse.Namespace) -> int:
+    try:
+        output_root = Path(args.output).expanduser().resolve()
+        manifest_path = output_root / args.manifest_name
+
+        convert_code, convert_payload, raw_convert_stdout = _run_convert_captured(args)
+        if convert_code != 0:
+            response = {
+                "ok": False,
+                "stage": "convert",
+                "error": "convert stage failed or skipped documents",
+                "convert": convert_payload or {"raw_stdout": raw_convert_stdout},
+            }
+            _dump_json(response)
+            return convert_code
+
+        postprocess_report_name = _safe_handoff_sidecar_name(
+            args.postprocess_report_name,
+            label="--postprocess-report-name",
+        ) or "postprocess_report.json"
+        postprocess_report_path = output_root / postprocess_report_name
+        postprocess_report = postprocess_handoff(
+            manifest_path,
+            profile=args.postprocess_profile,
+            write=True,
+            report_json=postprocess_report_path,
+        )
+        _update_manifest_postprocess_report(manifest_path, postprocess_report_name=postprocess_report_name)
+
+        metadata_name = _safe_handoff_sidecar_name(args.metadata_name, label="--metadata-name") or "metadata.json"
+        artifact_index_name = _safe_handoff_sidecar_name(args.artifact_index_name, label="--artifact-index-name") or "artifact_index.json"
+        profile_suggestions_name = _safe_handoff_sidecar_name(args.profile_suggestions_name, label="--profile-suggestions-name") or "profile_suggestions.json"
+        retrieval_hints_name = _safe_handoff_sidecar_name(args.retrieval_hints_name, label="--retrieval-hints-name") or "retrieval_hints.json"
+        assistant_profile_name = _safe_handoff_sidecar_name(args.assistant_profile_name, label="--assistant-profile-name") or "assistant_profile.json"
+        assistant_test_plan_name = _safe_handoff_sidecar_name(args.assistant_test_plan_name, label="--assistant-test-plan-name") or "assistant_test_plan.json"
+        package_readme_name = _safe_handoff_sidecar_name(args.package_readme_name, label="--package-readme-name") or "package_readme.md"
+        package_payload = create_rich_handoff_package(
+            handoff_root=output_root,
+            doc_manifest_name=args.manifest_name,
+            metadata_name=metadata_name,
+            artifact_index_name=artifact_index_name,
+            profile_suggestions_name=profile_suggestions_name,
+            retrieval_hints_name=retrieval_hints_name,
+            assistant_profile_name=assistant_profile_name,
+            assistant_test_plan_name=assistant_test_plan_name,
+            package_readme_name=package_readme_name,
+        )
+
+        ingest_plan_name = _safe_handoff_sidecar_name(args.ingest_plan_name, label="--ingest-plan-name")
+        if not ingest_plan_name:
+            raise DocConvertError("--ingest-plan-name must not be empty")
+        ingest_plan = make_ragflow_ingest_plan_payload(
+            handoff_root=output_root,
+            doc_manifest_name=args.manifest_name,
+            package_payload=package_payload,
+            postprocess_report_name=postprocess_report_name,
+        )
+        ingest_plan_path = output_root / ingest_plan_name
+        _write_yaml_payload(ingest_plan_path, ingest_plan)
+
+        alias_path: Path | None = None
+        alias_name = _safe_handoff_sidecar_name(args.ragflow_config_alias, label="--ragflow-config-alias")
+        if alias_name:
+            alias_path = output_root / alias_name
+            _write_yaml_payload(alias_path, ingest_plan)
+
+        response = {
+            "ok": True,
+            "pipeline": {
+                "schema": "ragflow_doc_to_md_pipeline_summary_v1",
+                "stages": {
+                    "convert": {"ok": True, "doc_manifest": str(manifest_path)},
+                    "postprocess": {
+                        "ok": True,
+                        "profile": args.postprocess_profile,
+                        "postprocess_report": str(postprocess_report_path),
+                        "changed_documents": postprocess_report.get("summary", {}).get("changed_documents"),
+                    },
+                    "package": {"ok": True, **package_payload},
+                    "ingest_plan": {"ok": True, "path": str(ingest_plan_path), "alias": str(alias_path) if alias_path else None},
+                },
+            },
+            "doc_manifest": str(manifest_path),
+            "quality_report": convert_payload.get("quality_report"),
+            "quality_gate": convert_payload.get("quality_gate"),
+            "runtime_report": convert_payload.get("runtime_report"),
+            "postprocess_report": str(postprocess_report_path),
+            "handoff_package": package_payload,
+            "retrieval_hints": str(output_root / retrieval_hints_name),
+            "ragflow_ingest_plan": str(ingest_plan_path),
+            "ragflow_config_alias": str(alias_path) if alias_path else None,
+            "document_count": convert_payload.get("document_count"),
+            "skipped": convert_payload.get("skipped", []),
+        }
+        if args.redaction_report:
+            response = _sanitize_output_payload(
+                response,
+                home_paths=[args.input, args.output, str(output_root)],
+                config_paths=[
+                    args.input,
+                    args.output,
+                    args.config,
+                    str(manifest_path),
+                    str(postprocess_report_path),
+                    str(ingest_plan_path),
+                    str(alias_path) if alias_path else None,
+                    args.redaction_report,
+                ],
+            )
+        _dump_json(response)
+        return 0
+    except (DocConvertError, DocPostprocessError, DocQualityError, HandoffError, OSError, UnicodeDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _run_inspect(args: argparse.Namespace) -> int:
     try:
         manifest = load_doc_manifest_payload(args.doc_manifest)
@@ -1585,7 +1775,7 @@ def build_backend_parser() -> argparse.ArgumentParser:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Convert documents into a Markdown handoff bundle",
-        epilog="Commands: backend probe, backend warmup, inspect, segment-plan, split.",
+        epilog="Commands: pipeline, backend probe, backend warmup, inspect, segment-plan, split.",
     )
     parser.add_argument("--input", required=True, help="Input file or directory")
     parser.add_argument("--output", required=True, help="Output handoff directory")
@@ -1621,6 +1811,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_pipeline_parser() -> argparse.ArgumentParser:
+    parser = build_parser()
+    parser.description = "Run convert -> postprocess -> rich package -> non-secret ingest plan"
+    parser.add_argument("--postprocess-profile", choices=["none", "safe", "ocr", "chunk-markers"], default="chunk-markers", help="Post-processing profile for the formal handoff")
+    parser.add_argument("--postprocess-report-name", default="postprocess_report.json", help="Postprocess report sidecar name under the output directory")
+    parser.add_argument("--metadata-name", default="metadata.json", help="Rich package metadata sidecar name")
+    parser.add_argument("--artifact-index-name", default="artifact_index.json", help="Rich package artifact index sidecar name")
+    parser.add_argument("--profile-suggestions-name", default="profile_suggestions.json", help="Rich package profile suggestions sidecar name")
+    parser.add_argument("--retrieval-hints-name", default="retrieval_hints.json", help="Rich package retrieval hints sidecar name")
+    parser.add_argument("--assistant-profile-name", default="assistant_profile.json", help="Rich package assistant profile sidecar name")
+    parser.add_argument("--assistant-test-plan-name", default="assistant_test_plan.json", help="Rich package assistant test plan sidecar name")
+    parser.add_argument("--package-readme-name", default="package_readme.md", help="Rich package README sidecar name")
+    parser.add_argument("--ingest-plan-name", default="ragflow_ingest_plan.yaml", help="Non-secret RAGFlow ingest plan sidecar name")
+    parser.add_argument("--ragflow-config-alias", help="Optional non-secret compatibility alias such as ragflow_config.yaml")
+    return parser
+
+
 def main(argv: list[str] | None = None) -> int:
     actual_argv = list(sys.argv[1:] if argv is None else argv)
     if actual_argv:
@@ -1636,6 +1843,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_package(build_package_parser().parse_args(command_args))
         if command == "postprocess":
             return _run_postprocess(build_postprocess_parser().parse_args(command_args))
+        if command == "pipeline":
+            return _run_pipeline(build_pipeline_parser().parse_args(command_args))
         if command == "backend":
             parsed = build_backend_parser().parse_args(command_args)
             return parsed.func(parsed)

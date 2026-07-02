@@ -2258,6 +2258,56 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
                 "returncode": 0 if rich_path.exists() else 1,
                 "error": "" if rich_path.exists() else f"missing {rich_path}",
             }
+        )
+    pipeline_input = workspace / "pipeline-input"
+    pipeline_input.mkdir(parents=True, exist_ok=True)
+    (pipeline_input / "pipeline.md").write_text("# Pipeline\n\nIntro\n\n## Details\n\nBody\n", encoding="utf-8")
+    pipeline_handoff = workspace / "pipeline-handoff"
+    pipeline_result = _run_command(
+        [
+            sys.executable,
+            str(convert_script),
+            "pipeline",
+            "--input",
+            str(pipeline_input),
+            "--output",
+            str(pipeline_handoff),
+            "--mode",
+            "passthrough",
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "doc-to-md pipeline handoff",
+        pipeline_result,
+        required_stdout='"ragflow_ingest_plan"',
+    )
+    for pipeline_name in (
+        "postprocess_report.json",
+        "retrieval_hints.json",
+        "ragflow_ingest_plan.yaml",
+    ):
+        pipeline_path = pipeline_handoff / pipeline_name
+        checks.append(
+            {
+                "name": f"pipeline {pipeline_name} produced",
+                "ok": pipeline_path.exists(),
+                "returncode": 0 if pipeline_path.exists() else 1,
+                "error": "" if pipeline_path.exists() else f"missing {pipeline_path}",
+            }
+        )
+    pipeline_markdown = pipeline_handoff / "documents" / "pipeline.md"
+    marker_ok = pipeline_markdown.is_file() and "<!-- chunk -->" in pipeline_markdown.read_text(encoding="utf-8")
+    checks.append(
+        {
+            "name": "pipeline writes chunk markers",
+            "ok": marker_ok,
+            "returncode": 0 if marker_ok else 1,
+            "error": "" if marker_ok else "missing chunk marker",
+        }
     )
     postprocess_dir = workspace / "postprocessed-handoff"
     postprocess_redaction = workspace / "postprocess_redaction.json"
@@ -2335,6 +2385,23 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         env=env,
     )
     _record_command_check(checks, "kb-build dry-run", build_result, required_stdout='"dry_run": true')
+    pipeline_build_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "--doc-manifest",
+            str(pipeline_handoff / "doc_manifest.json"),
+            "--kb-name",
+            "kb:platform-smoke-pipeline",
+            "--profile",
+            str(PROFILE_PATH),
+            "--dry-run",
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(checks, "kb-build pipeline dry-run", pipeline_build_result, required_stdout='"dry_run": true')
     mineru_fastapi_doc_manifest = workspace / "mineru-fastapi-handoff" / "doc_manifest.json"
     if mineru_fastapi_doc_manifest.exists():
         fastapi_build_result = _run_command(
@@ -4425,6 +4492,10 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         workspace / "mineru-cli-handoff" / "doc_manifest.json",
         workspace / "mineru-cli-handoff" / "runtime_report.json",
         workspace / "mineru-sync-handoff" / "doc_manifest.json",
+        workspace / "pipeline-handoff" / "doc_manifest.json",
+        workspace / "pipeline-handoff" / "postprocess_report.json",
+        workspace / "pipeline-handoff" / "retrieval_hints.json",
+        workspace / "pipeline-handoff" / "ragflow_ingest_plan.yaml",
         workspace / "backend_probe.json",
         workspace / "backend_probe.md",
         workspace / "convert_redaction.json",

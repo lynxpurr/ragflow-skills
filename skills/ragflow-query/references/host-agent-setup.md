@@ -131,6 +131,22 @@ python ragflow-query/scripts/query.py ask --help
 
 Expected result: `doc_manifest.json` is produced, `build.py --dry-run` succeeds, and `query.py ask --help` shows `--mode` and `--host-assisted`.
 
+## Formal Pre-Ingest Handoff
+
+For real document preparation before KB build, prefer the pipeline command so the host agent does not forget postprocess, rich sidecars, or the non-secret ingest plan:
+
+```bash
+python ragflow-doc-to-md/scripts/convert.py pipeline \
+  --input /path/to/source-docs \
+  --output /tmp/ragflow-skills-handoff \
+  --backend mineru-fastapi \
+  --mineru-asset-mode markdown_assets \
+  --postprocess-profile chunk-markers \
+  --json
+```
+
+Expected result: the handoff contains `doc_manifest.json`, `quality_report.json`, `runtime_report.json` when applicable, `postprocess_report.json`, `retrieval_hints.json`, rich package sidecars, and `ragflow_ingest_plan.yaml`. The ingest plan is advisory and non-secret; it must not contain RAGFlow endpoints or API keys.
+
 ## Live RAGFlow E2E
 
 Use a disposable KB name:

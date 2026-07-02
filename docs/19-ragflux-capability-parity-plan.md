@@ -1,6 +1,6 @@
 # 19. RAGFlux 能力补齐设计与开发计划
 
-状态：P0 已实现并通过离线验证；P1/P2 待实现
+状态：P0 已实现并通过离线验证；P1 pipeline 和 ingest plan 已实现，kb-build 深度消费增强待续；P2 待实现
 日期：2026-07-02
 适用范围：`ragflow-doc-to-md` 作为正式文档转换 skill，配合 `ragflow-kb-build`
 和 `ragflow-query` 替代 RAGFlux 的文档预处理、入库和检索验证能力。
@@ -281,33 +281,33 @@ P0 实现说明：
 
 ### 3.2 P1：端到端 pipeline 工作流
 
-- [ ] 决定采用 `convert.py pipeline` 子命令或 `convert --package-rich` 参数组合。
-- [ ] 实现 pipeline 执行顺序：convert -> postprocess -> package rich -> ingest plan。
-- [ ] 默认 pipeline 使用非破坏性写入，不原地改写输入 Markdown。
-- [ ] 支持 `--postprocess-profile safe|ocr|chunk-markers`，正式入库推荐 `chunk-markers`。
-- [ ] 支持 `--package-rich` 或 pipeline 默认生成 rich handoff。
-- [ ] 输出统一 JSON 摘要，列出所有生成物路径和 gate 状态。
-- [ ] 添加失败恢复策略：convert 失败不执行后续步骤；postprocess 失败不伪造 package；package 失败保留前序报告。
-- [ ] 添加 CLI tests，覆盖成功、quality BLOCKED、postprocess 失败、package 失败。
-- [ ] 更新 `SKILL.md` 和 host-agent prompt，把正式入库前处理改为 pipeline。
+- [x] 决定采用 `convert.py pipeline` 子命令或 `convert --package-rich` 参数组合。
+- [x] 实现 pipeline 执行顺序：convert -> postprocess -> package rich -> ingest plan。
+- [x] 默认 pipeline 使用非破坏性写入，不原地改写输入 Markdown。
+- [x] 支持 `--postprocess-profile safe|ocr|chunk-markers`，正式入库推荐 `chunk-markers`。
+- [x] pipeline 默认生成 rich handoff。
+- [x] 输出统一 JSON 摘要，列出所有生成物路径和 gate 状态。
+- [x] 添加失败恢复策略：convert 失败不执行后续步骤；postprocess 失败不伪造 package；package 失败保留前序报告。
+- [x] 添加 CLI tests，覆盖 pipeline 成功、非密钥 alias 和危险 sidecar 路径拒绝；quality BLOCKED / postprocess failure / package failure 仍作为后续回归扩展。
+- [x] 更新 `SKILL.md` 和 host-agent prompt，把正式入库前处理改为 pipeline。
 
 ### 3.3 P1：RAGFlow 入库建议 sidecar
 
-- [ ] 定义 `ragflow_ingest_plan_v1` schema。
-- [ ] 从 `profile_suggestions.json`、`retrieval_hints.json`、quality gate 和 doc manifest 生成 ingest plan。
-- [ ] 明确 sidecar 不包含 RAGFlow base URL、API key 或 host-agent 私有配置路径。
-- [ ] 输出推荐 `ragflow-kb-build` dry-run/build/validate 命令模板，命令中使用占位符。
-- [ ] 可选支持 `--ragflow-config-alias ragflow_config.yaml`，仅作为非密钥兼容 alias。
-- [ ] 添加 schema identity 和 release hygiene 覆盖。
-- [ ] 添加 consumer acceptance 检查，验证 ingest plan 可被 host agent 读取并转入 dry-run。
+- [x] 定义 `ragflow_ingest_plan_v1` schema。
+- [x] 从 `profile_suggestions.json`、`retrieval_hints.json`、quality gate 和 doc manifest 生成 ingest plan。
+- [x] 明确 sidecar 不包含 RAGFlow base URL、API key 或 host-agent 私有配置路径。
+- [x] 输出推荐 `ragflow-kb-build` dry-run/build 命令模板，命令中使用占位符。
+- [x] 可选支持 `--ragflow-config-alias ragflow_config.yaml`，仅作为非密钥兼容 alias。
+- [x] 添加 schema identity 和 release hygiene 覆盖。
+- [x] 添加 consumer acceptance 检查，验证 pipeline 产物可进入 `ragflow-kb-build --dry-run`。
 
 ### 3.4 P1：`ragflow-kb-build` 串联验证
 
 - [ ] 增强 `inspect-handoff`，明确报告 rich sidecars 是否齐全、图片资产是否缺失、quality gate 是否可上库。
 - [ ] 在 `topology advise` 报告中区分“未提供 retrieval hints”和“hints 提供但内容为空”。
 - [ ] 在 `activation-plan` 中加入 ingest plan 输入，核对 doc manifest、retrieval hints、profile 和 route-test readiness。
-- [ ] 增加 dry-run fixture：pipeline 产物 -> `ragflow-kb-build --dry-run`。
-- [ ] 增加 platform smoke：strict-vendor 环境跑完整离线 pipeline 和 kb-build dry-run。
+- [x] 增加 dry-run fixture：pipeline 产物 -> `ragflow-kb-build --dry-run`。
+- [x] 增加 platform smoke：strict-vendor 环境跑完整离线 pipeline 和 kb-build dry-run。
 
 ### 3.5 P2：Retrieval hints 质量增强
 

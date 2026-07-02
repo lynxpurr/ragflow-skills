@@ -21,6 +21,7 @@ python scripts/convert.py --input ./raw --output ./handoff --backend builtin
 python scripts/convert.py --input ./raw --output ./handoff --backend mineru-cli --mineru-cli-path /opt/mineru/bin/mineru
 python scripts/convert.py --input ./raw --output ./handoff --backend mineru
 python scripts/convert.py --input ./raw --output ./handoff --backend mineru-fastapi --mineru-base-url https://mineru.example.internal
+python scripts/convert.py pipeline --input ./raw --output ./handoff --backend mineru-fastapi --mineru-base-url https://mineru.example.internal --mineru-asset-mode markdown_assets --postprocess-profile chunk-markers
 python scripts/convert.py --input ./raw --output ./handoff --backend remote --remote-url https://converter.example/api/convert
 python scripts/convert.py backend probe --backend auto --report-json ./run/backend_probe.json --report-md ./run/backend_probe.md --redaction-report ./run/backend_probe_redaction.json --json
 python scripts/convert.py --config /path/to/ragflow-config.local.yaml --input ./raw --output ./handoff --json
@@ -51,7 +52,7 @@ mineru:
   asset_mode: markdown_assets
 ```
 
-Config precedence for the MinerU FastAPI endpoint is: `--mineru-base-url` overrides `MINERU_BASE_URL`, which overrides `mineru.base_url` in the config file.
+Config precedence for MinerU FastAPI settings is: `--mineru-base-url` overrides `MINERU_BASE_URL`, which overrides `mineru.base_url`; `--mineru-asset-mode` overrides `MINERU_ASSET_MODE`, which overrides `mineru.asset_mode`.
 
 Local MinerU CLI conversion can be configured through the host agent environment. `auto` uses this first for PDF/Office/image files when a CLI is available:
 
@@ -108,6 +109,7 @@ Notes:
 
 - The output directory contains `documents/*.md`, `doc_manifest.json`, and `quality_report.json`.
 - `templates/doc_manifest.schema.json` documents the public `doc_manifest.json` contract for host agents and downstream consumers.
+- For formal pre-ingest handoff generation, prefer `pipeline`; it runs conversion, deterministic postprocess, rich package generation, and writes the non-secret `ragflow_ingest_plan.yaml` sidecar in one step.
 - Use `package --rich` when the handoff should carry optional audit and review sidecars such as `metadata.json`, `artifact_index.json`, `profile_suggestions.json`, `retrieval_hints.json`, `assistant_profile.json`, `assistant_test_plan.json`, and `package_readme.md`.
 - Use `postprocess` with profiles `none`, `safe`, `ocr`, or `chunk-markers` when Markdown needs deterministic cleanup before ingestion. Use `--output` for non-destructive writes; `--write` is required for in-place rewrites.
 - `doc_manifest.json` uses `source_root: "."`, so downstream `ragflow-kb-build` can consume it after the handoff directory moves.
