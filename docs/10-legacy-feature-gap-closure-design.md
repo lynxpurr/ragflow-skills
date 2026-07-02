@@ -1632,8 +1632,9 @@ Finish the remaining gated work in this order:
    Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries
    are complete; script-owned LLM/RAGAS backend execution remains deferred behind the
    Phase 38 planning gate in `docs/14-optional-llm-backend-planning.md`.
-4. Keep private dedao bridging outside public release artifacts unless a private adapter is
-   explicitly needed.
+4. Keep private dedao bridging outside public release artifacts. The current private
+   checkpoint uses Markdown materialization plus the public `doc_manifest.json` handoff;
+   implement a private adapter only if that passthrough path proves insufficient.
 
 Current calibration:
 
@@ -1641,16 +1642,21 @@ Current calibration:
   disposable validation track is closed. The remaining roadmap checkboxes are
   intentionally outside that default path: optional script-owned LLM/RAGAS backends,
   post-CLI deployment adapters, and private dedao bridging.
-- The current open task list has 17 items across four gated categories: 2 local service or
+- The current open task list has 15 items across four gated categories: 2 local service or
   post-CLI host-wrapper items, 4 other post-CLI product-adapter items, 7 optional
-  script-owned LLM/backend items, and 4 private dedao bridge items.
+  script-owned LLM/backend items, and 2 private dedao bridge items.
 - Primary `doc_manifest.json` and `kb_manifest.json` JSON Schema templates are now part of
   the release contract and are checked by default release hygiene. Broader report-schema
   migration tooling should be added only when compatibility pressure appears.
 - The next development decision should choose one explicit gate: a concrete host workflow
   for `ragflow-query serve` implementation, the Phase 38 script-owned LLM/backend plan, or
-  a private dedao bridge request. Without one of those gates, maintenance should focus on
-  keeping the archive and optional runtime-wheel release path green.
+  a private dedao bridge request that proves Markdown passthrough is insufficient. Without
+  one of those gates, maintenance should focus on keeping the archive and optional
+  runtime-wheel release path green.
+- `docs/15-field-trial-observation-plan.md` is now the evidence collection gate for these
+  decisions. It defines public-safe signals, per-run records, and trigger thresholds for
+  `serve`, private bridges, remote conversion, provider abstraction, reranking, optional
+  LLM backends, and release health.
 - Phase 37 starts that offline post-CLI adapter planning track in
   `docs/13-post-cli-adapter-planning.md`. Phase 37.1 now implements the runtime-only wheel
   packaging smoke/export gate without changing the canonical archive release path and
@@ -1663,6 +1669,8 @@ Current calibration:
   Phase 38 now documents the optional LLM backend execution gate; model calls remain
   disabled until explicit config, deterministic fake-provider fixtures, advisory-output
   marking, citation/evidence compatibility, redaction, and release gates are satisfied.
+  The private dedao bridge checkpoint closed the preservation and no-public-reference
+  chores while leaving adapter/export code gated behind an actual private handoff need.
 
 ## Implementation Notes And Pitfalls
 
@@ -1717,7 +1725,7 @@ must not replace the Markdown handoff contract or bypass document quality report
 
 ## Phased Roadmap
 
-Recommended implementation order is the Phase 24-37 task list in
+Recommended implementation order is the Phase 24-38 task list in
 `docs/03-development-plan.md`:
 
 1. Phase 24: Rich Handoff 2.0 and Markdown Post-Processing.
@@ -1738,10 +1746,13 @@ Recommended implementation order is the Phase 24-37 task list in
 
 This order kept the foundation document-centric before adding more complex query-time and
 LLM-assisted behavior, then closed release governance, post-ingest operational guidance,
-and generated-report safety. After the current Phase 36 closure, remaining completion work
-should prioritize explicitly gated live validation, or, when live mutation is not approved,
-Phase 37 post-CLI adapter planning before local service, provider, reranker, and web/API
-product adapters. The runtime wheel smoke/export gate is implemented as an optional
-adapter check; Phase 38 documents the optional script-owned LLM/RAGAS execution gate and
-keeps backend execution deferred behind explicit config, deterministic fixtures,
-advisory-output marking, citation/evidence compatibility, redaction, and release gates.
+generated-report safety, post-CLI adapter intake, and optional LLM backend planning.
+Remaining completion work should now start only from an explicit gate: a host workflow
+that needs `serve`, a concrete product adapter contract, an approved script-owned LLM
+backend slice with fake fixtures, or a private dedao handoff need that cannot be solved by
+Markdown passthrough into `doc_manifest.json`. Field-trial observation should be collected
+first through `docs/15-field-trial-observation-plan.md`; if the trigger rules are not met,
+the correct action is to keep using the current CLI/archive path and run periodic release
+validation. The runtime wheel smoke/export gate remains an optional adapter check; backend
+execution stays deferred behind explicit config, deterministic fixtures, advisory-output
+marking, citation/evidence compatibility, redaction, and release gates.
