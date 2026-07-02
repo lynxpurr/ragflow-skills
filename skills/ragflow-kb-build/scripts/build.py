@@ -2227,6 +2227,8 @@ def _run_activation_plan(args: argparse.Namespace) -> int:
             doc_manifest_path=args.doc_manifest,
             route_config_path=args.route_config,
             retrieval_hints_path=args.retrieval_hints,
+            ingest_plan_path=args.ingest_plan,
+            profile_path=args.profile,
             chunk_snapshot_path=args.chunk_snapshot,
             centroid_index_path=args.centroid_index,
             route_tests_path=args.route_tests,
@@ -2242,6 +2244,8 @@ def _run_activation_plan(args: argparse.Namespace) -> int:
                     args.doc_manifest,
                     args.route_config,
                     args.retrieval_hints,
+                    args.ingest_plan,
+                    args.profile,
                     args.chunk_snapshot,
                     args.centroid_index,
                     args.route_tests,
@@ -2929,6 +2933,8 @@ def build_activation_plan_parser() -> argparse.ArgumentParser:
     parser.add_argument("--doc-manifest", help="Optional source doc_manifest.json for content quality checks")
     parser.add_argument("--route-config", help="Optional user-owned routing config")
     parser.add_argument("--retrieval-hints", help="Optional rich handoff retrieval_hints.json")
+    parser.add_argument("--ingest-plan", help="Optional ragflow_ingest_plan.yaml from ragflow-doc-to-md pipeline")
+    parser.add_argument("--profile", help="Optional reviewed kb-build profile used for ingestion")
     parser.add_argument("--chunk-snapshot", help="Optional ragflow_chunk_snapshot_v1 JSON")
     parser.add_argument("--centroid-index", help="Optional ragflow_route_centroid_index_v1 JSON")
     parser.add_argument("--route-tests", help="Optional route-test queries JSON")

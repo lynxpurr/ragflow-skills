@@ -128,6 +128,27 @@ class TopologyAdviceTests(unittest.TestCase):
         self.assertEqual(report["signals"]["terminology_independence"]["status"], "unknown")
         self.assertEqual(report["signals"]["minimum_useful_corpus_size"]["status"], "thin")
         self.assertEqual(report["recommendation"]["action"], "stage_until_larger")
+        self.assertFalse(report["signals"]["retrieval_hints"]["provided"])
+        self.assertFalse(report["signals"]["retrieval_hints"]["empty"])
+
+    def test_topology_advice_distinguishes_empty_retrieval_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nTiny standalone note.\n", encoding="utf-8")
+            hints = root / "retrieval_hints.json"
+            hints.write_text(json.dumps({"schema": "ragflow_retrieval_hints_v1"}), encoding="utf-8")
+
+            report = create_kb_topology_advice(
+                kb_name="kb:sample",
+                documents=[doc],
+                retrieval_hints_path=hints,
+                future_growth="low",
+            )
+
+        self.assertTrue(report["signals"]["retrieval_hints"]["provided"])
+        self.assertTrue(report["signals"]["retrieval_hints"]["empty"])
+        self.assertEqual(report["summary"]["retrieval_hints_empty"], True)
 
     def test_split_plan_groups_documents_and_boundary_queries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -210,6 +231,8 @@ class TopologyAdviceTests(unittest.TestCase):
             routing = root / "routing.json"
             hints = root / "retrieval_hints.json"
             route_tests = root / "route_tests.json"
+            ingest_plan = root / "ragflow_ingest_plan.json"
+            profile = root / "profile.json"
             kb_manifest.write_text(
                 json.dumps(
                     {
@@ -304,12 +327,44 @@ class TopologyAdviceTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            ingest_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_ingest_plan_v1",
+                        "handoff": {
+                            "doc_manifest": "doc_manifest.json",
+                            "retrieval_hints": "retrieval_hints.json",
+                        },
+                        "recommended_build": {
+                            "parser_profile": {
+                                "chunk_method": "naive",
+                                "chunk_size": 512,
+                                "chunk_overlap": 64,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "activation-profile",
+                        "chunk_method": "naive",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             report = create_kb_activation_plan(
                 kb_manifest_path=kb_manifest,
                 doc_manifest_path=doc_manifest,
                 route_config_path=routing,
                 retrieval_hints_path=hints,
+                ingest_plan_path=ingest_plan,
+                profile_path=profile,
                 chunk_snapshot_path=snapshot,
                 route_tests_path=route_tests,
             )
@@ -320,6 +375,11 @@ class TopologyAdviceTests(unittest.TestCase):
         self.assertEqual(report["mutation"], "none")
         self.assertEqual(report["recommendation"]["action"], "ready_for_activation_review")
         self.assertEqual(report["checks"]["route_config_registration"]["status"], "ready")
+        self.assertEqual(report["checks"]["ingest_plan_consistency"]["status"], "ready")
+        self.assertTrue(report["checks"]["ingest_plan_consistency"]["doc_manifest_matches"])
+        self.assertTrue(report["checks"]["ingest_plan_consistency"]["retrieval_hints_matches"])
+        self.assertTrue(report["checks"]["ingest_plan_consistency"]["profile_matches_recommendation"])
+        self.assertTrue(report["summary"]["ingest_plan_provided"])
         self.assertEqual(report["checks"]["route_test_readiness"]["passed_target_query_count"], 1)
         self.assertEqual(report["route_entry_suggestion"]["dataset_id"], "ds-activation")
         self.assertIn("RAGFlow KB Activation Plan", markdown)

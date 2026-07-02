@@ -3097,6 +3097,8 @@ class KbBuildCliTests(unittest.TestCase):
             route_config = root / "routing.json"
             retrieval_hints = root / "retrieval_hints.json"
             route_tests = root / "route_tests.json"
+            ingest_plan = root / "ragflow_ingest_plan.json"
+            profile = root / "profile.json"
             output = root / "kb_activation_plan.json"
             report_md = root / "kb_activation_plan.md"
             kb_manifest.write_text(
@@ -3186,6 +3188,36 @@ class KbBuildCliTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            ingest_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_ingest_plan_v1",
+                        "handoff": {
+                            "doc_manifest": "doc_manifest.json",
+                            "retrieval_hints": "retrieval_hints.json",
+                        },
+                        "recommended_build": {
+                            "parser_profile": {
+                                "chunk_method": "naive",
+                                "chunk_size": 512,
+                                "chunk_overlap": 64,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "activation-cli-profile",
+                        "chunk_method": "naive",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             result = subprocess.run(
                 [
@@ -3200,6 +3232,10 @@ class KbBuildCliTests(unittest.TestCase):
                     str(route_config),
                     "--retrieval-hints",
                     str(retrieval_hints),
+                    "--ingest-plan",
+                    str(ingest_plan),
+                    "--profile",
+                    str(profile),
                     "--chunk-snapshot",
                     str(chunk_snapshot),
                     "--route-tests",
@@ -3223,7 +3259,11 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["schema"], "kb_activation_plan_v1")
         self.assertTrue(payload["advisory_only"])
         self.assertEqual(payload["mutation"], "none")
+        self.assertEqual(payload["checks"]["ingest_plan_consistency"]["status"], "ready")
+        self.assertTrue(payload["checks"]["ingest_plan_consistency"]["doc_manifest_matches"])
+        self.assertTrue(payload["checks"]["ingest_plan_consistency"]["profile_matches_recommendation"])
         self.assertEqual(payload["checks"]["route_test_readiness"]["passed_target_query_count"], 1)
+        self.assertIn("ingest_plan_consistency", report_md_text)
         self.assertIn("RAGFlow KB Activation Plan", report_md_text)
 
     def test_topology_and_activation_write_redaction_reports(self) -> None:

@@ -16,6 +16,7 @@ from ragflow_skill_runtime.handoff import (
     RETRIEVAL_HINTS_SCHEMA,
     create_rich_handoff_package,
     inspect_rich_handoff,
+    load_ragflow_ingest_plan,
     make_ragflow_ingest_plan_payload,
     render_handoff_inspection_markdown,
 )
@@ -101,19 +102,38 @@ class HandoffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             documents = root / "documents"
-            documents.mkdir()
-            (documents / "a.md").write_text("# A\n", encoding="utf-8")
+            images = documents / "images"
+            images.mkdir(parents=True)
+            (documents / "a.md").write_text("# A\n\n![chart](images/chart.png)\n", encoding="utf-8")
+            (images / "chart.png").write_bytes(b"fake chart")
             (root / "doc_manifest.json").write_text(
                 json.dumps(
                     {
                         "version": "0.1",
                         "source_root": ".",
-                        "documents": [{"source_path": "a.md", "markdown_path": "documents/a.md"}],
+                        "quality_gate": {"status": "PASS"},
+                        "documents": [
+                            {
+                                "source_path": "a.md",
+                                "markdown_path": "documents/a.md",
+                                "assets": {"images": [{"path": "documents/images/chart.png"}]},
+                            }
+                        ],
                     }
                 ),
                 encoding="utf-8",
             )
             create_rich_handoff_package(handoff_root=root)
+            (root / "postprocess_report.json").write_text(
+                json.dumps({"schema": "doc_postprocess_report_v1"}),
+                encoding="utf-8",
+            )
+            plan = make_ragflow_ingest_plan_payload(handoff_root=root)
+            (root / "ragflow_ingest_plan.json").write_text(json.dumps(plan), encoding="utf-8")
+            (root / "ragflow_ingest_plan.yaml").write_text(
+                'schema: "ragflow_ingest_plan_v1"\n',
+                encoding="utf-8",
+            )
 
             report = inspect_rich_handoff(handoff_root=root)
             markdown = render_handoff_inspection_markdown(report)
@@ -123,9 +143,38 @@ class HandoffTests(unittest.TestCase):
         self.assertTrue(report["sidecars"]["retrieval_hints"]["exists"])
         self.assertTrue(report["sidecars"]["assistant_profile"]["exists"])
         self.assertTrue(report["sidecars"]["assistant_test_plan"]["exists"])
+        self.assertEqual(report["ingestion_readiness"]["status"], "ready")
+        self.assertTrue(report["ingestion_readiness"]["image_assets_ok"])
+        self.assertEqual(report["assets"]["images"]["missing_image_count"], 0)
+        self.assertTrue(report["sidecar_summary"]["rich_complete"])
         self.assertIn("RAGFlow Handoff Inspection", markdown)
+        self.assertIn("Ingestion readiness", markdown)
         self.assertIn("metadata", markdown)
         self.assertIn("Retrieval hint sections", markdown)
+
+    def test_inspect_rich_handoff_blocks_missing_images(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            documents.mkdir()
+            (documents / "a.md").write_text("# A\n\n![missing](images/missing.png)\n", encoding="utf-8")
+            (root / "doc_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "quality_gate": {"status": "PASS"},
+                        "documents": [{"source_path": "a.md", "markdown_path": "documents/a.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = inspect_rich_handoff(handoff_root=root)
+
+        self.assertEqual(report["ingestion_readiness"]["status"], "blocked")
+        self.assertEqual(report["assets"]["images"]["missing_image_count"], 1)
+        self.assertEqual(report["ingestion_readiness"]["issues"][0]["code"], "image_assets_missing")
 
     def test_make_ragflow_ingest_plan_is_non_secret_and_points_to_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -162,6 +211,36 @@ class HandoffTests(unittest.TestCase):
         self.assertFalse(plan["safety"]["stores_api_credentials"])
         self.assertNotIn("api_key:", serialized)
         self.assertNotIn("base_url:", serialized)
+
+    def test_load_ragflow_ingest_plan_reads_generated_yaml_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plan_path = Path(tmp) / "ragflow_ingest_plan.yaml"
+            plan_path.write_text(
+                "\n".join(
+                    [
+                        'schema: "ragflow_ingest_plan_v1"',
+                        "handoff:",
+                        '  doc_manifest: "doc_manifest.json"',
+                        '  retrieval_hints: "retrieval_hints.json"',
+                        "recommended_build:",
+                        '  command: "ragflow-kb-build"',
+                        "  dry_run_command:",
+                        '    - "ragflow-kb-build"',
+                        '    - "--dry-run"',
+                        "safety:",
+                        "  stores_api_credentials: false",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            plan = load_ragflow_ingest_plan(plan_path)
+
+        self.assertEqual(plan["schema"], RAGFLOW_INGEST_PLAN_SCHEMA)
+        self.assertEqual(plan["handoff"]["doc_manifest"], "doc_manifest.json")
+        self.assertEqual(plan["recommended_build"]["dry_run_command"][1], "--dry-run")
+        self.assertFalse(plan["safety"]["stores_api_credentials"])
 
 
 if __name__ == "__main__":

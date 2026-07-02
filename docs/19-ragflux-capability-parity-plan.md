@@ -1,6 +1,6 @@
 # 19. RAGFlux 能力补齐设计与开发计划
 
-状态：P0 已实现并通过离线验证；P1 pipeline 和 ingest plan 已实现，kb-build 深度消费增强待续；P2 待实现
+状态：P0 已实现并通过离线验证；P1 pipeline、ingest plan 和 kb-build 串联验证已实现；P2 待实现
 日期：2026-07-02
 适用范围：`ragflow-doc-to-md` 作为正式文档转换 skill，配合 `ragflow-kb-build`
 和 `ragflow-query` 替代 RAGFlux 的文档预处理、入库和检索验证能力。
@@ -303,11 +303,17 @@ P0 实现说明：
 
 ### 3.4 P1：`ragflow-kb-build` 串联验证
 
-- [ ] 增强 `inspect-handoff`，明确报告 rich sidecars 是否齐全、图片资产是否缺失、quality gate 是否可上库。
-- [ ] 在 `topology advise` 报告中区分“未提供 retrieval hints”和“hints 提供但内容为空”。
-- [ ] 在 `activation-plan` 中加入 ingest plan 输入，核对 doc manifest、retrieval hints、profile 和 route-test readiness。
+- [x] 增强 `inspect-handoff`，明确报告 rich sidecars 是否齐全、图片资产是否缺失、quality gate 是否可上库。
+- [x] 在 `topology advise` 报告中区分“未提供 retrieval hints”和“hints 提供但内容为空”。
+- [x] 在 `activation-plan` 中加入 ingest plan 输入，核对 doc manifest、retrieval hints、profile 和 route-test readiness。
 - [x] 增加 dry-run fixture：pipeline 产物 -> `ragflow-kb-build --dry-run`。
 - [x] 增加 platform smoke：strict-vendor 环境跑完整离线 pipeline 和 kb-build dry-run。
+
+P1 串联验证实现说明：
+
+- `inspect-handoff` 报告新增 `ingestion_readiness`、`sidecar_summary` 和 `assets.images`，能直接指出 rich sidecar 完整性、pipeline sidecar 完整性、图片资产缺失和 quality gate 是否允许进入 live build。
+- `topology advise` 报告新增 retrieval hints summary，明确区分未提供 hints、提供但为空、以及 section/keyword/question/image/table 等信号数量。
+- `activation-plan` 新增可选 `--ingest-plan` 和 `--profile`，可把 `ragflow_ingest_plan.yaml` 与实际传入的 `doc_manifest.json`、`retrieval_hints.json`、reviewed profile 和 route-test readiness 做离线一致性检查。
 
 ### 3.5 P2：Retrieval hints 质量增强
 

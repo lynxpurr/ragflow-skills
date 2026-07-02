@@ -11,9 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from .handoff import HandoffError, RAGFLOW_INGEST_PLAN_SCHEMA, load_ragflow_ingest_plan
 from .kb_build import BuildDocument
 from .manifests import KbManifest, ManifestError, load_doc_manifest, load_kb_manifest
 from .metadata_governance import MetadataGovernanceError, load_metadata
+from .profiles import ChunkProfile, ProfileError, load_profile
 from .routing import (
     RoutingConfig,
     RoutingError,
@@ -221,6 +223,33 @@ def _load_retrieval_hints(path: str | Path | None) -> dict[str, Any]:
     if payload.get("schema") != "ragflow_retrieval_hints_v1":
         raise TopologyError("retrieval hints schema must be ragflow_retrieval_hints_v1")
     return payload
+
+
+def _list_count(payload: Mapping[str, Any], key: str) -> int:
+    value = payload.get(key)
+    return len(value) if isinstance(value, list) else 0
+
+
+def _retrieval_hints_summary(path: str | Path | None, payload: Mapping[str, Any]) -> dict[str, Any]:
+    counts = {
+        "section_boundary_count": _list_count(payload, "section_boundaries"),
+        "keyword_count": _list_count(payload, "keyword_candidates"),
+        "question_count": _list_count(payload, "question_candidates"),
+        "numeric_count": _list_count(payload, "numeric_candidates"),
+        "table_artifact_count": _list_count(payload, "table_artifacts"),
+        "image_artifact_count": _list_count(payload, "image_artifacts"),
+        "preferred_boundary_count": _list_count(payload, "preferred_boundaries"),
+        "quality_risk_count": _list_count(payload, "quality_risks"),
+    }
+    signal_count = sum(counts.values())
+    return {
+        "provided": bool(path),
+        "path": str(path) if path else None,
+        "schema": payload.get("schema") if isinstance(payload.get("schema"), str) else None,
+        "empty": bool(path) and signal_count == 0,
+        "signal_count": signal_count,
+        **counts,
+    }
 
 
 def _hint_terms(retrieval_hints: Mapping[str, Any]) -> set[str]:
@@ -675,6 +704,181 @@ def _load_activation_route_tests(path: str | Path | None) -> list[dict[str, Any]
         return load_route_test_queries(path)
     except RoutingError as exc:
         raise TopologyError(str(exc)) from exc
+
+
+def _load_activation_profile(path: str | Path | None) -> ChunkProfile | None:
+    if not path:
+        return None
+    try:
+        return load_profile(path)
+    except ProfileError as exc:
+        raise TopologyError(str(exc)) from exc
+
+
+def _load_activation_ingest_plan(path: str | Path | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    try:
+        return load_ragflow_ingest_plan(path)
+    except HandoffError as exc:
+        raise TopologyError(str(exc)) from exc
+
+
+def _resolve_ingest_sidecar(ingest_plan_path: str | Path | None, raw: Any) -> Path | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    path = Path(raw)
+    if path.is_absolute() or ingest_plan_path is None:
+        return path
+    return Path(ingest_plan_path).parent / path
+
+
+def _same_file_reference(left: str | Path | None, right: str | Path | None) -> bool:
+    if left is None or right is None:
+        return False
+    try:
+        return Path(left).expanduser().resolve(strict=False) == Path(right).expanduser().resolve(strict=False)
+    except OSError:
+        return Path(left) == Path(right)
+
+
+def _profile_value(profile: ChunkProfile, key: str) -> Any:
+    if key == "chunk_method":
+        return profile.chunk_method
+    if key == "chunk_size":
+        return profile.chunk_size
+    if key == "chunk_overlap":
+        return profile.chunk_overlap
+    return profile.parser_config.get(key)
+
+
+def _ingest_plan_consistency_check(
+    *,
+    ingest_plan: Mapping[str, Any] | None,
+    ingest_plan_path: str | Path | None,
+    doc_manifest_path: str | Path | None,
+    retrieval_hints_path: str | Path | None,
+    profile_path: str | Path | None,
+    profile: ChunkProfile | None,
+) -> dict[str, Any]:
+    issues: list[dict[str, str]] = []
+    if ingest_plan is None:
+        return {
+            "status": "not_configured",
+            "optional": True,
+            "ingest_plan": None,
+            "schema": None,
+            "doc_manifest_matches": None,
+            "retrieval_hints_matches": None,
+            "profile_supplied": bool(profile_path),
+            "profile_matches_recommendation": None,
+            "issues": [
+                _activation_issue(
+                    "info",
+                    "ingest_plan_not_supplied",
+                    "no ragflow_ingest_plan sidecar was supplied",
+                    path="ingest_plan",
+                    recommendation="Supply ragflow_ingest_plan.yaml from ragflow-doc-to-md pipeline for formal handoff checks.",
+                )
+            ],
+        }
+
+    handoff = ingest_plan.get("handoff") if isinstance(ingest_plan.get("handoff"), Mapping) else {}
+    expected_doc_manifest = _resolve_ingest_sidecar(ingest_plan_path, handoff.get("doc_manifest"))
+    expected_retrieval_hints = _resolve_ingest_sidecar(ingest_plan_path, handoff.get("retrieval_hints"))
+    doc_matches = _same_file_reference(expected_doc_manifest, doc_manifest_path)
+    hints_matches = _same_file_reference(expected_retrieval_hints, retrieval_hints_path)
+    if expected_doc_manifest and not doc_manifest_path:
+        issues.append(
+            _activation_issue(
+                "warning",
+                "ingest_doc_manifest_not_supplied",
+                "ingest plan references a doc_manifest but activation-plan did not receive one",
+                path="doc_manifest",
+                recommendation="Pass --doc-manifest from the same pipeline handoff before activation review.",
+            )
+        )
+    elif expected_doc_manifest and not doc_matches:
+        issues.append(
+            _activation_issue(
+                "warning",
+                "ingest_doc_manifest_mismatch",
+                "activation doc_manifest path differs from ragflow_ingest_plan",
+                path="ingest_plan.handoff.doc_manifest",
+                recommendation="Confirm the activation plan is using the same handoff that was built.",
+            )
+        )
+    if expected_retrieval_hints and not retrieval_hints_path:
+        issues.append(
+            _activation_issue(
+                "warning",
+                "ingest_retrieval_hints_not_supplied",
+                "ingest plan references retrieval_hints but activation-plan did not receive one",
+                path="retrieval_hints",
+                recommendation="Pass --retrieval-hints from the same pipeline handoff for route hint checks.",
+            )
+        )
+    elif expected_retrieval_hints and not hints_matches:
+        issues.append(
+            _activation_issue(
+                "warning",
+                "ingest_retrieval_hints_mismatch",
+                "activation retrieval_hints path differs from ragflow_ingest_plan",
+                path="ingest_plan.handoff.retrieval_hints",
+                recommendation="Confirm retrieval hints came from the same pipeline handoff.",
+            )
+        )
+
+    recommended = ingest_plan.get("recommended_build") if isinstance(ingest_plan.get("recommended_build"), Mapping) else {}
+    parser_profile = recommended.get("parser_profile") if isinstance(recommended.get("parser_profile"), Mapping) else {}
+    profile_matches = None
+    profile_differences: list[dict[str, Any]] = []
+    if parser_profile:
+        if profile is None:
+            issues.append(
+                _activation_issue(
+                    "warning",
+                    "build_profile_not_supplied",
+                    "ingest plan includes a recommended parser profile but activation-plan did not receive --profile",
+                    path="profile",
+                    recommendation="Pass the reviewed kb-build profile used for ingestion so activation review can compare it.",
+                )
+            )
+        else:
+            for key in ("chunk_method", "chunk_size", "chunk_overlap"):
+                expected = parser_profile.get(key)
+                actual = _profile_value(profile, key)
+                if expected is not None and str(expected) != str(actual):
+                    profile_differences.append({"field": key, "expected": expected, "actual": actual})
+            profile_matches = not profile_differences
+            if profile_differences:
+                issues.append(
+                    _activation_issue(
+                        "warning",
+                        "build_profile_differs_from_ingest_plan",
+                        "provided build profile differs from ragflow_ingest_plan parser recommendation",
+                        path="recommended_build.parser_profile",
+                        recommendation="Confirm the profile change was intentional before activation.",
+                    )
+                )
+
+    return {
+        "status": _activation_status(issues),
+        "ingest_plan": str(ingest_plan_path) if ingest_plan_path else None,
+        "schema": ingest_plan.get("schema"),
+        "expected_schema": RAGFLOW_INGEST_PLAN_SCHEMA,
+        "doc_manifest": str(doc_manifest_path) if doc_manifest_path else None,
+        "expected_doc_manifest": str(expected_doc_manifest) if expected_doc_manifest else None,
+        "doc_manifest_matches": doc_matches if expected_doc_manifest else None,
+        "retrieval_hints": str(retrieval_hints_path) if retrieval_hints_path else None,
+        "expected_retrieval_hints": str(expected_retrieval_hints) if expected_retrieval_hints else None,
+        "retrieval_hints_matches": hints_matches if expected_retrieval_hints else None,
+        "profile": str(profile_path) if profile_path else None,
+        "profile_supplied": bool(profile_path),
+        "profile_matches_recommendation": profile_matches,
+        "profile_differences": profile_differences,
+        "issues": issues,
+    }
 
 
 def _content_completeness_check(
@@ -1247,6 +1451,7 @@ def create_kb_topology_advice(
     metadata = _metadata_index(metadata_path)
     doc_summaries = [_read_document(path, metadata) for path in paths]
     retrieval_hints = _load_retrieval_hints(retrieval_hints_path)
+    retrieval_hints_info = _retrieval_hints_summary(retrieval_hints_path, retrieval_hints)
     route_config = _route_config(route_config_path)
     route_terms = _kb_terms(route_config)
     candidate_terms = set().union(*(doc.terms for doc in doc_summaries)) | _hint_terms(retrieval_hints)
@@ -1280,6 +1485,7 @@ def create_kb_topology_advice(
         "inputs": {
             "metadata": str(metadata_path) if metadata_path else None,
             "retrieval_hints": str(retrieval_hints_path) if retrieval_hints_path else None,
+            "retrieval_hints_summary": retrieval_hints_info,
             "route_config": str(route_config_path) if route_config_path else None,
             "future_growth": growth["level"],
             "min_documents": min_documents,
@@ -1289,6 +1495,8 @@ def create_kb_topology_advice(
             "document_count": len(doc_summaries),
             "estimated_chunk_count": sum(doc.estimated_chunks for doc in doc_summaries),
             "candidate_term_count": len(candidate_terms),
+            "retrieval_hints_provided": retrieval_hints_info["provided"],
+            "retrieval_hints_empty": retrieval_hints_info["empty"],
             "recommendation": recommendation["action"],
             "confidence": recommendation["confidence"],
         },
@@ -1299,6 +1507,7 @@ def create_kb_topology_advice(
             "future_growth": growth,
             "semantic_overlap": overlap,
             "split": split,
+            "retrieval_hints": retrieval_hints_info,
         },
         "anchor_query_pairs": anchor_pairs,
         "route_test_starters": questions,
@@ -1385,6 +1594,8 @@ def create_kb_activation_plan(
     doc_manifest_path: str | Path | None = None,
     route_config_path: str | Path | None = None,
     retrieval_hints_path: str | Path | None = None,
+    ingest_plan_path: str | Path | None = None,
+    profile_path: str | Path | None = None,
     chunk_snapshot_path: str | Path | None = None,
     centroid_index_path: str | Path | None = None,
     route_tests_path: str | Path | None = None,
@@ -1400,6 +1611,8 @@ def create_kb_activation_plan(
     kb_manifest = _load_activation_kb_manifest(kb_manifest_path)
     doc_manifest = _load_activation_doc_manifest(doc_manifest_path)
     retrieval_hints = _load_retrieval_hints(retrieval_hints_path)
+    ingest_plan = _load_activation_ingest_plan(ingest_plan_path)
+    profile = _load_activation_profile(profile_path)
     chunk_snapshot = _load_activation_chunk_snapshot(chunk_snapshot_path)
     route_config = _route_config(route_config_path)
     centroid_index = _load_activation_centroid_index(centroid_index_path)
@@ -1424,6 +1637,14 @@ def create_kb_activation_plan(
         "hint_coverage": _hint_coverage_check(
             registered_kb=registered,
             retrieval_hints=retrieval_hints,
+        ),
+        "ingest_plan_consistency": _ingest_plan_consistency_check(
+            ingest_plan=ingest_plan,
+            ingest_plan_path=ingest_plan_path,
+            doc_manifest_path=doc_manifest_path,
+            retrieval_hints_path=retrieval_hints_path,
+            profile_path=profile_path,
+            profile=profile,
         ),
         "centroid_availability": _centroid_availability_check(
             kb_manifest,
@@ -1455,6 +1676,8 @@ def create_kb_activation_plan(
             "doc_manifest": str(doc_manifest_path) if doc_manifest_path else None,
             "route_config": str(route_config_path) if route_config_path else None,
             "retrieval_hints": str(retrieval_hints_path) if retrieval_hints_path else None,
+            "ingest_plan": str(ingest_plan_path) if ingest_plan_path else None,
+            "profile": str(profile_path) if profile_path else None,
             "chunk_snapshot": str(chunk_snapshot_path) if chunk_snapshot_path else None,
             "centroid_index": str(centroid_index_path) if centroid_index_path else None,
             "route_tests": str(route_tests_path) if route_tests_path else None,
@@ -1465,6 +1688,9 @@ def create_kb_activation_plan(
             "document_count": len(kb_manifest.documents),
             "declared_chunk_count": checks["chunk_readiness"]["declared_chunk_count"],
             "effective_chunk_count": checks["chunk_readiness"]["effective_chunk_count"],
+            "retrieval_hints_provided": bool(retrieval_hints_path),
+            "retrieval_hints_empty": _retrieval_hints_summary(retrieval_hints_path, retrieval_hints)["empty"],
+            "ingest_plan_provided": bool(ingest_plan_path),
             "required_check_count": len(required_checks),
             "blocked_check_count": len(blocked),
             "review_check_count": len(review),
@@ -1490,6 +1716,7 @@ def render_topology_advice_markdown(report: Mapping[str, Any]) -> str:
     signals = report.get("signals", {}) if isinstance(report.get("signals"), Mapping) else {}
     split = signals.get("split", {}) if isinstance(signals.get("split"), Mapping) else {}
     overlap = signals.get("semantic_overlap", {}) if isinstance(signals.get("semantic_overlap"), Mapping) else {}
+    hints = signals.get("retrieval_hints", {}) if isinstance(signals.get("retrieval_hints"), Mapping) else {}
     lines = [
         "# RAGFlow KB Topology Advice",
         "",
@@ -1503,6 +1730,7 @@ def render_topology_advice_markdown(report: Mapping[str, Any]) -> str:
         f"- Minimum corpus: `{signals.get('minimum_useful_corpus_size', {}).get('status') if isinstance(signals.get('minimum_useful_corpus_size'), Mapping) else 'unknown'}`",
         f"- Terminology independence: `{signals.get('terminology_independence', {}).get('status') if isinstance(signals.get('terminology_independence'), Mapping) else 'unknown'}`",
         f"- Semantic overlap: `{overlap.get('status')}` max `{overlap.get('max_overlap_score')}`",
+        f"- Retrieval hints: provided `{hints.get('provided', False)}`, empty `{hints.get('empty', False)}`, signals `{hints.get('signal_count', 0)}`",
         f"- Split review recommended: `{split.get('split_review_recommended')}`",
         f"- Ambiguous-term score: `{split.get('ambiguous_term_score')}`",
         f"- Dominant-document share: `{split.get('dominant_document_share')}`",
@@ -1528,6 +1756,7 @@ def render_activation_plan_markdown(report: Mapping[str, Any]) -> str:
 
     recommendation = report.get("recommendation", {}) if isinstance(report.get("recommendation"), Mapping) else {}
     checks = report.get("checks", {}) if isinstance(report.get("checks"), Mapping) else {}
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
     lines = [
         "# RAGFlow KB Activation Plan",
         "",
@@ -1536,6 +1765,8 @@ def render_activation_plan_markdown(report: Mapping[str, Any]) -> str:
         f"- Dataset: `{report.get('dataset_id')}`",
         f"- Recommendation: `{recommendation.get('action')}` ({recommendation.get('confidence')})",
         f"- Advisory only: `{report.get('advisory_only')}`",
+        f"- Ingest plan provided: `{summary.get('ingest_plan_provided', False)}`",
+        f"- Retrieval hints: provided `{summary.get('retrieval_hints_provided', False)}`, empty `{summary.get('retrieval_hints_empty', False)}`",
         "",
         "## Checks",
         "",
@@ -1545,6 +1776,7 @@ def render_activation_plan_markdown(report: Mapping[str, Any]) -> str:
         "chunk_readiness",
         "route_config_registration",
         "hint_coverage",
+        "ingest_plan_consistency",
         "centroid_availability",
         "route_test_readiness",
     ):

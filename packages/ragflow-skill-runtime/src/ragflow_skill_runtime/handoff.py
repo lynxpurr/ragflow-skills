@@ -91,6 +91,117 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _parse_yaml_scalar(value: str) -> Any:
+    if value == "":
+        return None
+    lowered = value.lower()
+    if lowered == "null":
+        return None
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        pass
+    try:
+        if "." in value:
+            return float(value)
+        return int(value)
+    except ValueError:
+        return value.strip().strip("\"'")
+
+
+def _read_simple_yaml(path: Path) -> dict[str, Any]:
+    lines: list[tuple[int, str]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("\t"):
+            raise HandoffError(f"tabs are not supported in handoff YAML: {path}")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        lines.append((len(line) - len(line.lstrip(" ")), stripped))
+
+    def parse_block(index: int, indent: int) -> tuple[Any, int]:
+        if index >= len(lines):
+            return {}, index
+        current_indent, current = lines[index]
+        if current_indent < indent:
+            return {}, index
+        if current_indent != indent:
+            raise HandoffError(f"unsupported YAML indentation in {path}: {current!r}")
+        if current.startswith("-"):
+            items: list[Any] = []
+            while index < len(lines):
+                item_indent, item = lines[index]
+                if item_indent < indent:
+                    break
+                if item_indent != indent or not item.startswith("-"):
+                    raise HandoffError(f"unsupported YAML list item in {path}: {item!r}")
+                rest = item[1:].strip()
+                if rest:
+                    items.append(_parse_yaml_scalar(rest))
+                    index += 1
+                else:
+                    child, index = parse_block(index + 1, indent + 2)
+                    items.append(child)
+            return items, index
+
+        mapping: dict[str, Any] = {}
+        while index < len(lines):
+            item_indent, item = lines[index]
+            if item_indent < indent:
+                break
+            if item_indent != indent or item.startswith("-"):
+                raise HandoffError(f"unsupported YAML mapping entry in {path}: {item!r}")
+            if ":" not in item:
+                raise HandoffError(f"unsupported YAML line in {path}: {item!r}")
+            key, raw_value = item.split(":", 1)
+            key = key.strip()
+            raw_value = raw_value.strip()
+            if not key:
+                raise HandoffError(f"empty YAML key in {path}")
+            if raw_value:
+                mapping[key] = _parse_yaml_scalar(raw_value)
+                index += 1
+            else:
+                child, index = parse_block(index + 1, indent + 2)
+                mapping[key] = child
+        return mapping, index
+
+    if not lines:
+        return {}
+    payload, index = parse_block(0, lines[0][0])
+    if index != len(lines):
+        raise HandoffError(f"unsupported trailing YAML content in {path}")
+    if not isinstance(payload, dict):
+        raise HandoffError(f"handoff YAML must contain a mapping: {path}")
+    return payload
+
+
+def load_ragflow_ingest_plan(path: str | Path) -> dict[str, Any]:
+    """Load a ragflow_ingest_plan_v1 sidecar from JSON or simple generated YAML."""
+
+    source = Path(path)
+    try:
+        if source.suffix.lower() == ".json":
+            payload = json.loads(source.read_text(encoding="utf-8"))
+        elif source.suffix.lower() in {".yaml", ".yml"}:
+            payload = _read_simple_yaml(source)
+        else:
+            raise HandoffError(f"unsupported ingest plan extension: {source.suffix}")
+    except FileNotFoundError as exc:
+        raise HandoffError(f"ingest plan not found: {source}") from exc
+    except json.JSONDecodeError as exc:
+        raise HandoffError(f"ingest plan is not valid JSON: {source}") from exc
+    if not isinstance(payload, dict):
+        raise HandoffError(f"ingest plan must contain an object: {source}")
+    if payload.get("schema") != RAGFLOW_INGEST_PLAN_SCHEMA:
+        raise HandoffError(f"ingest plan schema must be {RAGFLOW_INGEST_PLAN_SCHEMA}")
+    return payload
+
+
 def _relative(path: Path, root: Path) -> str:
     try:
         return path.relative_to(root).as_posix()
@@ -121,6 +232,97 @@ def _manifest_documents(manifest: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     if len(documents) != len(raw_documents):
         raise HandoffError("doc_manifest.documents must contain only objects")
     return documents
+
+
+def _is_remote_image_reference(value: str) -> bool:
+    lowered = value.strip().lower()
+    return (
+        lowered.startswith("http://")
+        or lowered.startswith("https://")
+        or lowered.startswith("data:")
+        or lowered.startswith("#")
+        or lowered.startswith("mailto:")
+    )
+
+
+def _image_reference_path(raw: str) -> str:
+    value = raw.strip().strip("<>")
+    if " " in value and not value.startswith(("./", "../", "/")):
+        value = value.split(" ", 1)[0]
+    return value.split("#", 1)[0].split("?", 1)[0]
+
+
+def _document_image_asset_paths(document: Mapping[str, Any]) -> list[str]:
+    assets = document.get("assets")
+    if not isinstance(assets, Mapping):
+        return []
+    images = assets.get("images")
+    if not isinstance(images, list):
+        return []
+    paths: list[str] = []
+    for item in images:
+        if not isinstance(item, Mapping):
+            continue
+        path = item.get("path")
+        if isinstance(path, str) and path.strip():
+            paths.append(path.strip())
+    return paths
+
+
+def _inspect_image_assets(*, root: Path, documents: list[Mapping[str, Any]]) -> dict[str, Any]:
+    references: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
+    manifest_assets: list[dict[str, Any]] = []
+    for document in documents:
+        markdown_raw = document.get("markdown_path")
+        markdown_path = _resolve_handoff_path(root, str(markdown_raw)) if isinstance(markdown_raw, str) else None
+        if markdown_path is None or not markdown_path.is_file():
+            if isinstance(markdown_raw, str):
+                missing.append(
+                    {
+                        "type": "markdown",
+                        "document": markdown_raw,
+                        "path": markdown_raw,
+                        "reason": "markdown_missing",
+                    }
+                )
+            continue
+        text = markdown_path.read_text(encoding="utf-8")
+        for match in IMAGE_RE.finditer(text):
+            raw = _image_reference_path(match.group(1))
+            if not raw or _is_remote_image_reference(raw):
+                continue
+            image_path = Path(raw)
+            resolved = image_path if image_path.is_absolute() else markdown_path.parent / image_path
+            record = {
+                "type": "markdown_reference",
+                "document": _relative(markdown_path, root),
+                "path": raw,
+                "resolved_path": _relative(resolved, root),
+                "exists": resolved.is_file(),
+            }
+            references.append(record)
+            if not resolved.is_file():
+                missing.append(record)
+        for raw in _document_image_asset_paths(document):
+            resolved = _resolve_handoff_path(root, raw)
+            record = {
+                "type": "manifest_asset",
+                "document": _relative(markdown_path, root),
+                "path": raw,
+                "resolved_path": _relative(resolved, root),
+                "exists": resolved.is_file(),
+            }
+            manifest_assets.append(record)
+            if not resolved.is_file():
+                missing.append(record)
+    return {
+        "markdown_reference_count": len(references),
+        "manifest_image_count": len(manifest_assets),
+        "missing_image_count": len(missing),
+        "missing_images": missing[:25],
+        "ok": not missing,
+    }
 
 
 def _file_record(path: Path, *, root: Path) -> dict[str, Any]:
@@ -961,26 +1163,44 @@ def inspect_rich_handoff(
     root = Path(handoff_root)
     doc_manifest = _read_json(root / doc_manifest_name)
     documents = _manifest_documents(doc_manifest)
-    sidecars = {}
-    for key, filename in {
-        "metadata": "metadata.json",
-        "artifact_index": "artifact_index.json",
-        "profile_suggestions": "profile_suggestions.json",
-        "retrieval_hints": "retrieval_hints.json",
-        "assistant_profile": "assistant_profile.json",
-        "assistant_test_plan": "assistant_test_plan.json",
-        "package_readme": "package_readme.md",
-        "quality_report": doc_manifest.get("quality_report") if isinstance(doc_manifest.get("quality_report"), str) else None,
-    }.items():
+    postprocess_report_name = (
+        doc_manifest.get("postprocess_report")
+        if isinstance(doc_manifest.get("postprocess_report"), str)
+        else "postprocess_report.json"
+    )
+    sidecar_specs: dict[str, tuple[str | None, str]] = {
+        "metadata": ("metadata.json", "rich"),
+        "artifact_index": ("artifact_index.json", "rich"),
+        "profile_suggestions": ("profile_suggestions.json", "rich"),
+        "retrieval_hints": ("retrieval_hints.json", "rich"),
+        "assistant_profile": ("assistant_profile.json", "rich"),
+        "assistant_test_plan": ("assistant_test_plan.json", "rich"),
+        "package_readme": ("package_readme.md", "rich"),
+        "postprocess_report": (postprocess_report_name, "pipeline"),
+        "ragflow_ingest_plan": ("ragflow_ingest_plan.yaml", "pipeline"),
+        "quality_report": (
+            doc_manifest.get("quality_report") if isinstance(doc_manifest.get("quality_report"), str) else None,
+            "core",
+        ),
+    }
+    sidecars: dict[str, dict[str, Any]] = {}
+    missing_rich_sidecars: list[str] = []
+    missing_pipeline_sidecars: list[str] = []
+    for key, (filename, category) in sidecar_specs.items():
         if not filename:
             continue
         path = root / filename
         sidecars[key] = {
             "path": filename,
             "exists": path.exists(),
+            "category": category,
         }
         if path.is_file():
             sidecars[key]["size_bytes"] = path.stat().st_size
+        elif category == "rich":
+            missing_rich_sidecars.append(key)
+        elif category == "pipeline":
+            missing_pipeline_sidecars.append(key)
 
     artifact_count = None
     artifact_index_path = root / "artifact_index.json"
@@ -1002,11 +1222,59 @@ def inspect_rich_handoff(
         assistant_test_count = assistant_test_plan.get("test_count")
 
     quality_status = None
+    manifest_gate = doc_manifest.get("quality_gate") if isinstance(doc_manifest.get("quality_gate"), Mapping) else {}
+    if isinstance(manifest_gate.get("status"), str):
+        quality_status = manifest_gate["status"]
     quality_name = doc_manifest.get("quality_report")
     if isinstance(quality_name, str) and (root / quality_name).is_file():
         quality = _read_json(root / quality_name)
         gate = quality.get("gate", {}) if isinstance(quality.get("gate"), Mapping) else {}
-        quality_status = gate.get("status")
+        if isinstance(gate.get("status"), str):
+            quality_status = gate["status"]
+
+    image_assets = _inspect_image_assets(root=root, documents=documents)
+    readiness_issues: list[dict[str, str]] = []
+    if quality_status == "BLOCKED":
+        readiness_issues.append(
+            {
+                "severity": "error",
+                "code": "quality_gate_blocked",
+                "message": "doc handoff quality gate is BLOCKED",
+                "recommendation": "Resolve handoff quality blockers before running live kb-build.",
+            }
+        )
+    elif quality_status not in {"PASS", "PASS_WITH_REVIEW"}:
+        readiness_issues.append(
+            {
+                "severity": "warning",
+                "code": "quality_gate_unknown",
+                "message": "quality gate status is missing or unknown",
+                "recommendation": "Run or inspect ragflow-doc-to-md quality_report.json before live build.",
+            }
+        )
+    if image_assets["missing_image_count"]:
+        readiness_issues.append(
+            {
+                "severity": "error",
+                "code": "image_assets_missing",
+                "message": "one or more Markdown image references or manifest image assets are missing",
+                "recommendation": "Regenerate the handoff with asset landing enabled or repair image paths.",
+            }
+        )
+    if missing_rich_sidecars:
+        readiness_issues.append(
+            {
+                "severity": "warning",
+                "code": "rich_sidecars_incomplete",
+                "message": "one or more rich handoff sidecars are missing",
+                "recommendation": "Run ragflow-doc-to-md pipeline or package --rich before formal ingestion review.",
+            }
+        )
+    readiness_status = "ready"
+    if any(issue["severity"] == "error" for issue in readiness_issues):
+        readiness_status = "blocked"
+    elif readiness_issues:
+        readiness_status = "review"
 
     return {
         "schema": "ragflow_handoff_inspection_v1",
@@ -1018,6 +1286,29 @@ def inspect_rich_handoff(
         "artifact_count": artifact_count,
         "retrieval_hint_count": retrieval_hint_count,
         "assistant_test_count": assistant_test_count,
+        "sidecar_summary": {
+            "rich_expected_count": len([key for key, spec in sidecar_specs.items() if spec[1] == "rich"]),
+            "rich_present_count": len(
+                [
+                    key
+                    for key, info in sidecars.items()
+                    if isinstance(info, Mapping) and info.get("category") == "rich" and info.get("exists")
+                ]
+            ),
+            "rich_missing": missing_rich_sidecars,
+            "rich_complete": not missing_rich_sidecars,
+            "pipeline_missing": missing_pipeline_sidecars,
+            "pipeline_complete": not missing_pipeline_sidecars,
+        },
+        "assets": {"images": image_assets},
+        "ingestion_readiness": {
+            "status": readiness_status,
+            "quality_gate_allows_build": quality_status in {"PASS", "PASS_WITH_REVIEW"},
+            "image_assets_ok": image_assets["ok"],
+            "rich_sidecars_complete": not missing_rich_sidecars,
+            "pipeline_sidecars_complete": not missing_pipeline_sidecars,
+            "issues": readiness_issues,
+        },
         "sidecars": sidecars,
     }
 
@@ -1033,12 +1324,39 @@ def render_handoff_inspection_markdown(report: Mapping[str, Any]) -> str:
         f"- Artifact count: {report.get('artifact_count') if report.get('artifact_count') is not None else 'unknown'}",
         f"- Retrieval hint sections: {report.get('retrieval_hint_count') if report.get('retrieval_hint_count') is not None else 'unknown'}",
         f"- Assistant tests: {report.get('assistant_test_count') if report.get('assistant_test_count') is not None else 'unknown'}",
+        f"- Ingestion readiness: `{(report.get('ingestion_readiness') or {}).get('status', 'unknown')}`",
         "",
-        "## Sidecars",
+        "## Readiness",
         "",
-        "| Sidecar | Exists | Path |",
-        "| --- | --- | --- |",
     ]
+    sidecar_summary = report.get("sidecar_summary", {}) if isinstance(report.get("sidecar_summary"), Mapping) else {}
+    assets = report.get("assets", {}) if isinstance(report.get("assets"), Mapping) else {}
+    images = assets.get("images", {}) if isinstance(assets.get("images"), Mapping) else {}
+    lines.extend(
+        [
+            f"- Rich sidecars complete: {str(bool(sidecar_summary.get('rich_complete'))).lower()}",
+            f"- Pipeline sidecars complete: {str(bool(sidecar_summary.get('pipeline_complete'))).lower()}",
+            f"- Missing image assets: {images.get('missing_image_count', 'unknown')}",
+            "",
+        ]
+    )
+    readiness = report.get("ingestion_readiness", {}) if isinstance(report.get("ingestion_readiness"), Mapping) else {}
+    readiness_issues = readiness.get("issues", []) if isinstance(readiness.get("issues"), list) else []
+    if readiness_issues:
+        lines.extend(["## Readiness Issues", ""])
+        for issue in readiness_issues:
+            if not isinstance(issue, Mapping):
+                continue
+            lines.append(f"- `{issue.get('code')}` ({issue.get('severity')}): {issue.get('message')}")
+        lines.append("")
+    lines.extend(
+        [
+            "## Sidecars",
+            "",
+            "| Sidecar | Exists | Path |",
+            "| --- | --- | --- |",
+        ]
+    )
     sidecars = report.get("sidecars", {})
     if isinstance(sidecars, Mapping):
         for name, info in sidecars.items():
