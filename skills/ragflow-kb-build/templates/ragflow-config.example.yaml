@@ -13,20 +13,21 @@ ragflow:
   verify_ssl: true
 
 doc_to_md:
-  # Keep auto unless a specific converter is required.
-  # Auto uses local mineru-cli first when available, then other configured backends.
-  # Use mineru/mineru-agent for Agent API; use mineru-sync/mineru-local for sync multipart /parse.
-  backend: auto
+  # Remote Hermes-agent deployments should pin the intended converter.
+  # Use mineru-fastapi for MinerU 3.2+ protocol-v2 async services.
+  # Use auto only when local CLI discovery is intentionally allowed.
+  backend: mineru-fastapi
 
 mineru:
   # Optional local CLI example: /opt/mineru/bin/mineru
   cli_path: ${MINERU_CLI_PATH}
   cli_backend: pipeline
+  # FastAPI v2 async example: https://mineru.example.internal
   # Agent API example: https://mineru.net/api/v1/agent
-  # Sync multipart example: http://mineru.internal:8777/api/v1
-  base_url: https://mineru.net/api/v1/agent
+  # Legacy sync multipart example: http://mineru.example.internal:8777/api/v1
+  base_url: https://mineru.example.internal
   api_key: ${MINERU_API_KEY}
-  timeout: 300
+  timeout: 1800
   poll_interval: 3
   language: ch
   page_range:

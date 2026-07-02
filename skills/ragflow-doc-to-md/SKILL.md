@@ -20,7 +20,7 @@ python scripts/convert.py --input ./docs --output ./handoff --mode passthrough
 python scripts/convert.py --input ./raw --output ./handoff --backend builtin
 python scripts/convert.py --input ./raw --output ./handoff --backend mineru-cli --mineru-cli-path /opt/mineru/bin/mineru
 python scripts/convert.py --input ./raw --output ./handoff --backend mineru
-python scripts/convert.py --input ./raw --output ./handoff --backend mineru-fastapi --mineru-base-url http://mineru.example.internal:8000
+python scripts/convert.py --input ./raw --output ./handoff --backend mineru-fastapi --mineru-base-url https://mineru.example.internal
 python scripts/convert.py --input ./raw --output ./handoff --backend remote --remote-url https://converter.example/api/convert
 python scripts/convert.py backend probe --backend auto --report-json ./run/backend_probe.json --report-md ./run/backend_probe.md --redaction-report ./run/backend_probe_redaction.json --json
 python scripts/convert.py --config /path/to/ragflow-config.local.yaml --input ./raw --output ./handoff --json
@@ -68,11 +68,15 @@ Self-hosted MinerU 3.2+ `mineru-api` FastAPI services use `mineru-fastapi`:
 
 ```bash
 DOC_TO_MD_BACKEND=mineru-fastapi
-MINERU_BASE_URL=http://mineru.example.internal:8000
+MINERU_BASE_URL=https://mineru.example.internal
 MINERU_API_KEY=...
-MINERU_TIMEOUT=300
+MINERU_TIMEOUT=1800
 MINERU_POLL_INTERVAL=3
 ```
+
+For remote Hermes-agent deployments backed by a MinerU FastAPI service, set
+`DOC_TO_MD_BACKEND=mineru-fastapi` explicitly. Do not rely on `auto` in that topology:
+`auto` may intentionally prefer a local `mineru-cli` or another configured converter.
 
 Generic remote conversion can also be configured through the host agent environment:
 
@@ -101,5 +105,5 @@ Notes:
 - The `mineru-cli` backend runs a local MinerU executable as `mineru -b <backend> -p <source> -o <temp-output>` and reads the Markdown file it produces. Set the path with `MINERU_CLI_PATH`, `mineru.cli_path`, or `--mineru-cli-path`; default CLI backend is `pipeline`.
 - The `mineru` and `mineru-agent` backends use the Agent parsing API shape: create parse task at `/parse/file`, upload to signed URL, poll `/parse/{task_id}`, then download Markdown.
 - The `mineru-fastapi` backend uses MinerU 3.2+ protocol version 2: submit multipart files to `/tasks`, poll `/tasks/{task_id}`, then read Markdown from `/tasks/{task_id}/result`.
-- The `mineru-sync` and `mineru-local` backends post multipart form data to `/parse` and expect Markdown text or JSON containing `markdown`, `content`, `text`, `result`, or `markdown_url`.
+- The `mineru-sync` and `mineru-local` backends are legacy compatibility paths for synchronous multipart `/parse` services. They expect Markdown text or JSON containing `markdown`, `content`, `text`, `result`, or `markdown_url`.
 - The remote backend expects JSON with `filename` and base64 `content_base64`, and returns `markdown` or `content`.

@@ -12,8 +12,8 @@ For a copy-paste prompt that end users can give to their own host agent, use `us
 - Use `templates/ragflow-config.example.yaml` as the config template.
 - Put real config in a stable host-agent path and point scripts to it with `RAGFLOW_CONFIG` or `--config`.
 - Treat RAGFlow and MinerU as external services. Do not start or supervise them from these skills.
-- Distinguish MinerU execution modes before testing conversion. The `mineru-cli` backend runs a local MinerU binary. The `mineru` and `mineru-agent` backends support the MinerU Agent API shape: create a parse task with `/parse/file`, upload to the returned URL, poll `/parse/{task_id}`, then download Markdown. The `mineru-sync` and `mineru-local` backends support synchronous multipart `/parse` services, whether they run on localhost, LAN, VPN, or HTTPS.
-- Keep `doc_to_md.backend: auto` unless a specific converter is required. In `auto`, local `mineru-cli` is preferred when `MINERU_CLI_PATH`, `mineru.cli_path`, or `mineru` on `PATH` is available; then configured service backends can be used. Do not set `doc_to_md.backend: mineru` for a synchronous multipart MinerU service.
+- Distinguish MinerU execution modes before testing conversion. The `mineru-fastapi` backend supports MinerU 3.2+ FastAPI protocol v2: submit files to `/tasks`, poll `/tasks/{task_id}`, then read Markdown from `/tasks/{task_id}/result`. The `mineru-cli` backend runs a local MinerU binary. The `mineru` and `mineru-agent` backends support the MinerU Agent API shape: create a parse task with `/parse/file`, upload to the returned URL, poll `/parse/{task_id}`, then download Markdown. The `mineru-sync` and `mineru-local` backends are legacy compatibility paths for synchronous multipart `/parse` services.
+- For a remote MinerU FastAPI service, set `doc_to_md.backend: mineru-fastapi` explicitly. Use `auto` only when local `mineru-cli` discovery is intentionally allowed. Do not set `doc_to_md.backend: mineru` for a FastAPI v2 or synchronous multipart MinerU service.
 - Do not patch `scripts/_vendor` inside release artifacts. New backend support must be implemented in the source runtime package and then re-vendored by the release builder.
 - Keep all E2E artifacts in a temporary or user-approved workspace, and report paths at the end.
 
@@ -48,20 +48,21 @@ ragflow:
   verify_ssl: true
 
 doc_to_md:
-  # Keep auto unless a specific converter is required.
-  # Auto uses local mineru-cli first when available, then other configured backends.
-  # Use mineru/mineru-agent for Agent API; use mineru-sync/mineru-local for sync multipart /parse.
-  backend: auto
+  # Remote Hermes-agent deployments should pin the intended converter.
+  # Use mineru-fastapi for MinerU 3.2+ protocol-v2 async services.
+  # Use auto only when local CLI discovery is intentionally allowed.
+  backend: mineru-fastapi
 
 mineru:
   # Optional local CLI example: /opt/mineru/bin/mineru
   cli_path: ${MINERU_CLI_PATH}
   cli_backend: pipeline
+  # FastAPI v2 async example: https://mineru.example.internal
   # Agent API example: https://mineru.net/api/v1/agent
-  # Sync multipart example: http://mineru.internal:8777/api/v1
-  base_url: https://mineru.net/api/v1/agent
+  # Legacy sync multipart example: http://mineru.example.internal:8777/api/v1
+  base_url: https://mineru.example.internal
   api_key: ${MINERU_API_KEY}
-  timeout: 300
+  timeout: 1800
   poll_interval: 3
   language: ch
   page_range:
@@ -166,7 +167,7 @@ python ragflow-query/scripts/query.py \
   --json
 ```
 
-For PDF/Office/image E2E, keep `--backend auto` when a local MinerU CLI is configured and should be preferred. Use `--backend mineru-cli` to force local CLI, `--backend mineru` when the service implements the MinerU Agent API, or `--backend mineru-sync` when the service implements synchronous multipart `/parse`. If no compatible CLI or service protocol can be identified, report the uncertainty and skip the MinerU test rather than guessing.
+For PDF/Office/image E2E, use `--backend mineru-fastapi` when the service implements MinerU FastAPI protocol v2. Keep `--backend auto` only when a local MinerU CLI is configured and should be preferred. Use `--backend mineru-cli` to force local CLI, `--backend mineru` when the service implements the MinerU Agent API, or `--backend mineru-sync` only for legacy synchronous multipart `/parse`. If no compatible CLI or service protocol can be identified, report the uncertainty and skip the MinerU test rather than guessing.
 
 ## GitHub Release E2E
 

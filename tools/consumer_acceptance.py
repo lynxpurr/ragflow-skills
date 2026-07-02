@@ -1089,6 +1089,236 @@ def _run_no_network_checks(
             }
         )
 
+    mineru_fastapi_input = work_root / "mineru-fastapi-input"
+    mineru_fastapi_input.mkdir(parents=True, exist_ok=True)
+    (mineru_fastapi_input / "sample.pdf").write_bytes(b"%PDF fake mineru fastapi acceptance")
+    mineru_fastapi_output = work_root / "mineru-fastapi-handoff"
+    mineru_fastapi_redaction = work_root / "convert_fastapi_redaction.json"
+    fastapi_probe_json = work_root / "backend_probe_fastapi.json"
+    fastapi_probe_md = work_root / "backend_probe_fastapi.md"
+    fastapi_probe_redaction = work_root / "backend_probe_fastapi_redaction.json"
+    fastapi_captured: dict[str, Any] = {
+        "auth": [],
+        "paths": [],
+        "status_calls": 0,
+        "result_calls": 0,
+    }
+
+    class MinerUFastAPIHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            fastapi_captured["paths"].append(self.path)
+            fastapi_captured["auth"].append(self.headers.get("Authorization"))
+            if self.path == "/tasks":
+                body = json.dumps({"task_id": "acceptance-fastapi-task", "status": "queued"}).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_response(404)
+            self.end_headers()
+
+        def do_GET(self) -> None:  # noqa: N802
+            fastapi_captured["paths"].append(self.path)
+            fastapi_captured["auth"].append(self.headers.get("Authorization"))
+            if self.path == "/health":
+                body = json.dumps(
+                    {
+                        "status": "healthy",
+                        "version": "3.2.1",
+                        "protocol_version": 2,
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.path == "/tasks/acceptance-fastapi-task":
+                fastapi_captured["status_calls"] += 1
+                body = json.dumps(
+                    {
+                        "task_id": "acceptance-fastapi-task",
+                        "status": "completed",
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.path == "/tasks/acceptance-fastapi-task/result":
+                fastapi_captured["result_calls"] += 1
+                body = json.dumps(
+                    {
+                        "backend": "pipeline",
+                        "version": "3.2.1",
+                        "results": {
+                            "sample": {
+                                "md_content": "# MinerU FastAPI Acceptance\n\nConverted by fake async service.\n"
+                            }
+                        },
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, _format: str, *args: object) -> None:
+            return
+
+    fastapi_server = ThreadingHTTPServer(("127.0.0.1", 0), MinerUFastAPIHandler)
+    fastapi_thread = threading.Thread(target=fastapi_server.serve_forever, daemon=True)
+    fastapi_thread.start()
+    try:
+        fastapi_base_url = f"http://127.0.0.1:{fastapi_server.server_port}"
+        fastapi_env = _minimal_env(
+            {
+                **env,
+                "DOC_TO_MD_BACKEND": "mineru-fastapi",
+                "MINERU_BASE_URL": fastapi_base_url,
+                "MINERU_API_KEY": "fastapi-secret",
+                "MINERU_TIMEOUT": "5",
+                "MINERU_POLL_INTERVAL": "0.1",
+            }
+        )
+        mineru_fastapi_result = _run_command(
+            [
+                python_executable,
+                str(convert_script),
+                "--input",
+                str(mineru_fastapi_input),
+                "--output",
+                str(mineru_fastapi_output),
+                "--redaction-report",
+                str(mineru_fastapi_redaction),
+                "--json",
+            ],
+            cwd=work_root,
+            env=fastapi_env,
+        )
+        fastapi_probe_result = _run_command(
+            [
+                python_executable,
+                str(convert_script),
+                "backend",
+                "probe",
+                "--backend",
+                "mineru-fastapi",
+                "--mineru-base-url",
+                fastapi_base_url,
+                "--mineru-api-key",
+                "fastapi-secret",
+                "--network-check",
+                "--report-json",
+                str(fastapi_probe_json),
+                "--report-md",
+                str(fastapi_probe_md),
+                "--redaction-report",
+                str(fastapi_probe_redaction),
+                "--json",
+                "--fail-on-unavailable",
+            ],
+            cwd=work_root,
+            env=env,
+        )
+    finally:
+        fastapi_server.shutdown()
+        fastapi_server.server_close()
+        fastapi_thread.join(timeout=2)
+
+    _record_command_check(
+        checks,
+        "doc-to-md mineru-fastapi async",
+        mineru_fastapi_result,
+        required_output='"ok": true',
+    )
+    _record_command_check(
+        checks,
+        "doc-to-md mineru-fastapi backend probe",
+        fastapi_probe_result,
+        required_output='"selected_backend": "mineru-fastapi"',
+    )
+    fastapi_manifest = mineru_fastapi_output / "doc_manifest.json"
+    fastapi_markdown = mineru_fastapi_output / "documents" / "sample.md"
+    fastapi_quality = mineru_fastapi_output / "quality_report.json"
+    _record_file_check(checks, "mineru-fastapi doc_manifest produced", fastapi_manifest)
+    _record_file_check(checks, "mineru-fastapi markdown produced", fastapi_markdown)
+    _record_file_check(checks, "mineru-fastapi quality_report produced", fastapi_quality)
+    if fastapi_manifest.exists():
+        produced.append(fastapi_manifest)
+    if fastapi_markdown.exists():
+        produced.append(fastapi_markdown)
+        markdown_text = fastapi_markdown.read_text(encoding="utf-8")
+        checks.append(
+            {
+                "name": "mineru-fastapi markdown content",
+                "ok": "MinerU FastAPI Acceptance" in markdown_text,
+                "path": str(fastapi_markdown),
+                "error": "" if "MinerU FastAPI Acceptance" in markdown_text else "missing expected markdown",
+            }
+        )
+    if fastapi_quality.exists():
+        produced.append(fastapi_quality)
+    if mineru_fastapi_redaction.exists():
+        produced.append(mineru_fastapi_redaction)
+    if fastapi_probe_json.exists():
+        produced.append(fastapi_probe_json)
+    if fastapi_probe_md.exists():
+        produced.append(fastapi_probe_md)
+    if fastapi_probe_redaction.exists():
+        produced.append(fastapi_probe_redaction)
+    fastapi_protocol_ok = (
+        "/tasks" in fastapi_captured["paths"]
+        and "/tasks/acceptance-fastapi-task" in fastapi_captured["paths"]
+        and "/tasks/acceptance-fastapi-task/result" in fastapi_captured["paths"]
+        and "/health" in fastapi_captured["paths"]
+        and fastapi_captured["status_calls"] >= 1
+        and fastapi_captured["result_calls"] == 1
+        and set(fastapi_captured["auth"]) == {"Bearer fastapi-secret"}
+    )
+    checks.append(
+        {
+            "name": "mineru-fastapi async protocol exercised",
+            "ok": fastapi_protocol_ok,
+            "path": str(fastapi_manifest),
+            "error": "" if fastapi_protocol_ok else f"unexpected protocol trace: {fastapi_captured}",
+        }
+    )
+    fastapi_outputs = [
+        mineru_fastapi_result.get("stdout", ""),
+        fastapi_probe_result.get("stdout", ""),
+        fastapi_manifest.read_text(encoding="utf-8") if fastapi_manifest.exists() else "",
+        fastapi_markdown.read_text(encoding="utf-8") if fastapi_markdown.exists() else "",
+        fastapi_quality.read_text(encoding="utf-8") if fastapi_quality.exists() else "",
+        mineru_fastapi_redaction.read_text(encoding="utf-8") if mineru_fastapi_redaction.exists() else "",
+        fastapi_probe_json.read_text(encoding="utf-8") if fastapi_probe_json.exists() else "",
+        fastapi_probe_md.read_text(encoding="utf-8") if fastapi_probe_md.exists() else "",
+        fastapi_probe_redaction.read_text(encoding="utf-8") if fastapi_probe_redaction.exists() else "",
+    ]
+    fastapi_combined_outputs = "\n".join(fastapi_outputs)
+    fastapi_redaction_ok = (
+        "fastapi-secret" not in fastapi_combined_outputs
+        and fastapi_base_url not in fastapi_combined_outputs
+    )
+    checks.append(
+        {
+            "name": "mineru-fastapi reports omit endpoint and api key",
+            "ok": fastapi_redaction_ok,
+            "path": str(fastapi_probe_redaction),
+            "error": "" if fastapi_redaction_ok else "mineru-fastapi output leaked fake endpoint or API key",
+        }
+    )
+
     backend_probe_json = work_root / "backend_probe.json"
     backend_probe_md = work_root / "backend_probe.md"
     backend_probe_redaction = work_root / "backend_probe_redaction.json"
@@ -2224,6 +2454,28 @@ def _run_no_network_checks(
         env=env,
     )
     _record_command_check(checks, "kb-build dry-run", build_result, required_output='"dry_run": true')
+    fastapi_build_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "--doc-manifest",
+            str(fastapi_manifest),
+            "--kb-name",
+            "kb:consumer-acceptance-mineru-fastapi",
+            "--profile",
+            str(profile),
+            "--dry-run",
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build mineru-fastapi dry-run",
+        fastapi_build_result,
+        required_output='"dry_run": true',
+    )
 
     model_provider_json = work_root / "model_provider_probe.json"
     model_provider_md = work_root / "model_provider_probe.md"

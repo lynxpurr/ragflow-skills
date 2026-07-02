@@ -296,6 +296,19 @@ def _run_mineru_env_check(
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
             self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            if self.path == "/tasks":
+                body = json.dumps(
+                    {
+                        "task_id": "smoke-fastapi-task",
+                        "status": "queued",
+                    }
+                ).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path.endswith("/parse"):
                 body = json.dumps(
                     {
@@ -336,6 +349,51 @@ def _run_mineru_env_check(
             self.end_headers()
 
         def do_GET(self) -> None:  # noqa: N802
+            if self.path == "/health":
+                body = json.dumps(
+                    {
+                        "status": "healthy",
+                        "version": "3.2.1",
+                        "protocol_version": 2,
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.path == "/tasks/smoke-fastapi-task":
+                body = json.dumps(
+                    {
+                        "task_id": "smoke-fastapi-task",
+                        "status": "completed",
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.path == "/tasks/smoke-fastapi-task/result":
+                body = json.dumps(
+                    {
+                        "backend": "pipeline",
+                        "version": "3.2.1",
+                        "results": {
+                            "mineru": {
+                                "md_content": "# MinerU FastAPI Service Smoke\n\nConverted through mineru-fastapi env config.\n"
+                            }
+                        },
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path == "/parse/smoke-task":
                 body = json.dumps(
                     {
@@ -369,6 +427,7 @@ def _run_mineru_env_check(
     mineru_input = workspace / "mineru-input"
     mineru_output = workspace / "mineru-handoff"
     mineru_cli_output = workspace / "mineru-cli-handoff"
+    mineru_fastapi_output = workspace / "mineru-fastapi-handoff"
     mineru_sync_output = workspace / "mineru-sync-handoff"
     mineru_input.mkdir(parents=True, exist_ok=True)
     (mineru_input / "mineru.pdf").write_bytes(b"%PDF mineru service smoke")
@@ -439,6 +498,27 @@ def _run_mineru_env_check(
             cwd=workspace,
             env=mineru_sync_env,
         )
+        mineru_fastapi_env = {
+            **env,
+            "DOC_TO_MD_BACKEND": "mineru-fastapi",
+            "MINERU_BASE_URL": f"http://127.0.0.1:{server.server_port}",
+            "MINERU_API_KEY": "smoke-key",
+            "MINERU_TIMEOUT": "5",
+            "MINERU_POLL_INTERVAL": "0.1",
+        }
+        fastapi_result = _run_command(
+            [
+                sys.executable,
+                str(convert_script),
+                "--input",
+                str(mineru_input),
+                "--output",
+                str(mineru_fastapi_output),
+                "--json",
+            ],
+            cwd=workspace,
+            env=mineru_fastapi_env,
+        )
         backend_probe_result = _run_command(
             [
                 sys.executable,
@@ -455,6 +535,30 @@ def _run_mineru_env_check(
                 str(workspace / "backend_probe.md"),
                 "--redaction-report",
                 str(workspace / "backend_probe_redaction.json"),
+                "--json",
+            ],
+            cwd=workspace,
+            env=env,
+        )
+        fastapi_probe_result = _run_command(
+            [
+                sys.executable,
+                str(convert_script),
+                "backend",
+                "probe",
+                "--backend",
+                "mineru-fastapi",
+                "--mineru-base-url",
+                f"http://127.0.0.1:{server.server_port}",
+                "--mineru-api-key",
+                "smoke-key",
+                "--network-check",
+                "--report-json",
+                str(workspace / "backend_probe_fastapi.json"),
+                "--report-md",
+                str(workspace / "backend_probe_fastapi.md"),
+                "--redaction-report",
+                str(workspace / "backend_probe_fastapi_redaction.json"),
                 "--json",
             ],
             cwd=workspace,
@@ -515,6 +619,12 @@ def _run_mineru_env_check(
     )
     _record_command_check(
         checks,
+        "doc-to-md mineru-fastapi env backend",
+        fastapi_result,
+        required_stdout='"ok": true',
+    )
+    _record_command_check(
+        checks,
         "doc-to-md backend probe",
         backend_probe_result,
         required_stdout='"schema": "ragflow_doc_backend_probe_report_v1"',
@@ -550,6 +660,40 @@ def _run_mineru_env_check(
             "ok": backend_probe_partial_ok,
             "returncode": 0 if backend_probe_partial_ok else 1,
             "error": backend_probe_partial_error,
+        }
+    )
+    _record_command_check(
+        checks,
+        "doc-to-md mineru-fastapi backend probe",
+        fastapi_probe_result,
+        required_stdout='"schema": "ragflow_doc_backend_probe_report_v1"',
+    )
+    fastapi_probe_json = workspace / "backend_probe_fastapi.json"
+    fastapi_probe_ok = False
+    fastapi_probe_error = ""
+    if fastapi_probe_json.exists():
+        try:
+            fastapi_probe_payload = json.loads(fastapi_probe_json.read_text(encoding="utf-8"))
+            fastapi_probe_ok = (
+                fastapi_probe_payload.get("selected_backend") == "mineru-fastapi"
+                and fastapi_probe_payload.get("summary", {}).get("available") == 1
+                and fastapi_probe_payload.get("runtime_partial_failure", {})
+                .get("summary", {})
+                .get("status")
+                == "completed"
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            fastapi_probe_error = f"invalid mineru-fastapi probe JSON: {exc}"
+    else:
+        fastapi_probe_error = f"missing {fastapi_probe_json}"
+    if not fastapi_probe_error and not fastapi_probe_ok:
+        fastapi_probe_error = "mineru-fastapi probe did not report an available async service"
+    checks.append(
+        {
+            "name": "doc-to-md mineru-fastapi probe available",
+            "ok": fastapi_probe_ok,
+            "returncode": 0 if fastapi_probe_ok else 1,
+            "error": fastapi_probe_error,
         }
     )
     _record_command_check(
@@ -633,6 +777,18 @@ def _run_mineru_env_check(
             "ok": sync_ok,
             "returncode": 0 if sync_ok else 1,
             "error": "" if sync_ok else f"missing or invalid {sync_markdown_path}",
+        }
+    )
+    fastapi_markdown_path = mineru_fastapi_output / "documents" / "mineru.md"
+    fastapi_ok = fastapi_markdown_path.exists() and "MinerU FastAPI Service Smoke" in fastapi_markdown_path.read_text(
+        encoding="utf-8"
+    )
+    checks.append(
+        {
+            "name": "mineru-fastapi service markdown produced",
+            "ok": fastapi_ok,
+            "returncode": 0 if fastapi_ok else 1,
+            "error": "" if fastapi_ok else f"missing or invalid {fastapi_markdown_path}",
         }
     )
     manifest_path = mineru_output / "doc_manifest.json"
@@ -2143,6 +2299,29 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         env=env,
     )
     _record_command_check(checks, "kb-build dry-run", build_result, required_stdout='"dry_run": true')
+    mineru_fastapi_doc_manifest = workspace / "mineru-fastapi-handoff" / "doc_manifest.json"
+    fastapi_build_result = _run_command(
+        [
+            sys.executable,
+            str(build_script),
+            "--doc-manifest",
+            str(mineru_fastapi_doc_manifest),
+            "--kb-name",
+            "kb:platform-smoke-mineru-fastapi",
+            "--profile",
+            str(PROFILE_PATH),
+            "--dry-run",
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build mineru-fastapi dry-run",
+        fastapi_build_result,
+        required_stdout='"dry_run": true',
+    )
     append_script = script_root / "ragflow-kb-build" / "scripts" / "append.py"
     append_secret = "platform-append-secret"
     append_host = "append.internal.local"
