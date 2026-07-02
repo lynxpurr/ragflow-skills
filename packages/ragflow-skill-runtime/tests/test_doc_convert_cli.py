@@ -593,6 +593,136 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertIn(b'name="language"', body)
         self.assertIn(b"en", body)
 
+    def test_convert_mineru_fastapi_backend_from_environment(self) -> None:
+        captured: dict[str, object] = {"status_calls": 0}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0"))
+                captured["path"] = self.path
+                captured["auth"] = self.headers.get("Authorization")
+                captured["content_type"] = self.headers.get("Content-Type")
+                captured["body"] = self.rfile.read(length)
+                body = json.dumps(
+                    {
+                        "task_id": "task-fastapi-cli",
+                        "status": "pending",
+                        "status_url": f"http://127.0.0.1:{self.server.server_port}/tasks/task-fastapi-cli",
+                        "result_url": f"http://127.0.0.1:{self.server.server_port}/tasks/task-fastapi-cli/result",
+                    }
+                ).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/tasks/task-fastapi-cli":
+                    captured["status_calls"] = int(captured["status_calls"]) + 1
+                    body = json.dumps({"task_id": "task-fastapi-cli", "status": "completed"}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if self.path == "/tasks/task-fastapi-cli/result":
+                    body = json.dumps(
+                        {
+                            "backend": "pipeline",
+                            "version": "3.2.1",
+                            "results": {
+                                "paper": {
+                                    "md_content": "# MinerU FastAPI\n\nConverted by fake async service.\n"
+                                }
+                            },
+                        }
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                input_dir = root / "input"
+                output_dir = root / "handoff"
+                input_dir.mkdir()
+                (input_dir / "paper.pdf").write_bytes(b"%PDF fake fastapi")
+                env = _env()
+                env.update(
+                    {
+                        "DOC_TO_MD_BACKEND": "mineru-fastapi",
+                        "MINERU_BASE_URL": f"http://127.0.0.1:{server.server_port}",
+                        "MINERU_API_KEY": "fastapi-secret",
+                        "MINERU_TIMEOUT": "5",
+                        "MINERU_POLL_INTERVAL": "0.01",
+                        "MINERU_LANGUAGE": "ch,en",
+                        "MINERU_PAGE_RANGE": "2-4",
+                        "MINERU_ENABLE_TABLE": "false",
+                        "MINERU_IS_OCR": "true",
+                        "MINERU_ENABLE_FORMULA": "false",
+                    }
+                )
+
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(CONVERT_SCRIPT),
+                        "--input",
+                        str(input_dir),
+                        "--output",
+                        str(output_dir),
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    env=env,
+                )
+
+                payload = json.loads(result.stdout)
+                markdown = (output_dir / "documents" / "paper.md").read_text(encoding="utf-8")
+                manifest = json.loads((output_dir / "doc_manifest.json").read_text(encoding="utf-8"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(payload["ok"])
+        self.assertIn("# MinerU FastAPI", markdown)
+        self.assertEqual(manifest["documents"][0]["markdown_path"], "documents/paper.md")
+        self.assertEqual(captured["path"], "/tasks")
+        self.assertEqual(captured["auth"], "Bearer fastapi-secret")
+        self.assertIn("multipart/form-data", str(captured["content_type"]))
+        body = captured["body"]
+        self.assertIsInstance(body, bytes)
+        self.assertIn(b'name="files"; filename="paper.pdf"', body)
+        self.assertIn(b'name="lang_list"', body)
+        self.assertIn(b"ch", body)
+        self.assertIn(b"en", body)
+        self.assertIn(b'name="parse_method"', body)
+        self.assertIn(b"ocr", body)
+        self.assertIn(b'name="table_enable"', body)
+        self.assertIn(b"false", body)
+        self.assertIn(b'name="start_page_id"', body)
+        self.assertIn(b"2", body)
+        self.assertIn(b'name="end_page_id"', body)
+        self.assertIn(b"4", body)
+        self.assertEqual(captured["status_calls"], 1)
+
     def test_convert_mineru_cli_backend_from_environment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1632,6 +1762,76 @@ class DocConvertCliTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["backends"][0]["status"], "available")
+
+    def test_backend_probe_mineru_fastapi_available_via_cli(self) -> None:
+        captured: dict[str, object] = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                captured["path"] = self.path
+                captured["auth"] = self.headers.get("Authorization")
+                body = json.dumps(
+                    {
+                        "status": "healthy",
+                        "version": "3.2.1",
+                        "protocol_version": 2,
+                        "queued_tasks": 0,
+                        "processing_tasks": 0,
+                        "completed_tasks": 0,
+                        "failed_tasks": 0,
+                        "max_concurrent_requests": 3,
+                        "processing_window_size": 64,
+                        "task_retention_seconds": 86400,
+                        "task_cleanup_interval_seconds": 300,
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "backend",
+                    "probe",
+                    "--backend",
+                    "mineru-fastapi",
+                    "--mineru-base-url",
+                    f"http://127.0.0.1:{server.server_port}",
+                    "--mineru-api-key",
+                    "probe-secret",
+                    "--network-check",
+                    "--json",
+                    "--fail-on-unavailable",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["selected_backend"], "mineru-fastapi")
+        self.assertEqual(payload["backends"][0]["status"], "available")
+        self.assertEqual(payload["summary"]["available"], 1)
+        self.assertEqual(payload["runtime_partial_failure"]["summary"]["status"], "completed")
+        self.assertEqual(captured["path"], "/health")
+        self.assertEqual(captured["auth"], "Bearer probe-secret")
 
     def test_backend_warmup_mineru_cli_writes_reports(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

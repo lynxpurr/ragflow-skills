@@ -11,7 +11,7 @@ Inputs:
 
 - Existing Markdown via `--mode passthrough`.
 - Plain text and simple HTML via the built-in converter.
-- Office/PDF/EPUB-like formats through `--backend mineru-cli` for an installed local MinerU binary, `--backend mineru` for MinerU Agent API, `--backend mineru-sync` for synchronous multipart `/parse`, `--backend pandoc` when pandoc is installed, or `--backend remote --remote-url ...`.
+- Office/PDF/EPUB-like formats through `--backend mineru-cli` for an installed local MinerU binary, `--backend mineru` for MinerU Agent API, `--backend mineru-fastapi` for a self-hosted MinerU `mineru-api` service, `--backend mineru-sync` for synchronous multipart `/parse`, `--backend pandoc` when pandoc is installed, or `--backend remote --remote-url ...`.
 
 Command examples:
 
@@ -20,6 +20,7 @@ python scripts/convert.py --input ./docs --output ./handoff --mode passthrough
 python scripts/convert.py --input ./raw --output ./handoff --backend builtin
 python scripts/convert.py --input ./raw --output ./handoff --backend mineru-cli --mineru-cli-path /opt/mineru/bin/mineru
 python scripts/convert.py --input ./raw --output ./handoff --backend mineru
+python scripts/convert.py --input ./raw --output ./handoff --backend mineru-fastapi --mineru-base-url http://mineru.example.internal:8000
 python scripts/convert.py --input ./raw --output ./handoff --backend remote --remote-url https://converter.example/api/convert
 python scripts/convert.py backend probe --backend auto --report-json ./run/backend_probe.json --report-md ./run/backend_probe.md --redaction-report ./run/backend_probe_redaction.json --json
 python scripts/convert.py --config /path/to/ragflow-config.local.yaml --input ./raw --output ./handoff --json
@@ -63,6 +64,16 @@ MINERU_API_KEY=...
 MINERU_TIMEOUT=300
 ```
 
+Self-hosted MinerU 3.2+ `mineru-api` FastAPI services use `mineru-fastapi`:
+
+```bash
+DOC_TO_MD_BACKEND=mineru-fastapi
+MINERU_BASE_URL=http://mineru.example.internal:8000
+MINERU_API_KEY=...
+MINERU_TIMEOUT=300
+MINERU_POLL_INTERVAL=3
+```
+
 Generic remote conversion can also be configured through the host agent environment:
 
 ```bash
@@ -89,5 +100,6 @@ Notes:
 - Use `segment-plan` before splitting long Markdown; use `split` when the user wants materialized `segments/*.md` that can be ingested as an ordinary Markdown directory. Add `--manifest-output` when downstream build should consume the materialized segments through a generated `doc_manifest.json`. For large split jobs, add `--checkpoint` plus `--batch-size`, then rerun with `--resume` until `checkpoint.completed` is true.
 - The `mineru-cli` backend runs a local MinerU executable as `mineru -b <backend> -p <source> -o <temp-output>` and reads the Markdown file it produces. Set the path with `MINERU_CLI_PATH`, `mineru.cli_path`, or `--mineru-cli-path`; default CLI backend is `pipeline`.
 - The `mineru` and `mineru-agent` backends use the Agent parsing API shape: create parse task at `/parse/file`, upload to signed URL, poll `/parse/{task_id}`, then download Markdown.
+- The `mineru-fastapi` backend uses MinerU 3.2+ protocol version 2: submit multipart files to `/tasks`, poll `/tasks/{task_id}`, then read Markdown from `/tasks/{task_id}/result`.
 - The `mineru-sync` and `mineru-local` backends post multipart form data to `/parse` and expect Markdown text or JSON containing `markdown`, `content`, `text`, `result`, or `markdown_url`.
 - The remote backend expects JSON with `filename` and base64 `content_base64`, and returns `markdown` or `content`.

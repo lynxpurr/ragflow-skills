@@ -73,6 +73,7 @@ BACKEND_CHOICES = {
     "mineru",
     "mineru-agent",
     "mineru-cli",
+    "mineru-fastapi",
     "mineru-local",
     "mineru-sync",
     "pandoc",
@@ -1503,7 +1504,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--remote-url", help="Remote conversion endpoint; defaults to DOC_TO_MD_REMOTE_URL")
     parser.add_argument("--remote-api-key", help="Remote conversion bearer token; defaults to DOC_TO_MD_REMOTE_API_KEY")
     parser.add_argument("--remote-timeout", type=float, help="Remote conversion timeout in seconds; defaults to DOC_TO_MD_TIMEOUT or 120")
-    parser.add_argument("--mineru-base-url", help="MinerU service base URL; Agent API defaults to MINERU_BASE_URL or https://mineru.net/api/v1/agent, mineru-sync appends /parse when needed")
+    parser.add_argument("--mineru-base-url", help="MinerU service base URL; Agent API defaults to MINERU_BASE_URL or https://mineru.net/api/v1/agent, mineru-sync appends /parse when needed, mineru-fastapi uses /tasks")
     parser.add_argument("--mineru-api-key", help="MinerU API key; defaults to MINERU_API_KEY")
     parser.add_argument("--mineru-timeout", type=float, help="MinerU parse timeout in seconds; defaults to MINERU_TIMEOUT or 300")
     parser.add_argument("--mineru-poll-interval", type=float, help="MinerU parse polling interval; defaults to MINERU_POLL_INTERVAL or 3")

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from ragflow_skill_runtime.doc_convert import (
@@ -15,6 +18,7 @@ from ragflow_skill_runtime.doc_convert import (
     extract_markdown_title,
     html_to_markdown,
     make_doc_manifest_payload,
+    mineru_fastapi_convert,
     probe_conversion_backends,
     render_backend_probe_markdown,
     safe_markdown_name,
@@ -142,6 +146,248 @@ class DocConvertTests(unittest.TestCase):
         self.assertGreaterEqual(report["summary"]["runtime_skipped_count"], 1)
         self.assertIn("runtime_partial_failure_status: `partial`", markdown)
         self.assertIn("runtime_skipped:", markdown)
+
+    def test_mineru_fastapi_convert_success(self) -> None:
+        captured: dict[str, object] = {"status_calls": 0}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(length)
+                captured["path"] = self.path
+                captured["auth"] = self.headers.get("Authorization")
+                captured["body"] = body.decode("utf-8", errors="replace")
+                payload = {
+                    "task_id": "task-fastapi",
+                    "status": "pending",
+                    "status_url": f"http://127.0.0.1:{self.server.server_port}/tasks/task-fastapi",
+                    "result_url": f"http://127.0.0.1:{self.server.server_port}/tasks/task-fastapi/result",
+                }
+                raw = json.dumps(payload).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/tasks/task-fastapi":
+                    captured["status_calls"] = int(captured["status_calls"]) + 1
+                    raw = json.dumps({"task_id": "task-fastapi", "status": "completed"}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                if self.path == "/tasks/task-fastapi/result":
+                    raw = json.dumps(
+                        {
+                            "backend": "pipeline",
+                            "version": "3.2.1",
+                            "results": {"paper": {"md_content": "# FastAPI\n\nConverted.\n"}},
+                        }
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                source_path = Path(tmp) / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake")
+                markdown = mineru_fastapi_convert(
+                    SourceDocument(path=source_path, source_path="paper.pdf"),
+                    base_url=f"http://127.0.0.1:{server.server_port}",
+                    api_key="fastapi-secret",
+                    timeout=5,
+                    poll_interval=0.01,
+                    language="ch,en",
+                    page_range="1-3",
+                    enable_table=False,
+                    is_ocr=True,
+                    enable_formula=False,
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(markdown, "# FastAPI\n\nConverted.\n")
+        self.assertEqual(captured["path"], "/tasks")
+        self.assertEqual(captured["auth"], "Bearer fastapi-secret")
+        body = str(captured["body"])
+        self.assertIn('name="files"; filename="paper.pdf"', body)
+        self.assertIn('name="lang_list"', body)
+        self.assertIn("ch", body)
+        self.assertIn("en", body)
+        self.assertIn('name="parse_method"', body)
+        self.assertIn("ocr", body)
+        self.assertIn('name="table_enable"', body)
+        self.assertIn("false", body)
+        self.assertIn('name="start_page_id"', body)
+        self.assertIn("1", body)
+        self.assertIn('name="end_page_id"', body)
+        self.assertIn("3", body)
+        self.assertEqual(captured["status_calls"], 1)
+
+    def test_mineru_fastapi_convert_task_failed(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                raw = json.dumps({"task_id": "task-failed"}).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self) -> None:  # noqa: N802
+                raw = json.dumps({"task_id": "task-failed", "status": "failed", "error": "boom"}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                source_path = Path(tmp) / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake")
+                with self.assertRaisesRegex(DocConvertError, "boom"):
+                    mineru_fastapi_convert(
+                        SourceDocument(path=source_path, source_path="paper.pdf"),
+                        base_url=f"http://127.0.0.1:{server.server_port}",
+                        timeout=5,
+                        poll_interval=0.01,
+                    )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_mineru_fastapi_convert_timeout(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                raw = json.dumps({"task_id": "task-timeout"}).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self) -> None:  # noqa: N802
+                raw = json.dumps({"task_id": "task-timeout", "status": "processing"}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                source_path = Path(tmp) / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake")
+                with self.assertRaisesRegex(DocConvertError, "timed out"):
+                    mineru_fastapi_convert(
+                        SourceDocument(path=source_path, source_path="paper.pdf"),
+                        base_url=f"http://127.0.0.1:{server.server_port}",
+                        timeout=0.05,
+                        poll_interval=0.01,
+                    )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_probe_mineru_fastapi_available(self) -> None:
+        captured: dict[str, object] = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                captured["path"] = self.path
+                captured["auth"] = self.headers.get("Authorization")
+                raw = json.dumps(
+                    {
+                        "status": "healthy",
+                        "version": "3.2.1",
+                        "protocol_version": 2,
+                        "queued_tasks": 0,
+                        "processing_tasks": 0,
+                        "completed_tasks": 0,
+                        "failed_tasks": 0,
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            report = probe_conversion_backends(
+                backend="mineru-fastapi",
+                mineru_base_url=f"http://127.0.0.1:{server.server_port}",
+                mineru_api_key="probe-secret",
+                network_check=True,
+                timeout=2,
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(report["backends"][0]["status"], "available")
+        self.assertEqual(report["summary"]["available"], 1)
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["status"], "completed")
+        self.assertEqual(captured["path"], "/health")
+        self.assertEqual(captured["auth"], "Bearer probe-secret")
+
+    def test_probe_mineru_fastapi_skips_network_without_network_check(self) -> None:
+        report = probe_conversion_backends(
+            backend="mineru-fastapi",
+            mineru_base_url="http://127.0.0.1:9",
+            network_check=False,
+            timeout=0.01,
+        )
+
+        entry = report["backends"][0]
+        self.assertEqual(entry["status"], "available")
+        self.assertIn("network check disabled", entry["reasons"])
+        self.assertEqual(report["summary"]["available"], 1)
+        self.assertEqual(report["runtime_partial_failure"]["summary"]["status"], "completed")
+        network_check = [item for item in entry["checks"] if item["name"] == "network_check"][0]
+        self.assertTrue(network_check["skipped"])
 
     def test_quality_report_passes_clean_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
