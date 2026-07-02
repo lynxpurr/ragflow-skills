@@ -4,6 +4,41 @@ Give this prompt to a host agent such as Hermes, OpenClaw, Claude Code, opencode
 
 The prompt asks the host agent to gather only missing service information, configure the skills safely, and run smoke or E2E validation without exposing secrets.
 
+## Quick Hermes/OpenClaw Task Prompt
+
+Use this shorter prompt when the host agent only needs to configure a remote MinerU FastAPI v2 parser for `ragflow-doc-to-md` and then guide the user through validation:
+
+```text
+请读取 ragflow-doc-to-md/SKILL.md、references/host-agent-setup.md 和 templates/ragflow-config.example.yaml，为我配置远程 MinerU FastAPI v2 文档解析。
+
+请自行和我交互，只询问缺失信息，不要让我手动拼接命令。你需要确认：
+- RAGFlow base URL、API key 或 secret 名称/位置。
+- MinerU 服务是否是 FastAPI v2：/health、/tasks、/tasks/{task_id}、/tasks/{task_id}/result。
+- MinerU base URL、API key 或 secret 名称/位置。
+- SSL 是否校验；只有自签名或内网测试时才询问是否临时关闭。
+- 是否需要解析 PDF / Office / 图片型文档，以及语言、OCR、表格、公式选项是否使用默认值。
+
+请使用稳定配置文件，不要把真实 API key 写入 skill 目录、git 仓库、项目文档或 release artifacts。Hermes 默认使用 ~/.hermes/ragflow/config.local.yaml，OpenClaw 使用 ~/.config/openclaw/ragflow/config.local.yaml、/etc/openclaw/ragflow/config.local.yaml、/var/lib/openclaw/ragflow/config.local.yaml 或挂载的 secret/config 路径。设置 RAGFLOW_CONFIG 指向该文件。
+
+配置文件中应明确：
+
+doc_to_md:
+  backend: mineru-fastapi
+
+mineru:
+  base_url: <MinerU FastAPI base URL>
+  api_key: ${MINERU_API_KEY}
+  timeout: 1800
+  poll_interval: 3
+  verify_ssl: true
+
+请记住优先级：--mineru-base-url 高于 MINERU_BASE_URL，高于配置文件中的 mineru.base_url。生产配置优先写入私有配置文件或环境变量；临时调试才使用命令行覆盖。
+
+请先运行无网络 smoke test，再在我确认后运行 MinerU backend probe、warmup 和一次最小转换验证。所有报告只输出脱敏 endpoint、路径和结论，不输出 API key。
+```
+
+## Full Host-Agent Prompt
+
 ```text
 请帮我配置并验证这一组 RAGFlow skills：
 
@@ -30,6 +65,7 @@ The prompt asks the host agent to gather only missing service information, confi
 - 默认 RAGFlow / MinerU 可能在远程机器、LAN、VPN 或 HTTPS gateway 上，不要假设它们和 agent 在同一台机器。
 - 先识别 MinerU 执行模式：`mineru-fastapi` 支持 MinerU 3.2+ FastAPI v2（`/tasks` 提交任务、`/tasks/{task_id}` 轮询、`/tasks/{task_id}/result` 读取 Markdown）；本机已安装 MinerU CLI 时可使用 `ragflow-doc-to-md --backend mineru-cli`，或在确实希望本地优先时保持 `auto`；`mineru` / `mineru-agent` 支持 MinerU Agent API（`/parse/file` 创建任务、上传文件、轮询任务、下载 Markdown）；`mineru-sync` / `mineru-local` 仅作为同步 multipart `/parse` legacy compatibility。默认 MinerU 可能是本机 CLI、内网远程服务、VPN、HTTPS gateway 或在线服务，不要把部署位置和协议混为一谈。
 - 不确定 MinerU 协议时，不要把配置文件里的 `doc_to_md.backend` 从 `auto` 改成 `mineru`。确认 FastAPI v2 后用 `mineru-fastapi`，本机 CLI 可用 `mineru-cli` 或有意选择 `auto`，确认 Agent API 后用 `mineru`，确认同步 multipart `/parse` 后才用 `mineru-sync`。
+- MinerU FastAPI endpoint 的配置优先级是：`--mineru-base-url` 高于 `MINERU_BASE_URL`，高于配置文件中的 `mineru.base_url`。生产配置优先使用私有 config 文件或环境变量；命令行参数只用于临时覆盖。
 - 不要直接修改 release artifact 或 skill 里的 `scripts/_vendor`。如果需要新增 backend，请报告为源码级需求，由维护者修改 `packages/ragflow-skill-runtime` 后重新构建发布包。
 - 只询问缺失的信息，不要让我手动拼接每一条命令。
 
@@ -91,6 +127,7 @@ mineru:
   enable_formula: true
 
 配置完成后，请设置 RAGFLOW_CONFIG 指向该配置文件。
+如果用户临时提供 `--mineru-base-url`，请说明它只覆盖本次命令；需要长期稳定运行时，应同步更新 `mineru.base_url` 或 `MINERU_BASE_URL`。
 
 第一阶段：无网络 smoke test
 

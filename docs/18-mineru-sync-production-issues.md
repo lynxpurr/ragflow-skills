@@ -356,3 +356,18 @@ python3 skills/ragflow-doc-to-md/scripts/convert.py \
 - Hermes agent 示例配置显式使用 `mineru-fastapi`。
 - `ragflow-kb-build --dry-run` 能消费 `ragflow-doc-to-md` 生成的 handoff bundle。
 - 所有公开文档、模板、报告和测试 fixture 都不包含真实密钥、个人路径或私有 endpoint。
+
+### 3.6 遗留问题和后续参考
+
+本轮修复已经闭合 Markdown-first 首版的离线发布路径，但以下事项仍需在后续按需推进：
+
+1. 真实远程 MinerU live validation 尚未执行。
+   当前验证均使用 fake/offline 服务。若要确认生产环境可用性，必须由用户显式提供 endpoint、授权和批准，按 2.10 的 gated runbook 使用小型公开 fixture 执行 `backend probe`、`backend warmup` 和正式转换，并只保留脱敏报告摘要。
+2. 结构化资产 sidecar 尚未实现。
+   `return_images`、`return_content_list`、`return_middle_json` 和 `return_model_output` 当前保持关闭；`runtime_report.json` 仅通过 `asset_policy` 明确记录 Markdown-only 策略。若业务需要图片、content list、middle json 或模型输出，必须新增 sidecar 写出、`doc_manifest.json` 资产引用、`artifact_index.json`、RAGFlow handoff dry-run 验收和脱敏测试。
+3. Markdown 质量 gate 仍是启发式检查。
+   当前能发现空文档、极低内容、明显乱码、表格结构缺失和公式分隔符异常，但不能替代真实 PDF 页覆盖率、表格还原率、公式语义正确性或版面级评估。后续应基于真实样本观察结果校准阈值，并避免把可疑信号升级为过度阻断。
+4. 企业 CA 支持依赖运行环境信任链。
+   当前配置面提供 `MINERU_VERIFY_SSL` / `mineru.verify_ssl`，默认校验证书，但没有单独的 `ca_bundle` 参数。若生产 MinerU 服务使用企业 CA 或内网 HTTPS 网关，应优先在 Hermes agent 运行环境中配置系统或 Python 信任链；只有在该方式不足时，再作为独立增强实现显式 CA bundle 配置和报告字段。
+5. 最终发布归档需要在目标提交上重新导出。
+   `dist/` 和 `release-artifacts/` 是 ignored 生成物，不随源码提交。若要发布当前修复后的 tarball，应在目标发布提交上重新运行 `tools/export_release_archives.py`，并重新执行 consumer acceptance 与 strict-vendor platform smoke，确保 `release-manifest.json` 的 `source_commit` 指向实际发布提交。

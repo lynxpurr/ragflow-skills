@@ -36,6 +36,22 @@ python scripts/convert.py postprocess --doc-manifest ./handoff/doc_manifest.json
 
 When a host agent should prepare config, run smoke checks, or perform end-to-end validation for the user, read `references/host-agent-setup.md` first. When an end user needs a copy-paste prompt to give their own host agent, use `references/user-onboarding-prompt.md`.
 
+For stable Hermes/OpenClaw-style use, copy `templates/ragflow-config.example.yaml` to a private host-agent config path, point `RAGFLOW_CONFIG` at it, and keep real secrets in environment variables or the host secret store:
+
+```yaml
+doc_to_md:
+  backend: mineru-fastapi
+
+mineru:
+  base_url: https://mineru.example.internal
+  api_key: ${MINERU_API_KEY}
+  timeout: 1800
+  poll_interval: 3
+  verify_ssl: true
+```
+
+Config precedence for the MinerU FastAPI endpoint is: `--mineru-base-url` overrides `MINERU_BASE_URL`, which overrides `mineru.base_url` in the config file.
+
 Local MinerU CLI conversion can be configured through the host agent environment. `auto` uses this first for PDF/Office/image files when a CLI is available:
 
 ```bash
