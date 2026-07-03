@@ -162,10 +162,136 @@ The summary should be treated as evidence for review, not as an automatic produc
 decision. A triggered track means "inspect this pattern"; it does not by itself approve
 `serve`, private bridge, remote conversion, provider, reranker, or LLM backend work.
 
+## Current Observation Records
+
+### 2026-07-03 run-001
+
+Workflow:
+- `ragflow-doc-to-md` / `ragflow-kb-build`
+
+Input summary:
+- Source type: Chinese product datasheet PDF.
+- Approximate document count: one document; full-document attempt plus a page-0 subset
+  retry.
+- Private details removed: exact source path, endpoint, and retained run-root paths.
+
+Commands:
+- Read-only MinerU FastAPI backend probe.
+- `ragflow-doc-to-md pipeline --backend mineru-fastapi --mineru-asset-mode markdown_assets
+  --postprocess-profile chunk-markers`
+- `ragflow-kb-build inspect-handoff`
+- `ragflow-kb-build --dry-run`
+- `tools/field_trial_metrics.py` over explicit local run roots.
+
+Artifacts:
+- Public-safe artifact names: `runtime_report.json`, `doc_manifest.json`,
+  `quality_report.json`, `postprocess_report.json`, `artifact_index.json`,
+  `retrieval_hints.json`, `ragflow_ingest_plan.yaml`, `inspect_handoff.json`,
+  `kb_build_dry_run.json`, field-trial metrics summary.
+- Private artifact location retained outside public repo.
+
+Results:
+- Pass/fail: full-document pipeline failed inside MinerU with `task_failed` /
+  CUDA out-of-memory before conversion output; page-0 subset passed.
+- Quality gate: page-0 subset `PASS`.
+- Handoff summary: one local image asset landed, rich sidecars were present, and
+  `inspect-handoff` reported `ingestion_readiness.status: ready`.
+- Build/probe status: MinerU probe available; `build.py --dry-run` passed with the
+  reviewed `default-zh-512` profile.
+- Live mutation: not run.
+
+Friction:
+- Full representative sample is blocked by MinerU GPU capacity or tenant contention.
+- Page-0 evidence proves the asset handoff path can work, but it does not cover the full
+  document's table/page/chunk-marker/baseline-retirement requirements.
+
+Gated trigger:
+- none. This does not open new product-surface work and does not close the RAGFlux
+  retirement gate.
+
+Decision:
+- keep observing; retry the full MinerU FastAPI field-trial after GPU capacity is
+  available, then run disposable RAGFlow live E2E only after explicit approval.
+
+### 2026-07-03 run-002
+
+Workflow:
+- `ragflow-doc-to-md` / `ragflow-kb-build` / `ragflow-query`
+
+Input summary:
+- Source type: Chinese product datasheet PDF with images, tables, headings, and numeric
+  product specifications.
+- Approximate document count: one full representative PDF.
+- Private details removed: exact source path, endpoint, credential, run-root path, KB
+  name, dataset id, document id, and retrieved chunk text.
+
+Commands:
+- Reduced MinerU GPU pressure by stopping an unused stale MinerU service while leaving the
+  active FastAPI backend available.
+- `ragflow-doc-to-md pipeline --backend mineru-fastapi --mineru-asset-mode markdown_assets
+  --postprocess-profile chunk-markers`
+- `ragflow-kb-build inspect-handoff`
+- `ragflow-kb-build --dry-run`
+- User-approved disposable RAGFlow live build with parse wait.
+- `ragflow-kb-build validate --level smoke`
+- `ragflow-kb-build parse-report` and `health-report`
+- `ragflow-query ask` in direct and host-assisted modes.
+- `ragflow-kb-build cleanup` preview and execute.
+- `tools/field_trial_metrics.py` over a curated explicit run-root subset.
+
+Artifacts:
+- Public-safe artifact names: `runtime_report.json`, `doc_manifest.json`,
+  `quality_report.json`, `postprocess_report.json`, `artifact_index.json`,
+  `retrieval_hints.json`, `ragflow_ingest_plan.yaml`, `inspect_handoff.json`,
+  `kb_build_dry_run.json`, `kb_manifest.json`, `parse_report.json`,
+  `kb_health_report.json`, `validation_smoke.json`, `query_direct.json`,
+  `query_host_assisted.json`, `cleanup_execute.json`, field-trial metrics summary, and
+  RAGFlux comparison summary.
+- Private artifact location retained outside public repo.
+
+Results:
+- Pass/fail: passed for the full representative PDF after GPU pressure was reduced.
+- Quality gate: `PASS`; no missing-image quality errors.
+- Handoff summary: one Markdown document, 21 local image assets, 9 chunk markers, 10
+  section boundaries, 21 image artifact signals, 26 question candidates, rich sidecars,
+  and `ragflow_ingest_plan.yaml`.
+- Build/probe status: `inspect-handoff` reported `ingestion_readiness.status: ready`;
+  dry-run passed with the reviewed Chinese 512-token profile.
+- Live mutation: one disposable KB was created, parsed, validated, queried, and deleted.
+- Parse/query summary: parse succeeded with 13 chunks; smoke validation passed with one
+  query and no empty results; direct and host-assisted query modes both returned evidence.
+- Cleanup: automatic delete succeeded; the post-cleanup probe still succeeded.
+- Field-trial metrics: curated summary `ok: true`, zero findings, quality `PASS`, no
+  runtime failures, and no zero-result query outputs.
+
+Friction:
+- A stale private RAGFlow credential caused the first probe to fail; a temporary private
+  config with a current credential was used for the approved live E2E and deleted after
+  cleanup.
+- The model-provider probe path returned a version/path compatibility 404, but dataset
+  build, parse, validation, direct query, host-assisted query, and cleanup all succeeded.
+- The retained RAGFlux package has denser chunk markers than the new pipeline. The new
+  pipeline still produced successful live RAGFlow chunks and smoke evidence, so this is a
+  follow-up observation item rather than a blocker for this sample.
+- The health report did not have an embedding-model value in the manifest and no separate
+  activation plan was supplied; these remained advisory review notes, not live failures.
+
+Gated trigger:
+- none for new product surface. The existing CLI pipeline, kb-build, and query surfaces
+  were sufficient for this run.
+
+Decision:
+- The representative-sample RAGFlux retirement field-trial gate passes for the current
+  replacement workflow. Keep observing additional real PDFs before treating this as a
+  broad corpus-quality guarantee, and require a separate explicit live-mutation approval
+  for any paired RAGFlux live A/B run.
+
 ## Current Decision
 
-The next stage is observation, not feature expansion. The public CLI/archive path remains
-the canonical baseline. The remaining open tasks should stay gated until this plan
-produces concrete evidence that one of them is needed. The system-level closeout baseline
-and ongoing observation/improvement backlog are recorded in
-`docs/16-system-closeout-report.md`.
+The next stage remains observation, not feature expansion. The representative PDF
+field-trial shows the current CLI pipeline is sufficient for the RAGFlux replacement
+workflow when GPU capacity is available and credentials are current. The remaining
+post-CLI, private-bridge, provider, reranker, and optional LLM/backend work should stay
+gated until this plan produces concrete evidence that one of them is needed. The
+system-level closeout baseline and ongoing observation/improvement backlog are recorded
+in `docs/16-system-closeout-report.md`.

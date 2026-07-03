@@ -46,6 +46,9 @@ Completed or closed for the current public command surface:
   explicit-run-root evidence aggregator instead of background telemetry.
 - Phase 40 system closeout records the design-to-implementation calibration, completed
   work summary, remaining gated task audit, and ongoing observation/improvement backlog.
+- Phase 41 closes the current RAGFlux retirement field-trial gates for the representative
+  PDF sample after GPU pressure was reduced, the full MinerU FastAPI pipeline passed, a
+  disposable RAGFlow KB live E2E passed, and the KB was cleaned up.
 
 Partially completed and still active:
 
@@ -72,7 +75,6 @@ Partially completed and still active:
   - The bounded non-live checkpoint/resume and partial-failure candidate inventory plus
     the approved live mutation/query helper rollout are closed; any future resilience
     expansion is future adapter scope.
-
 Deferred or outside the active public-suite completion path:
 
 - Private dedao bridging stays out of public skills. A private bridge checkpoint now
@@ -104,7 +106,7 @@ Completion priorities:
 
 Progress assessment:
 
-- Roadmap checklist status is 561 completed items out of 576 tracked items, about 97%.
+- Roadmap checklist status is 571 completed items out of 586 tracked items, about 97%.
 - The portable public CLI suite is complete for the planned portable archive
   release path: core commands, release packaging, redaction, report inventories, runtime
   helper pilots, contract gates, installed archive smoke, and primary manifest JSON Schema
@@ -129,7 +131,6 @@ normal offline continuation unless their gate is satisfied.
 | Other post-CLI product adapters | 4 | Remote conversion client, provider abstraction, reranker abstraction, web/API wrapper | Known endpoint/provider/product requirements plus fake fixtures and acceptance gates | Use the Phase 37.3 intake gate; keep deferred until one concrete contract has fixtures and acceptance criteria. |
 | Optional script-owned LLM/backend execution | 7 | Grounded-QA LLM adapter, agentic-answer execution, reflection, evidence-only synthesis, LLM/RAGAS evaluator, related Phase 30 synthesis backlog | Explicit LLM config, deterministic fixtures, advisory-output marking, citation-audit compatibility, and redaction gates | Use the Phase 38 planning gate; keep request/review boundaries as the default before any script-owned model call. |
 | Private dedao bridge | 2 | Optional private adapter and verified private handoff output | A private adapter is explicitly needed because the Markdown passthrough handoff is insufficient, and the adapter remains outside public release artifacts | Keep outside public `skills/`; consume public handoff contracts only. |
-
 Observation source: use `docs/15-field-trial-observation-plan.md` to record sanitized
 run evidence and trigger thresholds before starting any of these gated tracks.
 
@@ -149,8 +150,8 @@ code.
 Closeout decision:
 
 - Use the current CLI/archive path as the canonical baseline for real workflows.
-- Keep the 15 remaining open checklist items gated until observation evidence satisfies
-  a documented trigger rule.
+- Keep the 15 remaining open checklist items gated until observation evidence satisfies a
+  documented trigger rule.
 - Use `docs/15-field-trial-observation-plan.md` and `tools/field_trial_metrics.py` to
   collect and summarize explicit run evidence.
 - Run the release-facing validation chain before changing public commands, contracts,
@@ -1911,6 +1912,78 @@ Exit criteria:
 
 Status note: Phase 40 is a docs-only closeout checkpoint. It does not broaden the public
 command surface or close the remaining gated product/private implementation items.
+
+## Phase 41: RAGFlux Retirement Field-Trial Gates
+
+Goal: convert the completed RAGFlux capability-parity work from an offline-verified
+candidate path into a field-trial-backed default replacement path.
+
+Design source: `docs/19-ragflux-capability-parity-plan.md`.
+
+Status note: Phase 41 does not add new public command behavior by default. It collects
+real MinerU/RAGFlow evidence for the already implemented `ragflow-doc-to-md pipeline`,
+`ragflow-kb-build` handoff inspection/dry-run, and `ragflow-query` validation surfaces.
+RAGFlow mutation remains gated by explicit user approval.
+
+Tasks:
+
+- [x] Record the remaining RAGFlux retirement tasks in
+  `docs/19-ragflux-capability-parity-plan.md`.
+- [x] Add the Phase 41 task list to the active development plan.
+- [x] Preserve the full offline release-facing validation result as the baseline before
+  field-trial work starts.
+- [x] Run a real MinerU FastAPI field-trial on a representative PDF with images, tables,
+  page numbers, and Chinese headings, using `ragflow-doc-to-md pipeline --backend
+  mineru-fastapi --mineru-asset-mode markdown_assets --postprocess-profile chunk-markers`.
+- [x] Verify the real MinerU response shape is covered by existing offline fixtures; no
+  focused parser-extension task is required for this sample.
+- [x] Run `ragflow-kb-build inspect-handoff` and `build.py --dry-run` on the real handoff;
+  require ready ingestion status or explicitly accepted review items, without relying on
+  `--allow-blocked`.
+- [x] After explicit user approval, run a disposable RAGFlow KB live E2E: build, parse
+  wait, smoke validation, direct query, host-assisted query, and retained redacted reports.
+- [x] Compare the same sample against the retained RAGFlux baseline for image count,
+  quality gate, chunk markers, retrieval hints, and the new path's live parse/query
+  evidence.
+- [x] Clean up the disposable KB, or record dataset id / KB name for user cleanup if
+  automatic cleanup is unavailable.
+- [x] Record the field-trial evidence through `docs/15-field-trial-observation-plan.md`
+  and only then decide whether RAGFlux can move from candidate replacement to retired
+  default path.
+
+Implementation record, 2026-07-03:
+
+- Read-only MinerU FastAPI backend probe succeeded against the local field-trial service.
+- The first full-sample run exposed MinerU CUDA out-of-memory while another unused MinerU
+  service was resident. After stopping the unused service and keeping the active FastAPI
+  backend available, the full representative PDF completed through `pipeline`.
+- Full pipeline output reported `quality_gate.status: PASS`, 21 local image assets, 9
+  chunk markers, 10 section boundaries, 21 image artifact signals, 26 question
+  candidates, rich sidecars, and `ragflow_ingest_plan.yaml`.
+- `ragflow-kb-build inspect-handoff` reported `ingestion_readiness.status: ready`;
+  `build.py --dry-run` passed with the reviewed `default-zh-512` profile.
+- The approved disposable RAGFlow live E2E created one temporary KB, triggered and waited
+  for parse, produced 13 chunks, passed smoke validation, returned evidence for direct
+  and host-assisted query modes, and then deleted the temporary KB successfully.
+- The retained RAGFlux package comparison showed both paths at quality `PASS`. RAGFlux
+  had 15 package images and denser chunk markers; the new pipeline had 21 local assets,
+  enhanced retrieval hints, a non-secret ingest plan, and successful live parse/query
+  evidence. The lower marker density is a follow-up observation point, not a blocker for
+  this sample because live chunking and smoke retrieval passed.
+- A private RAGFlow config credential was stale during live probing; the operator used a
+  temporary private config with a current credential and removed it after cleanup. No
+  endpoint, token, run root, dataset id, or private source path is recorded in this public
+  plan.
+
+Exit criteria:
+
+- Representative MinerU FastAPI field-trial evidence confirms local image assets land and
+  quality gate is not blocked by landed images.
+- Handoff inspection and dry-run reports show the pipeline output is ready for ingestion.
+- A user-approved disposable KB live E2E passes and is cleaned up or explicitly recorded.
+- RAGFlux baseline comparison shows no critical regression in the retirement metrics.
+- Sanitized evidence is retained under an explicit run root and summarized by the
+  field-trial observation process.
 
 ## Definition of Done
 

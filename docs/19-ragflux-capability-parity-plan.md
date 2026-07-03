@@ -411,3 +411,64 @@ python3 tools/platform_smoke_matrix.py --profile strict-vendor-env --work-dir /t
 P0/P1/P2 离线能力补齐完成后，`ragflow-doc-to-md + ragflow-kb-build + ragflow-query`
 已具备作为 RAGFlux 退役候选替代链路的基础；正式退役仍以 3.6 中真实 MinerU FastAPI
 field-trial、一次性 KB live E2E 和对照样本不退化 gate 为准。
+
+### 3.9 现场 gate 执行记录（2026-07-03）
+
+本记录只描述当前这轮 RAGFlux 能力补齐后的现场验收。P0/P1/P2 的离线实现、
+公开 skill 指引、release hygiene、consumer acceptance、strict-vendor platform smoke
+和提交推送已完成；现场 gate 用一个代表性中文产品 PDF 验证现有 public CLI surface，
+没有新增命令或私有 adapter。
+
+已完成基线：
+
+- [x] P0/P1/P2 离线能力补齐完成，并通过完整 release-facing chain。
+- [x] 公开 skill 文案已使用 legacy workflow 中性表述，避免旧项目名进入 public release surface。
+- [x] 迁移表、退役 gate、Hermes/OpenClaw onboarding 指引已更新并推送到 `develop`。
+
+现场 gate：
+
+- [x] 真实 MinerU FastAPI field-trial：选择至少一份含图片、表格、页码和中文标题的 PDF，
+  使用 `ragflow-doc-to-md pipeline --backend mineru-fastapi --mineru-asset-mode markdown_assets
+  --postprocess-profile chunk-markers` 生成 handoff，记录图片落地数量、quality gate、
+  `doc_manifest.json`、`runtime_report.json` 和 `retrieval_hints.json`。
+- [x] 真实 MinerU FastAPI 返回形态已被现有解析器覆盖；未发现需要新增协议解析器的脱敏样本。
+- [x] 真实 handoff 入库前检查：`ragflow-kb-build inspect-handoff` 报告
+  `ingestion_readiness.status` 为 `ready`，`build.py --dry-run` 通过，且没有依赖
+  `--allow-blocked`。
+- [x] 经用户明确批准后，使用一次性 RAGFlow KB 完成 live build、parse wait、smoke validation、
+  direct query、host-assisted query，并保留脱敏报告。
+- [x] 完成同一对照样本的 RAGFlux retained package baseline 对比；新链路无关键静态退化，并有
+  新的 live parse/query evidence。
+- [x] 清理一次性 KB；自动 delete 成功，无需用户手动清理。
+- [x] 将 field-trial 结果按 `docs/15-field-trial-observation-plan.md` 记录为脱敏证据。
+
+执行结果：
+
+- 第一轮完整样本运行在 MinerU 转换输出前遇到 CUDA out-of-memory；释放 GPU 压力后，完整 PDF
+  pipeline 通过。这说明阻断来自服务资源竞争，而不是 `ragflow-doc-to-md` 图片资产落地或
+  handoff parser 缺陷。
+- 完整 pipeline 产物：quality gate `PASS`，1 个 Markdown 文档，21 张本地图片资产，9 个
+  `<!-- chunk -->` 标记，10 个 section boundaries，21 个 image artifacts，26 个
+  question candidates，rich sidecars 和 `ragflow_ingest_plan.yaml` 齐全。
+- 入库前检查：`inspect-handoff` 为 `ready`，dry-run 通过。
+- live E2E：一次性 KB build 成功，parse wait 完成，RAGFlow 生成 13 个 chunks；smoke
+  validation 通过且无空结果；direct query 和 host-assisted query 均返回 evidence；cleanup
+  execute 成功。
+- curated field-trial metrics：`ok: true`，0 findings，quality `PASS`，无 runtime failure，
+  无 zero-result query output。
+- RAGFlux retained package baseline：quality `PASS`，可上库包有 15 张图片、25 个 chunk
+  markers、12 个 sections 和 `ragflow_config.yaml`。新 pipeline 有 21 张本地资产、9 个
+  chunk markers、10 个 section boundaries、19 个 preferred boundaries、21 个 image
+  artifacts、26 个 question candidates 和非密钥 `ragflow_ingest_plan.yaml`。
+
+遗留观察项：
+
+- RAGFlux 的 chunk marker 更密；新 pipeline 采用较保守的标题边界策略。由于 live parse 生成
+  13 个 chunks 且 smoke/query 通过，这不是本样本阻断项，但后续多样本文档应继续观察 chunk
+  边界质量。
+- RAGFlow model-provider probe 在当前服务版本上返回 provider path 兼容性 404，但 dataset
+  build、parse、validate、query 和 cleanup 均成功；该问题不阻断本轮退役 gate。
+- live 健康报告缺少 embedding model 显式值，且本轮未单独提供 activation plan；两者是
+  advisory review note，不是 live failure。
+- 本轮只按用户批准对新 replacement path 做了一次性 KB live E2E；如果需要 RAGFlux retained
+  package 的严格 paired live A/B，需要另行批准第二次 disposable KB mutation。
