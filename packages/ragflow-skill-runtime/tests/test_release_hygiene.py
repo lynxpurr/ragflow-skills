@@ -15,6 +15,7 @@ from release_hygiene_check import (  # noqa: E402
     run_generated_report_safety_check,
     run_hygiene_check,
     run_suite_review,
+    scan_stale_skill_references,
     scan_forbidden_patterns,
 )
 
@@ -162,6 +163,25 @@ class ReleaseHygieneTests(unittest.TestCase):
         self.assertIn("skill_suite_private_reference", checks)
         self.assertIn("skill_suite_missing_reference", checks)
         self.assertIn("skill_suite_reference_drift", checks)
+
+    def test_stale_reference_scan_allows_chunk_marker_profile_token_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill_root = root / "ragflow-doc-to-md"
+            skill_root.mkdir()
+            skill_file = skill_root / "SKILL.md"
+            skill_file.write_text("Use profile chunk-markers-ragflux-like for boundary comparison.\n", encoding="utf-8")
+
+            allowed = scan_stale_skill_references(skill_root, base=root)
+            skill_file.write_text(
+                "Use profile chunk-markers-ragflux-like.\nDo not publish ragflux package names.\n",
+                encoding="utf-8",
+            )
+            blocked = scan_stale_skill_references(skill_root, base=root)
+
+        self.assertEqual(allowed, [])
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0].check, "skill_suite_stale_reference")
 
     def test_suite_review_reports_description_overlap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1174,6 +1174,9 @@ def _preferred_boundaries(
     sections: list[Mapping[str, Any]],
     page_markers: list[Mapping[str, Any]],
     chunk_markers: list[Mapping[str, Any]],
+    table_artifacts: list[Mapping[str, Any]] | None = None,
+    image_artifacts: list[Mapping[str, Any]] | None = None,
+    list_markers: list[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     boundaries: list[dict[str, Any]] = []
     seen: set[tuple[str | None, int, str]] = set()
@@ -1225,6 +1228,39 @@ def _preferred_boundaries(
                 "page": marker.get("page"),
             }
         )
+    for artifact in list(table_artifacts or []):
+        add(
+            {
+                "document": artifact.get("document"),
+                "line_start": artifact.get("line_start"),
+                "line_end": artifact.get("line_end") or artifact.get("line_start"),
+                "reason": "table_boundary",
+                "title": artifact.get("caption") or artifact.get("source_heading"),
+                "page": artifact.get("page"),
+            }
+        )
+    for artifact in list(image_artifacts or []):
+        line = artifact.get("line") or artifact.get("line_start")
+        add(
+            {
+                "document": artifact.get("document"),
+                "line_start": line,
+                "line_end": line,
+                "reason": "image_boundary",
+                "title": artifact.get("caption") or artifact.get("alt_text") or artifact.get("source_heading"),
+                "page": artifact.get("page"),
+            }
+        )
+    for marker in list(list_markers or []):
+        add(
+            {
+                "document": marker.get("document"),
+                "line_start": marker.get("line"),
+                "line_end": marker.get("line"),
+                "reason": "list_boundary",
+                "page": marker.get("page"),
+            }
+        )
     return boundaries[:100]
 
 
@@ -1239,6 +1275,25 @@ def _chunk_markers(*, markdown_rel: str, lines: list[str], page_by_line: Mapping
                     "page": _page_for_line(page_by_line, index),
                 }
             )
+    return markers
+
+
+def _list_boundaries(*, markdown_rel: str, lines: list[str], page_by_line: Mapping[int, int]) -> list[dict[str, Any]]:
+    markers: list[dict[str, Any]] = []
+    previous_list = False
+    for index, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        is_list = bool(re.match(r"^\s*(?:[-*+]|\d+[.)])\s+\S", line))
+        if is_list and not previous_list:
+            markers.append(
+                {
+                    "document": markdown_rel,
+                    "line": index,
+                    "page": _page_for_line(page_by_line, index),
+                }
+            )
+        if stripped:
+            previous_list = is_list
     return markers
 
 
@@ -1292,6 +1347,7 @@ def make_retrieval_hints_payload(
     document_type_signals: list[dict[str, Any]] = []
     page_markers: list[dict[str, Any]] = []
     chunk_markers: list[dict[str, Any]] = []
+    list_markers: list[dict[str, Any]] = []
     for document in documents:
         if not isinstance(document, Mapping):
             continue
@@ -1336,6 +1392,7 @@ def make_retrieval_hints_payload(
         )
         document_type_signals.append(_document_type_signal(markdown_rel=markdown_rel, text=text, sections=document_sections))
         chunk_markers.extend(_chunk_markers(markdown_rel=markdown_rel, lines=lines, page_by_line=page_by_line))
+        list_markers.extend(_list_boundaries(markdown_rel=markdown_rel, lines=lines, page_by_line=page_by_line))
         document_summaries.append(
             {
                 "markdown_path": markdown_rel,
@@ -1399,6 +1456,9 @@ def make_retrieval_hints_payload(
             sections=sections,
             page_markers=page_markers,
             chunk_markers=chunk_markers,
+            table_artifacts=table_artifacts,
+            image_artifacts=image_artifacts,
+            list_markers=list_markers,
         ),
     }
 
@@ -1719,6 +1779,7 @@ def make_ragflow_ingest_plan_payload(
     doc_manifest_name: str = "doc_manifest.json",
     package_payload: Mapping[str, Any] | None = None,
     postprocess_report_name: str | None = "postprocess_report.json",
+    chunk_profile_report_name: str | None = None,
 ) -> dict[str, Any]:
     """Create a non-secret ingestion plan for the next kb-build step."""
 
@@ -1750,6 +1811,7 @@ def make_ragflow_ingest_plan_payload(
         "quality_report": doc_manifest.get("quality_report"),
         "runtime_report": doc_manifest.get("runtime_report"),
         "postprocess_report": postprocess_report_name,
+        "chunk_profile_report": chunk_profile_report_name or doc_manifest.get("chunk_profile_report"),
         "metadata": package.get("metadata", "metadata.json"),
         "artifact_index": package.get("artifact_index", "artifact_index.json"),
         "profile_suggestions": profile_suggestions_name,
@@ -1835,6 +1897,11 @@ def inspect_rich_handoff(
         if isinstance(doc_manifest.get("postprocess_report"), str)
         else "postprocess_report.json"
     )
+    chunk_profile_report_name = (
+        doc_manifest.get("chunk_profile_report")
+        if isinstance(doc_manifest.get("chunk_profile_report"), str)
+        else None
+    )
     sidecar_specs: dict[str, tuple[str | None, str]] = {
         "metadata": ("metadata.json", "rich"),
         "artifact_index": ("artifact_index.json", "rich"),
@@ -1844,6 +1911,7 @@ def inspect_rich_handoff(
         "assistant_test_plan": ("assistant_test_plan.json", "rich"),
         "package_readme": ("package_readme.md", "rich"),
         "postprocess_report": (postprocess_report_name, "pipeline"),
+        "chunk_profile_report": (chunk_profile_report_name, "pipeline"),
         "ragflow_ingest_plan": ("ragflow_ingest_plan.yaml", "pipeline"),
         "quality_report": (
             doc_manifest.get("quality_report") if isinstance(doc_manifest.get("quality_report"), str) else None,

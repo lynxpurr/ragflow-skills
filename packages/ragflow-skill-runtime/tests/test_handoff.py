@@ -128,6 +128,8 @@ class HandoffTests(unittest.TestCase):
                 "| APOLLO-A | 4.0 μm | 1200 mm |\n\n"
                 "外观图展示控制面板和安装结构。\n"
                 "![APOLLO 设备外观](images/apollo.png)\n\n"
+                "- 安装前检查底座水平。\n"
+                "- 维护前确认急停开关可用。\n\n"
                 "<!-- page: 2 -->\n"
                 "<!-- chunk -->\n"
                 "## 安装维护\n\n"
@@ -189,6 +191,7 @@ class HandoffTests(unittest.TestCase):
         numeric = retrieval_hints["numeric_candidates"]
         assistant_stages = {case["stage"] for case in assistant_test_plan["cases"]}
         topology_starter_types = {case["type"] for case in topology_advice["route_test_starters"]}
+        preferred_reasons = {item["reason"] for item in preferred_boundaries}
 
         tech_section = next(item for item in sections if item["title"] == "技术参数")
         self.assertEqual(tech_section["page_start"], 1)
@@ -202,6 +205,9 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(table_artifacts[0]["page"], 1)
         self.assertTrue(any(item["reason"] == "page_boundary" and item["page"] == 2 for item in preferred_boundaries))
         self.assertTrue(any(item["reason"] == "chunk_marker_boundary" for item in preferred_boundaries))
+        self.assertIn("table_boundary", preferred_reasons)
+        self.assertIn("image_boundary", preferred_reasons)
+        self.assertIn("list_boundary", preferred_reasons)
         self.assertTrue(any(item["term"] == "技术参数" for item in keywords))
         self.assertTrue(any(item["term"] == "选型" and "deterministic_template" in item["source"] for item in keywords))
         self.assertTrue(any(item["type"] == "product_spec_lookup" for item in questions))
@@ -319,6 +325,7 @@ class HandoffTests(unittest.TestCase):
                         "version": "0.1",
                         "source_root": ".",
                         "quality_gate": {"status": "PASS"},
+                        "chunk_profile_report": "chunk_profile_report.json",
                         "documents": [
                             {
                                 "source_path": "a.md",
@@ -333,6 +340,10 @@ class HandoffTests(unittest.TestCase):
             create_rich_handoff_package(handoff_root=root)
             (root / "postprocess_report.json").write_text(
                 json.dumps({"schema": "doc_postprocess_report_v1"}),
+                encoding="utf-8",
+            )
+            (root / "chunk_profile_report.json").write_text(
+                json.dumps({"schema": "ragflow_chunk_profile_report_v1"}),
                 encoding="utf-8",
             )
             plan = make_ragflow_ingest_plan_payload(handoff_root=root)
@@ -350,6 +361,7 @@ class HandoffTests(unittest.TestCase):
         self.assertTrue(report["sidecars"]["retrieval_hints"]["exists"])
         self.assertTrue(report["sidecars"]["assistant_profile"]["exists"])
         self.assertTrue(report["sidecars"]["assistant_test_plan"]["exists"])
+        self.assertTrue(report["sidecars"]["chunk_profile_report"]["exists"])
         self.assertEqual(report["ingestion_readiness"]["status"], "ready")
         self.assertTrue(report["ingestion_readiness"]["image_assets_ok"])
         self.assertEqual(report["assets"]["images"]["missing_image_count"], 0)
@@ -396,6 +408,7 @@ class HandoffTests(unittest.TestCase):
                         "source_root": ".",
                         "handoff_mode": "formal_ingest",
                         "quality_report": "quality_report.json",
+                        "chunk_profile_report": "chunk_profile_report.json",
                         "quality_gate": {"status": "PASS"},
                         "documents": [{"source_path": "a.md", "markdown_path": "documents/a.md"}],
                     }
@@ -404,6 +417,10 @@ class HandoffTests(unittest.TestCase):
             )
             (root / "quality_report.json").write_text(
                 json.dumps({"schema": "doc_quality_report_v1", "gate": {"status": "PASS"}}),
+                encoding="utf-8",
+            )
+            (root / "chunk_profile_report.json").write_text(
+                json.dumps({"schema": "ragflow_chunk_profile_report_v1"}),
                 encoding="utf-8",
             )
             package = create_rich_handoff_package(handoff_root=root)
@@ -415,6 +432,7 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(plan["handoff"]["handoff_mode"], "formal_ingest")
         self.assertEqual(plan["handoff"]["doc_manifest"], "doc_manifest.json")
         self.assertEqual(plan["handoff"]["retrieval_hints"], "retrieval_hints.json")
+        self.assertEqual(plan["handoff"]["chunk_profile_report"], "chunk_profile_report.json")
         self.assertEqual(plan["quality_gate"]["status"], "PASS")
         self.assertEqual(plan["recommended_build"]["inspect_command"][0], "ragflow-kb-build")
         self.assertEqual(plan["recommended_build"]["dry_run_command"][0], "ragflow-kb-build")

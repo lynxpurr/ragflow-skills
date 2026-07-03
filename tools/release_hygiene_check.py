@@ -90,6 +90,7 @@ STALE_REFERENCE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("skill_suite_stale_reference", re.compile(r"\b(?:ragflux|ragflow-saas|kb ops)\b", re.IGNORECASE)),
     ("skill_suite_private_reference", re.compile(r"dedao|得到|薛兆丰|opc-bridge|shared-infra", re.IGNORECASE)),  # release-hygiene: allow
 )
+ALLOWED_STALE_REFERENCE_TOKENS = ("chunk-markers-ragflux-like",)
 REPEATED_WARNING_PATTERN = re.compile(
     r"\b(?:do not|don't|never|must not|without|does not|no real|real keys|real api keys|secret|"
     r"api key|mutate|mutation|llm)\b",
@@ -398,6 +399,15 @@ def scan_markdown_links(skill_root: Path, *, base: Path) -> list[Finding]:
 
 def scan_stale_skill_references(skill_root: Path, *, base: Path) -> list[Finding]:
     findings: list[Finding] = []
+
+    def scan_line_for(label: str, line: str) -> str:
+        if label != "skill_suite_stale_reference":
+            return line
+        sanitized = line
+        for token in ALLOWED_STALE_REFERENCE_TOKENS:
+            sanitized = re.sub(re.escape(token), "", sanitized, flags=re.IGNORECASE)
+        return sanitized
+
     for path in _suite_markdown_files(skill_root):
         if not path.exists():
             continue
@@ -406,7 +416,7 @@ def scan_stale_skill_references(skill_root: Path, *, base: Path) -> list[Finding
             if ALLOW_MARKER in line:
                 continue
             for label, pattern in STALE_REFERENCE_PATTERNS:
-                if pattern.search(line):
+                if pattern.search(scan_line_for(label, line)):
                     findings.append(
                         Finding(
                             check=label,

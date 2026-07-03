@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from ragflow_skill_runtime.doc_postprocess import (
+    CHUNK_PROFILE_REPORT_SCHEMA,
     POSTPROCESS_REPORT_SCHEMA,
     DocPostprocessError,
     postprocess_handoff,
@@ -49,6 +50,150 @@ class DocPostprocessTests(unittest.TestCase):
 
         self.assertIn("Body\n\n<!-- chunk -->\n## Two", processed)
         self.assertEqual(counts["chunk_markers.heading_boundaries"], 1)
+
+    def test_chunk_marker_profiles_emit_stable_report_sidecar(self) -> None:
+        text = (
+            "# APOLLO Catalog\n\n"
+            "Intro paragraph.\n\n"
+            "<!-- page: 1 -->\n\n"
+            "## Specs\n\n"
+            "| Field | Value |\n"
+            "| --- | --- |\n"
+            "| Accuracy | 4.0 um |\n\n"
+            "![diagram](images/apollo.png)\n\n"
+            "- Confirm base\n"
+            "- Calibrate sensor\n\n"
+            "### Maintenance\n\n"
+            "Body.\n\n"
+            "#### Appendix\n\n"
+            "More.\n\n"
+            "##### Detail\n\n"
+            "Fine.\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "catalog.md"
+            markdown.write_text(text, encoding="utf-8")
+            reports: dict[str, dict[str, object]] = {}
+            for profile in ("chunk-markers-conservative", "chunk-markers-dense", "chunk-markers-ragflux-like"):
+                output = root / f"{profile}.md"
+                report_json = root / f"{profile}.postprocess.json"
+                chunk_report_json = root / f"{profile}.chunk-profile.json"
+
+                report = postprocess_single_markdown(
+                    markdown,
+                    profile=profile,
+                    output_path=output,
+                    report_json=report_json,
+                    chunk_profile_report_json=chunk_report_json,
+                )
+                chunk_report = json.loads(chunk_report_json.read_text(encoding="utf-8"))
+                reports[profile] = chunk_report
+
+                self.assertEqual(report["chunk_profile_report"]["schema"], CHUNK_PROFILE_REPORT_SCHEMA)
+                self.assertEqual(chunk_report["schema"], CHUNK_PROFILE_REPORT_SCHEMA)
+                self.assertEqual(chunk_report["profile"], profile)
+                self.assertEqual(chunk_report["summary"]["documents"], 1)
+                self.assertEqual(chunk_report["documents"][0]["markdown_path"], "catalog.md")
+
+        conservative = reports["chunk-markers-conservative"]["summary"]
+        dense = reports["chunk-markers-dense"]["summary"]
+        ragflux = reports["chunk-markers-ragflux-like"]["summary"]
+        dense_types = dense["marker_type_counts"]
+        ragflux_types = ragflux["marker_type_counts"]
+
+        self.assertLess(conservative["marker_count"], dense["marker_count"])
+        self.assertLess(dense["marker_count"], ragflux["marker_count"])
+        self.assertGreater(dense_types["heading"], 0)
+        self.assertGreater(dense_types["page"], 0)
+        self.assertGreater(dense_types["table"], 0)
+        self.assertGreater(dense_types["image"], 0)
+        self.assertEqual(dense_types["list"], 0)
+        self.assertGreater(ragflux_types["list"], 0)
+        self.assertGreaterEqual(ragflux["preferred_boundary_aligned_marker_count"], ragflux["marker_count"])
+
+    def test_chunk_marker_fixture_profiles_have_monotonic_marker_counts(self) -> None:
+        fixtures = {
+            "product_catalog": (
+                "# APOLLO Catalog\n\n"
+                "Overview.\n\n"
+                "<!-- page: 1 -->\n"
+                "## Specs\n\n"
+                "| Field | Value |\n"
+                "| --- | --- |\n"
+                "| Accuracy | 4.0 um |\n\n"
+                "![diagram](images/apollo.png)\n\n"
+                "- Base inspection\n"
+                "- Sensor calibration\n"
+            ),
+            "paper": (
+                "# Sample Paper\n\n"
+                "Abstract text.\n\n"
+                "## Method\n\n"
+                "Method body.\n\n"
+                "### Dataset\n\n"
+                "Dataset body.\n\n"
+                "#### Hyperparameters\n\n"
+                "Parameter body.\n"
+            ),
+            "contract": (
+                "# Service Agreement\n\n"
+                "The parties agree as follows.\n\n"
+                "1. Scope of work\n"
+                "2. Payment terms\n"
+                "3. Termination\n\n"
+                "## Liability\n\n"
+                "Liability text.\n"
+            ),
+            "long_document": "# Operations Manual\n\nIntro.\n\n"
+            + "\n".join(f"## Section {index}\nBody {index}\n" for index in range(1, 10)),
+        }
+        profiles = ("chunk-markers-conservative", "chunk-markers-dense", "chunk-markers-ragflux-like")
+        dense_delta = 0
+        ragflux_delta = 0
+
+        for name, text in fixtures.items():
+            counts: list[int] = []
+            for profile in profiles:
+                processed, _rules = postprocess_markdown_text(text, profile=profile)
+                counts.append(processed.count("<!-- chunk -->"))
+            self.assertLessEqual(counts[0], counts[1], name)
+            self.assertLessEqual(counts[1], counts[2], name)
+            dense_delta += counts[1] - counts[0]
+            ragflux_delta += counts[2] - counts[1]
+
+        self.assertGreater(dense_delta, 0)
+        self.assertGreater(ragflux_delta, 0)
+
+    def test_chunk_profile_density_warnings_detect_sparse_dense_and_empty_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sparse_markdown = root / "sparse.md"
+            sparse_markdown.write_text("\n".join(f"plain line {index}" for index in range(12)) + "\n", encoding="utf-8")
+            sparse_report = postprocess_single_markdown(
+                sparse_markdown,
+                profile="chunk-markers-conservative",
+                output_path=root / "sparse.out.md",
+            )
+
+            dense_markdown = root / "dense.md"
+            dense_markdown.write_text(
+                "# Dense\n\n<!-- chunk -->\n\n<!-- chunk -->\nBody\n<!-- chunk -->\n",
+                encoding="utf-8",
+            )
+            dense_report = postprocess_single_markdown(
+                dense_markdown,
+                profile="chunk-markers-conservative",
+                output_path=root / "dense.out.md",
+            )
+
+        sparse_codes = {warning["code"] for warning in sparse_report["chunk_profile_report"]["documents"][0]["warnings"]}
+        dense_codes = {warning["code"] for warning in dense_report["chunk_profile_report"]["documents"][0]["warnings"]}
+
+        self.assertIn("marker_density_too_sparse", sparse_codes)
+        self.assertIn("marker_density_too_dense", dense_codes)
+        self.assertIn("consecutive_chunk_markers", dense_codes)
+        self.assertIn("empty_chunk_section", dense_codes)
 
     def test_single_markdown_requires_output_unless_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

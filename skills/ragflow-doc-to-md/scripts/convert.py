@@ -89,6 +89,15 @@ _ASSIGNMENT_SECRET_VALUE_RE = re.compile(
 DOC_SPLIT_CHECKPOINT_SCHEMA = "ragflow_doc_split_checkpoint_v1"
 THIN_PREVIEW_HANDOFF_MODE = "thin_preview"
 FORMAL_INGEST_HANDOFF_MODE = "formal_ingest"
+POSTPROCESS_PROFILE_CHOICES = [
+    "none",
+    "safe",
+    "ocr",
+    "chunk-markers",
+    "chunk-markers-conservative",
+    "chunk-markers-dense",
+    "chunk-markers-ragflux-like",
+]
 FORMAL_PREP_SOURCE_EXTENSIONS = {
     ".bmp",
     ".doc",
@@ -196,7 +205,7 @@ def _formal_ingest_handoff_advisory() -> list[dict[str, Any]]:
 def _chunk_marker_count(postprocess_report: dict[str, Any]) -> int:
     summary = postprocess_report.get("summary", {}) if isinstance(postprocess_report.get("summary"), dict) else {}
     rule_counts = summary.get("rule_counts", {}) if isinstance(summary.get("rule_counts"), dict) else {}
-    return int(rule_counts.get("chunk_markers.heading_boundaries", 0) or 0)
+    return sum(int(value or 0) for key, value in rule_counts.items() if str(key).startswith("chunk_markers."))
 
 
 def _formal_ingest_readiness_signals(
@@ -206,6 +215,7 @@ def _formal_ingest_readiness_signals(
     package_payload: dict[str, Any],
     ingest_plan_name: str,
     retrieval_hints_name: str,
+    chunk_profile_report_name: str | None = None,
 ) -> dict[str, Any]:
     rich_sidecars = [
         "metadata",
@@ -218,10 +228,11 @@ def _formal_ingest_readiness_signals(
     ]
     return {
         "chunk_markers": {
-            "enabled": postprocess_profile == "chunk-markers",
+            "enabled": postprocess_profile.startswith("chunk-markers"),
             "generated": _chunk_marker_count(postprocess_report) > 0,
             "profile": postprocess_profile,
             "marker_count": _chunk_marker_count(postprocess_report),
+            "chunk_profile_report": chunk_profile_report_name,
         },
         "rich_sidecars": {
             "generated": True,
@@ -852,6 +863,23 @@ def _postprocess_report_path(args: argparse.Namespace) -> Path:
     return Path(args.markdown).parent / "postprocess_report.json"
 
 
+def _postprocess_chunk_profile_report_path(args: argparse.Namespace) -> Path | None:
+    raw = getattr(args, "chunk_profile_report_json", None)
+    if raw:
+        return Path(raw)
+    profile = getattr(args, "profile", "")
+    if not isinstance(profile, str) or not profile.startswith("chunk-markers"):
+        return None
+    if args.doc_manifest:
+        if args.write:
+            return Path(args.doc_manifest).parent / "chunk_profile_report.json"
+        return Path(args.output) / "chunk_profile_report.json"
+    if args.output:
+        output = Path(args.output)
+        return (output if output.exists() and output.is_dir() else output.parent) / "chunk_profile_report.json"
+    return Path(args.markdown).parent / "chunk_profile_report.json"
+
+
 def _make_runtime_report(
     *,
     output_root: Path,
@@ -1328,10 +1356,17 @@ def _run_convert_captured(args: argparse.Namespace) -> tuple[int, dict[str, Any]
     return return_code, payload, raw
 
 
-def _update_manifest_postprocess_report(manifest_path: Path, *, postprocess_report_name: str) -> None:
+def _update_manifest_postprocess_report(
+    manifest_path: Path,
+    *,
+    postprocess_report_name: str,
+    chunk_profile_report_name: str | None = None,
+) -> None:
     manifest = load_doc_manifest_payload(manifest_path)
     updated = dict(manifest)
     updated["postprocess_report"] = postprocess_report_name
+    if chunk_profile_report_name:
+        updated["chunk_profile_report"] = chunk_profile_report_name
     manifest_path.write_text(json.dumps(updated, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -1398,14 +1433,26 @@ def _run_pipeline(args: argparse.Namespace) -> int:
             args.postprocess_report_name,
             label="--postprocess-report-name",
         ) or "postprocess_report.json"
+        chunk_profile_report_name = None
+        if args.postprocess_profile.startswith("chunk-markers"):
+            chunk_profile_report_name = _safe_handoff_sidecar_name(
+                args.chunk_profile_report_name,
+                label="--chunk-profile-report-name",
+            ) or "chunk_profile_report.json"
         postprocess_report_path = output_root / postprocess_report_name
+        chunk_profile_report_path = output_root / chunk_profile_report_name if chunk_profile_report_name else None
         postprocess_report = postprocess_handoff(
             manifest_path,
             profile=args.postprocess_profile,
             write=True,
             report_json=postprocess_report_path,
+            chunk_profile_report_json=chunk_profile_report_path,
         )
-        _update_manifest_postprocess_report(manifest_path, postprocess_report_name=postprocess_report_name)
+        _update_manifest_postprocess_report(
+            manifest_path,
+            postprocess_report_name=postprocess_report_name,
+            chunk_profile_report_name=chunk_profile_report_name,
+        )
         handoff_advisory = _formal_ingest_handoff_advisory()
         _update_manifest_handoff_state(
             manifest_path,
@@ -1440,6 +1487,7 @@ def _run_pipeline(args: argparse.Namespace) -> int:
             doc_manifest_name=args.manifest_name,
             package_payload=package_payload,
             postprocess_report_name=postprocess_report_name,
+            chunk_profile_report_name=chunk_profile_report_name,
         )
         ingest_plan_path = output_root / ingest_plan_name
         _write_yaml_payload(ingest_plan_path, ingest_plan)
@@ -1456,6 +1504,7 @@ def _run_pipeline(args: argparse.Namespace) -> int:
             package_payload=package_payload,
             ingest_plan_name=ingest_plan_name,
             retrieval_hints_name=retrieval_hints_name,
+            chunk_profile_report_name=chunk_profile_report_name,
         )
         _update_manifest_handoff_state(
             manifest_path,
@@ -1486,6 +1535,7 @@ def _run_pipeline(args: argparse.Namespace) -> int:
                         "ok": True,
                         "profile": args.postprocess_profile,
                         "postprocess_report": str(postprocess_report_path),
+                        "chunk_profile_report": str(chunk_profile_report_path) if chunk_profile_report_path else None,
                         "changed_documents": postprocess_report.get("summary", {}).get("changed_documents"),
                     },
                     "package": {"ok": True, **package_payload},
@@ -1497,6 +1547,7 @@ def _run_pipeline(args: argparse.Namespace) -> int:
             "quality_gate": convert_payload.get("quality_gate"),
             "runtime_report": convert_payload.get("runtime_report"),
             "postprocess_report": str(postprocess_report_path),
+            "chunk_profile_report": str(chunk_profile_report_path) if chunk_profile_report_path else None,
             "handoff_package": package_payload,
             "retrieval_hints": str(output_root / retrieval_hints_name),
             "ragflow_ingest_plan": str(ingest_plan_path),
@@ -1722,9 +1773,11 @@ def _run_postprocess(args: argparse.Namespace) -> int:
         if bool(args.markdown) == bool(args.doc_manifest):
             raise DocPostprocessError("provide exactly one of --markdown or --doc-manifest")
         report_json = args.report_json
+        chunk_profile_report_json = str(_postprocess_chunk_profile_report_path(args) or "") or None
         if args.redaction_report:
             raw_report_dir = tempfile.TemporaryDirectory(prefix="ragflow-doc-postprocess-report-")
             report_json = str(Path(raw_report_dir.name) / "postprocess_report.json")
+            chunk_profile_report_json = None
         else:
             raw_report_dir = None
         try:
@@ -1735,6 +1788,7 @@ def _run_postprocess(args: argparse.Namespace) -> int:
                     output_path=args.output,
                     write=args.write,
                     report_json=report_json,
+                    chunk_profile_report_json=chunk_profile_report_json,
                 )
             else:
                 report = postprocess_handoff(
@@ -1743,6 +1797,7 @@ def _run_postprocess(args: argparse.Namespace) -> int:
                     output_dir=args.output,
                     write=args.write,
                     report_json=report_json,
+                    chunk_profile_report_json=chunk_profile_report_json,
                 )
             if args.redaction_report:
                 report = _sanitize_generated_report(
@@ -1754,12 +1809,18 @@ def _run_postprocess(args: argparse.Namespace) -> int:
                         args.doc_manifest,
                         args.output,
                         args.report_json,
+                        getattr(args, "chunk_profile_report_json", None),
                         args.redaction_report,
                     ],
                 )
                 report_path = _postprocess_report_path(args)
                 report_path.parent.mkdir(parents=True, exist_ok=True)
                 report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+                chunk_report_path = _postprocess_chunk_profile_report_path(args)
+                chunk_report = report.get("chunk_profile_report") if isinstance(report, dict) else None
+                if chunk_report_path and isinstance(chunk_report, dict):
+                    chunk_report_path.parent.mkdir(parents=True, exist_ok=True)
+                    chunk_report_path.write_text(json.dumps(chunk_report, ensure_ascii=False, indent=2), encoding="utf-8")
         finally:
             if raw_report_dir is not None:
                 raw_report_dir.cleanup()
@@ -2002,10 +2063,11 @@ def build_postprocess_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Apply deterministic Markdown post-processing profiles")
     parser.add_argument("--markdown", help="Single Markdown file to post-process")
     parser.add_argument("--doc-manifest", help="Process every Markdown file referenced by a doc_manifest")
-    parser.add_argument("--profile", choices=["none", "safe", "ocr", "chunk-markers"], default="safe")
+    parser.add_argument("--profile", choices=POSTPROCESS_PROFILE_CHOICES, default="safe")
     parser.add_argument("--output", help="Output file for --markdown or output handoff directory for --doc-manifest")
     parser.add_argument("--write", action="store_true", help="Rewrite the source Markdown file(s) in place")
     parser.add_argument("--report-json", help="Optional postprocess_report.json output path")
+    parser.add_argument("--chunk-profile-report-json", help="Optional chunk_profile_report.json output path for chunk-marker profiles")
     parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     return parser
@@ -2099,8 +2161,9 @@ def build_parser() -> argparse.ArgumentParser:
 def build_pipeline_parser() -> argparse.ArgumentParser:
     parser = build_parser()
     parser.description = "Run convert -> postprocess -> rich package -> non-secret ingest plan"
-    parser.add_argument("--postprocess-profile", choices=["none", "safe", "ocr", "chunk-markers"], default="chunk-markers", help="Post-processing profile for the formal handoff")
+    parser.add_argument("--postprocess-profile", choices=POSTPROCESS_PROFILE_CHOICES, default="chunk-markers", help="Post-processing profile for the formal handoff")
     parser.add_argument("--postprocess-report-name", default="postprocess_report.json", help="Postprocess report sidecar name under the output directory")
+    parser.add_argument("--chunk-profile-report-name", default="chunk_profile_report.json", help="Chunk profile report sidecar name under the output directory")
     parser.add_argument("--metadata-name", default="metadata.json", help="Rich package metadata sidecar name")
     parser.add_argument("--artifact-index-name", default="artifact_index.json", help="Rich package artifact index sidecar name")
     parser.add_argument("--profile-suggestions-name", default="profile_suggestions.json", help="Rich package profile suggestions sidecar name")

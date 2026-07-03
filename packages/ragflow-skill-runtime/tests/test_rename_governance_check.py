@@ -50,6 +50,48 @@ class RenameGovernanceCheckTests(unittest.TestCase):
         self.assertFalse(report["naming_drift"]["ok"])
         self.assertEqual(report["naming_drift"]["summary"]["finding_count"], 1)
 
+    def test_chunk_marker_profile_token_is_allowed_without_general_legacy_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs = root / "docs"
+            docs.mkdir()
+            docs.joinpath("11-public-rename-policy.md").write_text(
+                "\n".join(
+                    [
+                        "## CLI Aliases",
+                        "## Schema Migration",
+                        "## Documentation Updates",
+                        "## Downstream Gates",
+                        "## Release Notes",
+                        "## Rollback Plan",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            skill_root = root / "skills" / "ragflow-doc-to-md"
+            skill_root.mkdir(parents=True)
+            skill_file = skill_root / "SKILL.md"
+            skill_file.write_text("Use profile chunk-markers-ragflux-like for boundary comparison.\n", encoding="utf-8")
+
+            allowed = run_rename_governance_check(
+                root=root,
+                compatibility_aliases=(),
+                drift_roots=(Path("skills"),),
+            )
+            skill_file.write_text(
+                "Use profile chunk-markers-ragflux-like.\nDo not publish ragflux package names.\n",
+                encoding="utf-8",
+            )
+            blocked = run_rename_governance_check(
+                root=root,
+                compatibility_aliases=(),
+                drift_roots=(Path("skills"),),
+            )
+
+        self.assertTrue(allowed["naming_drift"]["ok"], allowed)
+        self.assertFalse(blocked["naming_drift"]["ok"], blocked)
+        self.assertEqual(blocked["naming_drift"]["summary"]["finding_count"], 1)
+
     def test_compatibility_alias_requires_facade_evidence(self) -> None:
         alias = CompatibilityAlias(
             kind="command",

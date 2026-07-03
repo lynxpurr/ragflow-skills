@@ -175,7 +175,7 @@ schema production and the later phase owns consumption or live workflow integrat
 | Feature design | Owning skill | Development phase | Primary command/API surface | Contract artifacts | Required gates |
 | --- | --- | --- | --- | --- | --- |
 | 1. Rich Handoff 2.0 | `ragflow-doc-to-md`, `ragflow-kb-build` | Phase 24 | `ragflow-doc-to-md package --rich`, `ragflow-kb-build inspect-handoff` | `ragflow_handoff_package_v1`, `metadata.json`, `artifact_index.json`, `package_readme.md` | schema unit tests, CLI tests, consumer acceptance, platform smoke |
-| 2. Markdown Post-Processing | `ragflow-doc-to-md` | Phase 24 | post-process profiles `none`, `safe`, `ocr`, `chunk-markers` | `postprocess_report.json` | deterministic rewrite tests, no-write-by-default tests, quality gate tests |
+| 2. Markdown Post-Processing | `ragflow-doc-to-md` | Phase 24 | post-process profiles `none`, `safe`, `ocr`, `chunk-markers`, `chunk-markers-dense`, `chunk-markers-ragflux-like` | `postprocess_report.json`, `chunk_profile_report.json` | deterministic rewrite tests, no-write-by-default tests, quality gate tests |
 | 3. Metadata And Tagset Governance | `ragflow-kb-build` | Phase 25 | `metadata lint/merge/generate-template`, `tagset lint/export/report` | `ragflow_metadata_v1`, `ragflow_tagset_v1` | offline schema tests, merge precedence tests, redaction tests |
 | 4. Optimization Loop | `ragflow-kb-build` | Phase 26 | `optimize --plan-only`, `optimize readiness`, `optimize --execute` | `optimization_plan.json`, `optimization_live_readiness_report.json`, `profile_experiment_results.json`, `best_profile_report.md`, `cleanup_plan.json` | fake-client tests, explicit-mutation tests, live disposable tests when approved |
 | 5. Chunk Snapshot And Strict Chunk Recall | `ragflow-kb-build` | Phase 26 | `snapshot-chunks`, `validate --level benchmark` extensions | chunk snapshot schema, qrels `expected_chunks` extension | stable-hash tests, strict-recall metrics tests |
@@ -273,16 +273,28 @@ Add deterministic post-processing profiles:
 - `safe`: normalize image paths, remove duplicate blank lines, repair obvious heading
   spacing, strip absolute temp paths.
 - `ocr`: safe profile plus common OCR punctuation and whitespace fixes.
-- `chunk-markers`: insert conservative marker comments at heading boundaries.
+- `chunk-markers`: compatibility alias for conservative marker comments at level 1-3
+  heading boundaries.
+- `chunk-markers-conservative`: explicit conservative profile.
+- `chunk-markers-dense`: add page, table, and image boundaries for formal ingestion
+  review.
+- `chunk-markers-ragflux-like`: add list boundaries and deeper headings for RAGFlux
+  migration comparison.
 
 Outputs:
 
 - rewritten Markdown under `documents/`;
 - `postprocess_report.json`;
+- `chunk_profile_report.json` for chunk-marker profiles, with marker type counts,
+  preferred-boundary alignment, density warnings, and advisory RAGFlow parser profile
+  hints;
 - diff summary with changed line counts and rule IDs.
 
 Rules must be deterministic and explainable. Destructive rewriting should require
 `--write` or a new output directory.
+
+Implementation status: the chunk boundary profile upgrade is implemented as an offline,
+non-mutating report surface; live RAGFlow parser changes remain downstream review work.
 
 ## Feature Design 3: Metadata And Tagset Governance
 

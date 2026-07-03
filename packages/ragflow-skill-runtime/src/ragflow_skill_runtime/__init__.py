@@ -73,6 +73,7 @@ from .doc_quality import (
     render_quality_markdown,
 )
 from .doc_postprocess import (
+    CHUNK_PROFILE_REPORT_SCHEMA,
     POSTPROCESS_PROFILES,
     POSTPROCESS_REPORT_SCHEMA,
     DocPostprocessError,
@@ -791,6 +792,7 @@ __all__ = [
     "query_cross_language_ab_report",
     "classify_query_intent",
     "classify_endpoint_host",
+    "CHUNK_PROFILE_REPORT_SCHEMA",
     "configured_private_hosts_from_urls",
     "query_pollution_report",
     "query_rerank_ab_report",

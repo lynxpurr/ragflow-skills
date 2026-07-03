@@ -321,13 +321,16 @@ ragflow-doc-to-md compare-retained-package
 
 ### 4.3 P1：Chunk boundary profile 体系
 
-- [ ] 定义 `chunk_profile_report.json` schema：`ragflow_chunk_profile_report_v1`。
-- [ ] 增加 `chunk-markers-dense` profile。
-- [ ] 增加 `chunk-markers-ragflux-like` profile。
-- [ ] 将 table/image/page/list boundary 纳入 preferred boundary 计算。
-- [ ] 增加 marker density warning：过密、过稀、连续 marker、空 section。
-- [ ] 增加离线 fixture：产品目录、论文、合同、长文档。
-- [ ] 增加 smoke comparison：不同 profile 下 marker 数、hints 数和 chunk profile report 稳定。
+实现状态：2026-07-03 已完成；新增 profile/report、CLI sidecar、preferred boundary 和离线 fixture
+验证，未执行 live RAGFlow mutation。
+
+- [x] 定义 `chunk_profile_report.json` schema：`ragflow_chunk_profile_report_v1`。
+- [x] 增加 `chunk-markers-dense` profile。
+- [x] 增加 `chunk-markers-ragflux-like` profile。
+- [x] 将 table/image/page/list boundary 纳入 preferred boundary 计算。
+- [x] 增加 marker density warning：过密、过稀、连续 marker、空 section。
+- [x] 增加离线 fixture：产品目录、论文、合同、长文档。
+- [x] 增加 smoke comparison：不同 profile 下 marker 数、hints 数和 chunk profile report 稳定。
 
 ### 4.4 P1：图片语义 metadata
 

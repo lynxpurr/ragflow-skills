@@ -279,6 +279,8 @@ class DocConvertCliTests(unittest.TestCase):
             package_readme_exists = (output_dir / "package_readme.md").is_file()
             package_readme = (output_dir / "package_readme.md").read_text(encoding="utf-8")
             retrieval_hints = json.loads((output_dir / "retrieval_hints.json").read_text(encoding="utf-8"))
+            postprocess_report = json.loads((output_dir / "postprocess_report.json").read_text(encoding="utf-8"))
+            chunk_profile_report = json.loads((output_dir / "chunk_profile_report.json").read_text(encoding="utf-8"))
             ingest_plan = (output_dir / "ragflow_ingest_plan.yaml").read_text(encoding="utf-8")
 
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -287,25 +289,83 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(payload["pipeline"]["handoff_mode"], "formal_ingest")
         self.assertTrue(payload["formal_ingest"]["chunk_markers"]["enabled"])
         self.assertGreaterEqual(payload["formal_ingest"]["chunk_markers"]["marker_count"], 1)
+        self.assertEqual(payload["formal_ingest"]["chunk_markers"]["chunk_profile_report"], "chunk_profile_report.json")
         self.assertTrue(payload["formal_ingest"]["rich_sidecars"]["complete"])
         self.assertTrue(payload["formal_ingest"]["ragflow_ingest_plan"]["generated"])
         self.assertEqual(payload["quality_gate"]["status"], "PASS")
         self.assertEqual(payload["pipeline"]["stages"]["postprocess"]["profile"], "chunk-markers")
+        self.assertTrue(payload["pipeline"]["stages"]["postprocess"]["chunk_profile_report"].endswith("chunk_profile_report.json"))
+        self.assertTrue(payload["chunk_profile_report"].endswith("chunk_profile_report.json"))
         self.assertIn("<!-- chunk -->", markdown)
         self.assertEqual(manifest["handoff_mode"], "formal_ingest")
         self.assertTrue(manifest["formal_ingest"]["rich_sidecars"]["complete"])
         self.assertEqual(manifest["postprocess_report"], "postprocess_report.json")
+        self.assertEqual(manifest["chunk_profile_report"], "chunk_profile_report.json")
         self.assertTrue(package_readme_exists)
         self.assertIn("Handoff mode: `formal_ingest`", package_readme)
         self.assertIn("ragflow-kb-build inspect-handoff", package_readme)
         self.assertIn("--dry-run", package_readme)
         self.assertEqual(retrieval_hints["schema"], "ragflow_retrieval_hints_v1")
+        self.assertEqual(postprocess_report["chunk_profile_report"]["schema"], "ragflow_chunk_profile_report_v1")
+        self.assertEqual(chunk_profile_report["schema"], "ragflow_chunk_profile_report_v1")
+        self.assertGreaterEqual(chunk_profile_report["summary"]["marker_count"], 1)
         self.assertIn('schema: "ragflow_ingest_plan_v1"', ingest_plan)
         self.assertIn('handoff_mode: "formal_ingest"', ingest_plan)
+        self.assertIn('chunk_profile_report: "chunk_profile_report.json"', ingest_plan)
         self.assertIn('inspect_command:', ingest_plan)
         self.assertIn('command: "ragflow-kb-build"', ingest_plan)
         self.assertNotIn("api_key", ingest_plan)
         self.assertNotIn("base_url", ingest_plan)
+
+    def test_pipeline_dense_profile_writes_chunk_profile_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "handoff"
+            input_dir.mkdir()
+            (input_dir / "catalog.md").write_text(
+                "# APOLLO Catalog\n\n"
+                "Overview.\n\n"
+                "<!-- page: 1 -->\n\n"
+                "## Specs\n\n"
+                "| Field | Value |\n"
+                "| --- | --- |\n"
+                "| Accuracy | 4.0 um |\n",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "pipeline",
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                    "--mode",
+                    "passthrough",
+                    "--postprocess-profile",
+                    "chunk-markers-dense",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+            chunk_profile_report = json.loads((output_dir / "chunk_profile_report.json").read_text(encoding="utf-8"))
+            manifest = json.loads((output_dir / "doc_manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["pipeline"]["stages"]["postprocess"]["profile"], "chunk-markers-dense")
+        self.assertEqual(payload["formal_ingest"]["chunk_markers"]["profile"], "chunk-markers-dense")
+        self.assertEqual(chunk_profile_report["schema"], "ragflow_chunk_profile_report_v1")
+        self.assertEqual(chunk_profile_report["profile"], "chunk-markers-dense")
+        self.assertGreater(chunk_profile_report["summary"]["marker_type_counts"]["page"], 0)
+        self.assertGreater(chunk_profile_report["summary"]["marker_type_counts"]["table"], 0)
+        self.assertEqual(manifest["chunk_profile_report"], "chunk_profile_report.json")
 
     def test_pipeline_can_write_non_secret_ragflow_config_alias(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -502,6 +562,57 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertIn("# Title\n\nBody\n", cleaned)
         self.assertEqual(report_payload["schema"], "doc_postprocess_report_v1")
         self.assertTrue(json.loads(result.stdout)["ok"])
+
+    def test_postprocess_cli_writes_ragflux_like_chunk_profile_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "catalog.md"
+            output = root / "catalog.clean.md"
+            report = root / "postprocess_report.json"
+            chunk_report = root / "chunk_profile_report.json"
+            markdown.write_text(
+                "# Catalog\n\n"
+                "Intro.\n\n"
+                "<!-- page: 1 -->\n"
+                "## Specs\n\n"
+                "- Install base\n"
+                "- Calibrate sensor\n\n"
+                "![diagram](images/apollo.png)\n",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "postprocess",
+                    "--markdown",
+                    str(markdown),
+                    "--profile",
+                    "chunk-markers-ragflux-like",
+                    "--output",
+                    str(output),
+                    "--report-json",
+                    str(report),
+                    "--chunk-profile-report-json",
+                    str(chunk_report),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            report_payload = json.loads(report.read_text(encoding="utf-8"))
+            chunk_payload = json.loads(chunk_report.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(report_payload["chunk_profile_report"]["schema"], "ragflow_chunk_profile_report_v1")
+        self.assertEqual(chunk_payload["schema"], "ragflow_chunk_profile_report_v1")
+        self.assertEqual(chunk_payload["profile"], "chunk-markers-ragflux-like")
+        self.assertGreater(chunk_payload["summary"]["marker_type_counts"]["page"], 0)
+        self.assertGreater(chunk_payload["summary"]["marker_type_counts"]["list"], 0)
+        self.assertGreater(chunk_payload["summary"]["marker_type_counts"]["image"], 0)
 
     def test_postprocess_doc_manifest_cli_writes_handoff_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

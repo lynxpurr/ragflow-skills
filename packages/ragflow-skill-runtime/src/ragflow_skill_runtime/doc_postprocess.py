@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,11 +15,53 @@ from .doc_quality import load_doc_manifest_payload
 
 
 POSTPROCESS_REPORT_SCHEMA = "doc_postprocess_report_v1"
-POSTPROCESS_PROFILES = {"none", "safe", "ocr", "chunk-markers"}
+CHUNK_PROFILE_REPORT_SCHEMA = "ragflow_chunk_profile_report_v1"
+POSTPROCESS_PROFILES = {
+    "none",
+    "safe",
+    "ocr",
+    "chunk-markers",
+    "chunk-markers-conservative",
+    "chunk-markers-dense",
+    "chunk-markers-ragflux-like",
+}
 
 HEADING_WITHOUT_SPACE_RE = re.compile(r"^(#{1,6})([^#\s].*)$")
 MARKDOWN_IMAGE_TARGET_RE = re.compile(r"(!\[[^\]]*]\()([^)]+)(\))")
+MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*]\([^)]+\)")
+MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+PAGE_COMMENT_RE = re.compile(
+    r"<!--\s*(?:page|page_id|page-id|page_index|page-index)\s*[:=]?\s*\d+\s*-->",
+    re.IGNORECASE,
+)
+PAGE_TEXT_RE = re.compile(r"^\s*(?:page|p\.|第)\s*[0-9]{1,5}\s*(?:页)?\s*$", re.IGNORECASE)
+LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
+CHUNK_MARKER_RE = re.compile(r"^\s*<!--\s*chunk\s*-->\s*$", re.IGNORECASE)
 CJK_RE = r"\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
+
+CHUNK_MARKER_BOUNDARY_TYPES = ("heading", "page", "table", "image", "list")
+CHUNK_MARKER_PROFILE_CONFIG: dict[str, dict[str, Any]] = {
+    "chunk-markers": {
+        "canonical": "chunk-markers-conservative",
+        "heading_max_level": 3,
+        "boundary_types": {"heading"},
+    },
+    "chunk-markers-conservative": {
+        "canonical": "chunk-markers-conservative",
+        "heading_max_level": 3,
+        "boundary_types": {"heading"},
+    },
+    "chunk-markers-dense": {
+        "canonical": "chunk-markers-dense",
+        "heading_max_level": 4,
+        "boundary_types": {"heading", "page", "table", "image"},
+    },
+    "chunk-markers-ragflux-like": {
+        "canonical": "chunk-markers-ragflux-like",
+        "heading_max_level": 6,
+        "boundary_types": {"heading", "page", "table", "image", "list"},
+    },
+}
 
 
 class DocPostprocessError(RuntimeError):
@@ -49,9 +92,10 @@ class PostprocessDocumentResult:
     line_count_after: int
     rule_results: list[PostprocessRuleResult] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    chunk_profile: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "markdown_path": self.markdown_path,
             "output_path": self.output_path,
             "profile": self.profile,
@@ -61,6 +105,9 @@ class PostprocessDocumentResult:
             "rules": [result.to_dict() for result in self.rule_results if result.count],
             "warnings": list(self.warnings),
         }
+        if self.chunk_profile is not None:
+            payload["chunk_profile"] = self.chunk_profile
+        return payload
 
 
 def _now() -> str:
@@ -210,6 +257,139 @@ def _normalize_ocr_ligatures(text: str) -> tuple[str, int]:
     return current, changed
 
 
+def _is_chunk_marker(line: str) -> bool:
+    return bool(CHUNK_MARKER_RE.match(line.strip()))
+
+
+def _is_fence(line: str) -> bool:
+    stripped = line.strip()
+    return stripped.startswith("```") or stripped.startswith("~~~")
+
+
+def _chunk_marker_profile_config(profile: str) -> dict[str, Any] | None:
+    return CHUNK_MARKER_PROFILE_CONFIG.get(profile)
+
+
+def _heading_level(line: str) -> int | None:
+    match = re.match(r"^(#{1,6})\s+\S", line.strip())
+    return len(match.group(1)) if match else None
+
+
+def _markdown_table_starts(lines: list[str]) -> set[int]:
+    starts: set[int] = set()
+    for index, line in enumerate(lines[:-1]):
+        if "|" not in line:
+            continue
+        if MARKDOWN_TABLE_SEPARATOR_RE.match(lines[index + 1]):
+            starts.add(index + 1)
+    return starts
+
+
+def _html_table_starts(lines: list[str]) -> set[int]:
+    starts: set[int] = set()
+    for index, line in enumerate(lines, start=1):
+        if "<table" in line.lower():
+            starts.add(index)
+    return starts
+
+
+def _list_starts(lines: list[str]) -> set[int]:
+    starts: set[int] = set()
+    previous_list = False
+    for index, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        current_list = bool(LIST_ITEM_RE.match(line))
+        if current_list and not previous_list:
+            starts.add(index)
+        if stripped:
+            previous_list = current_list
+    return starts
+
+
+def _page_marker_line(line: str) -> bool:
+    return bool(PAGE_COMMENT_RE.search(line) or PAGE_TEXT_RE.match(line) or line == "\f")
+
+
+def _boundary_type_for_line(
+    *,
+    lines: list[str],
+    index: int,
+    profile_config: Mapping[str, Any],
+    markdown_table_starts: set[int],
+    html_table_starts: set[int],
+    list_starts: set[int],
+) -> str | None:
+    line = lines[index - 1]
+    stripped = line.strip()
+    if not stripped or _is_chunk_marker(stripped):
+        return None
+    allowed = profile_config.get("boundary_types")
+    boundary_types = allowed if isinstance(allowed, set) else set()
+    if "page" in boundary_types and _page_marker_line(line):
+        return "page"
+    if "heading" in boundary_types:
+        level = _heading_level(line)
+        if level is not None and level <= int(profile_config.get("heading_max_level", 3)):
+            return "heading"
+    if "table" in boundary_types and (index in markdown_table_starts or index in html_table_starts):
+        return "table"
+    if "image" in boundary_types and MARKDOWN_IMAGE_RE.search(line):
+        return "image"
+    if "list" in boundary_types and index in list_starts:
+        return "list"
+    return None
+
+
+def _previous_non_empty_is_marker(output: list[str]) -> bool:
+    for line in reversed(output):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        return _is_chunk_marker(stripped)
+    return False
+
+
+def _insert_chunk_markers_for_profile(profile: str):
+    profile_config = _chunk_marker_profile_config(profile)
+
+    def insert(text: str) -> tuple[str, int]:
+        if profile_config is None:
+            return text, 0
+        lines = text.splitlines()
+        if not lines:
+            return text, 0
+        output: list[str] = []
+        changed = 0
+        in_fence = False
+        seen_content = False
+        markdown_table_starts = _markdown_table_starts(lines)
+        html_table_starts = _html_table_starts(lines)
+        list_starts = _list_starts(lines)
+        for index, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if _is_fence(line):
+                in_fence = not in_fence
+            boundary_type = None if in_fence else _boundary_type_for_line(
+                lines=lines,
+                index=index,
+                profile_config=profile_config,
+                markdown_table_starts=markdown_table_starts,
+                html_table_starts=html_table_starts,
+                list_starts=list_starts,
+            )
+            if boundary_type and seen_content and not _previous_non_empty_is_marker(output):
+                if output and output[-1].strip():
+                    output.append("")
+                output.append("<!-- chunk -->")
+                changed += 1
+            output.append(line)
+            if stripped and not _is_chunk_marker(stripped):
+                seen_content = True
+        return "\n".join(output) + ("\n" if text.endswith("\n") else ""), changed
+
+    return insert
+
+
 def _insert_chunk_markers(text: str) -> tuple[str, int]:
     lines = text.splitlines()
     if not lines:
@@ -240,6 +420,143 @@ def _insert_chunk_markers(text: str) -> tuple[str, int]:
     return "\n".join(output) + ("\n" if text.endswith("\n") else ""), changed
 
 
+def _chunk_marker_lines(text: str) -> list[int]:
+    return [index for index, line in enumerate(text.splitlines(), start=1) if _is_chunk_marker(line)]
+
+
+def _preferred_boundary_candidates(text: str) -> list[dict[str, Any]]:
+    lines = text.splitlines()
+    markdown_table_starts = _markdown_table_starts(lines)
+    html_table_starts = _html_table_starts(lines)
+    list_starts = _list_starts(lines)
+    candidates: list[dict[str, Any]] = []
+    in_fence = False
+    for index, line in enumerate(lines, start=1):
+        if _is_fence(line):
+            in_fence = not in_fence
+        if in_fence:
+            continue
+        level = _heading_level(line)
+        if level is not None:
+            candidates.append({"line": index, "type": "heading", "level": level})
+        if _page_marker_line(line):
+            candidates.append({"line": index, "type": "page"})
+        if index in markdown_table_starts or index in html_table_starts:
+            candidates.append({"line": index, "type": "table"})
+        if MARKDOWN_IMAGE_RE.search(line):
+            candidates.append({"line": index, "type": "image"})
+        if index in list_starts:
+            candidates.append({"line": index, "type": "list"})
+    return candidates
+
+
+def _next_non_empty_line(lines: list[str], marker_line: int) -> tuple[int | None, str | None]:
+    for index in range(marker_line, len(lines)):
+        stripped = lines[index].strip()
+        if stripped:
+            return index + 1, stripped
+    return None, None
+
+
+def _marker_type_counts(text: str) -> dict[str, int]:
+    lines = text.splitlines()
+    candidates = _preferred_boundary_candidates(text)
+    candidates_by_line: dict[int, str] = {}
+    for candidate in candidates:
+        line = candidate.get("line")
+        boundary_type = candidate.get("type")
+        if isinstance(line, int) and isinstance(boundary_type, str):
+            candidates_by_line.setdefault(line, boundary_type)
+    counts: Counter[str] = Counter()
+    for marker_line in _chunk_marker_lines(text):
+        next_line, _stripped = _next_non_empty_line(lines, marker_line)
+        boundary_type = candidates_by_line.get(next_line or -1, "manual")
+        counts[boundary_type] += 1
+    return {key: int(counts.get(key, 0)) for key in (*CHUNK_MARKER_BOUNDARY_TYPES, "manual")}
+
+
+def _marker_density_warnings(text: str) -> list[dict[str, Any]]:
+    lines = text.splitlines()
+    markers = set(_chunk_marker_lines(text))
+    non_empty = [index for index, line in enumerate(lines, start=1) if line.strip()]
+    marker_count = len(markers)
+    warnings: list[dict[str, Any]] = []
+    if not non_empty:
+        return warnings
+    density = round(marker_count / max(len(non_empty), 1), 4)
+    if marker_count == 0 and len(non_empty) >= 12:
+        warnings.append({"code": "marker_density_too_sparse", "severity": "warning", "density": density})
+    if density > 0.3:
+        warnings.append({"code": "marker_density_too_dense", "severity": "warning", "density": density})
+    consecutive_count = 0
+    empty_section_count = 0
+    for marker_line in sorted(markers):
+        next_line, stripped = _next_non_empty_line(lines, marker_line)
+        if next_line is None:
+            empty_section_count += 1
+        elif _is_chunk_marker(stripped or ""):
+            consecutive_count += 1
+            empty_section_count += 1
+    if consecutive_count:
+        warnings.append(
+            {
+                "code": "consecutive_chunk_markers",
+                "severity": "warning",
+                "count": consecutive_count,
+            }
+        )
+    if empty_section_count:
+        warnings.append(
+            {
+                "code": "empty_chunk_section",
+                "severity": "warning",
+                "count": empty_section_count,
+            }
+        )
+    return warnings
+
+
+def _chunk_profile_document_summary(
+    *,
+    markdown_path: str,
+    output_path: str,
+    profile: str,
+    before: str,
+    after: str,
+) -> dict[str, Any] | None:
+    if _chunk_marker_profile_config(profile) is None:
+        return None
+    marker_lines = _chunk_marker_lines(after)
+    candidates = _preferred_boundary_candidates(after)
+    candidate_lines = {int(item["line"]) for item in candidates if isinstance(item.get("line"), int)}
+    aligned_count = 0
+    for marker_line in marker_lines:
+        next_line, _stripped = _next_non_empty_line(after.splitlines(), marker_line)
+        if next_line in candidate_lines:
+            aligned_count += 1
+    non_empty_line_count = sum(1 for line in after.splitlines() if line.strip())
+    marker_count = len(marker_lines)
+    return {
+        "markdown_path": markdown_path,
+        "output_path": output_path,
+        "profile": profile,
+        "canonical_profile": _chunk_marker_profile_config(profile).get("canonical"),
+        "line_count": _line_counts(after),
+        "non_empty_line_count": non_empty_line_count,
+        "source_manual_marker_count": len(_chunk_marker_lines(before)),
+        "marker_count": marker_count,
+        "marker_density": round(marker_count / max(non_empty_line_count, 1), 4),
+        "marker_type_counts": _marker_type_counts(after),
+        "preferred_boundary_count": len(candidates),
+        "preferred_boundary_alignment": {
+            "aligned_marker_count": aligned_count,
+            "preferred_boundary_count": len(candidates),
+            "alignment_ratio": round(aligned_count / max(marker_count, 1), 4),
+        },
+        "warnings": _marker_density_warnings(after),
+    }
+
+
 def postprocess_markdown_text(text: str, *, profile: str) -> tuple[str, list[PostprocessRuleResult]]:
     """Post-process Markdown content and return applied rule counts."""
 
@@ -266,8 +583,14 @@ def postprocess_markdown_text(text: str, *, profile: str) -> tuple[str, list[Pos
         apply("ocr.punctuation_spacing", "Remove OCR spaces before punctuation or closing brackets", _fix_ocr_punctuation_spacing)
         apply("ocr.ligatures", "Normalize common OCR ligatures", _normalize_ocr_ligatures)
 
-    if profile == "chunk-markers":
-        apply("chunk_markers.heading_boundaries", "Insert conservative chunk markers before level 1-3 headings", _insert_chunk_markers)
+    if _chunk_marker_profile_config(profile) is not None:
+        canonical = _chunk_marker_profile_config(profile).get("canonical")
+        rule_id = "chunk_markers.heading_boundaries" if canonical == "chunk-markers-conservative" else f"chunk_markers.{canonical}"
+        apply(
+            rule_id,
+            f"Insert chunk markers using the {canonical} boundary profile",
+            _insert_chunk_markers_for_profile(profile),
+        )
 
     return text, rule_results
 
@@ -312,14 +635,23 @@ def postprocess_markdown_file(
     fallback_root = Path(root_for_report) if root_for_report else target.parent
     source_root = Path(source_root_for_report) if source_root_for_report else fallback_root
     output_root = Path(output_root_for_report) if output_root_for_report else fallback_root
+    markdown_rel = _relative(source, source_root)
+    output_rel = _relative(target, output_root)
     return PostprocessDocumentResult(
-        markdown_path=_relative(source, source_root),
-        output_path=_relative(target, output_root),
+        markdown_path=markdown_rel,
+        output_path=output_rel,
         profile=_validate_profile(profile),
         changed=before != after,
         line_count_before=_line_counts(before),
         line_count_after=_line_counts(after),
         rule_results=rules,
+        chunk_profile=_chunk_profile_document_summary(
+            markdown_path=markdown_rel,
+            output_path=output_rel,
+            profile=_validate_profile(profile),
+            before=before,
+            after=after,
+        ),
     )
 
 
@@ -372,7 +704,7 @@ def _report_payload(*, profile: str, mode: str, documents: list[PostprocessDocum
     for document in documents:
         for rule in document.rule_results:
             rule_counts[rule.rule_id] = rule_counts.get(rule.rule_id, 0) + rule.count
-    return {
+    payload = {
         "schema": POSTPROCESS_REPORT_SCHEMA,
         "created_at": _now(),
         "profile": _validate_profile(profile),
@@ -385,6 +717,75 @@ def _report_payload(*, profile: str, mode: str, documents: list[PostprocessDocum
         },
         "documents": [document.to_dict() for document in documents],
     }
+    chunk_profile_report = _chunk_profile_report_payload(profile=profile, mode=mode, documents=documents)
+    if chunk_profile_report is not None:
+        payload["chunk_profile_report"] = chunk_profile_report
+    return payload
+
+
+def _chunk_profile_report_payload(
+    *,
+    profile: str,
+    mode: str,
+    documents: list[PostprocessDocumentResult],
+) -> dict[str, Any] | None:
+    if _chunk_marker_profile_config(_validate_profile(profile)) is None:
+        return None
+    raw_documents = [document.chunk_profile for document in documents if document.chunk_profile is not None]
+    marker_type_counts: Counter[str] = Counter()
+    warning_count = 0
+    for document in raw_documents:
+        counts = document.get("marker_type_counts")
+        if isinstance(counts, Mapping):
+            for key, value in counts.items():
+                marker_type_counts[str(key)] += int(value or 0)
+        warnings = document.get("warnings")
+        warning_count += len(warnings) if isinstance(warnings, list) else 0
+    marker_count = sum(int(document.get("marker_count", 0) or 0) for document in raw_documents)
+    preferred_boundary_count = sum(int(document.get("preferred_boundary_count", 0) or 0) for document in raw_documents)
+    aligned_marker_count = 0
+    for document in raw_documents:
+        alignment = document.get("preferred_boundary_alignment")
+        if isinstance(alignment, Mapping):
+            aligned_marker_count += int(alignment.get("aligned_marker_count", 0) or 0)
+    return {
+        "schema": CHUNK_PROFILE_REPORT_SCHEMA,
+        "created_at": _now(),
+        "profile": _validate_profile(profile),
+        "canonical_profile": _chunk_marker_profile_config(_validate_profile(profile)).get("canonical"),
+        "mode": mode,
+        "summary": {
+            "documents": len(raw_documents),
+            "marker_count": marker_count,
+            "marker_type_counts": {key: int(marker_type_counts.get(key, 0)) for key in (*CHUNK_MARKER_BOUNDARY_TYPES, "manual")},
+            "preferred_boundary_count": preferred_boundary_count,
+            "preferred_boundary_aligned_marker_count": aligned_marker_count,
+            "preferred_boundary_alignment_ratio": round(aligned_marker_count / max(marker_count, 1), 4),
+            "warning_count": warning_count,
+            "warnings": sorted(
+                {
+                    str(warning.get("code"))
+                    for document in raw_documents
+                    for warning in document.get("warnings", [])
+                    if isinstance(warning, Mapping) and warning.get("code")
+                }
+            ),
+        },
+        "ragflow_profile_advice": {
+            "parser": "review chunk parser settings after dry-run; this report is advisory and does not mutate RAGFlow",
+            "profile_hint": _chunk_marker_profile_config(_validate_profile(profile)).get("canonical"),
+        },
+        "documents": raw_documents,
+    }
+
+
+def _write_chunk_profile_report(report: Mapping[str, Any], path: str | Path | None) -> None:
+    chunk_report = report.get("chunk_profile_report")
+    if not isinstance(chunk_report, Mapping) or not path:
+        return
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(chunk_report, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def postprocess_handoff(
@@ -394,6 +795,7 @@ def postprocess_handoff(
     output_dir: str | Path | None = None,
     write: bool = False,
     report_json: str | Path | None = None,
+    chunk_profile_report_json: str | Path | None = None,
 ) -> dict[str, Any]:
     """Post-process all Markdown documents referenced by a doc_manifest."""
 
@@ -439,6 +841,8 @@ def postprocess_handoff(
     report_path = Path(report_json) if report_json else (output_root / "postprocess_report.json")
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    if chunk_profile_report_json:
+        _write_chunk_profile_report(report, chunk_profile_report_json)
     return report
 
 
@@ -449,6 +853,7 @@ def postprocess_single_markdown(
     output_path: str | Path | None = None,
     write: bool = False,
     report_json: str | Path | None = None,
+    chunk_profile_report_json: str | Path | None = None,
 ) -> dict[str, Any]:
     """Post-process one Markdown file and write a report."""
 
@@ -469,4 +874,6 @@ def postprocess_single_markdown(
         report_path = Path(markdown_path).parent / "postprocess_report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    if chunk_profile_report_json:
+        _write_chunk_profile_report(report, chunk_profile_report_json)
     return report

@@ -34,6 +34,7 @@ IGNORED_DIRS = {
     "release-artifacts",
 }
 ALLOW_MARKERS = ("rename-governance: allow", "release-hygiene: allow")
+ALLOWED_LEGACY_REFERENCE_TOKENS = ("chunk-markers-ragflux-like",)
 
 
 @dataclass(frozen=True)
@@ -287,6 +288,15 @@ def _scan_naming_drift(
     paths = _resolve_paths(root, drift_roots)
     findings: list[dict[str, Any]] = []
     checked_files: set[str] = set()
+
+    def scan_line_for(drift: RenameDriftPattern, line: str) -> str:
+        if drift.label != "legacy_ragflux_name":
+            return line
+        sanitized = line
+        for token in ALLOWED_LEGACY_REFERENCE_TOKENS:
+            sanitized = re.sub(re.escape(token), "", sanitized, flags=re.IGNORECASE)
+        return sanitized
+
     for path in _iter_text_files(paths, root=root, excluded_relative_paths=excluded_relative_paths):
         relative = _relative(path, root)
         checked_files.add(relative)
@@ -295,7 +305,7 @@ def _scan_naming_drift(
             if any(marker in line for marker in ALLOW_MARKERS):
                 continue
             for drift in RENAME_DRIFT_PATTERNS:
-                if drift.pattern.search(line):
+                if drift.pattern.search(scan_line_for(drift, line)):
                     findings.append(
                         {
                             "check": drift.label,
@@ -308,6 +318,7 @@ def _scan_naming_drift(
         "ok": not findings,
         "roots": [_relative(path, root) for path in paths],
         "excluded_relative_paths": sorted(excluded_relative_paths),
+        "allowed_legacy_reference_tokens": list(ALLOWED_LEGACY_REFERENCE_TOKENS),
         "checked_file_count": len(checked_files),
         "patterns": [drift.label for drift in RENAME_DRIFT_PATTERNS],
         "findings": findings,
