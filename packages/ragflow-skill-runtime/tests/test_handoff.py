@@ -9,6 +9,7 @@ from ragflow_skill_runtime.assistant_review import review_assistant_test_plan
 from ragflow_skill_runtime.handoff import (
     ASSISTANT_PROFILE_SCHEMA,
     ASSISTANT_TEST_PLAN_SCHEMA,
+    ASSET_SEMANTICS_SCHEMA,
     ARTIFACT_INDEX_SCHEMA,
     DOCUMENT_METADATA_SCHEMA,
     HANDOFF_PACKAGE_SCHEMA,
@@ -85,6 +86,7 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(package["handoff_mode"], "formal_ingest")
         self.assertEqual(package["document_count"], 1)
         self.assertEqual(package["artifact_count"], 1)
+        self.assertEqual(package["asset_semantic_count"], 1)
         self.assertGreaterEqual(package["retrieval_hint_count"], 2)
         self.assertGreaterEqual(package["assistant_test_count"], 1)
         self.assertEqual(metadata["schema"], DOCUMENT_METADATA_SCHEMA)
@@ -93,6 +95,10 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(metadata["documents"][0]["source_inventory"]["mime_hint"], "text/markdown")
         self.assertEqual(artifact_index["schema"], ARTIFACT_INDEX_SCHEMA)
         self.assertEqual(artifact_index["artifacts"][0]["path"], "documents/images/chart.jpg")
+        self.assertEqual(artifact_index["asset_semantics"]["schema"], ASSET_SEMANTICS_SCHEMA)
+        self.assertEqual(artifact_index["asset_semantics"]["summary"]["image_count"], 1)
+        self.assertEqual(artifact_index["asset_semantics"]["images"][0]["bytes"], len(b"fake image bytes"))
+        self.assertEqual(artifact_index["asset_semantics"]["images"][0]["semantic_kind"], "chart")
         self.assertEqual(suggestions["schema"], PROFILE_SUGGESTIONS_SCHEMA)
         self.assertIn("image-rich Markdown detected", suggestions["warnings"][0])
         self.assertEqual(retrieval_hints["schema"], RETRIEVAL_HINTS_SCHEMA)
@@ -171,6 +177,7 @@ class HandoffTests(unittest.TestCase):
             )
 
             create_rich_handoff_package(handoff_root=root)
+            artifact_index = json.loads((root / "artifact_index.json").read_text(encoding="utf-8"))
             retrieval_hints = json.loads((root / "retrieval_hints.json").read_text(encoding="utf-8"))
             assistant_test_plan = json.loads((root / "assistant_test_plan.json").read_text(encoding="utf-8"))
             topology_advice = create_kb_topology_advice(
@@ -190,15 +197,32 @@ class HandoffTests(unittest.TestCase):
         questions = retrieval_hints["question_candidates"]
         numeric = retrieval_hints["numeric_candidates"]
         assistant_stages = {case["stage"] for case in assistant_test_plan["cases"]}
+        visual_case = next(case for case in assistant_test_plan["cases"] if case["stage"] == "ocr_image_fact")
         topology_starter_types = {case["type"] for case in topology_advice["route_test_starters"]}
         preferred_reasons = {item["reason"] for item in preferred_boundaries}
+        asset_semantics = artifact_index["asset_semantics"]
+        image_semantic = asset_semantics["images"][0]
 
         tech_section = next(item for item in sections if item["title"] == "技术参数")
         self.assertEqual(tech_section["page_start"], 1)
         self.assertEqual(tech_section["table_count"], 1)
-        self.assertEqual(image_artifacts[0]["caption"], "APOLLO 设备外观")
+        self.assertEqual(asset_semantics["schema"], ASSET_SEMANTICS_SCHEMA)
+        self.assertEqual(asset_semantics["summary"]["image_count"], 1)
+        self.assertEqual(image_semantic["caption"], "APOLLO 控制面板")
+        self.assertEqual(image_semantic["alt_text"], "APOLLO 设备外观")
+        self.assertEqual(image_semantic["source_heading"], "技术参数")
+        self.assertEqual(image_semantic["page"], 1)
+        self.assertEqual(image_semantic["semantic_kind"], "image")
+        self.assertEqual(image_semantic["bytes"], len(b"fake image bytes"))
+        self.assertFalse(image_semantic["rewrites_markdown"])
+        self.assertTrue(image_semantic["semantic_alias"].endswith(".png"))
+        self.assertIn("content_list.json", image_semantic["semantic_sources"])
+        self.assertEqual(image_artifacts[0]["caption"], "APOLLO 控制面板")
+        self.assertEqual(image_artifacts[0]["alt_text"], "APOLLO 设备外观")
         self.assertEqual(image_artifacts[0]["source_heading"], "技术参数")
         self.assertEqual(image_artifacts[0]["page"], 1)
+        self.assertEqual(image_artifacts[0]["semantic_kind"], "image")
+        self.assertEqual(retrieval_hints["asset_semantics"]["summary"]["image_count"], 1)
         self.assertIn("控制面板", image_artifacts[0]["context"])
         self.assertEqual(table_artifacts[0]["source_heading"], "技术参数")
         self.assertEqual(table_artifacts[0]["header_preview"], ["型号", "精度", "尺寸"])
@@ -219,8 +243,78 @@ class HandoffTests(unittest.TestCase):
         self.assertIn("visual_fact", topology_starter_types)
         self.assertIn("exact_numeric_fact", topology_starter_types)
         self.assertIn("ocr_image_fact", assistant_stages)
+        self.assertEqual(visual_case["source_image"], "documents/images/apollo.png")
+        self.assertEqual(visual_case["source_caption"], "APOLLO 控制面板")
+        self.assertEqual(visual_case["semantic_kind"], "image")
         self.assertIn("exact_numeric_fact", assistant_stages)
         self.assertIn("paraphrase", assistant_stages)
+
+    def test_asset_semantics_excludes_remote_urls_and_original_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            images = documents / "images"
+            images.mkdir(parents=True)
+            markdown = documents / "public.md"
+            image = images / "public.png"
+            image.write_bytes(b"public image bytes")
+            markdown.write_text(
+                "# Public\n\n"
+                "Diagram context for public review.\n"
+                "![Public diagram](images/public.png)\n",
+                encoding="utf-8",
+            )
+            (root / "content_list.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "type": "image",
+                            "caption": "Public diagram",
+                            "page": 3,
+                            "path": "documents/images/public.png",
+                            "url": "https://example.invalid/raw?token=secret",
+                            "source_path": "/tmp/original-secret/public.png",
+                        },
+                        {
+                            "type": "image",
+                            "caption": "Ignored remote image",
+                            "page": 4,
+                            "path": "https://example.invalid/remote.png",
+                        },
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (root / "doc_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [
+                            {
+                                "source_path": "public.pdf",
+                                "markdown_path": "documents/public.md",
+                                "title": "Public",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            create_rich_handoff_package(handoff_root=root)
+            artifact_index = json.loads((root / "artifact_index.json").read_text(encoding="utf-8"))
+            retrieval_hints = json.loads((root / "retrieval_hints.json").read_text(encoding="utf-8"))
+
+        serialized = json.dumps(artifact_index["asset_semantics"], ensure_ascii=False)
+        self.assertEqual(artifact_index["asset_semantics"]["summary"]["image_count"], 1)
+        self.assertEqual(artifact_index["asset_semantics"]["images"][0]["caption"], "Public diagram")
+        self.assertEqual(retrieval_hints["image_artifacts"][0]["caption"], "Public diagram")
+        self.assertNotIn("https://", serialized)
+        self.assertNotIn("/tmp/", serialized)
+        self.assertNotIn("original-secret", serialized)
+        self.assertNotIn("token=secret", serialized)
 
     def test_html_table_hints_feed_topology_and_assistant_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

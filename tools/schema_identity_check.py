@@ -87,6 +87,14 @@ EXPECTED_IDENTITIES = (
         coverage_patterns=("doc_quality_report_v1",),
     ),
     SchemaIdentity(
+        key="asset_semantics",
+        group="manifest",
+        identity="ragflow_asset_semantics_v1",
+        source_patterns=("ragflow_asset_semantics_v1", "ASSET_SEMANTICS_SCHEMA"),
+        coverage_patterns=("ragflow_asset_semantics_v1", "ASSET_SEMANTICS_SCHEMA"),
+        description="Embedded image-asset semantics report under artifact_index.json.",
+    ),
+    SchemaIdentity(
         key="benchmark_report",
         group="benchmark",
         identity="ragflow_benchmark_report_v1",

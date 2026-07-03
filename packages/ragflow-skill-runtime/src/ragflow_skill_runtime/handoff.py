@@ -18,6 +18,7 @@ from .html_tables import parse_html_tables
 HANDOFF_PACKAGE_SCHEMA = "ragflow_handoff_package_v1"
 DOCUMENT_METADATA_SCHEMA = "ragflow_document_metadata_v1"
 ARTIFACT_INDEX_SCHEMA = "ragflow_artifact_index_v1"
+ASSET_SEMANTICS_SCHEMA = "ragflow_asset_semantics_v1"
 PROFILE_SUGGESTIONS_SCHEMA = "ragflow_profile_suggestions_v1"
 RETRIEVAL_HINTS_SCHEMA = "ragflow_retrieval_hints_v1"
 ASSISTANT_PROFILE_SCHEMA = "ragflow_assistant_profile_v1"
@@ -358,6 +359,18 @@ def _artifact_kind(path: Path) -> str:
     return "artifact"
 
 
+def _asset_file_semantic_fields(path: Path) -> dict[str, Any]:
+    fields: dict[str, Any] = {"exists": path.is_file()}
+    if path.is_file():
+        stat = path.stat()
+        fields["bytes"] = stat.st_size
+        fields["sha256"] = sha256_file(path)
+        mime_type, _encoding = mimetypes.guess_type(path.name)
+        if mime_type:
+            fields["mime_type"] = mime_type
+    return fields
+
+
 def _source_inventory_record(
     *,
     source_path: str,
@@ -684,6 +697,247 @@ def _markdown_image_contexts(
                 context["context"] = snippet
             contexts.append(context)
     return contexts
+
+
+def _is_image_like_path(path: str) -> bool:
+    return Path(path).suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".svg"}
+
+
+def _layout_image_signals(layout_signals: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    image_terms = (
+        "image",
+        "img",
+        "figure",
+        "fig",
+        "chart",
+        "diagram",
+        "logo",
+        "table",
+        "picture",
+        "图片",
+        "图像",
+        "图表",
+        "表格",
+    )
+    signals: list[dict[str, Any]] = []
+    for signal in layout_signals:
+        if not isinstance(signal, Mapping):
+            continue
+        path = signal.get("path")
+        block_type = str(signal.get("block_type") or "").lower()
+        text = str(signal.get("text") or "")
+        image_like = any(term in block_type for term in image_terms)
+        if isinstance(path, str) and _is_image_like_path(path):
+            image_like = True
+        if not image_like:
+            continue
+        record = {key: value for key, value in signal.items() if value is not None}
+        if text:
+            record["text"] = _compact_text(text, limit=180)
+        signals.append(record)
+    return signals[:80]
+
+
+def _paths_may_match(candidate: str | None, target: str | None) -> bool:
+    if not candidate or not target:
+        return False
+    left = candidate.strip().replace("\\", "/").strip("/")
+    right = target.strip().replace("\\", "/").strip("/")
+    if not left or not right:
+        return False
+    if left == right or left.endswith(f"/{right}") or right.endswith(f"/{left}"):
+        return True
+    left_name = Path(left).name
+    right_name = Path(right).name
+    return bool(left_name and left_name == right_name)
+
+
+def _layout_signal_for_image(path: str, layout_image_signals: list[Mapping[str, Any]]) -> Mapping[str, Any] | None:
+    for signal in layout_image_signals:
+        signal_path = signal.get("path")
+        if isinstance(signal_path, str) and _paths_may_match(signal_path, path):
+            return signal
+    return None
+
+
+def _semantic_kind_from_text(*values: Any) -> str:
+    text = " ".join(str(value).lower() for value in values if isinstance(value, str) and value.strip())
+    if not text:
+        return "unknown"
+    if any(token in text for token in ("logo", "商标", "标识")):
+        return "logo"
+    if any(token in text for token in ("decorative", "background", "ornament", "装饰", "背景")):
+        return "decorative"
+    if any(token in text for token in ("table", "spreadsheet", "表格", "表截图")):
+        return "table_image"
+    if any(token in text for token in ("chart", "graph", "plot", "diagram", "curve", "图表", "曲线", "示意图")):
+        return "chart"
+    return "image"
+
+
+def _semantic_alias_for_image(path: str, item: Mapping[str, Any]) -> str | None:
+    suffix = Path(path).suffix.lower()
+    if not suffix:
+        return None
+    label = " ".join(
+        str(item.get(key) or "")
+        for key in ("caption", "alt_text", "source_heading", "semantic_kind")
+        if isinstance(item.get(key), str)
+    )
+    words = [word.lower() for word in WORD_RE.findall(label) if word.lower() not in STOPWORDS]
+    if not words:
+        return None
+    stem = "-".join(words[:5])
+    parent = Path(path).parent.as_posix()
+    alias = f"{stem}{suffix}"
+    return f"{parent}/{alias}" if parent and parent != "." else alias
+
+
+def _enrich_image_artifacts(
+    image_artifacts: list[Mapping[str, Any]],
+    *,
+    root: Path,
+    layout_signals: list[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    layout_images = _layout_image_signals(layout_signals)
+    enriched: list[dict[str, Any]] = []
+    for artifact in image_artifacts:
+        if not isinstance(artifact, Mapping):
+            continue
+        path = artifact.get("path")
+        if not isinstance(path, str) or not path.strip() or not _safe_relative_reference(path):
+            continue
+        path = path.strip().replace("\\", "/")
+        record = {key: value for key, value in artifact.items() if value is not None}
+        record["path"] = path
+        record.setdefault("kind", "image")
+        semantic_sources = set(record.get("semantic_sources", [])) if isinstance(record.get("semantic_sources"), list) else set()
+        if record.get("source"):
+            semantic_sources.add(str(record.get("source")))
+        layout_signal = _layout_signal_for_image(path, layout_images)
+        if layout_signal is not None:
+            semantic_sources.add(str(layout_signal.get("source") or "layout_sidecar"))
+            layout_text = layout_signal.get("text")
+            if isinstance(layout_text, str) and layout_text.strip():
+                record["caption"] = _compact_text(layout_text, limit=160)
+            page = layout_signal.get("page")
+            if isinstance(page, int):
+                record["page"] = page
+            block_type = layout_signal.get("block_type")
+            if isinstance(block_type, str) and block_type.strip():
+                record["layout_block_type"] = block_type.strip()
+            source = layout_signal.get("source")
+            if isinstance(source, str):
+                record["layout_source"] = source
+        resolved = root / path
+        record.update(_asset_file_semantic_fields(resolved))
+        semantic_kind = _semantic_kind_from_text(
+            record.get("caption"),
+            record.get("alt_text"),
+            record.get("context"),
+            record.get("source_heading"),
+            record.get("layout_block_type"),
+            path,
+        )
+        record["semantic_kind"] = semantic_kind
+        alias = _semantic_alias_for_image(path, record)
+        if alias and alias != path:
+            record["semantic_alias"] = alias
+            record["rewrites_markdown"] = False
+        if semantic_sources:
+            record["semantic_sources"] = sorted(semantic_sources)
+        enriched.append(record)
+    return enriched[:60]
+
+
+def _asset_semantics_summary(images: list[Mapping[str, Any]], aliases: list[Mapping[str, Any]]) -> dict[str, Any]:
+    kind_counts: dict[str, int] = {}
+    missing = 0
+    with_page = 0
+    with_caption = 0
+    for image in images:
+        kind = str(image.get("semantic_kind") or "unknown")
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+        if image.get("exists") is False:
+            missing += 1
+        if isinstance(image.get("page"), int):
+            with_page += 1
+        if isinstance(image.get("caption"), str) and image.get("caption"):
+            with_caption += 1
+    return {
+        "image_count": len(images),
+        "semantic_alias_count": len(aliases),
+        "missing_image_count": missing,
+        "with_page_count": with_page,
+        "with_caption_count": with_caption,
+        "semantic_kind_counts": kind_counts,
+    }
+
+
+def make_asset_semantics_payload(
+    *,
+    handoff_root: str | Path,
+    metadata: Mapping[str, Any],
+    artifact_index: Mapping[str, Any],
+    layout_sidecars: list[Mapping[str, Any]] | None = None,
+    layout_signals: list[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Create deterministic semantic metadata for local image assets."""
+
+    root = Path(handoff_root)
+    markdown_contexts: list[dict[str, Any]] = []
+    documents = metadata.get("documents", []) if isinstance(metadata.get("documents"), list) else []
+    for document in documents:
+        if not isinstance(document, Mapping):
+            continue
+        markdown = document.get("markdown", {}) if isinstance(document.get("markdown"), Mapping) else {}
+        markdown_rel = str(markdown.get("path") or document.get("markdown_path") or "")
+        if not markdown_rel:
+            continue
+        text = _read_markdown(root / markdown_rel)
+        lines = text.splitlines()
+        page_by_line, _markers = _line_page_map(lines)
+        sections = _section_boundaries(markdown_rel=markdown_rel, text=text)
+        markdown_contexts.extend(
+            _markdown_image_contexts(
+                markdown_rel=markdown_rel,
+                text=text,
+                sections=sections,
+                page_by_line=page_by_line,
+                root=root,
+            )
+        )
+
+    artifacts = artifact_index.get("artifacts", []) if isinstance(artifact_index, Mapping) else []
+    indexed_images = [artifact for artifact in artifacts if isinstance(artifact, Mapping) and artifact.get("kind") == "image"]
+    raw_images = _merge_artifact_contexts(
+        artifacts=indexed_images,
+        contexts=markdown_contexts,
+        kind="image",
+    )
+    images = _enrich_image_artifacts(
+        raw_images,
+        root=root,
+        layout_signals=list(layout_signals or []),
+    )
+    aliases = [
+        {
+            "path": image["path"],
+            "alias": image["semantic_alias"],
+            "rewrites_markdown": False,
+            "semantic_kind": image.get("semantic_kind"),
+        }
+        for image in images
+        if isinstance(image.get("semantic_alias"), str)
+    ]
+    return {
+        "schema": ASSET_SEMANTICS_SCHEMA,
+        "created_at": _now(),
+        "summary": _asset_semantics_summary(images, aliases),
+        "images": images,
+        "semantic_aliases": aliases,
+        "layout_sidecars": list(layout_sidecars or []),
+    }
 
 
 def _markdown_table_contexts(
@@ -1409,18 +1663,35 @@ def make_retrieval_hints_payload(
         )
 
     artifacts = artifact_index.get("artifacts", []) if isinstance(artifact_index, Mapping) else []
+    asset_semantics = artifact_index.get("asset_semantics") if isinstance(artifact_index, Mapping) else None
+    semantic_images = asset_semantics.get("images", []) if isinstance(asset_semantics, Mapping) else []
+    semantic_images = [item for item in semantic_images if isinstance(item, Mapping)]
     indexed_table_artifacts = [artifact for artifact in artifacts if isinstance(artifact, Mapping) and artifact.get("kind") == "table"]
-    indexed_image_artifacts = [artifact for artifact in artifacts if isinstance(artifact, Mapping) and artifact.get("kind") == "image"]
+    indexed_image_artifacts = (
+        semantic_images
+        if semantic_images
+        else [artifact for artifact in artifacts if isinstance(artifact, Mapping) and artifact.get("kind") == "image"]
+    )
     layout_sidecars, layout_signals = _load_optional_layout_sidecars(root)
     table_artifacts = _merge_artifact_contexts(
         artifacts=indexed_table_artifacts,
         contexts=markdown_table_artifacts,
         kind="table",
     )
-    image_artifacts = _merge_artifact_contexts(
-        artifacts=indexed_image_artifacts,
-        contexts=markdown_image_artifacts,
-        kind="image",
+    image_contexts = [] if semantic_images else markdown_image_artifacts
+    image_artifacts = _enrich_image_artifacts(
+        _merge_artifact_contexts(
+            artifacts=indexed_image_artifacts,
+            contexts=image_contexts,
+            kind="image",
+        ),
+        root=root,
+        layout_signals=layout_signals,
+    )
+    asset_semantics_summary = (
+        asset_semantics.get("summary")
+        if isinstance(asset_semantics, Mapping) and isinstance(asset_semantics.get("summary"), Mapping)
+        else _asset_semantics_summary(image_artifacts, [])
     )
     quality_risks = _quality_risks(metadata=metadata, quality_report=quality_report, sections=sections)
     keywords = _keyword_candidates(
@@ -1445,6 +1716,10 @@ def make_retrieval_hints_payload(
         "section_boundaries": sections,
         "table_artifacts": table_artifacts[:30],
         "image_artifacts": image_artifacts[:30],
+        "asset_semantics": {
+            "schema": ASSET_SEMANTICS_SCHEMA,
+            "summary": asset_semantics_summary,
+        },
         "keyword_candidates": keywords,
         "question_candidates": questions,
         "numeric_candidates": numeric_candidates[:20],
@@ -1523,6 +1798,7 @@ def make_assistant_test_plan_payload(
     questions = retrieval_hints.get("question_candidates", []) if isinstance(retrieval_hints.get("question_candidates"), list) else []
     sections = retrieval_hints.get("section_boundaries", []) if isinstance(retrieval_hints.get("section_boundaries"), list) else []
     numeric = retrieval_hints.get("numeric_candidates", []) if isinstance(retrieval_hints.get("numeric_candidates"), list) else []
+    images = retrieval_hints.get("image_artifacts", []) if isinstance(retrieval_hints.get("image_artifacts"), list) else []
     cases: list[dict[str, Any]] = []
 
     if questions:
@@ -1551,18 +1827,33 @@ def make_assistant_test_plan_payload(
                     "source_heading": first_numeric.get("source_heading"),
                 }
             )
+    visual_artifact = next((image for image in images if isinstance(image, Mapping)), None)
     visual_section = next((section for section in sections if isinstance(section, Mapping) and int(section.get("image_count", 0)) > 0), None)
-    if visual_section:
-        cases.append(
-            {
-                "id": "visual-001",
-                "stage": "ocr_image_fact",
-                "question": f"What visual details are associated with {visual_section.get('title')}?",
-                "expected_behavior": "answer only if retrieved evidence contains the visual or OCR-backed detail",
-                "source_document": visual_section.get("document"),
-                "source_heading": visual_section.get("title"),
-            }
-        )
+    if visual_artifact or visual_section:
+        visual_label = None
+        if isinstance(visual_artifact, Mapping):
+            visual_label = visual_artifact.get("caption") or visual_artifact.get("alt_text") or visual_artifact.get("source_heading")
+        if not visual_label and isinstance(visual_section, Mapping):
+            visual_label = visual_section.get("title")
+        case = {
+            "id": "visual-001",
+            "stage": "ocr_image_fact",
+            "question": f"What visual details are associated with {visual_label}?",
+            "expected_behavior": "answer only if retrieved evidence contains the visual or OCR-backed detail",
+            "source_document": visual_artifact.get("document") if isinstance(visual_artifact, Mapping) else visual_section.get("document"),
+            "source_heading": visual_artifact.get("source_heading") if isinstance(visual_artifact, Mapping) else visual_section.get("title"),
+        }
+        if isinstance(visual_artifact, Mapping):
+            case.update(
+                {
+                    "source_image": visual_artifact.get("path"),
+                    "source_caption": visual_artifact.get("caption"),
+                    "semantic_kind": visual_artifact.get("semantic_kind"),
+                    "semantic_alias": visual_artifact.get("semantic_alias"),
+                    "page": visual_artifact.get("page"),
+                }
+            )
+        cases.append({key: value for key, value in case.items() if value is not None})
     if len(sections) >= 2 and isinstance(sections[0], Mapping) and isinstance(sections[1], Mapping):
         cases.append(
             {
@@ -1628,7 +1919,7 @@ def make_package_readme(
         "",
         f"- `{doc_manifest_name}`: required v0.1 document manifest.",
         f"- `{metadata_name}`: document-level source and Markdown metadata.",
-        f"- `{artifact_index_name}`: hashes and kinds for local assets under `documents/` and `artifacts/`.",
+        f"- `{artifact_index_name}`: hashes, kinds, and advisory image semantics for local assets under `documents/` and `artifacts/`.",
         f"- `{profile_suggestions_name}`: advisory parser/profile hints for review.",
         f"- `{retrieval_hints_name}`: section, keyword, question, and quality-risk hints for retrieval review.",
         f"- `{assistant_profile_name}`: advisory assistant retrieval and answer policy profile.",
@@ -1696,6 +1987,14 @@ def create_rich_handoff_package(
 
     metadata = make_document_metadata_payload(handoff_root=root, doc_manifest=doc_manifest)
     artifact_index = make_artifact_index_payload(handoff_root=root)
+    layout_sidecars, layout_signals = _load_optional_layout_sidecars(root)
+    artifact_index["asset_semantics"] = make_asset_semantics_payload(
+        handoff_root=root,
+        metadata=metadata,
+        artifact_index=artifact_index,
+        layout_sidecars=layout_sidecars,
+        layout_signals=layout_signals,
+    )
     profile_suggestions = make_profile_suggestions_payload(
         handoff_root=root,
         metadata=metadata,
@@ -1757,6 +2056,7 @@ def create_rich_handoff_package(
         "quality_report": quality_report_name if isinstance(quality_report_name, str) else None,
         "document_count": len(metadata["documents"]),
         "artifact_count": artifact_index["artifact_count"],
+        "asset_semantic_count": artifact_index["asset_semantics"]["summary"]["image_count"],
         "retrieval_hint_count": len(retrieval_hints["section_boundaries"]),
         "assistant_test_count": assistant_test_plan["test_count"],
         "quality_status": profile_suggestions.get("signals", {}).get("quality_status"),

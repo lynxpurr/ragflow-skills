@@ -1304,7 +1304,8 @@ Capabilities:
 
 - capture section boundaries, heading levels, line ranges, table/image/list counts, and
   boundary markers;
-- capture table artifacts and image-rich sections;
+- capture table artifacts, image-rich sections, and embedded `ragflow_asset_semantics_v1`
+  image metadata from Markdown image refs plus optional layout sidecars;
 - generate keyword and question candidates from headings and metadata;
 - recommend retrieval parameters such as similarity threshold, vector/BM25 weight, top-k,
   and quote/citation settings;
@@ -1315,6 +1316,12 @@ Capabilities:
 `ragflow-kb-build inspect-handoff` should summarize these sidecars. `ragflow-query` may
 consume an assistant profile for local test planning, but it should not mutate RAGFlow chat
 assistant settings automatically.
+
+Implementation status: rich handoffs now embed `ragflow_asset_semantics_v1` under
+`artifact_index.json`, merge Markdown image references with local asset hashes and optional
+`content_list` / `middle_json` layout signals, preserve semantic alias suggestions as
+advisory-only metadata, and propagate image semantics into `retrieval_hints.json` plus the
+visual assistant test case without rewriting Markdown or touching live RAGFlow.
 
 Implementation status: rich-handoff sidecars for retrieval hints, assistant profiles, and
 assistant test plans are generated as review artifacts by `ragflow-doc-to-md package

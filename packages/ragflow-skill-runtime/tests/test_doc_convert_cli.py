@@ -208,6 +208,14 @@ class DocConvertCliTests(unittest.TestCase):
                 check=False,
                 env=_env(),
             )
+            images = output_dir / "documents" / "images"
+            images.mkdir()
+            (images / "chart.png").write_bytes(b"fake chart")
+            markdown = output_dir / "documents" / "alpha.md"
+            markdown.write_text(
+                markdown.read_text(encoding="utf-8") + "\n![Alpha chart](images/chart.png)\n",
+                encoding="utf-8",
+            )
             package_result = subprocess.run(
                 [
                     sys.executable,
@@ -236,12 +244,20 @@ class DocConvertCliTests(unittest.TestCase):
         payload = json.loads(package_result.stdout)
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["package"]["schema"], "ragflow_handoff_package_v1")
+        self.assertEqual(payload["package"]["asset_semantic_count"], 1)
         self.assertEqual(metadata["schema"], "ragflow_document_metadata_v1")
         self.assertEqual(artifact_index["schema"], "ragflow_artifact_index_v1")
+        self.assertEqual(artifact_index["asset_semantics"]["schema"], "ragflow_asset_semantics_v1")
+        self.assertEqual(artifact_index["asset_semantics"]["summary"]["image_count"], 1)
+        self.assertEqual(artifact_index["asset_semantics"]["images"][0]["semantic_kind"], "chart")
+        self.assertEqual(artifact_index["asset_semantics"]["images"][0]["bytes"], len(b"fake chart"))
         self.assertEqual(suggestions["schema"], "ragflow_profile_suggestions_v1")
         self.assertEqual(retrieval_hints["schema"], "ragflow_retrieval_hints_v1")
+        self.assertEqual(retrieval_hints["asset_semantics"]["summary"]["image_count"], 1)
+        self.assertEqual(retrieval_hints["image_artifacts"][0]["semantic_kind"], "chart")
         self.assertEqual(assistant_profile["schema"], "ragflow_assistant_profile_v1")
         self.assertEqual(assistant_test_plan["schema"], "ragflow_assistant_test_plan_v1")
+        self.assertTrue(any(case.get("source_image") == "documents/images/chart.png" for case in assistant_test_plan["cases"]))
         self.assertTrue(readme_exists)
 
     def test_pipeline_creates_rich_handoff_and_ingest_plan(self) -> None:

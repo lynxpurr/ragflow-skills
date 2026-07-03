@@ -334,12 +334,15 @@ ragflow-doc-to-md compare-retained-package
 
 ### 4.4 P1：图片语义 metadata
 
-- [ ] 定义 `ragflow_asset_semantics_v1` 或扩展 `artifact_index.json`。
-- [ ] 从 Markdown image refs、artifact index、content_list、middle_json 合并图片语义。
-- [ ] 记录 page、kind、caption、source_heading、context、exists、sha256、bytes。
-- [ ] 增加 optional semantic alias map，但默认不改写 Markdown 主引用。
-- [ ] 将图片语义写入 retrieval hints 和 assistant test plan。
-- [ ] 增加 release hygiene 测试，确认不泄露远程 URL、原始路径或临时路径。
+实现状态：2026-07-03 已完成；扩展 `artifact_index.json` 内嵌图片语义报告，并传递到
+`retrieval_hints.json` 和 `assistant_test_plan.json`，未执行 live RAGFlow mutation。
+
+- [x] 定义 `ragflow_asset_semantics_v1` 或扩展 `artifact_index.json`。
+- [x] 从 Markdown image refs、artifact index、content_list、middle_json 合并图片语义。
+- [x] 记录 page、kind、caption、source_heading、context、exists、sha256、bytes。
+- [x] 增加 optional semantic alias map，但默认不改写 Markdown 主引用。
+- [x] 将图片语义写入 retrieval hints 和 assistant test plan。
+- [x] 增加 release hygiene 测试，确认不泄露远程 URL、原始路径或临时路径。
 
 ### 4.5 P1：Ingest readiness report
 
