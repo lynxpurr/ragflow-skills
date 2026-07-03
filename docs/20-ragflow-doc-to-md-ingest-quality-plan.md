@@ -472,3 +472,68 @@ RAGFlux 退役不应只看单次样本。至少需要：
 
 只有当这些证据稳定后，才能把 `ragflow-doc-to-md pipeline + ragflow-kb-build + ragflow-query`
 从“候选 replacement path”提升为“默认正式发布路径”。
+
+## 第六部分：2026-07-03 本轮优化收口总结
+
+本轮围绕“正式入库准备质量”完成了 `ragflow-doc-to-md` 到 `ragflow-kb-build`、
+`ragflow-query` 的离线 handoff 强化。实现重点不是复制旧包结构，而是把正式入库路径变成
+可发现、可审计、可 dry-run、可对比、可观察的 replacement path。
+
+### 6.1 已完成修改
+
+- 正式入库模式可发现性：`convert` 默认标记 `handoff_mode: thin_preview` 并给出 advisory；
+  `pipeline` 标记 `handoff_mode: formal_ingest`，并在 summary/runtime report 中暴露正式
+  handoff readiness signals。
+- KB 质量前置：新增 HTML table 统计、table artifact hints、chunk boundary profiles、
+  marker density warnings、图片语义 metadata、assistant/query hint 传递。
+- 入库准备审计：新增 `ragflow_doc_ingest_readiness_v1`，让 `package --rich`、`pipeline`
+  和 `ragflow-kb-build inspect-handoff` 能复用同一 JSON-first readiness 判断。
+- 包级可复核性：新增 `ragflow_formal_handoff_manifest_v1`，记录 sidecar、schema versions、
+  hashes 和 downstream command suggestions；`doc_manifest.json` 继续作为文档级 ingestion
+  contract。
+- Retained package 对比：新增 `ragflow_handoff_comparison_v1`，进行静态、脱敏、normalized
+  comparison，并明确标记 paired live A/B 是否执行。
+- Runtime 性能口径：`ragflow_doc_runtime_report_v1` 增加 `performance` 区块，记录 conversion、
+  asset、postprocess、package、hints、ingest plan 等阶段耗时，区分 local CLI 冷启动和常驻
+  service 复用，并保留 timeout/resource failure 分类。
+- 多样本退役观察：`tools/field_trial_metrics.py` 新增
+  `ragflow_retirement_observation_matrix_v1`，仅从显式 run roots 汇总 scanned、long
+  document、paper、contract、complex table、image heavy、low-quality OCR、multi-document
+  handoff 等样本证据。
+- Release gate 补强：field-trial metrics 和 retirement matrix schema identity 已纳入
+  release hygiene 路径，防止后续报告 schema 静默漂移。
+
+### 6.2 需要持续观察的项目
+
+- 多样本覆盖是否充分：当前代表样本不能替代广泛语料结论，后续应继续积累扫描件、长文档、
+  论文、合同、复杂表格、大量图片、低质量 OCR 和多文档 handoff 证据。
+- Chunk marker 密度：代表样本中 retained package 的 marker 更密，新 pipeline 的 live parse
+  和 smoke/query 已通过；后续应观察 marker 稀疏是否导致检索召回或 citation 稳定性下降。
+- 图片和表格语义：持续检查 local asset 落地、caption/context/page 归属、HTML table artifact
+  和 retrieval hints 是否能被 downstream profile、assistant test plan 和 query 侧有效消费。
+- Readiness 与实际 parse/query 的一致性：`ready` 或 `ready_with_review` 应持续对照 dry-run、
+  live parse chunk 数、smoke/query 和 citation audit 结果，避免 readiness 过度乐观。
+- 性能口径稳定性：区分 local MinerU CLI cold process、persistent service reuse、backend 未汇报
+  model init 的情况，避免把不同运行形态的耗时直接比较。
+- 安全边界：field-trial summary 只能记录脱敏指标、artifact 名称和 failure class，不写 endpoint、
+  token、dataset/document id、KB name、私有路径或 raw chunks。
+- Release health：每次 public schema、CLI summary、report surface 或 release artifact 变化后，
+  保持 schema identity、manifest schema、release hygiene、consumer acceptance 和 strict-vendor
+  platform smoke 绿色。
+
+### 6.3 后续开发工作汇总
+
+- 默认后续方向是 field-trial observation 和 release-path maintenance，不是直接开启新产品 surface。
+- 若至少三个真实 host-agent run 证明一次性 CLI handoff 成为瓶颈，再从 Phase 37.2 设计门禁进入
+  `ragflow-query serve`：localhost 绑定、生命周期、health/direct/host-assisted/shutdown schema、
+  auth boundary、redacted logs 和 fake-client smoke 必须先定义。
+- 若真实 converter/provider/product 合同出现，再进入 remote conversion client、provider
+  abstraction、reranker adapter 或 web/API wrapper；必须先具备 endpoint/auth/error model、fake
+  fixtures 和 acceptance criteria，不允许默认私有 endpoint。
+- Optional script-owned LLM/RAGAS backend 仍保持 deferred；只有在 explicit LLM config、
+  deterministic fixtures、advisory-output marking、citation-audit compatibility、redaction 和 release
+  gates 同时满足后才能开发。
+- Private bridge 仍留在 public release artifacts 之外；只有当 Markdown passthrough 到
+  `doc_manifest.json` 被真实私有 workflow 证明不足时，才在 public `skills/` 外开发。
+- Paired live A/B 或新的 live RAGFlow mutation 需要单独明确批准、一次性资源、cleanup 记录和脱敏
+  evidence；普通继续开发请求不自动打开 live gate。

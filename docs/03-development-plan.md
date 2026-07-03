@@ -2002,3 +2002,61 @@ The public suite is ready for first external use when:
 - [x] Release hygiene check blocks private paths, private workflow references, and missing vendored runtime.
 - [x] Release archive export produces deterministic per-skill archives and checksum manifest.
 - [x] Dedao integration remains private and outside public release artifacts.
+
+## 2026-07-03 Ingest Quality Optimization Closeout
+
+This closeout summarizes the `docs/20-ragflow-doc-to-md-ingest-quality-plan.md` round.
+It is a roadmap note, not a new unchecked implementation phase.
+
+Completed changes:
+
+- `ragflow-doc-to-md` now distinguishes `handoff_mode: thin_preview` from
+  `handoff_mode: formal_ingest`; ordinary `convert` emits preview advisory signals, while
+  `pipeline` emits formal ingest readiness signals.
+- Formal handoff quality now includes HTML table statistics, chunk boundary profiles,
+  marker density warnings, image semantics, retrieval hints, assistant test-plan inputs,
+  ingest readiness reports, package-level formal manifests, and retained-package static
+  comparison reports.
+- Runtime reports now expose performance timing for conversion, asset handling,
+  postprocess, package, hints, and ingest-plan stages, with local CLI cold-start versus
+  persistent service reuse called out where the backend can report it.
+- Field-trial metrics now include the offline
+  `ragflow_retirement_observation_matrix_v1` summary for explicit run roots, and both
+  field-trial metrics plus retirement matrix schema identities are covered by release
+  hygiene.
+- The implementation path added tests, schema identity coverage, consumer/platform smoke
+  coverage where public surfaces changed, and documentation updates without adding
+  default live RAGFlow mutation.
+
+Ongoing observation:
+
+- Keep collecting sanitized run evidence across scanned files, long documents, papers,
+  contracts, complex tables, image-heavy inputs, low-quality OCR, and multi-document
+  handoff batches before treating the replacement path as broad corpus-quality evidence.
+- Watch chunk marker density, table/image semantic retention, readiness-to-live-parse
+  agreement, smoke/query/citation stability, cleanup reliability, and cold/warm runtime
+  performance deltas.
+- Continue to use `tools/field_trial_metrics.py` only on explicit run roots or JSON files;
+  public docs may record sanitized metrics, artifact names, and failure classes, but not
+  endpoints, credentials, dataset/document ids, KB names, private paths, or raw chunks.
+- Keep archive release, runtime-wheel smoke/export, schema identity, manifest schema,
+  release hygiene, consumer acceptance, and strict-vendor platform smoke green whenever
+  public reports, contracts, or artifacts change.
+
+Future work summary:
+
+- Default continuation remains field-trial observation and release-path maintenance.
+- `ragflow-query serve` stays gated until real host-agent evidence shows one-shot CLI
+  handoff is insufficient; implementation must start from the Phase 37.2 lifecycle,
+  localhost, auth, health/direct/host-assisted/shutdown, redacted-log, and fake-client
+  design gate.
+- Remote conversion, provider abstraction, reranker adapter, and web/API wrapper work
+  stay deferred until a concrete endpoint/provider/product contract has fake fixtures,
+  error handling, config/auth shape, and acceptance criteria.
+- Optional script-owned LLM/RAGAS execution remains deferred until explicit LLM config,
+  deterministic fixtures, advisory marking, citation-audit compatibility, redaction, and
+  release gates are planned together.
+- Private bridge work remains outside public `skills/`; start it only if a private
+  workflow proves Markdown passthrough into `doc_manifest.json` is insufficient.
+- Any paired live A/B, disposable KB workflow, or other live RAGFlow mutation still
+  requires separate explicit approval, cleanup confirmation, and sanitized evidence.
