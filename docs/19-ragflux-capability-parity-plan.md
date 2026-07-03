@@ -1,7 +1,7 @@
 # 19. RAGFlux 能力补齐设计与开发计划
 
-状态：P0/P1/P2 已实现并通过离线验证；迁移指引与 RAGFlux 退役门禁已补齐；真实服务 field-trial / live E2E 仍需按门禁执行
-日期：2026-07-02
+状态：P0/P1/P2 已实现并通过离线验证；迁移指引与 RAGFlux 退役门禁已补齐；代表性 PDF 已完成真实 MinerU FastAPI field-trial 和一次性 RAGFlow KB live E2E
+日期：2026-07-02；最后更新：2026-07-03
 适用范围：`ragflow-doc-to-md` 作为正式文档转换 skill，配合 `ragflow-kb-build`
 和 `ragflow-query` 替代 RAGFlux 的文档预处理、入库和检索验证能力。
 
@@ -346,14 +346,14 @@ RAGFlux 产物迁移表：
 
 | RAGFlux 产物/能力 | 三 skill 替代产物/命令 | 状态 |
 | --- | --- | --- |
-| PDF/Office/image -> Markdown | `ragflow-doc-to-md pipeline --backend mineru-fastapi --mineru-asset-mode markdown_assets` | 已实现；真实 MinerU FastAPI field-trial 待执行 |
-| 图片目录 | `documents/images/...`，`doc_manifest.json` 的 `assets.images[]`，`artifact_index.json` 的 image artifacts | 已实现；需真实样本确认图片返回形态 |
+| PDF/Office/image -> Markdown | `ragflow-doc-to-md pipeline --backend mineru-fastapi --mineru-asset-mode markdown_assets` | 已实现；代表性 PDF 真实 MinerU FastAPI field-trial 通过，后续继续多样本观察 |
+| 图片目录 | `documents/images/...`，`doc_manifest.json` 的 `assets.images[]`，`artifact_index.json` 的 image artifacts | 已实现；代表性 PDF 落地 21 张本地图片资产，未发现新协议解析缺口 |
 | `<!-- chunk -->` 标记 | `pipeline --postprocess-profile chunk-markers` 生成 `postprocess_report.json` 并改写 handoff Markdown | 已实现 |
 | `retrieval_hints.json` | `package --rich` / `pipeline` 生成增强 hints，含 section/page/table/image/numeric/template signals | 已实现 |
 | `retrieval_hints` 被后续工具消费 | `ragflow-kb-build topology advise/split-plan/activation-plan`，`ragflow-query assistant-profile/assistant-test-plan` | 已实现 |
 | RAGFlow 配置建议 | 非密钥 `ragflow_ingest_plan.yaml`，可选非密钥 alias `ragflow_config.yaml` | 已实现；真实 endpoint/API key 仍只放私有 config 或环境变量 |
 | 入库 dry-run | `ragflow-kb-build inspect-handoff` + `build.py --dry-run` | 已实现 |
-| live build / parse / validate | `ragflow-kb-build` build、`validate.py --level smoke/regression/benchmark`、`parse-report`、`health-report` | 已实现；live mutation 需用户批准 |
+| live build / parse / validate | `ragflow-kb-build` build、`validate.py --level smoke/regression/benchmark`、`parse-report`、`health-report` | 已实现；代表样本经用户批准完成一次性 KB live E2E，后续 live mutation 仍需逐次批准 |
 | query / assistant 验证 | `ragflow-query ask`、`assistant-profile recommend`、`assistant-test-plan`、`audit-citations`、`evaluate-answer` | 已实现；assistant 设置不自动修改 |
 
 RAGFlux 退役前 release gate：
@@ -409,8 +409,9 @@ python3 tools/platform_smoke_matrix.py --profile strict-vendor-env --work-dir /t
 4. 最后增强 hints 质量和 kb-build activation/topology 串联。
 
 P0/P1/P2 离线能力补齐完成后，`ragflow-doc-to-md + ragflow-kb-build + ragflow-query`
-已具备作为 RAGFlux 退役候选替代链路的基础；正式退役仍以 3.6 中真实 MinerU FastAPI
-field-trial、一次性 KB live E2E 和对照样本不退化 gate 为准。
+已具备作为 RAGFlux 退役候选替代链路的基础。2026-07-03 的代表性 PDF 现场 gate
+已经验证真实 MinerU FastAPI、一次性 KB live E2E 和 retained package baseline 对比；
+后续正式发布判断应继续区分“代表样本通过”和“广泛语料质量保证”。
 
 ### 3.9 现场 gate 执行记录（2026-07-03）
 
@@ -472,3 +473,61 @@ field-trial、一次性 KB live E2E 和对照样本不退化 gate 为准。
   advisory review note，不是 live failure。
 - 本轮只按用户批准对新 replacement path 做了一次性 KB live E2E；如果需要 RAGFlux retained
   package 的严格 paired live A/B，需要另行批准第二次 disposable KB mutation。
+
+### 3.10 本轮改善收尾结论与后续路线
+
+本轮能力补齐的核心结论：
+
+1. RAGFlux 退役的关键缺口已经从“能力缺失”转为“现场运行质量持续观察”。P0 图片资产落地、
+   P1 pipeline / ingest plan / kb-build 串联、P2 retrieval hints 增强均已完成，并通过离线
+   release-facing validation。
+2. 在代表性中文产品 PDF 上，`ragflow-doc-to-md pipeline --backend mineru-fastapi
+   --mineru-asset-mode markdown_assets --postprocess-profile chunk-markers` 可以胜任正式入库前处理：
+   quality gate `PASS`，本地图片资产落地，rich sidecars 齐全，`inspect-handoff` ready，
+   dry-run 通过。
+3. 三 skill 拆分后的职责边界成立：`ragflow-doc-to-md` 负责转换和 handoff 富化，
+   `ragflow-kb-build` 负责上库、解析、验证和健康报告，`ragflow-query` 负责 direct /
+   host-assisted 检索验证。RAGFlux 的“一条龙”能力已被拆成更可治理的流水线。
+4. 代表样本 live E2E 证明 replacement path 可完成一次性 KB build、parse wait、smoke
+   validation、direct query、host-assisted query 和 cleanup；这使其可以作为默认正式链路的候选。
+5. 本轮通过的是代表样本验收，不等同于所有文档类型的广泛质量保证，也不等同于 RAGFlux retained
+   package 的严格 paired live A/B。后续是否扩大为默认发布路径，应依赖更多样本文档的持续观察。
+
+后续需要持续关注的事项：
+
+- MinerU 资源压力：CUDA OOM 来自服务资源竞争时，应先释放或降低 GPU 压力，再判断是否存在协议或
+  parser 缺陷。Hermes/OpenClaw 应把 MinerU 服务状态、端口和显存占用纳入运行前检查。
+- MinerU FastAPI 协议漂移：如果真实服务返回离线 fixture 未覆盖的新图片、zip、base64、
+  content-list 或 middle-json 形态，应先记录脱敏样本，再做最小解析器扩展。
+- Chunk 边界质量：RAGFlux retained package 的 chunk marker 更密；新 pipeline 的 marker 更保守。
+  当前样本 live parse 和 smoke query 已通过，但多样本文档应继续观察 chunk 数、召回质量和边界可读性。
+- 图片资产语义：新 pipeline 本地资产数多于 Markdown 引用数，说明 artifact index 捕获了额外图片。
+  后续应观察这些额外资产是否提高检索/审计价值，还是会带来无效资产膨胀。
+- RAGFlow 版本兼容：model-provider probe 在当前服务版本出现 provider path 兼容性 404，但 dataset
+  build/parse/query/cleanup 正常。后续应把 provider probe 与 dataset API 可用性分开判断。
+- 私有凭据生命周期：live 配置可能过期，临时配置只能保存在私有路径，使用后必须删除；public docs
+  只记录脱敏事实，不记录 endpoint、token、dataset id、document id、KB name、run root 或原始路径。
+- Manifest 可解释性：live 健康报告中 embedding model 缺失、activation plan 未单独提供仍是
+  advisory review note。后续如果要给用户更强的发布信心，应补齐这些信息链路。
+- Cleanup 可靠性：一次性 KB 必须默认预览后执行 cleanup，并保留 cleanup 成功或手动清理所需的脱敏事实。
+- 多文档类型覆盖：当前代表样本是中文工业产品 PDF。后续还应覆盖扫描件、长文档、论文、合同、复杂表格、
+  大量图片、低质量 OCR 和多文档批量 handoff。
+
+后续可以新增但不应立即默认展开的功能：
+
+- `structured_assets` 生产模式：在 `markdown_assets` 稳定后，按 opt-in 增加 content_list、
+  middle_json、页码、版面块、图片上下文和表格结构 sidecar 的完整保存与 schema 化。
+- 自适应 chunk-marker profile：在现有 `chunk-markers` 基础上增加 conservative / dense /
+  ragflux-compatible 等 profile，并用离线 fixture 和 live smoke 对比验证不同密度的召回影响。
+- 现场验收批处理器：提供一个非默认、显式 run-root 的 field-trial runner，串联 pipeline、
+  inspect、dry-run、可选 live E2E、cleanup 和脱敏摘要，减少 Hermes/OpenClaw 临场编排成本。
+- Retained package 对比报告：把本轮临时 comparison 口径产品化为只读报告，固定比较 quality、图片、
+  chunk marker、hints、sidecars 和 live evidence，同时明确 paired live A/B 需要额外批准。
+- RAGFlow provider compatibility probe：按 RAGFlow 版本拆分 provider/model probe endpoint，
+  避免 provider path 404 被误判为 dataset build/query 不可用。
+- Activation plan 自动串联：在 pipeline handoff 或 kb-build dry-run 后更显式地产生 route-test
+  readiness、assistant test plan 和 activation checklist，帮助用户完成上库后的检索启用。
+- Handoff 完整度评分：基于 quality gate、图片落地、sidecar 完整性、hint 信号、dry-run ready
+  和 redaction 结果生成一个 advisory score，供 host agent 决定是否提示用户进入 live build。
+- 多样本退役观察矩阵：把后续真实 PDF/Office/图片样本按文档类型、页数、图片数、表格复杂度、
+  OCR 难度、parse chunk 数和 smoke/query 结果汇总，作为最终默认发布路径的证据。
