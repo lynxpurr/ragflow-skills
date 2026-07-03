@@ -38,6 +38,7 @@ python scripts/convert.py split --markdown ./handoff/documents/book.md --output 
 python scripts/convert.py split --markdown ./handoff/documents/book.md --output ./handoff/segments --checkpoint ./run/split.checkpoint.json --batch-size 10 --plan-output ./handoff/segmentation_plan.json
 python scripts/convert.py split --markdown ./handoff/documents/book.md --output ./handoff/segments --checkpoint ./run/split.checkpoint.json --resume --plan-output ./handoff/segmentation_plan.json
 python scripts/convert.py package --handoff ./handoff --rich
+python scripts/convert.py compare-retained-package --retained-package ./legacy-retained --replacement-handoff ./handoff --report-json ./run/handoff_comparison.json --report-md ./run/handoff_comparison.md --redaction-report ./run/handoff_comparison.redaction.json --json
 python scripts/convert.py postprocess --doc-manifest ./handoff/doc_manifest.json --profile safe --output ./handoff-clean
 ```
 
@@ -121,6 +122,7 @@ Notes:
 - `formal_handoff_manifest.json` is a package-level audit file with relative sidecar paths, schema/version identities, Markdown/image/report hashes, a package hash, and downstream command suggestions. It does not replace `doc_manifest.json`, which remains the document-level contract consumed by `ragflow-kb-build`.
 - `artifact_index.json` embeds `ragflow_asset_semantics_v1` for local image assets when available: page, caption, nearby heading/context, semantic kind, bytes, hash, and advisory alias suggestions. Alias suggestions do not rewrite Markdown image references.
 - When replacing a legacy preprocessor workflow, use `pipeline` for formal handoff generation, then review `ingest_readiness_report.json` and pass `doc_manifest.json`, `retrieval_hints.json`, and `ragflow_ingest_plan.yaml` to `ragflow-kb-build inspect-handoff` and dry-run before any live build.
+- Use `compare-retained-package` when a host agent needs a read-only `ragflow_handoff_comparison_v1` report between a legacy retained ingestion package and a `pipeline` handoff. The command excludes obvious retained intermediate/raw/layout/span directories, normalizes chunk markers, blank lines, and image path differences for text similarity, and marks strict paired live A/B as `not_run` unless separate live evidence is supplied. It does not create or mutate RAGFlow KBs.
 - Use `postprocess` with profiles `none`, `safe`, `ocr`, `chunk-markers`, `chunk-markers-conservative`, `chunk-markers-dense`, or `chunk-markers-ragflux-like` when Markdown needs deterministic cleanup before ingestion. `chunk-markers` remains the conservative compatibility alias; `chunk-markers-dense` adds page/table/image boundaries, and `chunk-markers-ragflux-like` also adds list boundaries for migration comparison. Use `--output` for non-destructive writes; `--write` is required for in-place rewrites.
 - `doc_manifest.json` uses `source_root: "."`, so downstream `ragflow-kb-build` can consume it after the handoff directory moves.
 - `quality_gate.status` is written into `doc_manifest.json`; `ragflow-kb-build` blocks `BLOCKED` handoffs unless the user passes `--allow-blocked`.

@@ -69,6 +69,7 @@ mineru:
 - MinerU FastAPI endpoint 的配置优先级是：`--mineru-base-url` 高于 `MINERU_BASE_URL`，高于配置文件中的 `mineru.base_url`。生产配置优先使用私有 config 文件或环境变量；命令行参数只用于临时覆盖。
 - 不要直接修改 release artifact 或 skill 里的 `scripts/_vendor`。如果需要新增 backend，请报告为源码级需求，由维护者修改 `packages/ragflow-skill-runtime` 后重新构建发布包。
 - 正式 RAGFlow KB 入库前处理默认使用 `ragflow-doc-to-md pipeline`。普通 `convert` 输出的 `handoff_mode: thin_preview` 只用于快速预览；不要拿它和 legacy thick package 做正式能力对比，也不要直接进入 live build。
+- 如果需要对比 legacy retained package，请使用 `ragflow-doc-to-md compare-retained-package` 生成只读 `ragflow_handoff_comparison_v1` 报告；它不是 paired live A/B，默认必须标记 strict paired live A/B `not_run`，不要因此创建第二个 live KB。
 - 只询问缺失的信息，不要让我手动拼接每一条命令。
 
 请先检查并报告：

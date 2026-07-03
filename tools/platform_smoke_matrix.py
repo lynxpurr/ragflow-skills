@@ -2315,6 +2315,108 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "error": "" if marker_ok else "missing chunk marker",
         }
     )
+    retained_parent = workspace / "legacy-retained-package"
+    retained_root = retained_parent / "ragflow_input"
+    retained_images = retained_root / "images"
+    retained_raw = retained_root / "raw" / "layout"
+    retained_images.mkdir(parents=True, exist_ok=True)
+    retained_raw.mkdir(parents=True, exist_ok=True)
+    (retained_images / "chart.png").write_bytes(b"retained chart")
+    (retained_root / "apollo.md").write_text(
+        "# APOLLO Catalog\n\n"
+        "<!-- chunk -->\n\n"
+        "APOLLO accuracy is 4.0 um.\n\n"
+        "![Chart](images/chart.png)\n\n"
+        "| Field | Value |\n"
+        "| --- | --- |\n"
+        "| Accuracy | 4.0 um |\n",
+        encoding="utf-8",
+    )
+    (retained_root / "quality_report.json").write_text(
+        json.dumps({"schema": "doc_quality_report_v1", "gate": {"status": "PASS"}}),
+        encoding="utf-8",
+    )
+    (retained_root / "retrieval_hints.json").write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_retrieval_hints_v1",
+                "section_boundaries": [{"title": "APOLLO Catalog"}],
+                "preferred_boundaries": [{"reason": "chunk_marker_boundary"}],
+                "keyword_candidates": [{"term": "APOLLO"}],
+                "question_candidates": [{"question": "What is the accuracy?"}],
+                "table_artifacts": [{"source": "markdown_table"}],
+                "image_artifacts": [{"path": "images/chart.png"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (retained_root / "ragflow_config.yaml").write_text("chunk_size: 512\n", encoding="utf-8")
+    (retained_raw / "ignored-private-source.md").write_text("# Ignored\n\nDo not count this.\n", encoding="utf-8")
+    (retained_raw / "ignored-cache.png").write_bytes(b"ignored image cache")
+    comparison_json = workspace / "handoff_comparison.json"
+    comparison_md = workspace / "handoff_comparison.md"
+    comparison_redaction = workspace / "handoff_comparison.redaction.json"
+    comparison_result = _run_command(
+        [
+            sys.executable,
+            str(convert_script),
+            "compare-retained-package",
+            "--retained-package",
+            str(retained_parent),
+            "--replacement-handoff",
+            str(pipeline_handoff),
+            "--report-json",
+            str(comparison_json),
+            "--report-md",
+            str(comparison_md),
+            "--redaction-report",
+            str(comparison_redaction),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "doc-to-md retained package comparison",
+        comparison_result,
+        required_stdout='"schema": "ragflow_handoff_comparison_v1"',
+    )
+    for comparison_path in (comparison_json, comparison_md):
+        checks.append(
+            {
+                "name": f"handoff comparison {comparison_path.name} produced",
+                "ok": comparison_path.exists(),
+                "returncode": 0 if comparison_path.exists() else 1,
+                "error": "" if comparison_path.exists() else f"missing {comparison_path}",
+            }
+        )
+    _record_redaction_sidecar_check(checks, "doc-to-md retained package comparison redaction", comparison_redaction)
+    comparison_ok = False
+    comparison_error = "missing comparison JSON"
+    if comparison_json.exists():
+        try:
+            comparison_payload = json.loads(comparison_json.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            comparison_error = str(exc)
+        else:
+            static = comparison_payload.get("static_comparison", {})
+            retained_static = static.get("retained_package", {}) if isinstance(static, dict) else {}
+            comparison_ok = (
+                comparison_payload.get("schema") == "ragflow_handoff_comparison_v1"
+                and comparison_payload.get("live_evidence", {}).get("paired_live_ab", {}).get("status") == "not_run"
+                and retained_static.get("effective_root") == "ragflow_input"
+                and retained_static.get("scan", {}).get("ignored_directory_count", 0) >= 1
+            )
+            comparison_error = "" if comparison_ok else "comparison payload did not preserve static/no-live boundary"
+    checks.append(
+        {
+            "name": "retained package comparison marks static no-live boundary",
+            "ok": comparison_ok,
+            "returncode": 0 if comparison_ok else 1,
+            "error": comparison_error,
+        }
+    )
     postprocess_dir = workspace / "postprocessed-handoff"
     postprocess_redaction = workspace / "postprocess_redaction.json"
     postprocess_result = _run_command(
@@ -4502,6 +4604,9 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         workspace / "pipeline-handoff" / "postprocess_report.json",
         workspace / "pipeline-handoff" / "retrieval_hints.json",
         workspace / "pipeline-handoff" / "ragflow_ingest_plan.yaml",
+        workspace / "handoff_comparison.json",
+        workspace / "handoff_comparison.md",
+        workspace / "handoff_comparison.redaction.json",
         workspace / "backend_probe.json",
         workspace / "backend_probe.md",
         workspace / "convert_redaction.json",

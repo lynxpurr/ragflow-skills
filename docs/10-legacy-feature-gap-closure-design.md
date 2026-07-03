@@ -1341,6 +1341,14 @@ and downstream inspect/dry-run command suggestions. `doc_manifest.json` remains 
 document-level ingestion contract; the formal manifest is for package review and
 handoff integrity checks.
 
+Implementation status: `ragflow-doc-to-md compare-retained-package` now emits read-only
+`ragflow_handoff_comparison_v1` reports for RAGFlux retained ingestion packages versus
+formal replacement handoffs. The report excludes obvious retained raw/intermediate/layout
+and span directories, normalizes chunk markers, blank lines, and Markdown image path
+differences for text similarity, compares image/table/chunk/hints/sidecar metrics, and
+marks strict paired live A/B as `not_run` unless separately supplied live evidence exists.
+It does not create, upload to, query, or delete RAGFlow KBs.
+
 Implementation status: rich-handoff sidecars for retrieval hints, assistant profiles, and
 assistant test plans are generated as review artifacts by `ragflow-doc-to-md package
 --rich` and surfaced by downstream acceptance/smoke checks. `ragflow-query
@@ -1435,8 +1443,8 @@ breaker pilots must stay default-off, read-only, and scoped to `endpoint-report`
 Inventory implemented. `tools/report_surface_inventory.py` emits
 `ragflow_report_surface_inventory_v1`, imports the public CLI parsers offline, and fails
 the inventory when a public command lacks an explicit `covered`, `not_applicable`, or
-`needs_redaction` classification. The current verified inventory names 88 public commands:
-79 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
+`needs_redaction` classification. The current verified inventory names 89 public commands:
+80 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
 classification findings.
 
 `ragflow-kb-build parse-report` and `ragflow-kb-build health-report` now support
@@ -1622,7 +1630,7 @@ mutation/query rollout.
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene as a static Phase
 31 governance surface. It reuses the public command inventory and classifies current
 runtime-helper coverage as 21 covered commands, 0 candidate commands, 0 deferred
-commands, and 67 not-applicable commands with no stale classification findings. Covered
+commands, and 68 not-applicable commands with no stale classification findings. Covered
 commands include the endpoint-report helper pilot, query fallback partial-failure reports,
 live `ragflow-query ask` retry/partial-failure/metrics reporting, query-output cache
 reports, centroid build checkpoints, top-level live `ragflow-kb-build` stage
@@ -1656,7 +1664,7 @@ hygiene.
 
 The active Phase 31 runtime-resilience inventory is closed. The runtime-resilience
 inventory is the authoritative ledger: 21 command surfaces are currently `covered`, 0 are
-`candidate`, 0 are `deferred`, and 67 are `not_applicable`.
+`candidate`, 0 are `deferred`, and 68 are `not_applicable`.
 
 Finish the remaining gated work in this order:
 

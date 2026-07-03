@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import json
 import hashlib
 import mimetypes
@@ -26,6 +27,7 @@ ASSISTANT_PROFILE_SCHEMA = "ragflow_assistant_profile_v1"
 ASSISTANT_TEST_PLAN_SCHEMA = "ragflow_assistant_test_plan_v1"
 DOC_INGEST_READINESS_SCHEMA = "ragflow_doc_ingest_readiness_v1"
 FORMAL_HANDOFF_MANIFEST_SCHEMA = "ragflow_formal_handoff_manifest_v1"
+HANDOFF_COMPARISON_SCHEMA = "ragflow_handoff_comparison_v1"
 RAGFLOW_INGEST_PLAN_SCHEMA = "ragflow_ingest_plan_v1"
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -40,6 +42,40 @@ PAGE_COMMENT_RE = re.compile(
 )
 PAGE_TEXT_RE = re.compile(r"^\s*(?:page|p\.|第)\s*([0-9]{1,5})\s*(?:页)?\s*$", re.IGNORECASE)
 CHUNK_MARKER = "<!-- chunk -->"
+CHUNK_MARKER_RE = re.compile(r"<!--\s*chunk(?:\s+[^>]*)?\s*-->", re.IGNORECASE)
+MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
+IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".tif", ".tiff", ".webp"}
+TABLE_SUFFIXES = {".csv", ".tsv", ".xls", ".xlsx"}
+COMPARISON_RETAINED_IGNORED_DIRS = {
+    ".cache",
+    "intermediate",
+    "layout",
+    "layout_pdf",
+    "layout_pdfs",
+    "mineru",
+    "mineru_output",
+    "origin",
+    "pdf",
+    "pdfs",
+    "raw",
+    "raw_source",
+    "raw_sources",
+    "source_pdf",
+    "source_pdfs",
+    "span",
+    "span_pdf",
+    "span_pdfs",
+    "spans",
+    "temp",
+    "tmp",
+}
+COMPARISON_MARKDOWN_SIDECAR_NAMES = {
+    "ingest_readiness_report.md",
+    "package_readme.md",
+    "quality_report.md",
+    "readme.md",
+    "runtime_report.md",
+}
 
 STOPWORDS = {
     "about",
@@ -2941,6 +2977,750 @@ def write_formal_handoff_manifest(
     path = root / formal_handoff_manifest_name
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return payload
+
+
+def _comparison_retained_effective_root(root: Path) -> tuple[Path, str]:
+    ragflow_input = root / "ragflow_input"
+    if root.name != "ragflow_input" and ragflow_input.is_dir():
+        return ragflow_input, "ragflow_input"
+    return root, "."
+
+
+def _comparison_path_uses_ignored_dir(path: Path, root: Path, ignored_dirs: set[str]) -> bool:
+    try:
+        parts = path.relative_to(root).parts[:-1] if path.is_file() else path.relative_to(root).parts
+    except ValueError:
+        return True
+    return any(part.lower() in ignored_dirs for part in parts)
+
+
+def _comparison_count_ignored_dirs(root: Path, ignored_dirs: set[str]) -> int:
+    count = 0
+    if not root.is_dir():
+        return count
+    for path in root.rglob("*"):
+        if path.is_dir() and path.name.lower() in ignored_dirs:
+            count += 1
+    return count
+
+
+def _comparison_iter_files(root: Path, *, suffixes: set[str], ignored_dirs: set[str]) -> list[Path]:
+    files: list[Path] = []
+    if not root.is_dir():
+        return files
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        if _comparison_path_uses_ignored_dir(path, root, ignored_dirs):
+            continue
+        if path.suffix.lower() in suffixes:
+            files.append(path)
+    return files
+
+
+def _comparison_find_sidecar(root: Path, names: tuple[str, ...], *, ignored_dirs: set[str]) -> Path | None:
+    lowered = {name.lower() for name in names}
+    for name in names:
+        direct = root / name
+        if direct.is_file() and not _comparison_path_uses_ignored_dir(direct, root, ignored_dirs):
+            return direct
+    candidates = [
+        path
+        for path in _comparison_iter_files(root, suffixes={".json", ".yaml", ".yml", ".md"}, ignored_dirs=ignored_dirs)
+        if path.name.lower() in lowered
+    ]
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: (len(item.relative_to(root).parts), item.relative_to(root).as_posix()))[0]
+
+
+def _comparison_load_sidecar_payload(
+    root: Path,
+    names: tuple[str, ...],
+    *,
+    ignored_dirs: set[str],
+) -> tuple[dict[str, Any] | None, str | None]:
+    path = _comparison_find_sidecar(root, names, ignored_dirs=ignored_dirs)
+    if path is None:
+        return None, None
+    try:
+        if path.suffix.lower() == ".json":
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        elif path.suffix.lower() in {".yaml", ".yml"}:
+            payload = _read_simple_yaml(path)
+        else:
+            return None, _relative(path, root)
+    except (HandoffError, json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return None, _relative(path, root)
+    if not isinstance(payload, dict):
+        return None, _relative(path, root)
+    return payload, _relative(path, root)
+
+
+def _comparison_markdown_paths(
+    *,
+    root: Path,
+    doc_manifest: Mapping[str, Any] | None,
+    ignored_dirs: set[str],
+) -> list[Path]:
+    paths: list[Path] = []
+    if isinstance(doc_manifest, Mapping):
+        raw_documents = doc_manifest.get("documents")
+        if isinstance(raw_documents, list):
+            for document in raw_documents:
+                if not isinstance(document, Mapping):
+                    continue
+                raw_path = document.get("markdown_path")
+                if not isinstance(raw_path, str) or not _safe_relative_reference(raw_path):
+                    continue
+                path = root / raw_path
+                if path.is_file() and not _comparison_path_uses_ignored_dir(path, root, ignored_dirs):
+                    paths.append(path)
+    if paths:
+        return sorted(set(paths), key=lambda item: _relative(item, root))
+    return [
+        path
+        for path in _comparison_iter_files(root, suffixes={".md", ".markdown"}, ignored_dirs=ignored_dirs)
+        if path.name.lower() not in COMPARISON_MARKDOWN_SIDECAR_NAMES
+    ]
+
+
+def _comparison_file_records(paths: list[Path], *, root: Path, limit: int = 50) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for path in paths[:limit]:
+        record = _file_record(path, root=root)
+        records.append(record)
+    return records
+
+
+def _count_markdown_tables(text: str) -> int:
+    lines = text.splitlines()
+    count = 0
+    for index, line in enumerate(lines[:-1]):
+        if "|" not in line:
+            continue
+        if MARKDOWN_TABLE_SEPARATOR_RE.match(lines[index + 1]):
+            count += 1
+    return count
+
+
+def _normalize_markdown_text_for_comparison(text: str) -> str:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = CHUNK_MARKER_RE.sub("\n", normalized)
+    normalized = MARKDOWN_IMAGE_RE.sub(lambda match: f"![{' '.join(match.group(1).split())}](<image>)", normalized)
+    lines = [" ".join(line.split()) for line in normalized.splitlines() if line.strip()]
+    return "\n".join(lines)
+
+
+def _comparison_markdown_metrics(paths: list[Path], *, root: Path) -> tuple[dict[str, Any], str]:
+    total_bytes = 0
+    total_chars = 0
+    total_lines = 0
+    image_ref_count = 0
+    local_image_ref_count = 0
+    remote_image_ref_count = 0
+    chunk_marker_count = 0
+    markdown_table_count = 0
+    html_table_count = 0
+    normalized_parts: list[str] = []
+    for path in paths:
+        try:
+            raw = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        encoded = raw.encode("utf-8")
+        total_bytes += len(encoded)
+        total_chars += len(raw)
+        total_lines += len(raw.splitlines())
+        refs = list(MARKDOWN_IMAGE_RE.finditer(raw))
+        image_ref_count += len(refs)
+        for match in refs:
+            target = _image_reference_path(match.group(2))
+            if target and not _is_remote_image_reference(target):
+                local_image_ref_count += 1
+            else:
+                remote_image_ref_count += 1
+        chunk_marker_count += len(CHUNK_MARKER_RE.findall(raw))
+        markdown_table_count += _count_markdown_tables(raw)
+        html_table_count += len(parse_html_tables(raw))
+        normalized_parts.append(_normalize_markdown_text_for_comparison(raw))
+    normalized_text = "\n".join(part for part in normalized_parts if part)
+    return (
+        {
+            "markdown_file_count": len(paths),
+            "markdown_bytes": total_bytes,
+            "markdown_chars": total_chars,
+            "markdown_lines": total_lines,
+            "image_reference_count": image_ref_count,
+            "local_image_reference_count": local_image_ref_count,
+            "remote_image_reference_count": remote_image_ref_count,
+            "chunk_marker_count": chunk_marker_count,
+            "markdown_table_count": markdown_table_count,
+            "html_table_count": html_table_count,
+            "normalized_text_chars": len(normalized_text),
+            "normalized_text_sha256": hashlib.sha256(normalized_text.encode("utf-8")).hexdigest(),
+        },
+        normalized_text,
+    )
+
+
+def _comparison_sidecar_completeness(root: Path, *, ignored_dirs: set[str]) -> dict[str, Any]:
+    expected: dict[str, tuple[str, ...]] = {
+        "doc_manifest": ("doc_manifest.json",),
+        "quality_report": ("quality_report.json",),
+        "postprocess_report": ("postprocess_report.json",),
+        "chunk_profile_report": ("chunk_profile_report.json",),
+        "metadata": ("metadata.json",),
+        "artifact_index": ("artifact_index.json",),
+        "profile_suggestions": ("profile_suggestions.json",),
+        "retrieval_hints": ("retrieval_hints.json",),
+        "assistant_profile": ("assistant_profile.json",),
+        "assistant_test_plan": ("assistant_test_plan.json",),
+        "ingest_readiness": ("ingest_readiness_report.json",),
+        "formal_handoff_manifest": ("formal_handoff_manifest.json",),
+        "package_readme": ("package_readme.md",),
+        "ragflow_ingest_plan": ("ragflow_ingest_plan.yaml", "ragflow_ingest_plan.yml", "ragflow_ingest_plan.json"),
+        "legacy_ragflow_config": ("ragflow_config.yaml", "ragflow_config.yml", "ragflow_config.json"),
+    }
+    records: dict[str, dict[str, Any]] = {}
+    present: list[str] = []
+    missing: list[str] = []
+    for name, filenames in expected.items():
+        path = _comparison_find_sidecar(root, filenames, ignored_dirs=ignored_dirs)
+        if path is None:
+            missing.append(name)
+            records[name] = {"present": False, "path": None}
+            continue
+        present.append(name)
+        records[name] = {"present": True, "path": _relative(path, root)}
+    return {
+        "expected_count": len(expected),
+        "present_count": len(present),
+        "missing_count": len(missing),
+        "completeness_ratio": round(len(present) / len(expected), 4) if expected else 1.0,
+        "present": present,
+        "missing": missing,
+        "sidecars": records,
+    }
+
+
+def _comparison_quality_summary(
+    root: Path,
+    *,
+    ignored_dirs: set[str],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    doc_manifest, doc_manifest_path = _comparison_load_sidecar_payload(
+        root,
+        ("doc_manifest.json",),
+        ignored_dirs=ignored_dirs,
+    )
+    quality_report, quality_report_path = _comparison_load_sidecar_payload(
+        root,
+        ("quality_report.json",),
+        ignored_dirs=ignored_dirs,
+    )
+    status = _quality_status_from_reports(doc_manifest or {}, quality_report) if doc_manifest or quality_report else None
+    if not status and isinstance(quality_report, Mapping):
+        for container_key in ("quality_gate", "gate", "summary"):
+            container = quality_report.get(container_key)
+            if isinstance(container, Mapping) and isinstance(container.get("status"), str):
+                status = str(container["status"])
+                break
+        if not status and isinstance(quality_report.get("status"), str):
+            status = str(quality_report["status"])
+    counts = _quality_content_counts(quality_report)
+    return (
+        {
+            "status": status or "UNKNOWN",
+            "doc_manifest": doc_manifest_path,
+            "quality_report": quality_report_path,
+            "error_count": counts["error_count"],
+            "warning_count": counts["warning_count"],
+            "quality_image_count": counts["image_count"],
+            "quality_table_count": counts["table_count"],
+            "quality_html_table_count": counts["html_table_count"],
+            "quality_markdown_table_count": counts["markdown_table_count"],
+        },
+        doc_manifest,
+    )
+
+
+def _comparison_artifact_summary(root: Path, *, ignored_dirs: set[str]) -> dict[str, Any]:
+    image_files = _comparison_iter_files(root, suffixes=IMAGE_SUFFIXES, ignored_dirs=ignored_dirs)
+    table_files = _comparison_iter_files(root, suffixes=TABLE_SUFFIXES, ignored_dirs=ignored_dirs)
+    artifact_index, artifact_index_path = _comparison_load_sidecar_payload(
+        root,
+        ("artifact_index.json",),
+        ignored_dirs=ignored_dirs,
+    )
+    indexed_images = 0
+    indexed_tables = 0
+    semantic_images = 0
+    if isinstance(artifact_index, Mapping):
+        artifacts = artifact_index.get("artifacts")
+        if isinstance(artifacts, list):
+            for artifact in artifacts:
+                if not isinstance(artifact, Mapping):
+                    continue
+                kind = artifact.get("kind")
+                if kind == "image":
+                    indexed_images += 1
+                elif kind == "table":
+                    indexed_tables += 1
+        asset_semantics = artifact_index.get("asset_semantics")
+        if isinstance(asset_semantics, Mapping):
+            summary = asset_semantics.get("summary")
+            if isinstance(summary, Mapping):
+                try:
+                    semantic_images = int(summary.get("image_count", 0) or 0)
+                except (TypeError, ValueError):
+                    semantic_images = 0
+    return {
+        "artifact_index": artifact_index_path,
+        "local_image_file_count": len(image_files),
+        "local_image_files_sample": _comparison_file_records(image_files, root=root, limit=25),
+        "table_file_count": len(table_files),
+        "table_files_sample": _comparison_file_records(table_files, root=root, limit=25),
+        "artifact_index_image_count": indexed_images,
+        "artifact_index_table_count": indexed_tables,
+        "asset_semantic_image_count": semantic_images,
+    }
+
+
+def _comparison_retrieval_hints_summary(root: Path, *, ignored_dirs: set[str]) -> dict[str, Any]:
+    payload, path = _comparison_load_sidecar_payload(root, ("retrieval_hints.json",), ignored_dirs=ignored_dirs)
+    summary = _retrieval_hint_summary(payload)
+    summary["path"] = path
+    return summary
+
+
+def _comparison_ingest_readiness_summary(root: Path, *, ignored_dirs: set[str]) -> dict[str, Any]:
+    payload, path = _comparison_load_sidecar_payload(
+        root,
+        ("ingest_readiness_report.json",),
+        ignored_dirs=ignored_dirs,
+    )
+    if not isinstance(payload, Mapping):
+        return {"exists": False, "path": path, "status": None, "advisory_score": None}
+    return {
+        "exists": True,
+        "path": path,
+        "schema": payload.get("schema"),
+        "status": payload.get("status"),
+        "advisory_score": payload.get("advisory_score"),
+    }
+
+
+def _comparison_package_summary(
+    *,
+    root: Path,
+    role: str,
+    ignored_dirs: set[str],
+    effective_root_label: str,
+) -> tuple[dict[str, Any], str]:
+    quality, doc_manifest = _comparison_quality_summary(root, ignored_dirs=ignored_dirs)
+    markdown_paths = _comparison_markdown_paths(root=root, doc_manifest=doc_manifest, ignored_dirs=ignored_dirs)
+    markdown_metrics, normalized_text = _comparison_markdown_metrics(markdown_paths, root=root)
+    hints = _comparison_retrieval_hints_summary(root, ignored_dirs=ignored_dirs)
+    artifacts = _comparison_artifact_summary(root, ignored_dirs=ignored_dirs)
+    sidecars = _comparison_sidecar_completeness(root, ignored_dirs=ignored_dirs)
+    readiness = _comparison_ingest_readiness_summary(root, ignored_dirs=ignored_dirs)
+    table_signal_count = (
+        int(markdown_metrics["markdown_table_count"])
+        + int(markdown_metrics["html_table_count"])
+        + int(hints.get("table_artifact_count", 0) or 0)
+        + int(artifacts["table_file_count"])
+        + int(artifacts["artifact_index_table_count"])
+    )
+    image_signal_count = (
+        int(markdown_metrics["image_reference_count"])
+        + int(artifacts["local_image_file_count"])
+        + int(hints.get("image_artifact_count", 0) or 0)
+        + int(artifacts["artifact_index_image_count"])
+        + int(artifacts["asset_semantic_image_count"])
+    )
+    summary = {
+        "role": role,
+        "root_label": role,
+        "effective_root": effective_root_label,
+        "scan": {
+            "explicit_root_only": True,
+            "ignored_directory_names": sorted(ignored_dirs),
+            "ignored_directory_count": _comparison_count_ignored_dirs(root, ignored_dirs),
+            "intermediate_dirs_excluded": bool(ignored_dirs),
+        },
+        "quality_gate": quality,
+        "markdown": {
+            **markdown_metrics,
+            "markdown_files_sample": _comparison_file_records(markdown_paths, root=root, limit=25),
+        },
+        "images": {
+            "markdown_image_reference_count": markdown_metrics["image_reference_count"],
+            "local_image_reference_count": markdown_metrics["local_image_reference_count"],
+            **artifacts,
+        },
+        "tables": {
+            "markdown_table_count": markdown_metrics["markdown_table_count"],
+            "html_table_count": markdown_metrics["html_table_count"],
+            "retrieval_hint_table_artifact_count": hints.get("table_artifact_count", 0),
+            "table_file_count": artifacts["table_file_count"],
+            "artifact_index_table_count": artifacts["artifact_index_table_count"],
+            "total_static_table_signal_count": table_signal_count,
+        },
+        "chunk_markers": {
+            "marker_count": markdown_metrics["chunk_marker_count"],
+        },
+        "retrieval_hints": hints,
+        "ingest_readiness": readiness,
+        "sidecar_completeness": sidecars,
+        "summary": {
+            "markdown_chars": markdown_metrics["markdown_chars"],
+            "markdown_bytes": markdown_metrics["markdown_bytes"],
+            "markdown_lines": markdown_metrics["markdown_lines"],
+            "local_image_file_count": artifacts["local_image_file_count"],
+            "chunk_marker_count": markdown_metrics["chunk_marker_count"],
+            "retrieval_hint_section_count": hints.get("section_boundary_count", 0),
+            "retrieval_hint_preferred_boundary_count": hints.get("preferred_boundary_count", 0),
+            "retrieval_hint_keyword_count": hints.get("keyword_candidate_count", 0),
+            "retrieval_hint_question_count": hints.get("question_candidate_count", 0),
+            "table_signal_count": table_signal_count,
+            "image_signal_count": image_signal_count,
+            "sidecar_completeness_ratio": sidecars["completeness_ratio"],
+        },
+    }
+    return summary, normalized_text
+
+
+def _comparison_ratio(left: str, right: str) -> float:
+    if not left and not right:
+        return 1.0
+    if not left or not right:
+        return 0.0
+    return round(difflib.SequenceMatcher(None, left, right).ratio(), 4)
+
+
+def _comparison_delta(replacement: Mapping[str, Any], retained: Mapping[str, Any], key: str) -> int | float | None:
+    left = replacement.get(key)
+    right = retained.get(key)
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return left - right
+    return None
+
+
+def _nested_number(payload: Mapping[str, Any], keys: tuple[str, ...]) -> int | float | None:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        for key in keys:
+            value = summary.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return value
+    metrics = payload.get("metrics")
+    if isinstance(metrics, Mapping):
+        for key in keys:
+            value = metrics.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return value
+    return None
+
+
+def _nested_string(payload: Mapping[str, Any], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        for key in keys:
+            value = summary.get(key)
+            if isinstance(value, str):
+                return value
+    return None
+
+
+def _comparison_live_evidence_summary(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {"status": "not_provided"}
+    return {
+        "status": "provided",
+        "schema": payload.get("schema"),
+        "ok": payload.get("ok") if isinstance(payload.get("ok"), bool) else None,
+        "parse_status": _nested_string(payload, ("parse_status", "document_parse_status", "status")),
+        "chunk_count": _nested_number(payload, ("chunk_count", "total_chunk_count", "average_chunks")),
+        "smoke_pass_rate": _nested_number(payload, ("smoke_pass_rate", "pass_rate", "hit_rate")),
+        "empty_result_count": _nested_number(payload, ("empty_result_count", "empty_results")),
+        "direct_query_success": _nested_string(payload, ("direct_query_success", "query_success")),
+        "host_assisted_query_success": _nested_string(payload, ("host_assisted_query_success",)),
+        "cleanup_status": _nested_string(payload, ("cleanup_status", "cleanup_result")),
+    }
+
+
+def _comparison_observations(
+    *,
+    retained_summary: Mapping[str, Any],
+    replacement_summary: Mapping[str, Any],
+    paired_live_ab_status: str,
+    retained_live_evidence: Mapping[str, Any] | None,
+) -> tuple[str, list[dict[str, str]]]:
+    observations: list[dict[str, str]] = []
+    severity_rank = {"info": 0, "warning": 1, "error": 2}
+
+    def add(severity: str, code: str, message: str) -> None:
+        observations.append({"severity": severity, "code": code, "message": message})
+
+    replacement_quality = (
+        replacement_summary.get("quality_gate", {}).get("status")
+        if isinstance(replacement_summary.get("quality_gate"), Mapping)
+        else None
+    )
+    retained_quality = (
+        retained_summary.get("quality_gate", {}).get("status")
+        if isinstance(retained_summary.get("quality_gate"), Mapping)
+        else None
+    )
+    if replacement_quality == "BLOCKED":
+        add("error", "replacement_quality_blocked", "replacement handoff quality gate is BLOCKED")
+    elif retained_quality == "PASS" and replacement_quality not in {"PASS", "PASS_WITH_REVIEW"}:
+        add("warning", "replacement_quality_not_pass", "retained package reports PASS but replacement quality is not clearly passable")
+
+    retained_metrics = retained_summary.get("summary") if isinstance(retained_summary.get("summary"), Mapping) else {}
+    replacement_metrics = replacement_summary.get("summary") if isinstance(replacement_summary.get("summary"), Mapping) else {}
+    retained_markers = int(retained_metrics.get("chunk_marker_count", 0) or 0)
+    replacement_markers = int(replacement_metrics.get("chunk_marker_count", 0) or 0)
+    if retained_markers > replacement_markers:
+        add(
+            "info",
+            "replacement_chunk_markers_less_dense",
+            "retained package has denser chunk markers; treat this as a follow-up observation unless retrieval metrics regress",
+        )
+    retained_sidecars = float(retained_metrics.get("sidecar_completeness_ratio", 0) or 0)
+    replacement_sidecars = float(replacement_metrics.get("sidecar_completeness_ratio", 0) or 0)
+    if replacement_sidecars + 0.0001 < retained_sidecars:
+        add("warning", "replacement_sidecars_less_complete", "replacement handoff has fewer expected sidecars than retained package")
+    if paired_live_ab_status != "executed":
+        add(
+            "info",
+            "strict_paired_live_ab_not_run",
+            "strict paired live RAGFlow A/B was not run; static retained-package comparison is not live parity evidence",
+        )
+    elif not isinstance(retained_live_evidence, Mapping):
+        add("warning", "paired_live_ab_evidence_missing", "paired live A/B is marked executed but retained-package live evidence was not provided")
+
+    max_severity = max((severity_rank.get(item["severity"], 0) for item in observations), default=0)
+    if max_severity >= severity_rank["error"]:
+        status = "blocked"
+    elif max_severity >= severity_rank["warning"]:
+        status = "review_required"
+    else:
+        status = "no_critical_static_regression_detected"
+    return status, observations
+
+
+def make_handoff_comparison_payload(
+    *,
+    retained_package: str | Path,
+    replacement_handoff: str | Path,
+    paired_live_ab_status: str = "not_run",
+    replacement_live_evidence: Mapping[str, Any] | None = None,
+    retained_live_evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compare a retained legacy ingestion package with a replacement handoff.
+
+    The comparison is read-only and static by default. It deliberately excludes retained
+    intermediate directories and does not create, upload to, query, or delete RAGFlow KBs.
+    """
+
+    if paired_live_ab_status not in {"not_run", "executed"}:
+        raise HandoffError("paired_live_ab_status must be 'not_run' or 'executed'")
+    retained_root_input = Path(retained_package)
+    replacement_root = Path(replacement_handoff)
+    if not retained_root_input.is_dir():
+        raise HandoffError(f"retained package directory not found: {retained_root_input}")
+    if not replacement_root.is_dir():
+        raise HandoffError(f"replacement handoff directory not found: {replacement_root}")
+
+    retained_root, retained_effective_label = _comparison_retained_effective_root(retained_root_input)
+    retained_summary, retained_text = _comparison_package_summary(
+        root=retained_root,
+        role="retained_package",
+        ignored_dirs=COMPARISON_RETAINED_IGNORED_DIRS,
+        effective_root_label=retained_effective_label,
+    )
+    replacement_summary, replacement_text = _comparison_package_summary(
+        root=replacement_root,
+        role="replacement_pipeline_handoff",
+        ignored_dirs=set(),
+        effective_root_label=".",
+    )
+    retained_metrics = retained_summary["summary"]
+    replacement_metrics = replacement_summary["summary"]
+    similarity = _comparison_ratio(retained_text, replacement_text)
+    deltas = {
+        key: _comparison_delta(replacement_metrics, retained_metrics, key)
+        for key in (
+            "markdown_chars",
+            "markdown_bytes",
+            "markdown_lines",
+            "local_image_file_count",
+            "chunk_marker_count",
+            "retrieval_hint_section_count",
+            "retrieval_hint_preferred_boundary_count",
+            "retrieval_hint_keyword_count",
+            "retrieval_hint_question_count",
+            "table_signal_count",
+            "image_signal_count",
+            "sidecar_completeness_ratio",
+        )
+    }
+    static_status, observations = _comparison_observations(
+        retained_summary=retained_summary,
+        replacement_summary=replacement_summary,
+        paired_live_ab_status=paired_live_ab_status,
+        retained_live_evidence=retained_live_evidence,
+    )
+    paired_live_ab = {
+        "status": paired_live_ab_status,
+        "executed": paired_live_ab_status == "executed",
+        "requires_explicit_live_mutation_approval": True,
+        "default_behavior": "not_run",
+    }
+    return {
+        "schema": HANDOFF_COMPARISON_SCHEMA,
+        "created_at": _now(),
+        "report_type": "retained_package_static_comparison",
+        "comparison_boundary": {
+            "retained_package_static_comparison": True,
+            "replacement_path_live_evidence": isinstance(replacement_live_evidence, Mapping),
+            "strict_paired_live_ab": paired_live_ab,
+            "notes": [
+                "Retained package metrics are static package-to-package evidence.",
+                "Paired live RAGFlow A/B requires separate explicit mutation approval and is not implied by this report.",
+            ],
+        },
+        "inputs": {
+            "retained_package": {
+                "label": "retained_package",
+                "scope": "explicit retained ingestion package root",
+                "effective_root": retained_effective_label,
+            },
+            "replacement_handoff": {
+                "label": "replacement_pipeline_handoff",
+                "scope": "explicit ragflow-doc-to-md pipeline handoff root",
+                "effective_root": ".",
+            },
+        },
+        "static_comparison": {
+            "status": static_status,
+            "retained_package": retained_summary,
+            "replacement_handoff": replacement_summary,
+            "normalized_text": {
+                "similarity": similarity,
+                "retained_normalized_chars": len(retained_text),
+                "replacement_normalized_chars": len(replacement_text),
+                "normalization_steps": [
+                    "removed chunk marker comments",
+                    "collapsed blank lines and whitespace",
+                    "normalized Markdown image link paths to <image>",
+                ],
+            },
+            "deltas": deltas,
+            "observations": observations,
+        },
+        "live_evidence": {
+            "replacement_path": _comparison_live_evidence_summary(replacement_live_evidence),
+            "retained_paired_path": _comparison_live_evidence_summary(retained_live_evidence),
+            "paired_live_ab": paired_live_ab,
+        },
+        "safety": {
+            "read_only": True,
+            "live_ragflow_mutation": "not_performed",
+            "script_owned_llm": "not_used",
+            "scans_explicit_roots_only": True,
+            "retained_intermediate_dirs_excluded": True,
+            "retained_ignored_directory_names": sorted(COMPARISON_RETAINED_IGNORED_DIRS),
+            "stores_api_credentials": False,
+            "stores_ragflow_endpoint": False,
+            "paths": "relative_package_paths_only",
+        },
+    }
+
+
+def render_handoff_comparison_markdown(report: Mapping[str, Any]) -> str:
+    """Render Markdown from a ragflow_handoff_comparison_v1 payload."""
+
+    static = report.get("static_comparison") if isinstance(report.get("static_comparison"), Mapping) else {}
+    retained = static.get("retained_package") if isinstance(static.get("retained_package"), Mapping) else {}
+    replacement = static.get("replacement_handoff") if isinstance(static.get("replacement_handoff"), Mapping) else {}
+    retained_summary = retained.get("summary") if isinstance(retained.get("summary"), Mapping) else {}
+    replacement_summary = replacement.get("summary") if isinstance(replacement.get("summary"), Mapping) else {}
+    normalized = static.get("normalized_text") if isinstance(static.get("normalized_text"), Mapping) else {}
+    live = report.get("live_evidence") if isinstance(report.get("live_evidence"), Mapping) else {}
+    paired = live.get("paired_live_ab") if isinstance(live.get("paired_live_ab"), Mapping) else {}
+    lines = [
+        "# RAGFlow Handoff Comparison",
+        "",
+        f"- schema: `{report.get('schema', HANDOFF_COMPARISON_SCHEMA)}`",
+        f"- report_type: `{report.get('report_type', 'retained_package_static_comparison')}`",
+        f"- static_status: `{static.get('status', 'unknown')}`",
+        f"- normalized_text_similarity: {normalized.get('similarity', 'unknown')}",
+        f"- paired_live_ab: `{paired.get('status', 'not_run')}`",
+        "",
+        "## Static Metrics",
+        "",
+        "| Metric | Retained package | Replacement handoff | Delta |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    deltas = static.get("deltas") if isinstance(static.get("deltas"), Mapping) else {}
+    metric_labels = [
+        ("markdown_chars", "Markdown chars"),
+        ("markdown_bytes", "Markdown bytes"),
+        ("markdown_lines", "Markdown lines"),
+        ("local_image_file_count", "Local image files"),
+        ("chunk_marker_count", "Chunk markers"),
+        ("retrieval_hint_section_count", "Hint sections"),
+        ("retrieval_hint_preferred_boundary_count", "Preferred boundaries"),
+        ("retrieval_hint_keyword_count", "Keyword candidates"),
+        ("retrieval_hint_question_count", "Question candidates"),
+        ("table_signal_count", "Table signals"),
+        ("image_signal_count", "Image signals"),
+        ("sidecar_completeness_ratio", "Sidecar completeness"),
+    ]
+    for key, label in metric_labels:
+        lines.append(
+            f"| {label} | {retained_summary.get(key, 0)} | {replacement_summary.get(key, 0)} | {deltas.get(key, '')} |"
+        )
+    lines.extend(["", "## Live Evidence", ""])
+    replacement_live = live.get("replacement_path") if isinstance(live.get("replacement_path"), Mapping) else {}
+    retained_live = live.get("retained_paired_path") if isinstance(live.get("retained_paired_path"), Mapping) else {}
+    lines.extend(
+        [
+            f"- replacement_path: `{replacement_live.get('status', 'not_provided')}`",
+            f"- retained_paired_path: `{retained_live.get('status', 'not_provided')}`",
+            f"- strict_paired_live_ab_executed: {str(bool(paired.get('executed'))).lower()}",
+            "",
+        ]
+    )
+    observations = static.get("observations") if isinstance(static.get("observations"), list) else []
+    if observations:
+        lines.extend(["## Observations", ""])
+        for item in observations:
+            if not isinstance(item, Mapping):
+                continue
+            lines.append(f"- `{item.get('code')}` ({item.get('severity')}): {item.get('message')}")
+        lines.append("")
+    lines.extend(
+        [
+            "## Safety",
+            "",
+            "- read_only: true",
+            "- live_ragflow_mutation: `not_performed`",
+            "- retained_intermediate_dirs_excluded: true",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def create_rich_handoff_package(

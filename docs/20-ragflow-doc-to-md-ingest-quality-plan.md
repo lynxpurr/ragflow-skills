@@ -284,6 +284,13 @@ ragflow-doc-to-md compare-retained-package
 - 不把 RAGFlux 中间目录、layout PDF、span PDF、原始 PDF 重复算入 retained package。
 - 默认不创建第二个 live KB；paired live A/B 必须另行显式批准。
 
+实现状态：2026-07-03 已完成；新增 `compare-retained-package` 只读 CLI 和
+`ragflow_handoff_comparison_v1` JSON-first 报告，覆盖 retained package 静态比较、
+normalized text similarity、image/table/chunk/hints/sidecar completeness、redaction
+sidecar、consumer acceptance 和 strict-vendor platform smoke。该命令仅读取显式传入的
+retained package 和 replacement handoff；默认 `paired_live_ab.status: not_run`，未执行
+live RAGFlow mutation。
+
 ### 3.8 Runtime performance telemetry
 
 增强 runtime report 的性能口径：
@@ -379,13 +386,13 @@ smoke 覆盖；未执行 live RAGFlow mutation。
 
 ### 4.7 P2：Normalized comparison report
 
-- [ ] 定义 `ragflow_handoff_comparison_v1` schema。
-- [ ] 实现 retained package static comparison，不扫描中间目录。
-- [ ] 计算 normalized text similarity：去除 chunk marker、空行、图片路径差异后比较正文。
-- [ ] 输出 image、table、chunk marker、hints、sidecar completeness 对比。
-- [ ] 明确标记 paired live A/B 是否执行。
-- [ ] 增加 fixture：RAGFlux retained package vs pipeline handoff。
-- [ ] 增加 redaction 测试，确认不写入私有路径。
+- [x] 定义 `ragflow_handoff_comparison_v1` schema。
+- [x] 实现 retained package static comparison，不扫描中间目录。
+- [x] 计算 normalized text similarity：去除 chunk marker、空行、图片路径差异后比较正文。
+- [x] 输出 image、table、chunk marker、hints、sidecar completeness 对比。
+- [x] 明确标记 paired live A/B 是否执行。
+- [x] 增加 fixture：RAGFlux retained package vs pipeline handoff。
+- [x] 增加 redaction 测试，确认不写入私有路径。
 
 ### 4.8 P2：Runtime performance telemetry
 

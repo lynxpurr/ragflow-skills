@@ -15,6 +15,7 @@ from ragflow_skill_runtime.handoff import (
     DOCUMENT_METADATA_SCHEMA,
     FORMAL_HANDOFF_MANIFEST_SCHEMA,
     HANDOFF_PACKAGE_SCHEMA,
+    HANDOFF_COMPARISON_SCHEMA,
     PROFILE_SUGGESTIONS_SCHEMA,
     RAGFLOW_INGEST_PLAN_SCHEMA,
     RETRIEVAL_HINTS_SCHEMA,
@@ -23,8 +24,10 @@ from ragflow_skill_runtime.handoff import (
     load_ragflow_ingest_plan,
     make_doc_ingest_readiness_payload,
     make_formal_handoff_manifest_payload,
+    make_handoff_comparison_payload,
     make_ragflow_ingest_plan_payload,
     render_doc_ingest_readiness_markdown,
+    render_handoff_comparison_markdown,
     render_handoff_inspection_markdown,
     write_doc_ingest_readiness_report,
     write_formal_handoff_manifest,
@@ -147,6 +150,144 @@ class HandoffTests(unittest.TestCase):
         self.assertIn("ingest_readiness_report.json", readme)
         self.assertIn("ragflow-kb-build inspect-handoff", readme)
         self.assertIn("--dry-run", readme)
+
+    def test_handoff_comparison_ignores_retained_intermediates_and_normalizes_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            retained_parent = root / "ragflux-retained"
+            retained = retained_parent / "ragflow_input"
+            retained_images = retained / "images"
+            retained_images.mkdir(parents=True)
+            (retained_images / "chart.png").write_bytes(b"retained chart")
+            (retained / "apollo.md").write_text(
+                "# APOLLO Catalog\n\n"
+                "<!-- chunk -->\n\n"
+                "APOLLO accuracy is 4.0 um.\n\n"
+                "![Chart](images/chart.png)\n\n"
+                "| Field | Value |\n"
+                "| --- | --- |\n"
+                "| Accuracy | 4.0 um |\n",
+                encoding="utf-8",
+            )
+            (retained / "quality_report.json").write_text(
+                json.dumps({"schema": "doc_quality_report_v1", "gate": {"status": "PASS"}}),
+                encoding="utf-8",
+            )
+            (retained / "retrieval_hints.json").write_text(
+                json.dumps(
+                    {
+                        "schema": RETRIEVAL_HINTS_SCHEMA,
+                        "section_boundaries": [{"title": "APOLLO Catalog"}],
+                        "preferred_boundaries": [{"reason": "chunk_marker_boundary"}],
+                        "keyword_candidates": [{"term": "APOLLO"}],
+                        "question_candidates": [{"question": "What is the accuracy?"}],
+                        "table_artifacts": [{"source": "markdown_table"}],
+                        "image_artifacts": [{"path": "images/chart.png"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (retained / "ragflow_config.yaml").write_text("chunk_size: 512\n", encoding="utf-8")
+            raw = retained / "raw" / "mineru"
+            raw.mkdir(parents=True)
+            (raw / "noise.md").write_text("# Noise\n\nThis should not be compared.\n", encoding="utf-8")
+            (raw / "noise.png").write_bytes(b"duplicate image cache")
+
+            replacement = root / "replacement"
+            replacement_docs = replacement / "documents"
+            replacement_images = replacement_docs / "assets"
+            replacement_images.mkdir(parents=True)
+            (replacement / "source.md").write_text("# Source\n", encoding="utf-8")
+            (replacement_images / "chart-renamed.png").write_bytes(b"replacement chart")
+            (replacement_docs / "apollo.md").write_text(
+                "# APOLLO Catalog\n\n"
+                "APOLLO accuracy is 4.0 um.\n\n"
+                "![Chart](assets/chart-renamed.png)\n\n"
+                "<!-- chunk -->\n"
+                "| Field | Value |\n"
+                "| --- | --- |\n"
+                "| Accuracy | 4.0 um |\n",
+                encoding="utf-8",
+            )
+            (replacement / "doc_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "handoff_mode": "formal_ingest",
+                        "quality_report": "quality_report.json",
+                        "chunk_profile_report": "chunk_profile_report.json",
+                        "quality_gate": {"status": "PASS"},
+                        "documents": [
+                            {
+                                "source_path": "source.md",
+                                "markdown_path": "documents/apollo.md",
+                                "title": "APOLLO Catalog",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (replacement / "quality_report.json").write_text(
+                json.dumps({"schema": "doc_quality_report_v1", "gate": {"status": "PASS"}}),
+                encoding="utf-8",
+            )
+            create_rich_handoff_package(handoff_root=replacement)
+            (replacement / "postprocess_report.json").write_text(
+                json.dumps({"schema": "doc_postprocess_report_v1"}),
+                encoding="utf-8",
+            )
+            (replacement / "chunk_profile_report.json").write_text(
+                json.dumps({"schema": "ragflow_chunk_profile_report_v1", "summary": {"marker_count": 1}}),
+                encoding="utf-8",
+            )
+            (replacement / "ragflow_ingest_plan.yaml").write_text(
+                "\n".join(
+                    [
+                        'schema: "ragflow_ingest_plan_v1"',
+                        "handoff:",
+                        '  doc_manifest: "doc_manifest.json"',
+                        "recommended_build:",
+                        "  dry_run_command:",
+                        '    - "ragflow-kb-build"',
+                        '    - "--dry-run"',
+                        "safety:",
+                        "  stores_api_credentials: false",
+                        "  stores_ragflow_endpoint: false",
+                        "  stores_secret: false",
+                        '  mutation_default: "dry_run_first"',
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            report = make_handoff_comparison_payload(
+                retained_package=retained_parent,
+                replacement_handoff=replacement,
+            )
+            markdown = render_handoff_comparison_markdown(report)
+
+        static = report["static_comparison"]
+        retained_summary = static["retained_package"]
+        replacement_summary = static["replacement_handoff"]
+        self.assertEqual(report["schema"], HANDOFF_COMPARISON_SCHEMA)
+        self.assertEqual(retained_summary["effective_root"], "ragflow_input")
+        self.assertEqual(retained_summary["markdown"]["markdown_file_count"], 1)
+        self.assertEqual(retained_summary["images"]["local_image_file_count"], 1)
+        self.assertGreaterEqual(retained_summary["scan"]["ignored_directory_count"], 1)
+        self.assertEqual(replacement_summary["markdown"]["markdown_file_count"], 1)
+        self.assertGreaterEqual(static["normalized_text"]["similarity"], 0.9)
+        self.assertEqual(static["deltas"]["chunk_marker_count"], 0)
+        self.assertFalse(report["live_evidence"]["paired_live_ab"]["executed"])
+        self.assertEqual(report["live_evidence"]["paired_live_ab"]["status"], "not_run")
+        self.assertEqual(report["safety"]["live_ragflow_mutation"], "not_performed")
+        self.assertIn("strict_paired_live_ab_not_run", {item["code"] for item in static["observations"]})
+        self.assertIn("RAGFlow Handoff Comparison", markdown)
+        serialized = json.dumps(report, ensure_ascii=False) + markdown
+        self.assertNotIn(str(root), serialized)
+        self.assertNotIn("noise.md", serialized)
 
     def test_retrieval_hints_include_pages_context_templates_and_layout_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

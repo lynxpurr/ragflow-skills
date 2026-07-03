@@ -51,6 +51,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     load_skill_config,
     make_doc_manifest_payload,
     make_doc_runtime_report_payload,
+    make_handoff_comparison_payload,
     make_ragflow_ingest_plan_payload,
     make_quality_report_payload,
     materialize_segments,
@@ -62,6 +63,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_backend_probe_markdown,
     render_backend_warmup_markdown,
     render_doc_runtime_markdown,
+    render_handoff_comparison_markdown,
     render_quality_markdown,
     safe_markdown_name,
     sanitize_report_payload,
@@ -506,6 +508,21 @@ def _sanitize_output_payload(
         config_paths=config_paths,
     )
     return sanitized
+
+
+def _read_optional_json_report(path: str | None, *, label: str) -> dict[str, Any] | None:
+    if not path:
+        return None
+    source = Path(path)
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise HandoffError(f"{label} not found: {source}") from exc
+    except json.JSONDecodeError as exc:
+        raise HandoffError(f"{label} is not valid JSON: {source}") from exc
+    if not isinstance(payload, dict):
+        raise HandoffError(f"{label} must contain a JSON object: {source}")
+    return payload
 
 
 def _split_source_hashes(markdown_path: str | Path) -> dict[str, str]:
@@ -1847,6 +1864,94 @@ def _run_package(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_compare_retained_package(args: argparse.Namespace) -> int:
+    try:
+        replacement_live_evidence = _read_optional_json_report(
+            args.replacement_live_evidence,
+            label="replacement live evidence",
+        )
+        retained_live_evidence = _read_optional_json_report(
+            args.retained_live_evidence,
+            label="retained-package live evidence",
+        )
+        report = make_handoff_comparison_payload(
+            retained_package=args.retained_package,
+            replacement_handoff=args.replacement_handoff,
+            paired_live_ab_status=args.paired_live_ab_status,
+            replacement_live_evidence=replacement_live_evidence,
+            retained_live_evidence=retained_live_evidence,
+        )
+        if args.redaction_report:
+            report = _sanitize_generated_report(
+                report,
+                args.redaction_report,
+                home_paths=[
+                    args.retained_package,
+                    args.replacement_handoff,
+                    args.report_json,
+                    args.report_md,
+                    args.replacement_live_evidence,
+                    args.retained_live_evidence,
+                ],
+                config_paths=[
+                    args.retained_package,
+                    args.replacement_handoff,
+                    args.report_json,
+                    args.report_md,
+                    args.redaction_report,
+                    args.replacement_live_evidence,
+                    args.retained_live_evidence,
+                ],
+            )
+        report_json_path = Path(args.report_json) if args.report_json else None
+        if report_json_path:
+            report_json_path.parent.mkdir(parents=True, exist_ok=True)
+            report_json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        report_md_path = Path(args.report_md) if args.report_md else None
+        if report_md_path:
+            report_md_path.parent.mkdir(parents=True, exist_ok=True)
+            report_md_path.write_text(render_handoff_comparison_markdown(report), encoding="utf-8")
+        static = report.get("static_comparison") if isinstance(report.get("static_comparison"), dict) else {}
+        normalized = static.get("normalized_text") if isinstance(static.get("normalized_text"), dict) else {}
+        live = report.get("live_evidence") if isinstance(report.get("live_evidence"), dict) else {}
+        paired_live_ab = live.get("paired_live_ab") if isinstance(live.get("paired_live_ab"), dict) else {}
+        response = {
+            "ok": True,
+            "schema": report.get("schema"),
+            "report_json": str(report_json_path) if report_json_path else None,
+            "report_md": str(report_md_path) if report_md_path else None,
+            "static_status": static.get("status"),
+            "normalized_text_similarity": normalized.get("similarity"),
+            "paired_live_ab": paired_live_ab,
+            "safety": report.get("safety"),
+        }
+        if args.redaction_report:
+            response = _sanitize_output_payload(
+                response,
+                home_paths=[
+                    args.retained_package,
+                    args.replacement_handoff,
+                    args.report_json,
+                    args.report_md,
+                    args.replacement_live_evidence,
+                    args.retained_live_evidence,
+                ],
+                config_paths=[
+                    args.retained_package,
+                    args.replacement_handoff,
+                    args.report_json,
+                    args.report_md,
+                    args.redaction_report,
+                    args.replacement_live_evidence,
+                    args.retained_live_evidence,
+                ],
+            )
+        _dump_json(response)
+        return 0
+    except (HandoffError, OSError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _run_postprocess(args: argparse.Namespace) -> int:
     try:
         if bool(args.markdown) == bool(args.doc_manifest):
@@ -2204,7 +2309,7 @@ def build_backend_parser() -> argparse.ArgumentParser:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Convert documents into a Markdown handoff bundle",
-        epilog="Commands: pipeline, backend probe, backend warmup, inspect, segment-plan, split.",
+        epilog="Commands: pipeline, compare-retained-package, backend probe, backend warmup, inspect, segment-plan, split.",
     )
     parser.add_argument("--input", required=True, help="Input file or directory")
     parser.add_argument("--output", required=True, help="Output handoff directory")
@@ -2261,6 +2366,27 @@ def build_pipeline_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_compare_retained_package_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Compare a retained legacy ingestion package with a formal replacement handoff",
+    )
+    parser.add_argument("--retained-package", required=True, help="Retained legacy ingestion package root; ragflow_input/ is auto-selected when present")
+    parser.add_argument("--replacement-handoff", required=True, help="ragflow-doc-to-md pipeline handoff root")
+    parser.add_argument("--report-json", help="Optional JSON comparison report output path")
+    parser.add_argument("--report-md", help="Optional Markdown comparison report output path")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    parser.add_argument(
+        "--paired-live-ab-status",
+        choices=["not_run", "executed"],
+        default="not_run",
+        help="Whether a strict paired RAGFlow live A/B was separately approved and executed",
+    )
+    parser.add_argument("--replacement-live-evidence", help="Optional existing JSON summary for replacement-path live evidence")
+    parser.add_argument("--retained-live-evidence", help="Optional existing JSON summary for retained-package paired live evidence")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    return parser
+
+
 def main(argv: list[str] | None = None) -> int:
     actual_argv = list(sys.argv[1:] if argv is None else argv)
     if actual_argv:
@@ -2278,6 +2404,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_postprocess(build_postprocess_parser().parse_args(command_args))
         if command == "pipeline":
             return _run_pipeline(build_pipeline_parser().parse_args(command_args))
+        if command == "compare-retained-package":
+            return _run_compare_retained_package(build_compare_retained_package_parser().parse_args(command_args))
         if command == "backend":
             parsed = build_backend_parser().parse_args(command_args)
             return parsed.func(parsed)

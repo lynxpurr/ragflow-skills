@@ -111,6 +111,14 @@ EXPECTED_IDENTITIES = (
         description="Package-level formal handoff audit manifest with sidecar hashes.",
     ),
     SchemaIdentity(
+        key="handoff_comparison",
+        group="manifest",
+        identity="ragflow_handoff_comparison_v1",
+        source_patterns=("ragflow_handoff_comparison_v1", "HANDOFF_COMPARISON_SCHEMA"),
+        coverage_patterns=("ragflow_handoff_comparison_v1", "compare-retained-package"),
+        description="Static retained-package comparison report for legacy replacement evidence.",
+    ),
+    SchemaIdentity(
         key="benchmark_report",
         group="benchmark",
         identity="ragflow_benchmark_report_v1",

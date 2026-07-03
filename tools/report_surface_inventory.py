@@ -117,6 +117,7 @@ QUERY_NOT_APPLICABLE_COMMANDS = (
 DOC_COVERED_COMMANDS = (
     "ragflow-doc-to-md",
     "ragflow-doc-to-md backend probe",
+    "ragflow-doc-to-md compare-retained-package",
     "ragflow-doc-to-md backend warmup",
     "ragflow-doc-to-md inspect",
     "ragflow-doc-to-md postprocess",
@@ -313,6 +314,7 @@ def discover_public_commands(root: Path = ROOT) -> list[DiscoveredCommand]:
         (("ragflow-doc-to-md", "split"), doc.build_split_parser),
         (("ragflow-doc-to-md", "package"), doc.build_package_parser),
         (("ragflow-doc-to-md", "postprocess"), doc.build_postprocess_parser),
+        (("ragflow-doc-to-md", "compare-retained-package"), doc.build_compare_retained_package_parser),
         (("ragflow-doc-to-md", "backend"), doc.build_backend_parser),
     ):
         _record_parsers(

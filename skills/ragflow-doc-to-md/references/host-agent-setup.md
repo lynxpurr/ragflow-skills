@@ -156,6 +156,24 @@ If stdout or `doc_manifest.json` says `handoff_mode: thin_preview`, do not treat
 output as a formal KB pre-ingest package. Re-run with `ragflow-doc-to-md pipeline`
 before comparing it with a legacy thick package or sending it to a live build.
 
+When a user asks for retained-package comparison, keep it static and explicit:
+
+```bash
+python ragflow-doc-to-md/scripts/convert.py compare-retained-package \
+  --retained-package /path/to/legacy-retained-package \
+  --replacement-handoff /tmp/ragflow-skills-handoff \
+  --report-json /tmp/ragflow-skills-handoff/comparison.json \
+  --report-md /tmp/ragflow-skills-handoff/comparison.md \
+  --redaction-report /tmp/ragflow-skills-handoff/comparison.redaction.json \
+  --json
+```
+
+Expected result: `ragflow_handoff_comparison_v1` is written without live RAGFlow
+mutation. The report compares retained ingestion-package artifacts only, excludes
+obvious raw/intermediate/layout/span directories, normalizes chunk markers and image path
+differences for text similarity, and marks strict paired live A/B as `not_run` unless a
+separately approved live run produced evidence.
+
 Before any live RAGFlow mutation, run:
 
 ```bash

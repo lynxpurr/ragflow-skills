@@ -107,6 +107,48 @@ def _write_slow_mineru_cli(path: Path) -> Path:
     return path
 
 
+def _write_retained_package_fixture(root: Path) -> Path:
+    retained_parent = root / "ragflux-retained"
+    retained = retained_parent / "ragflow_input"
+    images = retained / "images"
+    raw = retained / "raw" / "layout"
+    images.mkdir(parents=True)
+    raw.mkdir(parents=True)
+    (images / "chart.png").write_bytes(b"retained chart")
+    (retained / "apollo.md").write_text(
+        "# APOLLO Catalog\n\n"
+        "<!-- chunk -->\n\n"
+        "APOLLO accuracy is 4.0 um.\n\n"
+        "![Chart](images/chart.png)\n\n"
+        "| Field | Value |\n"
+        "| --- | --- |\n"
+        "| Accuracy | 4.0 um |\n",
+        encoding="utf-8",
+    )
+    (retained / "quality_report.json").write_text(
+        json.dumps({"schema": "doc_quality_report_v1", "gate": {"status": "PASS"}}),
+        encoding="utf-8",
+    )
+    (retained / "retrieval_hints.json").write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_retrieval_hints_v1",
+                "section_boundaries": [{"title": "APOLLO Catalog"}],
+                "preferred_boundaries": [{"reason": "chunk_marker_boundary"}],
+                "keyword_candidates": [{"term": "APOLLO"}],
+                "question_candidates": [{"question": "What is the accuracy?"}],
+                "table_artifacts": [{"source": "markdown_table"}],
+                "image_artifacts": [{"path": "images/chart.png"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (retained / "ragflow_config.yaml").write_text("chunk_size: 512\n", encoding="utf-8")
+    (raw / "ignored-private-source.md").write_text("# Ignored\n\nDo not count this.\n", encoding="utf-8")
+    (raw / "ignored-cache.png").write_bytes(b"ignored image cache")
+    return retained_parent
+
+
 class DocConvertCliTests(unittest.TestCase):
     def test_convert_passthrough_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -412,6 +454,143 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertGreater(chunk_profile_report["summary"]["marker_type_counts"]["page"], 0)
         self.assertGreater(chunk_profile_report["summary"]["marker_type_counts"]["table"], 0)
         self.assertEqual(manifest["chunk_profile_report"], "chunk_profile_report.json")
+
+    def test_compare_retained_package_cli_writes_static_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            retained = _write_retained_package_fixture(root)
+            input_dir = root / "input"
+            output_dir = root / "replacement-handoff"
+            input_dir.mkdir()
+            (input_dir / "apollo.md").write_text(
+                "# APOLLO Catalog\n\n"
+                "APOLLO accuracy is 4.0 um.\n\n"
+                "| Field | Value |\n"
+                "| --- | --- |\n"
+                "| Accuracy | 4.0 um |\n",
+                encoding="utf-8",
+            )
+            pipeline_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "pipeline",
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                    "--mode",
+                    "passthrough",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            report_json = root / "handoff_comparison.json"
+            report_md = root / "handoff_comparison.md"
+            compare_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "compare-retained-package",
+                    "--retained-package",
+                    str(retained),
+                    "--replacement-handoff",
+                    str(output_dir),
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(compare_result.stdout)
+            report = json.loads(report_json.read_text(encoding="utf-8"))
+            markdown = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(pipeline_result.returncode, 0, pipeline_result.stderr)
+        self.assertEqual(compare_result.returncode, 0, compare_result.stderr)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["schema"], "ragflow_handoff_comparison_v1")
+        self.assertEqual(report["schema"], "ragflow_handoff_comparison_v1")
+        self.assertEqual(report["static_comparison"]["retained_package"]["effective_root"], "ragflow_input")
+        self.assertEqual(report["static_comparison"]["retained_package"]["markdown"]["markdown_file_count"], 1)
+        self.assertEqual(report["static_comparison"]["retained_package"]["images"]["local_image_file_count"], 1)
+        self.assertEqual(report["live_evidence"]["paired_live_ab"]["status"], "not_run")
+        self.assertFalse(report["live_evidence"]["paired_live_ab"]["executed"])
+        self.assertEqual(report["safety"]["live_ragflow_mutation"], "not_performed")
+        self.assertIn("RAGFlow Handoff Comparison", markdown)
+        self.assertIn("strict_paired_live_ab_not_run", markdown)
+
+    def test_compare_retained_package_redaction_omits_private_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            retained = _write_retained_package_fixture(root)
+            replacement = root / "replacement-handoff"
+            docs = replacement / "documents"
+            docs.mkdir(parents=True)
+            (docs / "apollo.md").write_text("# APOLLO Catalog\n\nAPOLLO accuracy is 4.0 um.\n", encoding="utf-8")
+            (replacement / "doc_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "handoff_mode": "formal_ingest",
+                        "quality_report": "quality_report.json",
+                        "quality_gate": {"status": "PASS"},
+                        "documents": [{"source_path": "private-source.pdf", "markdown_path": "documents/apollo.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (replacement / "quality_report.json").write_text(
+                json.dumps({"schema": "doc_quality_report_v1", "gate": {"status": "PASS"}}),
+                encoding="utf-8",
+            )
+            report_json = root / "private-home" / "handoff_comparison.json"
+            report_md = root / "private-home" / "handoff_comparison.md"
+            redaction = root / "private-home" / "handoff_comparison.redaction.json"
+            compare_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "compare-retained-package",
+                    "--retained-package",
+                    str(retained),
+                    "--replacement-handoff",
+                    str(replacement),
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                    "--redaction-report",
+                    str(redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            combined = "\n".join(
+                [
+                    compare_result.stdout,
+                    report_json.read_text(encoding="utf-8"),
+                    report_md.read_text(encoding="utf-8"),
+                    redaction.read_text(encoding="utf-8"),
+                ]
+            )
+
+        self.assertEqual(compare_result.returncode, 0, compare_result.stderr)
+        self.assertNotIn(str(root), combined)
+        self.assertNotIn("ignored-private-source", combined)
+        self.assertNotIn("private-source.pdf", combined)
 
     def test_pipeline_can_write_non_secret_ragflow_config_alias(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
