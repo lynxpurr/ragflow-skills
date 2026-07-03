@@ -18,6 +18,7 @@ if RUNTIME_SRC.exists() and str(RUNTIME_SRC) not in sys.path:
 
 from ragflow_skill_runtime import (  # noqa: E402
     DocManifest,
+    FormalHandoffManifest,
     KbManifest,
     ManifestError,
     manifest_json_schemas,
@@ -88,6 +89,11 @@ def run_manifest_schema_check(*, root: Path = ROOT) -> dict[str, Any]:
             "template": root / "skills" / "ragflow-kb-build" / "templates" / "kb_manifest.schema.json",
             "example": root / "skills" / "ragflow-kb-build" / "templates" / "kb_manifest.example.json",
             "loader": KbManifest.from_dict,
+        },
+        "formal_handoff_manifest": {
+            "template": root / "skills" / "ragflow-doc-to-md" / "templates" / "formal_handoff_manifest.schema.json",
+            "example": root / "skills" / "ragflow-doc-to-md" / "templates" / "formal_handoff_manifest.example.json",
+            "loader": FormalHandoffManifest.from_dict,
         },
     }
     findings: list[dict[str, str]] = []

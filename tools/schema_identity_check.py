@@ -103,6 +103,14 @@ EXPECTED_IDENTITIES = (
         description="JSON-first formal document ingest readiness report.",
     ),
     SchemaIdentity(
+        key="formal_handoff_manifest",
+        group="manifest",
+        identity="ragflow_formal_handoff_manifest_v1",
+        source_patterns=("ragflow_formal_handoff_manifest_v1", "FORMAL_HANDOFF_MANIFEST_SCHEMA"),
+        coverage_patterns=("ragflow_formal_handoff_manifest_v1", "FORMAL_HANDOFF_MANIFEST_SCHEMA"),
+        description="Package-level formal handoff audit manifest with sidecar hashes.",
+    ),
+    SchemaIdentity(
         key="benchmark_report",
         group="benchmark",
         identity="ragflow_benchmark_report_v1",

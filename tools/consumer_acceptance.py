@@ -992,6 +992,7 @@ def _run_no_network_checks(
         "assistant_test_plan.json",
         "ingest_readiness_report.json",
         "ingest_readiness_report.md",
+        "formal_handoff_manifest.json",
         "package_readme.md",
     ):
         rich_path = handoff_dir / rich_name
@@ -1032,6 +1033,9 @@ def _run_no_network_checks(
     chunk_markers = formal_signals.get("chunk_markers", {}) if isinstance(formal_signals, dict) else {}
     ingest_plan_signal = formal_signals.get("ragflow_ingest_plan", {}) if isinstance(formal_signals, dict) else {}
     readiness_signal = formal_signals.get("ingest_readiness", {}) if isinstance(formal_signals, dict) else {}
+    formal_manifest_signal = (
+        formal_signals.get("formal_handoff_manifest", {}) if isinstance(formal_signals, dict) else {}
+    )
     host_agent_formal_summary_ok = (
         isinstance(pipeline_summary, dict)
         and pipeline_summary.get("handoff_mode") == "formal_ingest"
@@ -1040,6 +1044,8 @@ def _run_no_network_checks(
         and bool(ingest_plan_signal.get("generated"))
         and bool(readiness_signal.get("generated"))
         and readiness_signal.get("status") == "ready"
+        and bool(formal_manifest_signal.get("generated"))
+        and formal_manifest_signal.get("schema") == "ragflow_formal_handoff_manifest_v1"
     )
     checks.append(
         {
@@ -1054,6 +1060,7 @@ def _run_no_network_checks(
         "retrieval_hints.json",
         "ingest_readiness_report.json",
         "ingest_readiness_report.md",
+        "formal_handoff_manifest.json",
         "ragflow_ingest_plan.yaml",
     ):
         pipeline_path = pipeline_handoff / pipeline_name

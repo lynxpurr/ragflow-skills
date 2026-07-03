@@ -1,0 +1,92 @@
+{
+  "schema": "ragflow_formal_handoff_manifest_v1",
+  "created_at": "2026-07-03T00:00:00Z",
+  "handoff_mode": "formal_ingest",
+  "doc_manifest": "doc_manifest.json",
+  "formal_handoff_manifest": "formal_handoff_manifest.json",
+  "source_document_count": 1,
+  "generated_sidecar_count": 2,
+  "missing_sidecars": [],
+  "sidecars": [
+    {
+      "name": "doc_manifest",
+      "path": "doc_manifest.json",
+      "category": "core",
+      "exists": true,
+      "safe_relative_path": true,
+      "size_bytes": 128,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "schema_identity": "version:0.1"
+    },
+    {
+      "name": "ingest_readiness",
+      "path": "ingest_readiness_report.json",
+      "category": "rich",
+      "exists": true,
+      "safe_relative_path": true,
+      "size_bytes": 128,
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "schema_identity": "ragflow_doc_ingest_readiness_v1"
+    }
+  ],
+  "markdown_files": [
+    {
+      "document_index": 1,
+      "path": "documents/source.md",
+      "exists": true,
+      "safe_relative_path": true,
+      "size_bytes": 64,
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  ],
+  "image_assets": [],
+  "report_hashes": [
+    {
+      "name": "ingest_readiness",
+      "path": "ingest_readiness_report.json",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "schema_identity": "ragflow_doc_ingest_readiness_v1"
+    }
+  ],
+  "schema_versions": {
+    "doc_manifest": "version:0.1",
+    "ingest_readiness": "ragflow_doc_ingest_readiness_v1"
+  },
+  "package_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "package_hash_algorithm": "sha256(relative_path+file_sha256+size+schema_identity)",
+  "package_hash_inputs": [
+    {
+      "group": "markdown",
+      "path": "documents/source.md",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "size_bytes": 64
+    }
+  ],
+  "downstream_command_suggestions": [
+    {
+      "name": "inspect_handoff",
+      "command": [
+        "ragflow-kb-build",
+        "inspect-handoff",
+        "--handoff",
+        "<handoff>",
+        "--report-json",
+        "<run>/handoff_inspection.json",
+        "--report-md",
+        "<run>/handoff_inspection.md"
+      ]
+    }
+  ],
+  "safety": {
+    "paths": "relative_only",
+    "unsafe_sidecars": [],
+    "stores_ragflow_endpoint": false,
+    "stores_api_credentials": false,
+    "live_ragflow_mutation": "not_performed",
+    "mutation_default": "dry_run_first"
+  },
+  "notes": [
+    "doc_manifest.json remains the document-level ingestion contract.",
+    "formal_handoff_manifest.json is a package-level audit manifest for review and handoff integrity."
+  ]
+}

@@ -13,6 +13,7 @@ from ragflow_skill_runtime.handoff import (
     ARTIFACT_INDEX_SCHEMA,
     DOC_INGEST_READINESS_SCHEMA,
     DOCUMENT_METADATA_SCHEMA,
+    FORMAL_HANDOFF_MANIFEST_SCHEMA,
     HANDOFF_PACKAGE_SCHEMA,
     PROFILE_SUGGESTIONS_SCHEMA,
     RAGFLOW_INGEST_PLAN_SCHEMA,
@@ -21,10 +22,12 @@ from ragflow_skill_runtime.handoff import (
     inspect_rich_handoff,
     load_ragflow_ingest_plan,
     make_doc_ingest_readiness_payload,
+    make_formal_handoff_manifest_payload,
     make_ragflow_ingest_plan_payload,
     render_doc_ingest_readiness_markdown,
     render_handoff_inspection_markdown,
     write_doc_ingest_readiness_report,
+    write_formal_handoff_manifest,
 )
 from ragflow_skill_runtime.kb_build import BuildDocument
 from ragflow_skill_runtime.topology import create_kb_topology_advice
@@ -86,7 +89,10 @@ class HandoffTests(unittest.TestCase):
             assistant_test_plan = json.loads((root / "assistant_test_plan.json").read_text(encoding="utf-8"))
             ingest_readiness = json.loads((root / "ingest_readiness_report.json").read_text(encoding="utf-8"))
             ingest_readiness_md = (root / "ingest_readiness_report.md").read_text(encoding="utf-8")
+            formal_manifest = json.loads((root / "formal_handoff_manifest.json").read_text(encoding="utf-8"))
             readme = (root / "package_readme.md").read_text(encoding="utf-8")
+            recomputed_formal_hash = make_formal_handoff_manifest_payload(handoff_root=root)["package_hash"]
+            rewritten_formal_manifest = write_formal_handoff_manifest(handoff_root=root)
 
         self.assertEqual(package["schema"], HANDOFF_PACKAGE_SCHEMA)
         self.assertEqual(package["handoff_mode"], "formal_ingest")
@@ -95,6 +101,9 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(package["asset_semantic_count"], 1)
         self.assertEqual(package["ingest_readiness"], "ingest_readiness_report.json")
         self.assertEqual(package["ingest_readiness_status"], "ready_with_review")
+        self.assertEqual(package["formal_handoff_manifest"], "formal_handoff_manifest.json")
+        self.assertEqual(package["formal_handoff_manifest_schema"], FORMAL_HANDOFF_MANIFEST_SCHEMA)
+        self.assertEqual(package["formal_handoff_package_hash"], formal_manifest["package_hash"])
         self.assertGreaterEqual(package["retrieval_hint_count"], 2)
         self.assertGreaterEqual(package["assistant_test_count"], 1)
         self.assertEqual(metadata["schema"], DOCUMENT_METADATA_SCHEMA)
@@ -120,8 +129,21 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(ingest_readiness["schema"], DOC_INGEST_READINESS_SCHEMA)
         self.assertEqual(ingest_readiness["status"], "ready_with_review")
         self.assertIn("pipeline_sidecars_incomplete", {issue["code"] for issue in ingest_readiness["issues"]})
+        self.assertEqual(formal_manifest["schema"], FORMAL_HANDOFF_MANIFEST_SCHEMA)
+        self.assertEqual(formal_manifest["source_document_count"], 1)
+        self.assertEqual(formal_manifest["schema_versions"]["metadata"], DOCUMENT_METADATA_SCHEMA)
+        self.assertEqual(formal_manifest["schema_versions"]["artifact_index"], ARTIFACT_INDEX_SCHEMA)
+        self.assertIn("documents/source.md", {item["path"] for item in formal_manifest["markdown_files"]})
+        self.assertIn("documents/images/chart.jpg", {item["path"] for item in formal_manifest["image_assets"]})
+        self.assertIn("inspect_handoff", {item["name"] for item in formal_manifest["downstream_command_suggestions"]})
+        self.assertEqual(formal_manifest["safety"]["live_ragflow_mutation"], "not_performed")
+        self.assertFalse(formal_manifest["safety"]["unsafe_sidecars"])
+        self.assertEqual(recomputed_formal_hash, formal_manifest["package_hash"])
+        self.assertEqual(rewritten_formal_manifest["package_hash"], formal_manifest["package_hash"])
         self.assertIn("RAGFlow Doc Ingest Readiness", ingest_readiness_md)
         self.assertIn("Handoff mode: `formal_ingest`", readme)
+        self.assertIn("formal_handoff_manifest.json", readme)
+        self.assertIn("document-level ingestion contract", readme)
         self.assertIn("ingest_readiness_report.json", readme)
         self.assertIn("ragflow-kb-build inspect-handoff", readme)
         self.assertIn("--dry-run", readme)

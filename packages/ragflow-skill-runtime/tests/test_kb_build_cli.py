@@ -375,12 +375,17 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(package_result.returncode, 0, package_result.stderr)
         self.assertEqual(inspect_result.returncode, 0, inspect_result.stderr)
         self.assertEqual(package_payload["package"]["ingest_readiness_status"], "ready_with_review")
+        self.assertEqual(package_payload["package"]["formal_handoff_manifest_schema"], "ragflow_formal_handoff_manifest_v1")
         self.assertEqual(inspect_payload["handoff"]["schema"], "ragflow_handoff_inspection_v1")
         self.assertTrue(report_payload["ingest_readiness_report"]["exists"])
         self.assertEqual(report_payload["ingest_readiness_report"]["declared_status"], "ready_with_review")
         self.assertTrue(report_payload["ingest_readiness_report"]["matches_recomputed_status"])
+        self.assertTrue(report_payload["formal_handoff_manifest"]["exists"])
+        self.assertEqual(report_payload["formal_handoff_manifest"]["schema"], "ragflow_formal_handoff_manifest_v1")
+        self.assertEqual(report_payload["formal_handoff_manifest"]["package_hash"], package_payload["package"]["formal_handoff_package_hash"])
         self.assertEqual(report_payload["ingestion_readiness"]["status"], "ready_with_review")
         self.assertIn("Readiness report exists: true", report_text)
+        self.assertIn("Formal handoff manifest exists: true", report_text)
 
     def test_build_dry_run_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

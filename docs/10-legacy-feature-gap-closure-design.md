@@ -227,6 +227,7 @@ Add an optional package mode, not a replacement for `doc_manifest.json`:
 ```text
 handoff/
 ├── doc_manifest.json
+├── formal_handoff_manifest.json
 ├── metadata.json
 ├── quality_report.json
 ├── segmentation_plan.json
@@ -243,6 +244,7 @@ handoff/
 New schemas:
 
 - `ragflow_handoff_package_v1`
+- `ragflow_formal_handoff_manifest_v1`
 - `ragflow_document_metadata_v1`
 - `ragflow_profile_suggestions_v1`
 - `ragflow_artifact_index_v1`
@@ -1330,6 +1332,14 @@ Markdown summary rendered from that JSON. The report derives `ready`,
 sidecar completeness, chunk readiness, retrieval-hint richness, artifact coverage,
 ingest-plan, and redaction-safety checks. `ragflow-kb-build inspect-handoff` reads the
 sidecar and recomputes the status without mutating RAGFlow.
+
+Implementation status: rich handoffs now write package-level
+`ragflow_formal_handoff_manifest_v1` audit manifests as `formal_handoff_manifest.json`.
+The manifest records handoff mode, source document count, relative sidecar inventory,
+schema/version identities, Markdown/image/report hashes, a deterministic package hash,
+and downstream inspect/dry-run command suggestions. `doc_manifest.json` remains the
+document-level ingestion contract; the formal manifest is for package review and
+handoff integrity checks.
 
 Implementation status: rich-handoff sidecars for retrieval hints, assistant profiles, and
 assistant test plans are generated as review artifacts by `ragflow-doc-to-md package

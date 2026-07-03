@@ -67,6 +67,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     sanitize_report_payload,
     sha256_file,
     write_doc_ingest_readiness_report,
+    write_formal_handoff_manifest,
     warmup_conversion_backend,
 )
 
@@ -228,6 +229,7 @@ def _formal_ingest_readiness_signals(
         "retrieval_hints",
         "assistant_profile",
         "assistant_test_plan",
+        "formal_handoff_manifest",
         "package_readme",
     ]
     return {
@@ -259,6 +261,12 @@ def _formal_ingest_readiness_signals(
             "path": ingest_readiness_name,
             "status": ingest_readiness_status,
             "advisory_score": ingest_readiness_score,
+        },
+        "formal_handoff_manifest": {
+            "generated": bool(package_payload.get("formal_handoff_manifest")),
+            "path": package_payload.get("formal_handoff_manifest"),
+            "schema": package_payload.get("formal_handoff_manifest_schema"),
+            "package_hash": package_payload.get("formal_handoff_package_hash"),
         },
         "recommended_next_steps": {
             "inspect_handoff": "ragflow-kb-build inspect-handoff --handoff <handoff>",
@@ -1478,6 +1486,7 @@ def _run_pipeline(args: argparse.Namespace) -> int:
         assistant_test_plan_name = _safe_handoff_sidecar_name(args.assistant_test_plan_name, label="--assistant-test-plan-name") or "assistant_test_plan.json"
         ingest_readiness_name = _safe_handoff_sidecar_name(args.ingest_readiness_name, label="--ingest-readiness-name") or "ingest_readiness_report.json"
         ingest_readiness_md_name = _safe_handoff_sidecar_name(args.ingest_readiness_md_name, label="--ingest-readiness-md-name") if args.ingest_readiness_md_name else None
+        formal_manifest_name = _safe_handoff_sidecar_name(args.formal_manifest_name, label="--formal-manifest-name") or "formal_handoff_manifest.json"
         package_readme_name = _safe_handoff_sidecar_name(args.package_readme_name, label="--package-readme-name") or "package_readme.md"
         package_payload = create_rich_handoff_package(
             handoff_root=output_root,
@@ -1490,6 +1499,7 @@ def _run_pipeline(args: argparse.Namespace) -> int:
             assistant_test_plan_name=assistant_test_plan_name,
             ingest_readiness_name=ingest_readiness_name,
             ingest_readiness_md_name=ingest_readiness_md_name,
+            formal_handoff_manifest_name=formal_manifest_name,
             package_readme_name=package_readme_name,
         )
 
@@ -1528,6 +1538,29 @@ def _run_pipeline(args: argparse.Namespace) -> int:
         package_payload["ingest_readiness_md"] = ingest_readiness_md_name
         package_payload["ingest_readiness_status"] = ingest_readiness["status"]
         package_payload["ingest_readiness_score"] = ingest_readiness["advisory_score"]
+        formal_handoff_manifest = write_formal_handoff_manifest(
+            handoff_root=output_root,
+            doc_manifest_name=args.manifest_name,
+            formal_handoff_manifest_name=formal_manifest_name,
+            sidecar_names={
+                "metadata": metadata_name,
+                "artifact_index": artifact_index_name,
+                "profile_suggestions": profile_suggestions_name,
+                "retrieval_hints": retrieval_hints_name,
+                "assistant_profile": assistant_profile_name,
+                "assistant_test_plan": assistant_test_plan_name,
+                "ingest_readiness": ingest_readiness_name,
+                "ingest_readiness_md": ingest_readiness_md_name,
+                "package_readme": package_readme_name,
+                "quality_report": convert_payload.get("quality_report_name") or args.quality_report_name,
+                "postprocess_report": postprocess_report_name,
+                "chunk_profile_report": chunk_profile_report_name,
+                "ragflow_ingest_plan": ingest_plan_name,
+            },
+        )
+        package_payload["formal_handoff_manifest"] = formal_manifest_name
+        package_payload["formal_handoff_manifest_schema"] = formal_handoff_manifest["schema"]
+        package_payload["formal_handoff_package_hash"] = formal_handoff_manifest["package_hash"]
 
         alias_path: Path | None = None
         alias_name = _safe_handoff_sidecar_name(args.ragflow_config_alias, label="--ragflow-config-alias")
@@ -1592,6 +1625,7 @@ def _run_pipeline(args: argparse.Namespace) -> int:
             "retrieval_hints": str(output_root / retrieval_hints_name),
             "ingest_readiness_report": str(output_root / ingest_readiness_name),
             "ingest_readiness_report_md": str(output_root / ingest_readiness_md_name) if ingest_readiness_md_name else None,
+            "formal_handoff_manifest": str(output_root / formal_manifest_name),
             "ragflow_ingest_plan": str(ingest_plan_path),
             "ragflow_config_alias": str(alias_path) if alias_path else None,
             "document_count": convert_payload.get("document_count"),
@@ -1804,6 +1838,7 @@ def _run_package(args: argparse.Namespace) -> int:
             assistant_test_plan_name=args.assistant_test_plan_name,
             ingest_readiness_name=args.ingest_readiness_name,
             ingest_readiness_md_name=args.ingest_readiness_md_name,
+            formal_handoff_manifest_name=args.formal_manifest_name,
             package_readme_name=args.package_readme_name,
         )
         _dump_json({"ok": True, "package": payload})
@@ -2100,6 +2135,7 @@ def build_package_parser() -> argparse.ArgumentParser:
     parser.add_argument("--assistant-test-plan-name", default="assistant_test_plan.json", help="Assistant test plan sidecar name")
     parser.add_argument("--ingest-readiness-name", default="ingest_readiness_report.json", help="Ingest readiness JSON sidecar name")
     parser.add_argument("--ingest-readiness-md-name", default="ingest_readiness_report.md", help="Ingest readiness Markdown sidecar name")
+    parser.add_argument("--formal-manifest-name", default="formal_handoff_manifest.json", help="Package-level formal handoff audit manifest name")
     parser.add_argument("--package-readme-name", default="package_readme.md", help="Package README sidecar name")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     return parser
@@ -2218,6 +2254,7 @@ def build_pipeline_parser() -> argparse.ArgumentParser:
     parser.add_argument("--assistant-test-plan-name", default="assistant_test_plan.json", help="Rich package assistant test plan sidecar name")
     parser.add_argument("--ingest-readiness-name", default="ingest_readiness_report.json", help="Rich package ingest readiness JSON sidecar name")
     parser.add_argument("--ingest-readiness-md-name", default="ingest_readiness_report.md", help="Rich package ingest readiness Markdown sidecar name")
+    parser.add_argument("--formal-manifest-name", default="formal_handoff_manifest.json", help="Package-level formal handoff audit manifest name")
     parser.add_argument("--package-readme-name", default="package_readme.md", help="Rich package README sidecar name")
     parser.add_argument("--ingest-plan-name", default="ragflow_ingest_plan.yaml", help="Non-secret RAGFlow ingest plan sidecar name")
     parser.add_argument("--ragflow-config-alias", help="Optional non-secret compatibility alias such as ragflow_config.yaml")

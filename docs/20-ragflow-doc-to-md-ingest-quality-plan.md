@@ -244,6 +244,13 @@ formal_handoff_manifest.json
 - 不包含真实 endpoint、API key、私有源路径或临时路径。
 - release hygiene 和 schema identity 覆盖该 schema。
 
+实现状态：2026-07-03 已完成；`package --rich` 和 `pipeline` 默认写出
+`ragflow_formal_handoff_manifest_v1` 为 `formal_handoff_manifest.json`，记录相对
+sidecar inventory、schema/version identity、Markdown/image/report hash、包级 hash 和
+inspect/dry-run command suggestions。`doc_manifest.json` 继续作为文档级 ingestion
+contract，formal manifest 只作为包级审计和 handoff 完整性证据；未执行 live RAGFlow
+mutation。
+
 ### 3.7 Normalized RAGFlux comparison report
 
 将本轮临时对比口径产品化为只读报告：
@@ -360,11 +367,15 @@ ragflow-doc-to-md compare-retained-package
 
 ### 4.6 P2：Formal handoff manifest
 
-- [ ] 定义 `ragflow_formal_handoff_manifest_v1` schema。
-- [ ] 写出 sidecar list、schema versions、hashes、downstream command suggestions。
-- [ ] 增加 schema identity 和 manifest schema check。
-- [ ] 增加 consumer acceptance 和 strict-vendor platform smoke。
-- [ ] 更新 public docs，说明它与 `doc_manifest.json` 的关系：前者是包级审计，后者是文档级 ingestion contract。
+实现状态：2026-07-03 已完成；新增 public schema template/example、runtime 生成器、
+CLI 默认输出、`inspect-handoff` 摘要、consumer acceptance 和 strict-vendor platform
+smoke 覆盖；未执行 live RAGFlow mutation。
+
+- [x] 定义 `ragflow_formal_handoff_manifest_v1` schema。
+- [x] 写出 sidecar list、schema versions、hashes、downstream command suggestions。
+- [x] 增加 schema identity 和 manifest schema check。
+- [x] 增加 consumer acceptance 和 strict-vendor platform smoke。
+- [x] 更新 public docs，说明它与 `doc_manifest.json` 的关系：前者是包级审计，后者是文档级 ingestion contract。
 
 ### 4.7 P2：Normalized comparison report
 

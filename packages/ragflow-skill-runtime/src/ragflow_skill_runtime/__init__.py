@@ -102,6 +102,7 @@ from .handoff import (
     ARTIFACT_INDEX_SCHEMA,
     DOC_INGEST_READINESS_SCHEMA,
     DOCUMENT_METADATA_SCHEMA,
+    FORMAL_HANDOFF_MANIFEST_SCHEMA,
     HANDOFF_PACKAGE_SCHEMA,
     PROFILE_SUGGESTIONS_SCHEMA,
     RAGFLOW_INGEST_PLAN_SCHEMA,
@@ -115,6 +116,7 @@ from .handoff import (
     make_asset_semantics_payload,
     make_artifact_index_payload,
     make_doc_ingest_readiness_payload,
+    make_formal_handoff_manifest_payload,
     make_document_metadata_payload,
     make_profile_suggestions_payload,
     make_ragflow_ingest_plan_payload,
@@ -122,6 +124,7 @@ from .handoff import (
     render_doc_ingest_readiness_markdown,
     render_handoff_inspection_markdown,
     write_doc_ingest_readiness_report,
+    write_formal_handoff_manifest,
 )
 from .assistant_review import (
     ASSISTANT_PROFILE_RECOMMENDATION_SCHEMA,
@@ -145,6 +148,9 @@ from .diagnostics import (
 from .manifests import (
     DOC_MANIFEST_JSON_SCHEMA,
     DOC_MANIFEST_JSON_SCHEMA_ID,
+    FORMAL_HANDOFF_MANIFEST_JSON_SCHEMA,
+    FORMAL_HANDOFF_MANIFEST_JSON_SCHEMA_ID,
+    FormalHandoffManifest,
     DocManifest,
     DocumentEntry,
     KB_MANIFEST_JSON_SCHEMA,
@@ -520,12 +526,15 @@ __all__ = [
     "DIAGNOSTIC_REPORT_SCHEMA",
     "DOC_MANIFEST_JSON_SCHEMA",
     "DOC_MANIFEST_JSON_SCHEMA_ID",
+    "FORMAL_HANDOFF_MANIFEST_JSON_SCHEMA",
+    "FORMAL_HANDOFF_MANIFEST_JSON_SCHEMA_ID",
     "ASSISTANT_PROFILE_SCHEMA",
     "ASSISTANT_TEST_PLAN_SCHEMA",
     "ASSET_SEMANTICS_SCHEMA",
     "ARTIFACT_INDEX_SCHEMA",
     "DOC_INGEST_READINESS_SCHEMA",
     "DOCUMENT_METADATA_SCHEMA",
+    "FORMAL_HANDOFF_MANIFEST_SCHEMA",
     "HANDOFF_PACKAGE_SCHEMA",
     "POSTPROCESS_PROFILES",
     "POSTPROCESS_REPORT_SCHEMA",
@@ -543,6 +552,7 @@ __all__ = [
     "DocPostprocessError",
     "DocSegmentError",
     "DocumentEntry",
+    "FormalHandoffManifest",
     "DocumentSegment",
     "KB_MANIFEST_JSON_SCHEMA",
     "KB_MANIFEST_JSON_SCHEMA_ID",
@@ -775,6 +785,7 @@ __all__ = [
     "make_artifact_index_payload",
     "make_doc_manifest_payload",
     "make_doc_ingest_readiness_payload",
+    "make_formal_handoff_manifest_payload",
     "make_document_metadata_payload",
     "make_metadata_template_payload",
     "make_profile_suggestions_payload",
@@ -938,6 +949,7 @@ __all__ = [
     "write_centroid_plan",
     "write_centroid_report",
     "write_doc_ingest_readiness_report",
+    "write_formal_handoff_manifest",
 ]
 
 __version__ = "0.1.0"

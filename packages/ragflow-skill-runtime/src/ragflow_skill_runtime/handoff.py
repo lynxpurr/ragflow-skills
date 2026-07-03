@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import mimetypes
 import re
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ RETRIEVAL_HINTS_SCHEMA = "ragflow_retrieval_hints_v1"
 ASSISTANT_PROFILE_SCHEMA = "ragflow_assistant_profile_v1"
 ASSISTANT_TEST_PLAN_SCHEMA = "ragflow_assistant_test_plan_v1"
 DOC_INGEST_READINESS_SCHEMA = "ragflow_doc_ingest_readiness_v1"
+FORMAL_HANDOFF_MANIFEST_SCHEMA = "ragflow_formal_handoff_manifest_v1"
 RAGFLOW_INGEST_PLAN_SCHEMA = "ragflow_ingest_plan_v1"
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -1907,6 +1909,7 @@ def make_package_readme(
     assistant_test_plan_name: str,
     ingest_readiness_name: str = "ingest_readiness_report.json",
     ingest_readiness_md_name: str | None = "ingest_readiness_report.md",
+    formal_handoff_manifest_name: str = "formal_handoff_manifest.json",
     quality_report_name: str | None = None,
     handoff_mode: str | None = None,
 ) -> str:
@@ -1920,7 +1923,8 @@ def make_package_readme(
         "",
         "## Files",
         "",
-        f"- `{doc_manifest_name}`: required v0.1 document manifest.",
+        f"- `{doc_manifest_name}`: required v0.1 document-level ingestion contract consumed by `ragflow-kb-build`.",
+        f"- `{formal_handoff_manifest_name}`: package-level audit manifest with sidecar hashes and downstream command suggestions.",
         f"- `{metadata_name}`: document-level source and Markdown metadata.",
         f"- `{artifact_index_name}`: hashes, kinds, and advisory image semantics for local assets under `documents/` and `artifacts/`.",
         f"- `{profile_suggestions_name}`: advisory parser/profile hints for review.",
@@ -1967,6 +1971,154 @@ def _read_json_if_file(path: Path) -> dict[str, Any] | None:
     if not path.is_file():
         return None
     return _read_json(path)
+
+
+def _read_sidecar_identity(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".json":
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        elif suffix in {".yaml", ".yml"}:
+            payload = _read_simple_yaml(path)
+        else:
+            return None
+    except (HandoffError, json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    schema = payload.get("schema")
+    if isinstance(schema, str) and schema.strip():
+        return schema.strip()
+    version = payload.get("version")
+    if isinstance(version, str) and version.strip():
+        return f"version:{version.strip()}"
+    return None
+
+
+def _formal_sidecar_record(
+    *,
+    root: Path,
+    name: str,
+    raw_path: str | None,
+    category: str,
+) -> dict[str, Any]:
+    if not raw_path:
+        return {
+            "name": name,
+            "path": None,
+            "category": category,
+            "exists": False,
+            "safe_relative_path": False,
+        }
+    safe_path = _safe_relative_reference(raw_path)
+    record: dict[str, Any] = {
+        "name": name,
+        "path": raw_path if safe_path else "<unsafe>",
+        "category": category,
+        "exists": False,
+        "safe_relative_path": safe_path,
+    }
+    if not safe_path:
+        return record
+    path = root / raw_path
+    record["exists"] = path.is_file()
+    if path.is_file():
+        record["size_bytes"] = path.stat().st_size
+        record["sha256"] = sha256_file(path)
+        identity = _read_sidecar_identity(path)
+        if identity:
+            record["schema_identity"] = identity
+    return record
+
+
+def _document_markdown_records(*, root: Path, documents: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for index, document in enumerate(documents, start=1):
+        raw_path = document.get("markdown_path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            records.append(
+                {
+                    "document_index": index,
+                    "path": None,
+                    "exists": False,
+                    "safe_relative_path": False,
+                }
+            )
+            continue
+        safe_path = _safe_relative_reference(raw_path)
+        record: dict[str, Any] = {
+            "document_index": index,
+            "path": raw_path if safe_path else "<unsafe>",
+            "exists": False,
+            "safe_relative_path": safe_path,
+        }
+        if safe_path:
+            path = root / raw_path
+            record["exists"] = path.is_file()
+            if path.is_file():
+                record["size_bytes"] = path.stat().st_size
+                record["sha256"] = sha256_file(path)
+        records.append(record)
+    return records
+
+
+def _image_asset_records(*, root: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for container in ("documents", "artifacts"):
+        base = root / container
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*")):
+            if not path.is_file() or _artifact_kind(path) != "image":
+                continue
+            records.append(_file_record(path, root=root))
+    return records
+
+
+def _schema_versions_from_records(records: list[Mapping[str, Any]]) -> dict[str, str]:
+    versions: dict[str, str] = {}
+    for record in records:
+        name = record.get("name")
+        identity = record.get("schema_identity")
+        if isinstance(name, str) and isinstance(identity, str) and identity:
+            versions[name] = identity
+    return versions
+
+
+def _package_hash_payload(
+    *,
+    sidecars: list[Mapping[str, Any]],
+    markdown_files: list[Mapping[str, Any]],
+    image_assets: list[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for group, records in (
+        ("sidecar", sidecars),
+        ("markdown", markdown_files),
+        ("image_asset", image_assets),
+    ):
+        for record in records:
+            sha256 = record.get("sha256")
+            path = record.get("path")
+            if not isinstance(sha256, str) or not isinstance(path, str):
+                continue
+            entries.append(
+                {
+                    "group": group,
+                    "path": path,
+                    "sha256": sha256,
+                    "size_bytes": record.get("size_bytes"),
+                    "schema_identity": record.get("schema_identity"),
+                }
+            )
+    return sorted(entries, key=lambda item: (str(item["group"]), str(item["path"])))
+
+
+def _aggregate_package_hash(entries: list[Mapping[str, Any]]) -> str:
+    canonical = json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _quality_status_from_reports(doc_manifest: Mapping[str, Any], quality_report: Mapping[str, Any] | None) -> str | None:
@@ -2644,6 +2796,153 @@ def write_doc_ingest_readiness_report(
     return payload
 
 
+def make_formal_handoff_manifest_payload(
+    *,
+    handoff_root: str | Path,
+    doc_manifest_name: str = "doc_manifest.json",
+    formal_handoff_manifest_name: str = "formal_handoff_manifest.json",
+    sidecar_names: Mapping[str, str | None] | None = None,
+) -> dict[str, Any]:
+    """Create a package-level formal handoff audit manifest without private paths."""
+
+    root = Path(handoff_root)
+    doc_manifest = load_doc_manifest_payload(root / doc_manifest_name)
+    documents = _manifest_documents(doc_manifest)
+    default_sidecars: dict[str, str | None] = {
+        "doc_manifest": doc_manifest_name,
+        "quality_report": doc_manifest.get("quality_report") if isinstance(doc_manifest.get("quality_report"), str) else None,
+        "runtime_report": doc_manifest.get("runtime_report") if isinstance(doc_manifest.get("runtime_report"), str) else None,
+        "postprocess_report": doc_manifest.get("postprocess_report")
+        if isinstance(doc_manifest.get("postprocess_report"), str)
+        else "postprocess_report.json",
+        "chunk_profile_report": doc_manifest.get("chunk_profile_report")
+        if isinstance(doc_manifest.get("chunk_profile_report"), str)
+        else None,
+        "metadata": "metadata.json",
+        "artifact_index": "artifact_index.json",
+        "profile_suggestions": "profile_suggestions.json",
+        "retrieval_hints": "retrieval_hints.json",
+        "assistant_profile": "assistant_profile.json",
+        "assistant_test_plan": "assistant_test_plan.json",
+        "ingest_readiness": "ingest_readiness_report.json",
+        "ingest_readiness_md": "ingest_readiness_report.md",
+        "package_readme": "package_readme.md",
+        "ragflow_ingest_plan": "ragflow_ingest_plan.yaml",
+    }
+    if sidecar_names:
+        default_sidecars.update({key: value for key, value in sidecar_names.items() if key in default_sidecars})
+    categories = {
+        "doc_manifest": "core",
+        "quality_report": "core",
+        "runtime_report": "core",
+        "postprocess_report": "pipeline",
+        "chunk_profile_report": "pipeline",
+        "metadata": "rich",
+        "artifact_index": "rich",
+        "profile_suggestions": "rich",
+        "retrieval_hints": "rich",
+        "assistant_profile": "rich",
+        "assistant_test_plan": "rich",
+        "ingest_readiness": "rich",
+        "ingest_readiness_md": "rich",
+        "package_readme": "rich",
+        "ragflow_ingest_plan": "pipeline",
+    }
+    sidecars = [
+        _formal_sidecar_record(
+            root=root,
+            name=name,
+            raw_path=path,
+            category=categories.get(name, "sidecar"),
+        )
+        for name, path in default_sidecars.items()
+        if path
+    ]
+    markdown_files = _document_markdown_records(root=root, documents=documents)
+    image_assets = _image_asset_records(root=root)
+    hash_inputs = _package_hash_payload(
+        sidecars=sidecars,
+        markdown_files=markdown_files,
+        image_assets=image_assets,
+    )
+    missing_sidecars = [
+        str(record.get("name"))
+        for record in sidecars
+        if record.get("exists") is False and record.get("category") in {"core", "rich", "pipeline"}
+    ]
+    unsafe_sidecars = [
+        str(record.get("name"))
+        for record in sidecars
+        if record.get("safe_relative_path") is False
+    ]
+    schema_versions = _schema_versions_from_records(sidecars)
+    return {
+        "schema": FORMAL_HANDOFF_MANIFEST_SCHEMA,
+        "created_at": _now(),
+        "handoff_mode": doc_manifest.get("handoff_mode") if isinstance(doc_manifest.get("handoff_mode"), str) else None,
+        "doc_manifest": doc_manifest_name,
+        "formal_handoff_manifest": formal_handoff_manifest_name,
+        "source_document_count": len(documents),
+        "generated_sidecar_count": sum(1 for record in sidecars if record.get("exists")),
+        "missing_sidecars": missing_sidecars,
+        "sidecars": sidecars,
+        "markdown_files": markdown_files,
+        "image_assets": image_assets,
+        "report_hashes": [
+            {
+                "name": record.get("name"),
+                "path": record.get("path"),
+                "sha256": record.get("sha256"),
+                "schema_identity": record.get("schema_identity"),
+            }
+            for record in sidecars
+            if isinstance(record.get("sha256"), str)
+            and (
+                str(record.get("name", "")).endswith("report")
+                or str(record.get("path", "")).endswith((".json", ".yaml", ".yml", ".md"))
+            )
+        ],
+        "schema_versions": schema_versions,
+        "package_hash": _aggregate_package_hash(hash_inputs),
+        "package_hash_algorithm": "sha256(relative_path+file_sha256+size+schema_identity)",
+        "package_hash_inputs": hash_inputs,
+        "downstream_command_suggestions": _default_next_commands(),
+        "safety": {
+            "paths": "relative_only",
+            "unsafe_sidecars": unsafe_sidecars,
+            "stores_ragflow_endpoint": False,
+            "stores_api_credentials": False,
+            "live_ragflow_mutation": "not_performed",
+            "mutation_default": "dry_run_first",
+        },
+        "notes": [
+            "doc_manifest.json remains the document-level ingestion contract.",
+            "formal_handoff_manifest.json is a package-level audit manifest for review and handoff integrity.",
+        ],
+    }
+
+
+def write_formal_handoff_manifest(
+    *,
+    handoff_root: str | Path,
+    doc_manifest_name: str = "doc_manifest.json",
+    formal_handoff_manifest_name: str = "formal_handoff_manifest.json",
+    sidecar_names: Mapping[str, str | None] | None = None,
+) -> dict[str, Any]:
+    """Write the package-level formal handoff manifest and return its payload."""
+
+    root = Path(handoff_root)
+    payload = make_formal_handoff_manifest_payload(
+        handoff_root=root,
+        doc_manifest_name=doc_manifest_name,
+        formal_handoff_manifest_name=formal_handoff_manifest_name,
+        sidecar_names=sidecar_names,
+    )
+    path = root / formal_handoff_manifest_name
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
+
+
 def create_rich_handoff_package(
     *,
     handoff_root: str | Path,
@@ -2656,6 +2955,7 @@ def create_rich_handoff_package(
     assistant_test_plan_name: str = "assistant_test_plan.json",
     ingest_readiness_name: str = "ingest_readiness_report.json",
     ingest_readiness_md_name: str | None = "ingest_readiness_report.md",
+    formal_handoff_manifest_name: str = "formal_handoff_manifest.json",
     package_readme_name: str = "package_readme.md",
 ) -> dict[str, Any]:
     """Create optional rich sidecars beside an existing doc manifest."""
@@ -2713,6 +3013,7 @@ def create_rich_handoff_package(
         assistant_test_plan_name=assistant_test_plan_name,
         ingest_readiness_name=ingest_readiness_name,
         ingest_readiness_md_name=ingest_readiness_md_name,
+        formal_handoff_manifest_name=formal_handoff_manifest_name,
         quality_report_name=quality_report_name if isinstance(quality_report_name, str) else None,
         handoff_mode=doc_manifest.get("handoff_mode") if isinstance(doc_manifest.get("handoff_mode"), str) else None,
     )
@@ -2747,6 +3048,23 @@ def create_rich_handoff_package(
             "quality_report": quality_report_name if isinstance(quality_report_name, str) else None,
         },
     )
+    formal_handoff_manifest = write_formal_handoff_manifest(
+        handoff_root=root,
+        doc_manifest_name=doc_manifest_name,
+        formal_handoff_manifest_name=formal_handoff_manifest_name,
+        sidecar_names={
+            "quality_report": quality_report_name if isinstance(quality_report_name, str) else None,
+            "metadata": metadata_name,
+            "artifact_index": artifact_index_name,
+            "profile_suggestions": profile_suggestions_name,
+            "retrieval_hints": retrieval_hints_name,
+            "assistant_profile": assistant_profile_name,
+            "assistant_test_plan": assistant_test_plan_name,
+            "ingest_readiness": ingest_readiness_name,
+            "ingest_readiness_md": ingest_readiness_md_name,
+            "package_readme": package_readme_name,
+        },
+    )
 
     payload = {
         "schema": HANDOFF_PACKAGE_SCHEMA,
@@ -2761,6 +3079,7 @@ def create_rich_handoff_package(
         "assistant_test_plan": assistant_test_plan_name,
         "ingest_readiness": ingest_readiness_name,
         "ingest_readiness_md": ingest_readiness_md_name,
+        "formal_handoff_manifest": formal_handoff_manifest_name,
         "package_readme": package_readme_name,
         "quality_report": quality_report_name if isinstance(quality_report_name, str) else None,
         "document_count": len(metadata["documents"]),
@@ -2768,6 +3087,8 @@ def create_rich_handoff_package(
         "asset_semantic_count": artifact_index["asset_semantics"]["summary"]["image_count"],
         "ingest_readiness_status": ingest_readiness["status"],
         "ingest_readiness_score": ingest_readiness["advisory_score"],
+        "formal_handoff_manifest_schema": formal_handoff_manifest["schema"],
+        "formal_handoff_package_hash": formal_handoff_manifest["package_hash"],
         "retrieval_hint_count": len(retrieval_hints["section_boundaries"]),
         "assistant_test_count": assistant_test_plan["test_count"],
         "quality_status": profile_suggestions.get("signals", {}).get("quality_status"),
@@ -2831,6 +3152,7 @@ def make_ragflow_ingest_plan_payload(
         "assistant_test_plan": package.get("assistant_test_plan", "assistant_test_plan.json"),
         "ingest_readiness": package.get("ingest_readiness", "ingest_readiness_report.json"),
         "ingest_readiness_md": package.get("ingest_readiness_md", "ingest_readiness_report.md"),
+        "formal_handoff_manifest": package.get("formal_handoff_manifest", "formal_handoff_manifest.json"),
     }
     return {
         "schema": RAGFLOW_INGEST_PLAN_SCHEMA,
@@ -2924,6 +3246,7 @@ def inspect_rich_handoff(
         "assistant_test_plan": ("assistant_test_plan.json", "rich"),
         "ingest_readiness_report": ("ingest_readiness_report.json", "rich"),
         "ingest_readiness_report_md": ("ingest_readiness_report.md", "rich"),
+        "formal_handoff_manifest": ("formal_handoff_manifest.json", "rich"),
         "package_readme": ("package_readme.md", "rich"),
         "postprocess_report": (postprocess_report_name, "pipeline"),
         "chunk_profile_report": (chunk_profile_report_name, "pipeline"),
@@ -2998,6 +3321,8 @@ def inspect_rich_handoff(
         if isinstance(recomputed_readiness.get("checks"), Mapping)
         else {}
     )
+    formal_manifest_path = root / "formal_handoff_manifest.json"
+    formal_manifest = _read_json_if_file(formal_manifest_path)
 
     return {
         "schema": "ragflow_handoff_inspection_v1",
@@ -3031,6 +3356,15 @@ def inspect_rich_handoff(
             "declared_status": stored_status,
             "recomputed_status": readiness_status,
             "matches_recomputed_status": stored_status == readiness_status if stored_status else False,
+        },
+        "formal_handoff_manifest": {
+            "path": "formal_handoff_manifest.json",
+            "exists": formal_manifest_path.is_file(),
+            "schema": formal_manifest.get("schema") if isinstance(formal_manifest, Mapping) else None,
+            "package_hash": formal_manifest.get("package_hash") if isinstance(formal_manifest, Mapping) else None,
+            "generated_sidecar_count": formal_manifest.get("generated_sidecar_count")
+            if isinstance(formal_manifest, Mapping)
+            else None,
         },
         "ingestion_readiness": {
             "status": readiness_status,
@@ -3088,10 +3422,17 @@ def render_handoff_inspection_markdown(report: Mapping[str, Any]) -> str:
         if isinstance(report.get("ingest_readiness_report"), Mapping)
         else {}
     )
+    formal_manifest = (
+        report.get("formal_handoff_manifest")
+        if isinstance(report.get("formal_handoff_manifest"), Mapping)
+        else {}
+    )
     lines.extend(
         [
             f"- Readiness report exists: {str(bool(readiness_report.get('exists'))).lower()}",
             f"- Readiness report status matches review: {str(bool(readiness_report.get('matches_recomputed_status'))).lower()}",
+            f"- Formal handoff manifest exists: {str(bool(formal_manifest.get('exists'))).lower()}",
+            f"- Formal handoff package hash: `{formal_manifest.get('package_hash') or 'unknown'}`",
             f"- Advisory score: {readiness.get('advisory_score', 'unknown')}",
             f"- Rich sidecars complete: {str(bool(sidecar_summary.get('rich_complete'))).lower()}",
             f"- Pipeline sidecars complete: {str(bool(sidecar_summary.get('pipeline_complete'))).lower()}",

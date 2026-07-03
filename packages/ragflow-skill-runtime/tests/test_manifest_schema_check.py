@@ -19,9 +19,9 @@ class ManifestSchemaCheckTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report)
         self.assertEqual(report["schema"], SCHEMA)
-        self.assertEqual(report["summary"]["schema_count"], 2)
+        self.assertEqual(report["summary"]["schema_count"], 3)
         checked = {check["name"] for check in report["checks"]}
-        self.assertEqual(checked, {"doc_manifest", "kb_manifest"})
+        self.assertEqual(checked, {"doc_manifest", "kb_manifest", "formal_handoff_manifest"})
         for check in report["checks"]:
             self.assertTrue(check["template_matches_runtime"], check)
             self.assertTrue(check["example_valid"], check)
