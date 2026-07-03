@@ -149,6 +149,8 @@ The tool is intentionally narrow:
 - it now includes a `ragflow_retirement_observation_matrix_v1` summary for explicit
   sample types such as scanned documents, long documents, papers, contracts, complex
   tables, image-heavy sources, low-quality OCR, and multi-document handoffs;
+- release hygiene schema identity checks cover both `ragflow_field_trial_metrics_v1` and
+  `ragflow_retirement_observation_matrix_v1`;
 - it does not mark roadmap checkboxes, start services, upload reports, or inspect private
   directories unless the operator passes them explicitly.
 

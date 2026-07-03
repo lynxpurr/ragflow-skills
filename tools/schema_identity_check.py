@@ -638,6 +638,26 @@ EXPECTED_IDENTITIES = (
         description="Release governance inventory for runtime-resilience helper coverage and candidates.",
         source_roots=(Path("tools/runtime_resilience_inventory.py"),),
     ),
+    SchemaIdentity(
+        key="field_trial_metrics",
+        group="release",
+        identity="ragflow_field_trial_metrics_v1",
+        source_patterns=("ragflow_field_trial_metrics_v1", "SCHEMA"),
+        coverage_patterns=("ragflow_field_trial_metrics_v1", "build_field_trial_metrics"),
+        description="Offline explicit-run-root field-trial metrics report for observation and trigger review.",
+        source_roots=(Path("tools/field_trial_metrics.py"),),
+        coverage_roots=(Path("packages/ragflow-skill-runtime/tests/test_field_trial_metrics.py"),),
+    ),
+    SchemaIdentity(
+        key="retirement_observation_matrix",
+        group="release",
+        identity="ragflow_retirement_observation_matrix_v1",
+        source_patterns=("ragflow_retirement_observation_matrix_v1", "RETIREMENT_MATRIX_SCHEMA"),
+        coverage_patterns=("ragflow_retirement_observation_matrix_v1", "RETIREMENT_MATRIX_SCHEMA"),
+        description="Multi-sample replacement-path retirement observation matrix inside field-trial metrics reports.",
+        source_roots=(Path("tools/field_trial_metrics.py"),),
+        coverage_roots=(Path("packages/ragflow-skill-runtime/tests/test_field_trial_metrics.py"),),
+    ),
 )
 
 

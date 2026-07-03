@@ -38,6 +38,8 @@ class SchemaIdentityCheckTests(unittest.TestCase):
             self.assertIn(group, groups)
         keys = {check["key"] for check in report["checks"]}
         self.assertIn("version_date_drift_check", keys)
+        self.assertIn("field_trial_metrics", keys)
+        self.assertIn("retirement_observation_matrix", keys)
 
     def test_schema_identity_check_reports_missing_source_or_coverage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

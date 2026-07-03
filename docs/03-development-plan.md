@@ -250,7 +250,7 @@ remain in their owning phases below.
 | Track | Existing open items | Current status | Completion rule |
 | --- | --- | --- | --- |
 | Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory and approved live mutation/query coverage closed | Runtime inventory stays at 21 `covered`, 0 `candidate`, 0 `deferred`, and 68 `not_applicable` command surfaces after the retained-package comparison report was classified as read-only/not-applicable for runtime helpers. `ragflow-doc-to-md` runtime reports now include offline performance telemetry for conversion, asset, postprocess, package, hints, and ingest-plan stages without adding live mutation. |
-| RAGFlux retirement observation | docs/20 multi-sample observation matrix | Complete as an offline explicit-run-root summary path | `tools/field_trial_metrics.py` now emits `ragflow_retirement_observation_matrix_v1` for scanned, long-document, paper, contract, complex-table, image-heavy, low-quality-OCR, and multi-document handoff evidence without scanning user directories or running live mutation. |
+| RAGFlux retirement observation | docs/20 multi-sample observation matrix | Complete as an offline explicit-run-root summary path | `tools/field_trial_metrics.py` now emits `ragflow_retirement_observation_matrix_v1` for scanned, long-document, paper, contract, complex-table, image-heavy, low-quality-OCR, and multi-document handoff evidence without scanning user directories or running live mutation; field-trial and retirement matrix schema identities are covered by the release gate. |
 | Document split packaging | Phase 16 optional manifest rewrite/package mode | Complete for current CLI scope | Split outputs can be resumed and optionally repackaged without breaking existing segment-directory ingestion. |
 | Query service and agentic adapters | Phase 3 `serve`, Phase 21/30 script-owned synthesis and reflection | Host-assisted agentic retrieval and agentic-answer request/review complete; local service and script-owned answer synthesis deferred | Implement script-owned synthesis only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
 | Live disposable optimization | None currently open; Phase 31 live mutation/query resilience is closed | Probe, disposable optimization build/validate/cleanup, Phase 27 enrichment validation, and Phase 31 live runtime resilience are complete | Future live runs still require credentials, explicit confirmation, exact cleanup confirmation, retained artifacts, and user approval. |
@@ -1878,9 +1878,10 @@ Exit criteria:
 
 Status note: `tools/field_trial_metrics.py` now scans only explicit run roots or JSON
 files, summarizes existing public reports into `ragflow_field_trial_metrics_v1`, renders a
-Markdown summary, and can write a `ragflow_report_redaction_report_v1` sidecar. Focused
-tests cover blocked quality, zero-result query output, citation audit failure, release
-health, explicit gated-trigger records, CLI output files, and redaction behavior.
+Markdown summary, can write a `ragflow_report_redaction_report_v1` sidecar, and has
+field-trial plus retirement-matrix report schema identities covered by release hygiene.
+Focused tests cover blocked quality, zero-result query output, citation audit failure,
+release health, explicit gated-trigger records, CLI output files, and redaction behavior.
 
 ## Phase 40: System Closeout Review And Observation Backlog
 
