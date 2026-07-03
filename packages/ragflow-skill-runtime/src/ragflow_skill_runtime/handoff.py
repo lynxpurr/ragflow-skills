@@ -25,9 +25,16 @@ RAGFLOW_INGEST_PLAN_SCHEMA = "ragflow_ingest_plan_v1"
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
+MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)]\(([^)]+)\)")
 NUMERIC_RE = re.compile(r"\b\d+(?:[.,]\d+)*(?:\s?[%A-Za-zμ°/-]+)?")
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
 CJK_PHRASE_RE = re.compile(r"[\u4e00-\u9fff]{2,12}")
+PAGE_COMMENT_RE = re.compile(
+    r"<!--\s*(?:page|page_id|page-id|page_index|page-index)\s*[:=]?\s*(\d+)\s*-->",
+    re.IGNORECASE,
+)
+PAGE_TEXT_RE = re.compile(r"^\s*(?:page|p\.|第)\s*([0-9]{1,5})\s*(?:页)?\s*$", re.IGNORECASE)
+CHUNK_MARKER = "<!-- chunk -->"
 
 STOPWORDS = {
     "about",
@@ -521,6 +528,188 @@ def _count_table_blocks(lines: list[str]) -> int:
     return count
 
 
+def _compact_text(value: str, *, limit: int = 180) -> str:
+    compacted = " ".join(value.strip().split())
+    if len(compacted) <= limit:
+        return compacted
+    return compacted[: max(limit - 1, 0)].rstrip() + "..."
+
+
+def _line_page_map(lines: list[str]) -> tuple[dict[int, int], list[dict[str, Any]]]:
+    page_by_line: dict[int, int] = {}
+    markers: list[dict[str, Any]] = []
+    current_page: int | None = None
+    for index, line in enumerate(lines, start=1):
+        page: int | None = None
+        comment_match = PAGE_COMMENT_RE.search(line)
+        if comment_match:
+            page = int(comment_match.group(1))
+        elif line == "\f":
+            page = 1 if current_page is None else current_page + 1
+        else:
+            text_match = PAGE_TEXT_RE.match(line)
+            if text_match:
+                page = int(text_match.group(1))
+        if page is not None:
+            current_page = page
+            markers.append({"line": index, "page": page})
+        if current_page is not None:
+            page_by_line[index] = current_page
+    return page_by_line, markers
+
+
+def _page_for_line(page_by_line: Mapping[int, int], line: int) -> int | None:
+    page = page_by_line.get(line)
+    return int(page) if isinstance(page, int) else None
+
+
+def _section_for_line(sections: list[Mapping[str, Any]], line: int) -> Mapping[str, Any] | None:
+    for section in sections:
+        if int(section.get("line_start", 0)) <= line <= int(section.get("line_end", 0)):
+            return section
+    return None
+
+
+def _context_snippet(lines: list[str], *, line: int, radius: int = 2) -> str | None:
+    start = max(line - radius - 1, 0)
+    end = min(line + radius, len(lines))
+    candidates: list[str] = []
+    for candidate in lines[start:end]:
+        stripped = candidate.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#") or stripped.startswith("<!--"):
+            continue
+        if MARKDOWN_IMAGE_RE.search(stripped):
+            continue
+        if stripped.count("|") >= 2:
+            continue
+        candidates.append(stripped)
+    if not candidates:
+        return None
+    return _compact_text(" ".join(candidates), limit=240)
+
+
+def _table_blocks(lines: list[str]) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    start: int | None = None
+    rows: list[str] = []
+    for index, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        is_table_line = stripped.count("|") >= 2 and not stripped.startswith("```")
+        if is_table_line:
+            if start is None:
+                start = index
+            rows.append(stripped)
+            continue
+        if start is not None:
+            blocks.append({"line_start": start, "line_end": index - 1, "rows": rows})
+            start = None
+            rows = []
+    if start is not None:
+        blocks.append({"line_start": start, "line_end": len(lines), "rows": rows})
+    return blocks
+
+
+def _table_header_preview(rows: list[str]) -> list[str]:
+    if not rows:
+        return []
+    header = rows[0].strip().strip("|")
+    return [_compact_text(cell, limit=40) for cell in header.split("|") if cell.strip()][:8]
+
+
+def _safe_relative_reference(value: str) -> bool:
+    normalized = value.strip().replace("\\", "/")
+    if not normalized or normalized.startswith(("/", "~")):
+        return False
+    if ":" in normalized.split("/", 1)[0]:
+        return False
+    return ".." not in [part for part in normalized.split("/") if part]
+
+
+def _public_local_asset_path(raw: str, *, root: Path, base: Path) -> str | None:
+    target = _image_reference_path(raw)
+    if not target or _is_remote_image_reference(target):
+        return None
+    if not _safe_relative_reference(target):
+        return None
+    resolved = (base / target).resolve(strict=False)
+    try:
+        return resolved.relative_to(root.resolve(strict=False)).as_posix()
+    except ValueError:
+        return None
+
+
+def _markdown_image_contexts(
+    *,
+    markdown_rel: str,
+    text: str,
+    sections: list[Mapping[str, Any]],
+    page_by_line: Mapping[int, int],
+    root: Path,
+) -> list[dict[str, Any]]:
+    contexts: list[dict[str, Any]] = []
+    lines = text.splitlines()
+    markdown_parent = (root / markdown_rel).parent
+    for index, line in enumerate(lines, start=1):
+        for match in MARKDOWN_IMAGE_RE.finditer(line):
+            raw_target = _image_reference_path(match.group(2))
+            public_path = _public_local_asset_path(raw_target, root=root, base=markdown_parent)
+            if public_path is None:
+                continue
+            resolved = root / public_path
+            section = _section_for_line(sections, index) or {}
+            alt_text = _compact_text(match.group(1), limit=120)
+            context: dict[str, Any] = {
+                "kind": "image",
+                "path": public_path,
+                "markdown_target": raw_target if _safe_relative_reference(raw_target) else public_path,
+                "document": markdown_rel,
+                "line": index,
+                "source_heading": section.get("title"),
+                "heading_level": section.get("level"),
+                "page": _page_for_line(page_by_line, index),
+                "exists": resolved.is_file(),
+                "source": "markdown_image_reference",
+            }
+            if alt_text:
+                context["alt_text"] = alt_text
+                context["caption"] = alt_text
+            snippet = _context_snippet(lines, line=index)
+            if snippet:
+                context["context"] = snippet
+            contexts.append(context)
+    return contexts
+
+
+def _markdown_table_contexts(
+    *,
+    markdown_rel: str,
+    text: str,
+    sections: list[Mapping[str, Any]],
+    page_by_line: Mapping[int, int],
+) -> list[dict[str, Any]]:
+    contexts: list[dict[str, Any]] = []
+    for block in _table_blocks(text.splitlines()):
+        line_start = int(block["line_start"])
+        section = _section_for_line(sections, line_start) or {}
+        contexts.append(
+            {
+                "kind": "table",
+                "document": markdown_rel,
+                "line_start": line_start,
+                "line_end": int(block["line_end"]),
+                "source_heading": section.get("title"),
+                "heading_level": section.get("level"),
+                "page": _page_for_line(page_by_line, line_start),
+                "row_count": len(block["rows"]),
+                "header_preview": _table_header_preview(block["rows"]),
+                "source": "markdown_table",
+            }
+        )
+    return contexts
+
+
 def _section_stats(lines: list[str], *, line_start: int, line_end: int) -> dict[str, int]:
     section_lines = lines[max(line_start - 1, 0) : max(line_end, line_start - 1)]
     section_text = "\n".join(section_lines)
@@ -528,12 +717,13 @@ def _section_stats(lines: list[str], *, line_start: int, line_end: int) -> dict[
         "image_count": len(IMAGE_RE.findall(section_text)),
         "table_count": _count_table_blocks(section_lines),
         "list_item_count": sum(1 for line in section_lines if re.match(r"^\s*(?:[-*+]|\d+[.)])\s+", line)),
-        "chunk_marker_count": sum(1 for line in section_lines if "<!-- chunk -->" in line),
+        "chunk_marker_count": sum(1 for line in section_lines if CHUNK_MARKER in line),
     }
 
 
 def _section_boundaries(*, markdown_rel: str, text: str) -> list[dict[str, Any]]:
     lines = text.splitlines()
+    page_by_line, _markers = _line_page_map(lines)
     headings: list[dict[str, Any]] = []
     for index, line in enumerate(lines, start=1):
         match = HEADING_RE.match(line)
@@ -558,6 +748,12 @@ def _section_boundaries(*, markdown_rel: str, text: str) -> list[dict[str, Any]]
     for position, heading in enumerate(headings):
         next_start = headings[position + 1]["line_start"] if position + 1 < len(headings) else len(lines) + 1
         heading["line_end"] = max(int(next_start) - 1, int(heading["line_start"]))
+        page_start = _page_for_line(page_by_line, int(heading["line_start"]))
+        page_end = _page_for_line(page_by_line, int(heading["line_end"]))
+        if page_start is not None:
+            heading["page_start"] = page_start
+        if page_end is not None:
+            heading["page_end"] = page_end
         heading.update(_section_stats(lines, line_start=int(heading["line_start"]), line_end=int(heading["line_end"])))
     return headings
 
@@ -567,13 +763,131 @@ def _add_keyword_candidate(candidates: dict[str, dict[str, Any]], *, term: str, 
     if not normalized:
         return
     key = normalized.lower()
-    if len(key) < 3 or key in STOPWORDS:
+    has_cjk = any("\u4e00" <= char <= "\u9fff" for char in normalized)
+    if (len(key) < 3 and not has_cjk) or key in STOPWORDS:
         return
     if key not in candidates:
         candidates[key] = {"term": normalized, "source": source, "weight": weight}
 
 
-def _keyword_candidates(*, sections: list[Mapping[str, Any]], documents: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _has_cjk(text: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in text)
+
+
+DOC_TYPE_TEMPLATES: dict[str, dict[str, Any]] = {
+    "zh_product_catalog": {
+        "keywords": ["产品", "产品目录", "型号", "规格", "技术参数", "性能", "精度", "尺寸", "配置", "选型", "应用"],
+        "questions": [
+            ("product_spec_lookup", "有哪些型号、规格或技术参数可用于选型？"),
+            ("product_dimension_lookup", "产品的尺寸、精度或性能参数是什么？"),
+        ],
+    },
+    "zh_industrial_manual": {
+        "keywords": ["安装", "维护", "操作", "安全", "调试", "故障", "保养", "注意事项", "设备"],
+        "questions": [
+            ("manual_procedure_lookup", "安装、操作或维护步骤有哪些关键要求？"),
+            ("safety_requirement_lookup", "文档中列出了哪些安全注意事项或故障处理要求？"),
+        ],
+    },
+    "zh_paper": {
+        "keywords": ["摘要", "关键词", "研究", "方法", "实验", "结果", "结论", "参考文献"],
+        "questions": [
+            ("paper_summary_lookup", "论文的研究问题、方法和结论是什么？"),
+            ("paper_evidence_lookup", "实验结果或关键数据支持了哪些结论？"),
+        ],
+    },
+    "en_product_catalog": {
+        "keywords": ["product", "catalog", "model", "specification", "parameter", "accuracy", "dimension", "configuration"],
+        "questions": [
+            ("product_spec_lookup", "Which models, specifications, or technical parameters are listed for selection?"),
+            ("product_dimension_lookup", "What dimensions, accuracy, or performance parameters does the source state?"),
+        ],
+    },
+    "en_manual": {
+        "keywords": ["installation", "maintenance", "operation", "safety", "troubleshooting", "equipment"],
+        "questions": [
+            ("manual_procedure_lookup", "What installation, operation, or maintenance requirements are stated?"),
+            ("safety_requirement_lookup", "What safety notes or troubleshooting requirements are listed?"),
+        ],
+    },
+    "en_paper": {
+        "keywords": ["abstract", "method", "experiment", "result", "conclusion", "reference"],
+        "questions": [
+            ("paper_summary_lookup", "What research question, method, and conclusion does the paper present?"),
+            ("paper_evidence_lookup", "Which results or numeric evidence support the conclusion?"),
+        ],
+    },
+}
+
+
+DOC_TYPE_SIGNALS: dict[str, list[str]] = {
+    "zh_product_catalog": ["产品目录", "产品", "型号", "规格", "技术参数", "性能", "精度", "尺寸", "配置", "选型", "应用"],
+    "zh_industrial_manual": ["安装", "维护", "操作", "安全", "调试", "故障", "保养", "注意事项", "设备"],
+    "zh_paper": ["摘要", "关键词", "研究", "方法", "实验", "结果", "结论", "参考文献"],
+    "en_product_catalog": ["product", "catalog", "model", "specification", "parameter", "accuracy", "dimension", "configuration"],
+    "en_manual": ["installation", "maintenance", "operation", "safety", "troubleshooting", "equipment"],
+    "en_paper": ["abstract", "method", "experiment", "result", "conclusion", "reference"],
+}
+
+
+def _document_type_signal(*, markdown_rel: str, text: str, sections: list[Mapping[str, Any]]) -> dict[str, Any]:
+    haystack = "\n".join(
+        [
+            text[:12000],
+            "\n".join(str(section.get("title") or "") for section in sections),
+        ]
+    )
+    haystack_lower = haystack.lower()
+    scored: list[tuple[str, list[str]]] = []
+    for doc_type, signals in DOC_TYPE_SIGNALS.items():
+        matches: list[str] = []
+        for signal in signals:
+            if (_has_cjk(signal) and signal in haystack) or (not _has_cjk(signal) and signal.lower() in haystack_lower):
+                matches.append(signal)
+        if matches:
+            scored.append((doc_type, matches))
+    if not scored:
+        return {
+            "document": markdown_rel,
+            "document_type": "general_zh" if _has_cjk(haystack) else "general",
+            "confidence": 0.2,
+            "matched_signals": [],
+        }
+    scored.sort(key=lambda item: (len(item[1]), item[0]), reverse=True)
+    doc_type, matches = scored[0]
+    confidence = min(0.95, 0.35 + 0.1 * len(matches))
+    return {
+        "document": markdown_rel,
+        "document_type": doc_type,
+        "confidence": round(confidence, 2),
+        "matched_signals": matches[:12],
+    }
+
+
+def _apply_template_keywords(
+    candidates: dict[str, dict[str, Any]],
+    *,
+    document_type_signals: list[Mapping[str, Any]],
+) -> None:
+    for signal in document_type_signals:
+        doc_type = signal.get("document_type")
+        template = DOC_TYPE_TEMPLATES.get(str(doc_type))
+        if not template:
+            continue
+        for term in template.get("keywords", []):
+            if isinstance(term, str):
+                _add_keyword_candidate(candidates, term=term, source=f"deterministic_template:{doc_type}", weight=0.65)
+
+
+def _keyword_candidates(
+    *,
+    sections: list[Mapping[str, Any]],
+    documents: list[Mapping[str, Any]],
+    document_type_signals: list[Mapping[str, Any]] | None = None,
+    image_artifacts: list[Mapping[str, Any]] | None = None,
+    table_artifacts: list[Mapping[str, Any]] | None = None,
+    layout_signals: list[Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     candidates: dict[str, dict[str, Any]] = {}
     for document in documents:
         title = document.get("title")
@@ -588,14 +902,26 @@ def _keyword_candidates(*, sections: list[Mapping[str, Any]], documents: list[Ma
             _add_keyword_candidate(candidates, term=word, source="heading_word", weight=0.5)
         for phrase in CJK_PHRASE_RE.findall(title):
             _add_keyword_candidate(candidates, term=phrase, source="heading_phrase", weight=0.7)
-    return list(candidates.values())[:40]
+    _apply_template_keywords(candidates, document_type_signals=list(document_type_signals or []))
+    for artifact in list(image_artifacts or []) + list(table_artifacts or []):
+        for key in ("caption", "alt_text", "source_heading"):
+            value = artifact.get(key)
+            if isinstance(value, str):
+                _add_keyword_candidate(candidates, term=value, source=f"{artifact.get('kind', 'artifact')}_{key}", weight=0.45)
+    for signal in list(layout_signals or []):
+        text = signal.get("text") or signal.get("caption")
+        if isinstance(text, str):
+            for phrase in CJK_PHRASE_RE.findall(text[:120]):
+                _add_keyword_candidate(candidates, term=phrase, source="layout_signal_phrase", weight=0.35)
+    return sorted(candidates.values(), key=lambda item: (-float(item.get("weight", 0)), str(item.get("term", ""))))[:60]
 
 
-def _has_cjk(text: str) -> bool:
-    return any("\u4e00" <= char <= "\u9fff" for char in text)
-
-
-def _question_candidates(*, sections: list[Mapping[str, Any]], numeric_candidates: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _question_candidates(
+    *,
+    sections: list[Mapping[str, Any]],
+    numeric_candidates: list[Mapping[str, Any]],
+    document_type_signals: list[Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     questions: list[dict[str, Any]] = []
     for section in sections[:12]:
         title = section.get("title")
@@ -631,6 +957,26 @@ def _question_candidates(*, sections: list[Mapping[str, Any]], numeric_candidate
                     "line_start": section.get("line_start"),
                 }
             )
+    seen_template_questions: set[tuple[str, str | None]] = set()
+    for signal in list(document_type_signals or []):
+        doc_type = str(signal.get("document_type") or "")
+        template = DOC_TYPE_TEMPLATES.get(doc_type)
+        if not template:
+            continue
+        for question_type, question in template.get("questions", []):
+            key = (question_type, signal.get("document") if isinstance(signal.get("document"), str) else None)
+            if key in seen_template_questions:
+                continue
+            seen_template_questions.add(key)
+            questions.append(
+                {
+                    "question": question,
+                    "type": question_type,
+                    "source_document": signal.get("document"),
+                    "document_type": doc_type,
+                    "source": "deterministic_template",
+                }
+            )
     for candidate in numeric_candidates[:5]:
         questions.append(
             {
@@ -639,6 +985,7 @@ def _question_candidates(*, sections: list[Mapping[str, Any]], numeric_candidate
                 "source_document": candidate.get("document"),
                 "source_heading": candidate.get("source_heading"),
                 "line_start": candidate.get("line"),
+                "page": candidate.get("page"),
             }
         )
     return questions[:30]
@@ -647,7 +994,10 @@ def _question_candidates(*, sections: list[Mapping[str, Any]], numeric_candidate
 def _numeric_candidates(*, markdown_rel: str, text: str, sections: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     section_by_line = sorted(sections, key=lambda item: int(item.get("line_start", 0)))
+    page_by_line, _markers = _line_page_map(text.splitlines())
     for index, line in enumerate(text.splitlines(), start=1):
+        if PAGE_COMMENT_RE.search(line) or PAGE_TEXT_RE.match(line) or CHUNK_MARKER in line:
+            continue
         for match in NUMERIC_RE.finditer(line):
             heading = None
             for section in section_by_line:
@@ -660,11 +1010,192 @@ def _numeric_candidates(*, markdown_rel: str, text: str, sections: list[Mapping[
                     "document": markdown_rel,
                     "line": index,
                     "source_heading": heading,
+                    "page": _page_for_line(page_by_line, index),
                 }
             )
             if len(output) >= 20:
                 return output
     return output
+
+
+SIDECAR_CANDIDATES = (
+    "content_list.json",
+    "middle_json.json",
+    "middle.json",
+    "mineru_content_list.json",
+    "mineru_middle_json.json",
+)
+
+
+def _safe_sidecar_record(path: Path, *, root: Path) -> dict[str, Any]:
+    return {
+        "path": _relative(path, root),
+        "exists": path.is_file(),
+        "size_bytes": path.stat().st_size if path.is_file() else None,
+    }
+
+
+def _load_optional_layout_sidecars(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    sidecars: list[dict[str, Any]] = []
+    signals: list[dict[str, Any]] = []
+
+    def visit(value: Any, *, source: str, depth: int = 0) -> None:
+        if depth > 4 or len(signals) >= 120:
+            return
+        if isinstance(value, Mapping):
+            page = value.get("page") or value.get("page_idx") or value.get("page_id") or value.get("page_no")
+            text = value.get("text") or value.get("content") or value.get("caption") or value.get("title")
+            block_type = value.get("type") or value.get("kind") or value.get("category")
+            image_path = value.get("image_path") or value.get("img_path") or value.get("path")
+            level = value.get("level") or value.get("heading_level")
+            record: dict[str, Any] = {"source": source}
+            if isinstance(page, int):
+                record["page"] = page
+            elif isinstance(page, str) and page.isdigit():
+                record["page"] = int(page)
+            if isinstance(block_type, str):
+                record["block_type"] = block_type
+            if isinstance(text, str) and text.strip():
+                record["text"] = _compact_text(text, limit=220)
+            if isinstance(image_path, str) and _safe_relative_reference(image_path):
+                record["path"] = image_path.strip().replace("\\", "/")
+            if isinstance(level, int):
+                record["level"] = level
+            elif isinstance(level, str) and level.isdigit():
+                record["level"] = int(level)
+            if len(record) > 1:
+                signals.append(record)
+            for item in value.values():
+                if isinstance(item, (Mapping, list)):
+                    visit(item, source=source, depth=depth + 1)
+        elif isinstance(value, list):
+            for item in value[:200]:
+                visit(item, source=source, depth=depth + 1)
+
+    for relative_name in SIDECAR_CANDIDATES:
+        path = root / relative_name
+        if not path.is_file():
+            continue
+        record = _safe_sidecar_record(path, root=root)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            record["status"] = "invalid_json"
+        else:
+            record["status"] = "loaded"
+            visit(payload, source=relative_name)
+        sidecars.append(record)
+    return sidecars, signals
+
+
+def _merge_artifact_contexts(
+    *,
+    artifacts: list[Mapping[str, Any]],
+    contexts: list[Mapping[str, Any]],
+    kind: str,
+) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+
+    def key_for(item: Mapping[str, Any], fallback_index: int) -> str:
+        path = item.get("path")
+        if isinstance(path, str) and path:
+            return path
+        document = item.get("document")
+        line = item.get("line") or item.get("line_start")
+        return f"{document}:{line}:{fallback_index}"
+
+    for index, item in enumerate(artifacts):
+        if not isinstance(item, Mapping):
+            continue
+        key = key_for(item, index)
+        if key not in merged:
+            order.append(key)
+        merged[key] = dict(item)
+        merged[key].setdefault("kind", kind)
+    for index, item in enumerate(contexts, start=len(order)):
+        if not isinstance(item, Mapping):
+            continue
+        key = key_for(item, index)
+        if key not in merged:
+            order.append(key)
+            merged[key] = {}
+        merged[key].update({key_name: value for key_name, value in item.items() if value is not None})
+        merged[key].setdefault("kind", kind)
+    return [merged[key] for key in order][:60]
+
+
+def _preferred_boundaries(
+    *,
+    sections: list[Mapping[str, Any]],
+    page_markers: list[Mapping[str, Any]],
+    chunk_markers: list[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    boundaries: list[dict[str, Any]] = []
+    seen: set[tuple[str | None, int, str]] = set()
+
+    def add(boundary: dict[str, Any]) -> None:
+        line_start = boundary.get("line_start")
+        if not isinstance(line_start, int):
+            return
+        key = (
+            boundary.get("document") if isinstance(boundary.get("document"), str) else None,
+            line_start,
+            str(boundary.get("reason") or ""),
+        )
+        if key in seen:
+            return
+        seen.add(key)
+        boundaries.append({key_name: value for key_name, value in boundary.items() if value is not None})
+
+    for section in sections:
+        if int(section.get("level", 0)) <= 3:
+            add(
+                {
+                    "document": section.get("document"),
+                    "line_start": section.get("line_start"),
+                    "line_end": section.get("line_end"),
+                    "reason": "heading_boundary",
+                    "title": section.get("title"),
+                    "level": section.get("level"),
+                    "page": section.get("page_start"),
+                }
+            )
+    for marker in page_markers:
+        add(
+            {
+                "document": marker.get("document"),
+                "line_start": marker.get("line"),
+                "line_end": marker.get("line"),
+                "reason": "page_boundary",
+                "page": marker.get("page"),
+            }
+        )
+    for marker in chunk_markers:
+        add(
+            {
+                "document": marker.get("document"),
+                "line_start": marker.get("line"),
+                "line_end": marker.get("line"),
+                "reason": "chunk_marker_boundary",
+                "page": marker.get("page"),
+            }
+        )
+    return boundaries[:100]
+
+
+def _chunk_markers(*, markdown_rel: str, lines: list[str], page_by_line: Mapping[int, int]) -> list[dict[str, Any]]:
+    markers: list[dict[str, Any]] = []
+    for index, line in enumerate(lines, start=1):
+        if CHUNK_MARKER in line:
+            markers.append(
+                {
+                    "document": markdown_rel,
+                    "line": index,
+                    "page": _page_for_line(page_by_line, index),
+                }
+            )
+    return markers
 
 
 def _quality_risks(*, metadata: Mapping[str, Any], quality_report: Mapping[str, Any] | None, sections: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -712,6 +1243,11 @@ def make_retrieval_hints_payload(
     sections: list[dict[str, Any]] = []
     numeric_candidates: list[dict[str, Any]] = []
     document_summaries: list[dict[str, Any]] = []
+    markdown_image_artifacts: list[dict[str, Any]] = []
+    markdown_table_artifacts: list[dict[str, Any]] = []
+    document_type_signals: list[dict[str, Any]] = []
+    page_markers: list[dict[str, Any]] = []
+    chunk_markers: list[dict[str, Any]] = []
     for document in documents:
         if not isinstance(document, Mapping):
             continue
@@ -720,26 +1256,73 @@ def make_retrieval_hints_payload(
         if not markdown_rel:
             continue
         text = _read_markdown(root / markdown_rel)
+        lines = text.splitlines()
+        page_by_line, markers = _line_page_map(lines)
+        for marker in markers:
+            page_markers.append({"document": markdown_rel, **marker})
         document_sections = _section_boundaries(markdown_rel=markdown_rel, text=text)
         sections.extend(document_sections)
         numeric_candidates.extend(_numeric_candidates(markdown_rel=markdown_rel, text=text, sections=document_sections))
+        markdown_image_artifacts.extend(
+            _markdown_image_contexts(
+                markdown_rel=markdown_rel,
+                text=text,
+                sections=document_sections,
+                page_by_line=page_by_line,
+                root=root,
+            )
+        )
+        markdown_table_artifacts.extend(
+            _markdown_table_contexts(
+                markdown_rel=markdown_rel,
+                text=text,
+                sections=document_sections,
+                page_by_line=page_by_line,
+            )
+        )
+        document_type_signals.append(_document_type_signal(markdown_rel=markdown_rel, text=text, sections=document_sections))
+        chunk_markers.extend(_chunk_markers(markdown_rel=markdown_rel, lines=lines, page_by_line=page_by_line))
         document_summaries.append(
             {
                 "markdown_path": markdown_rel,
                 "title": document.get("title"),
                 "section_count": len(document_sections),
-                "line_count": len(text.splitlines()),
+                "line_count": len(lines),
                 "image_count": text.count("!["),
-                "table_count": _count_table_blocks(text.splitlines()),
+                "table_count": _count_table_blocks(lines),
+                "page_count": len({marker["page"] for marker in markers}),
+                "chunk_marker_count": len([line for line in lines if CHUNK_MARKER in line]),
             }
         )
 
     artifacts = artifact_index.get("artifacts", []) if isinstance(artifact_index, Mapping) else []
-    table_artifacts = [artifact for artifact in artifacts if isinstance(artifact, Mapping) and artifact.get("kind") == "table"]
-    image_artifacts = [artifact for artifact in artifacts if isinstance(artifact, Mapping) and artifact.get("kind") == "image"]
+    indexed_table_artifacts = [artifact for artifact in artifacts if isinstance(artifact, Mapping) and artifact.get("kind") == "table"]
+    indexed_image_artifacts = [artifact for artifact in artifacts if isinstance(artifact, Mapping) and artifact.get("kind") == "image"]
+    layout_sidecars, layout_signals = _load_optional_layout_sidecars(root)
+    table_artifacts = _merge_artifact_contexts(
+        artifacts=indexed_table_artifacts,
+        contexts=markdown_table_artifacts,
+        kind="table",
+    )
+    image_artifacts = _merge_artifact_contexts(
+        artifacts=indexed_image_artifacts,
+        contexts=markdown_image_artifacts,
+        kind="image",
+    )
     quality_risks = _quality_risks(metadata=metadata, quality_report=quality_report, sections=sections)
-    keywords = _keyword_candidates(sections=sections, documents=[item for item in documents if isinstance(item, Mapping)])
-    questions = _question_candidates(sections=sections, numeric_candidates=numeric_candidates)
+    keywords = _keyword_candidates(
+        sections=sections,
+        documents=[item for item in documents if isinstance(item, Mapping)],
+        document_type_signals=document_type_signals,
+        image_artifacts=image_artifacts,
+        table_artifacts=table_artifacts,
+        layout_signals=layout_signals,
+    )
+    questions = _question_candidates(
+        sections=sections,
+        numeric_candidates=numeric_candidates,
+        document_type_signals=document_type_signals,
+    )
 
     return {
         "schema": RETRIEVAL_HINTS_SCHEMA,
@@ -752,18 +1335,15 @@ def make_retrieval_hints_payload(
         "keyword_candidates": keywords,
         "question_candidates": questions,
         "numeric_candidates": numeric_candidates[:20],
+        "document_type_signals": document_type_signals,
+        "layout_sidecars": layout_sidecars,
+        "layout_signals": layout_signals[:60],
         "quality_risks": quality_risks,
-        "preferred_boundaries": [
-            {
-                "document": section.get("document"),
-                "line_start": section.get("line_start"),
-                "line_end": section.get("line_end"),
-                "reason": "heading_boundary",
-                "title": section.get("title"),
-            }
-            for section in sections
-            if int(section.get("level", 0)) <= 3
-        ][:80],
+        "preferred_boundaries": _preferred_boundaries(
+            sections=sections,
+            page_markers=page_markers,
+            chunk_markers=chunk_markers,
+        ),
     }
 
 

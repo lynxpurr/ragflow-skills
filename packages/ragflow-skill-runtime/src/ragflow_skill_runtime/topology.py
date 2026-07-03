@@ -263,7 +263,7 @@ def _hint_terms(retrieval_hints: Mapping[str, Any]) -> set[str]:
     return terms
 
 
-def _question_candidates(retrieval_hints: Mapping[str, Any], *, limit: int = 6) -> list[dict[str, Any]]:
+def _question_candidates(retrieval_hints: Mapping[str, Any], *, limit: int = 8) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     for item in retrieval_hints.get("question_candidates", []) if isinstance(retrieval_hints.get("question_candidates"), list) else []:
         if not isinstance(item, Mapping):

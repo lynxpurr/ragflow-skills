@@ -20,6 +20,8 @@ from ragflow_skill_runtime.handoff import (
     make_ragflow_ingest_plan_payload,
     render_handoff_inspection_markdown,
 )
+from ragflow_skill_runtime.kb_build import BuildDocument
+from ragflow_skill_runtime.topology import create_kb_topology_advice
 
 
 class HandoffTests(unittest.TestCase):
@@ -97,6 +99,115 @@ class HandoffTests(unittest.TestCase):
         self.assertTrue(assistant_profile["retrieval"]["require_evidence"])
         self.assertEqual(assistant_test_plan["schema"], ASSISTANT_TEST_PLAN_SCHEMA)
         self.assertTrue(any(case["stage"] == "negative_boundary" for case in assistant_test_plan["cases"]))
+
+    def test_retrieval_hints_include_pages_context_templates_and_layout_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            images = documents / "images"
+            images.mkdir(parents=True)
+            source = root / "apollo.pdf"
+            markdown = documents / "apollo.md"
+            image = images / "apollo.png"
+            source.write_bytes(b"%PDF fake")
+            image.write_bytes(b"fake image bytes")
+            markdown.write_text(
+                "<!-- page: 1 -->\n"
+                "# APOLLO 产品目录\n\n"
+                "APOLLO 工业设备用于高精度测量和自动化应用。\n\n"
+                "## 技术参数\n\n"
+                "| 型号 | 精度 | 尺寸 |\n"
+                "| --- | --- | --- |\n"
+                "| APOLLO-A | 4.0 μm | 1200 mm |\n\n"
+                "外观图展示控制面板和安装结构。\n"
+                "![APOLLO 设备外观](images/apollo.png)\n\n"
+                "<!-- page: 2 -->\n"
+                "<!-- chunk -->\n"
+                "## 安装维护\n\n"
+                "安装前检查安全注意事项，维护周期为 30 天。\n",
+                encoding="utf-8",
+            )
+            (root / "content_list.json").write_text(
+                json.dumps(
+                    [
+                        {"type": "title", "text": "APOLLO 产品目录", "page": 1, "level": 1},
+                        {"type": "image", "caption": "APOLLO 控制面板", "page": 1, "path": "documents/images/apollo.png"},
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (root / "doc_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "quality_report": "quality_report.json",
+                        "documents": [
+                            {
+                                "source_path": "apollo.pdf",
+                                "markdown_path": "documents/apollo.md",
+                                "sha256": "abc",
+                                "title": "APOLLO 产品目录",
+                                "warnings": [],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "quality_report.json").write_text(
+                json.dumps({"schema": "doc_quality_report_v1", "gate": {"status": "PASS"}}),
+                encoding="utf-8",
+            )
+
+            create_rich_handoff_package(handoff_root=root)
+            retrieval_hints = json.loads((root / "retrieval_hints.json").read_text(encoding="utf-8"))
+            assistant_test_plan = json.loads((root / "assistant_test_plan.json").read_text(encoding="utf-8"))
+            topology_advice = create_kb_topology_advice(
+                kb_name="kb:apollo-catalog",
+                documents=[BuildDocument(markdown)],
+                retrieval_hints_path=root / "retrieval_hints.json",
+                future_growth="high",
+                min_documents=1,
+                min_total_chars=100,
+            )
+
+        sections = retrieval_hints["section_boundaries"]
+        image_artifacts = retrieval_hints["image_artifacts"]
+        table_artifacts = retrieval_hints["table_artifacts"]
+        preferred_boundaries = retrieval_hints["preferred_boundaries"]
+        keywords = retrieval_hints["keyword_candidates"]
+        questions = retrieval_hints["question_candidates"]
+        numeric = retrieval_hints["numeric_candidates"]
+        assistant_stages = {case["stage"] for case in assistant_test_plan["cases"]}
+        topology_starter_types = {case["type"] for case in topology_advice["route_test_starters"]}
+
+        tech_section = next(item for item in sections if item["title"] == "技术参数")
+        self.assertEqual(tech_section["page_start"], 1)
+        self.assertEqual(tech_section["table_count"], 1)
+        self.assertEqual(image_artifacts[0]["caption"], "APOLLO 设备外观")
+        self.assertEqual(image_artifacts[0]["source_heading"], "技术参数")
+        self.assertEqual(image_artifacts[0]["page"], 1)
+        self.assertIn("控制面板", image_artifacts[0]["context"])
+        self.assertEqual(table_artifacts[0]["source_heading"], "技术参数")
+        self.assertEqual(table_artifacts[0]["header_preview"], ["型号", "精度", "尺寸"])
+        self.assertEqual(table_artifacts[0]["page"], 1)
+        self.assertTrue(any(item["reason"] == "page_boundary" and item["page"] == 2 for item in preferred_boundaries))
+        self.assertTrue(any(item["reason"] == "chunk_marker_boundary" for item in preferred_boundaries))
+        self.assertTrue(any(item["term"] == "技术参数" for item in keywords))
+        self.assertTrue(any(item["term"] == "选型" and "deterministic_template" in item["source"] for item in keywords))
+        self.assertTrue(any(item["type"] == "product_spec_lookup" for item in questions))
+        self.assertTrue(any(item["value"] == "1200 mm" and item["page"] == 1 for item in numeric))
+        self.assertEqual(retrieval_hints["document_type_signals"][0]["document_type"], "zh_product_catalog")
+        self.assertEqual(retrieval_hints["layout_sidecars"][0]["status"], "loaded")
+        self.assertTrue(any(item.get("text") == "APOLLO 产品目录" for item in retrieval_hints["layout_signals"]))
+        self.assertIn("product_spec_lookup", topology_starter_types)
+        self.assertIn("visual_fact", topology_starter_types)
+        self.assertIn("exact_numeric_fact", topology_starter_types)
+        self.assertIn("ocr_image_fact", assistant_stages)
+        self.assertIn("exact_numeric_fact", assistant_stages)
+        self.assertIn("paraphrase", assistant_stages)
 
     def test_inspect_rich_handoff_reports_optional_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

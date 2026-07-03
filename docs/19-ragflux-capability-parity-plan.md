@@ -1,6 +1,6 @@
 # 19. RAGFlux 能力补齐设计与开发计划
 
-状态：P0 已实现并通过离线验证；P1 pipeline、ingest plan 和 kb-build 串联验证已实现；P2 待实现
+状态：P0 已实现并通过离线验证；P1 pipeline、ingest plan 和 kb-build 串联验证已实现；P2 retrieval hints 离线质量增强已部分实现
 日期：2026-07-02
 适用范围：`ragflow-doc-to-md` 作为正式文档转换 skill，配合 `ragflow-kb-build`
 和 `ragflow-query` 替代 RAGFlux 的文档预处理、入库和检索验证能力。
@@ -317,11 +317,22 @@ P1 串联验证实现说明：
 
 ### 3.5 P2：Retrieval hints 质量增强
 
-- [ ] 引入可选 `content_list` / `middle_json` sidecar 解析，不改变默认无 LLM 策略。
-- [ ] 将页码、标题层级、图片 caption、表格上下文写入 hints。
-- [ ] 对中文产品目录、工业手册、论文等文档类型补充 deterministic question/keyword 模板。
-- [ ] 添加 fixture，验证 section boundaries、preferred boundaries、image artifacts 和 numeric candidates。
-- [ ] 通过 benchmark/sample 文档评估 hints 对 topology、route-test starter 和 assistant test plan 的改善。
+- [x] 引入可选 `content_list` / `middle_json` sidecar 解析，不改变默认无 LLM 策略。
+- [x] 将页码、标题层级、图片 caption、表格上下文写入 hints。
+- [x] 对中文产品目录、工业手册、论文等文档类型补充 deterministic question/keyword 模板。
+- [x] 添加 fixture，验证 section boundaries、preferred boundaries、image artifacts 和 numeric candidates。
+- [x] 通过 benchmark/sample 文档评估 hints 对 topology、route-test starter 和 assistant test plan 的改善。
+
+P2 retrieval hints 离线增强实现说明：
+
+- `retrieval_hints.json` 继续使用 `ragflow_retrieval_hints_v1` schema，不破坏现有消费者。
+- `section_boundaries` 现在可带 `page_start`、`page_end` 和原有 heading level。
+- `image_artifacts` 会合并 artifact index 与 Markdown 图片引用，补充 alt/caption、就近标题、页码、行号、上下文片段和本地文件存在性。
+- `table_artifacts` 会从 Markdown 表格块生成表格上下文，包含就近标题、页码、行范围、行数和 header preview。
+- `preferred_boundaries` 除 heading boundary 外，还会吸收 page boundary 和 `<!-- chunk -->` boundary。
+- `numeric_candidates` 追加页码；`keyword_candidates` 和 `question_candidates` 增加中文产品目录、工业手册、论文以及英文 product/manual/paper 的确定性模板。
+- 如果 handoff 根目录存在 `content_list.json`、`middle_json.json`、`middle.json`、`mineru_content_list.json` 或 `mineru_middle_json.json`，会以只读方式提取有限 layout signals；不存在时不影响默认 Markdown-only hints 生成。
+- 离线 sample fixture 已验证增强后的 hints 会进入 `topology advise` 的 `route_test_starters`，并推动 `assistant_test_plan` 覆盖视觉、数值和 paraphrase 检查；真实文档集上的 live benchmark 仍应作为 RAGFlux 退役前验收的一部分。
 
 ### 3.6 P2：文档和迁移指引
 
