@@ -12,6 +12,7 @@ from typing import Any, Mapping
 
 from .doc_convert import sha256_file
 from .doc_quality import DocQualityError, load_doc_manifest_payload
+from .html_tables import parse_html_tables
 
 
 HANDOFF_PACKAGE_SCHEMA = "ragflow_handoff_package_v1"
@@ -584,6 +585,9 @@ def _context_snippet(lines: list[str], *, line: int, radius: int = 2) -> str | N
             continue
         if stripped.count("|") >= 2:
             continue
+        lowered = stripped.lower()
+        if any(marker in lowered for marker in ("<table", "<thead", "<tbody", "<tr", "<th", "<td")):
+            continue
         candidates.append(stripped)
     if not candidates:
         return None
@@ -710,12 +714,52 @@ def _markdown_table_contexts(
     return contexts
 
 
+def _html_table_contexts(
+    *,
+    markdown_rel: str,
+    text: str,
+    sections: list[Mapping[str, Any]],
+    page_by_line: Mapping[int, int],
+) -> list[dict[str, Any]]:
+    contexts: list[dict[str, Any]] = []
+    lines = text.splitlines()
+    for table in parse_html_tables(text):
+        line_start = int(table.line_start)
+        section = _section_for_line(sections, line_start) or {}
+        context: dict[str, Any] = {
+            "kind": "table",
+            "document": markdown_rel,
+            "line_start": line_start,
+            "line_end": int(table.line_end),
+            "source_heading": section.get("title"),
+            "heading_level": section.get("level"),
+            "page": _page_for_line(page_by_line, line_start),
+            "row_count": int(table.row_count),
+            "column_count": int(table.column_count),
+            "header_preview": list(table.header_preview),
+            "source": "html_table",
+        }
+        if table.caption:
+            context["caption"] = table.caption
+        snippet = _context_snippet(lines, line=line_start)
+        if snippet:
+            context["context"] = snippet
+        if table.warnings:
+            context["warnings"] = list(table.warnings)
+        contexts.append(context)
+    return contexts
+
+
 def _section_stats(lines: list[str], *, line_start: int, line_end: int) -> dict[str, int]:
     section_lines = lines[max(line_start - 1, 0) : max(line_end, line_start - 1)]
     section_text = "\n".join(section_lines)
+    markdown_table_count = _count_table_blocks(section_lines)
+    html_table_count = len(parse_html_tables(section_text))
     return {
         "image_count": len(IMAGE_RE.findall(section_text)),
-        "table_count": _count_table_blocks(section_lines),
+        "table_count": markdown_table_count + html_table_count,
+        "markdown_table_count": markdown_table_count,
+        "html_table_count": html_table_count,
         "list_item_count": sum(1 for line in section_lines if re.match(r"^\s*(?:[-*+]|\d+[.)])\s+", line)),
         "chunk_marker_count": sum(1 for line in section_lines if CHUNK_MARKER in line),
     }
@@ -1261,6 +1305,8 @@ def make_retrieval_hints_payload(
         for marker in markers:
             page_markers.append({"document": markdown_rel, **marker})
         document_sections = _section_boundaries(markdown_rel=markdown_rel, text=text)
+        markdown_table_count = _count_table_blocks(lines)
+        html_table_count = len(parse_html_tables(text))
         sections.extend(document_sections)
         numeric_candidates.extend(_numeric_candidates(markdown_rel=markdown_rel, text=text, sections=document_sections))
         markdown_image_artifacts.extend(
@@ -1280,6 +1326,14 @@ def make_retrieval_hints_payload(
                 page_by_line=page_by_line,
             )
         )
+        markdown_table_artifacts.extend(
+            _html_table_contexts(
+                markdown_rel=markdown_rel,
+                text=text,
+                sections=document_sections,
+                page_by_line=page_by_line,
+            )
+        )
         document_type_signals.append(_document_type_signal(markdown_rel=markdown_rel, text=text, sections=document_sections))
         chunk_markers.extend(_chunk_markers(markdown_rel=markdown_rel, lines=lines, page_by_line=page_by_line))
         document_summaries.append(
@@ -1289,7 +1343,9 @@ def make_retrieval_hints_payload(
                 "section_count": len(document_sections),
                 "line_count": len(lines),
                 "image_count": text.count("!["),
-                "table_count": _count_table_blocks(lines),
+                "table_count": markdown_table_count + html_table_count,
+                "markdown_table_count": markdown_table_count,
+                "html_table_count": html_table_count,
                 "page_count": len({marker["page"] for marker in markers}),
                 "chunk_marker_count": len([line for line in lines if CHUNK_MARKER in line]),
             }

@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from .html_tables import parse_html_tables
+
 
 QUALITY_REPORT_SCHEMA = "doc_quality_report_v1"
 PASS = "PASS"
@@ -67,6 +69,9 @@ class QualityDocumentReport:
     non_empty_line_count: int = 0
     heading_count: int = 0
     table_count: int = 0
+    markdown_table_count: int = 0
+    html_table_count: int = 0
+    html_table_review_warning_count: int = 0
     formula_marker_count: int = 0
     page_marker_count: int = 0
     replacement_char_count: int = 0
@@ -86,6 +91,9 @@ class QualityDocumentReport:
                 "non_empty_line_count": self.non_empty_line_count,
                 "heading_count": self.heading_count,
                 "table_count": self.table_count,
+                "markdown_table_count": self.markdown_table_count,
+                "html_table_count": self.html_table_count,
+                "html_table_review_warning_count": self.html_table_review_warning_count,
                 "formula_marker_count": self.formula_marker_count,
                 "page_marker_count": self.page_marker_count,
                 "replacement_char_count": self.replacement_char_count,
@@ -186,6 +194,9 @@ def inspect_quality_document(document: QualityDocument, *, output_root: str | Pa
     non_empty_line_count = 0
     heading_count = 0
     table_count = 0
+    markdown_table_count = 0
+    html_table_count = 0
+    html_table_review_warning_count = 0
     formula_marker_count = 0
     page_marker_count = 0
     replacement_char_count = 0
@@ -244,7 +255,11 @@ def inspect_quality_document(document: QualityDocument, *, output_root: str | Pa
     line_count = len(lines)
     non_empty_line_count = sum(1 for line in lines if line.strip())
     heading_count = sum(1 for line in lines if line.lstrip().startswith("#"))
-    table_count = _count_tables(lines)
+    markdown_table_count = _count_tables(lines)
+    html_tables = parse_html_tables(text)
+    html_table_count = len(html_tables)
+    html_table_review_warning_count = sum(1 for table in html_tables if table.warnings)
+    table_count = markdown_table_count + html_table_count
     formula_marker_count = len(MATH_MARKER_RE.findall(text))
     page_marker_count = len(PAGE_MARKER_RE.findall(text))
     replacement_char_count = text.count("\ufffd")
@@ -298,6 +313,19 @@ def inspect_quality_document(document: QualityDocument, *, output_root: str | Pa
                     path=_relative(markdown_path, output_root_path),
                 )
             )
+        for table_index, table in enumerate(html_tables, start=1):
+            for warning in table.warnings:
+                issues.append(
+                    QualityIssue(
+                        severity="warning",
+                        issue_type=f"html_table_{warning}",
+                        message=(
+                            f"HTML table {table_index} has review warning {warning}; "
+                            "verify table extraction before formal ingestion"
+                        ),
+                        path=_relative(markdown_path, output_root_path),
+                    )
+                )
         if _math_delimiters_unbalanced(text):
             issues.append(
                 QualityIssue(
@@ -339,6 +367,9 @@ def inspect_quality_document(document: QualityDocument, *, output_root: str | Pa
         non_empty_line_count=non_empty_line_count,
         heading_count=heading_count,
         table_count=table_count,
+        markdown_table_count=markdown_table_count,
+        html_table_count=html_table_count,
+        html_table_review_warning_count=html_table_review_warning_count,
         formula_marker_count=formula_marker_count,
         page_marker_count=page_marker_count,
         replacement_char_count=replacement_char_count,
@@ -466,6 +497,8 @@ def render_quality_markdown(report: Mapping[str, Any]) -> str:
             lines.extend(
                 [
                     f"- Tables: {signals.get('table_count', 0)}",
+                    f"- Markdown tables: {signals.get('markdown_table_count', signals.get('table_count', 0))}",
+                    f"- HTML tables: {signals.get('html_table_count', 0)}",
                     f"- Formula markers: {signals.get('formula_marker_count', 0)}",
                     f"- Page markers: {signals.get('page_marker_count', 0)}",
                     f"- Replacement char ratio: {signals.get('replacement_char_ratio', 0)}",

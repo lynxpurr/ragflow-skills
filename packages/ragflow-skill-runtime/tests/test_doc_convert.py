@@ -1139,6 +1139,33 @@ class DocConvertTests(unittest.TestCase):
         self.assertEqual(report["gate"]["status"], PASS)
         self.assertEqual(report["gate"]["summary"]["errors"], 0)
 
+    def test_quality_report_counts_html_tables(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "documents" / "apollo.md"
+            markdown.parent.mkdir()
+            markdown.write_text(
+                "# APOLLO 产品目录\n\n"
+                "## 技术参数\n\n"
+                "<table>\n"
+                "<tr><th>型号</th><th>精度</th><th>尺寸</th></tr>\n"
+                "<tr><td>APOLLO-H</td><td>0.01 mm</td><td>250 mm</td></tr>\n"
+                "</table>\n",
+                encoding="utf-8",
+            )
+
+            report = make_quality_report_payload(
+                output_root=root,
+                documents=[QualityDocument(source_path="apollo.pdf", markdown_path=markdown)],
+            )
+
+        signals = report["documents"][0]["quality_signals"]
+        self.assertEqual(report["gate"]["status"], PASS)
+        self.assertEqual(signals["table_count"], 1)
+        self.assertEqual(signals["markdown_table_count"], 0)
+        self.assertEqual(signals["html_table_count"], 1)
+        self.assertEqual(signals["html_table_review_warning_count"], 0)
+
     def test_quality_report_blocks_empty_and_missing_image(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

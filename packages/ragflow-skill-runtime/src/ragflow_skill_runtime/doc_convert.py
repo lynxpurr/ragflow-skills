@@ -2634,6 +2634,8 @@ def render_doc_runtime_markdown(report: Mapping[str, Any]) -> str:
             f"- remote timeout: `{summary.get('remote_timeout', 0)}`",
             f"- remote retries: `{summary.get('remote_retry_count', 0)}`",
             f"- http attempts: `{summary.get('http_attempts', 0)}`",
+            f"- quality table count: `{summary.get('quality_table_count', 0)}`",
+            f"- quality HTML table count: `{summary.get('quality_html_table_count', 0)}`",
             "",
             "| Source | Backend | Status | Cleanup | Leftovers |",
             "| --- | --- | --- | --- | --- |",

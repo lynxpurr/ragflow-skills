@@ -71,6 +71,31 @@ def _write_fake_mineru_cli_with_image(path: Path) -> Path:
     return path
 
 
+def _write_fake_mineru_cli_with_html_table(path: Path) -> Path:
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "from pathlib import Path\n"
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "out_dir = Path(args[args.index('-o') + 1])\n"
+        "source = Path(args[args.index('-p') + 1])\n"
+        "out_dir.mkdir(parents=True, exist_ok=True)\n"
+        "(out_dir / (source.stem + '.md')).write_text(\n"
+        "    '# APOLLO 产品目录\\n\\n'\n"
+        "    'APOLLO 产品用于高精度选型。\\n\\n'\n"
+        "    '## 技术参数\\n\\n'\n"
+        "    '<table>\\n'\n"
+        "    '<thead><tr><th>型号</th><th>精度</th><th>尺寸</th></tr></thead>\\n'\n"
+        "    '<tbody><tr><td>APOLLO-H</td><td>0.01 mm</td><td>250 mm</td></tr></tbody>\\n'\n"
+        "    '</table>\\n',\n"
+        "    encoding='utf-8',\n"
+        ")\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
 def _write_slow_mineru_cli(path: Path) -> Path:
     path.write_text(
         "#!/usr/bin/env python3\n"
@@ -357,6 +382,56 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(runtime_report["summary"]["handoff_mode"], "formal_ingest")
         self.assertEqual(runtime_report["handoff_advisory"][0]["code"], "inspect_and_dry_run_before_live_build")
         self.assertTrue(runtime_report["formal_ingest"]["rich_sidecars"]["complete"])
+
+    def test_pipeline_runtime_and_hints_count_html_tables(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "handoff"
+            fake_cli = _write_fake_mineru_cli_with_html_table(root / "mineru")
+            input_dir.mkdir()
+            (input_dir / "apollo.pdf").write_bytes(b"%PDF fake cli")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "pipeline",
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                    "--backend",
+                    "mineru-cli",
+                    "--mineru-cli-path",
+                    str(fake_cli),
+                    "--runtime-report-md",
+                    "runtime_report.md",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+            quality_report = json.loads((output_dir / "quality_report.json").read_text(encoding="utf-8"))
+            runtime_report = json.loads((output_dir / "runtime_report.json").read_text(encoding="utf-8"))
+            runtime_markdown = (output_dir / "runtime_report.md").read_text(encoding="utf-8")
+            retrieval_hints = json.loads((output_dir / "retrieval_hints.json").read_text(encoding="utf-8"))
+
+        signals = quality_report["documents"][0]["quality_signals"]
+        html_table = next(item for item in retrieval_hints["table_artifacts"] if item["source"] == "html_table")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["handoff_mode"], "formal_ingest")
+        self.assertEqual(signals["table_count"], 1)
+        self.assertEqual(signals["html_table_count"], 1)
+        self.assertEqual(runtime_report["document_quality_summary"]["html_table_count"], 1)
+        self.assertEqual(runtime_report["summary"]["quality_html_table_count"], 1)
+        self.assertIn("quality HTML table count: `1`", runtime_markdown)
+        self.assertEqual(html_table["header_preview"], ["型号", "精度", "尺寸"])
+        self.assertEqual(html_table["row_count"], 2)
+        self.assertEqual(html_table["column_count"], 3)
 
     def test_pipeline_rejects_unsafe_sidecar_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

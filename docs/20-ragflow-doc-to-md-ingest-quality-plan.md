@@ -310,11 +310,14 @@ ragflow-doc-to-md compare-retained-package
 
 ### 4.2 P0：HTML table 识别和质量统计
 
-- [ ] 定义 HTML table deterministic parser helper，统计 `<table>`、行列估算、header preview。
-- [ ] 扩展 quality/runtime report，纳入 HTML table count。
-- [ ] 扩展 `retrieval_hints.json` 的 `table_artifacts`，支持 HTML table source。
-- [ ] 增加 APOLLO 类 HTML table fixture。
-- [ ] 增加 `kb-build topology advise` 和 assistant test plan 消费测试。
+实现状态：2026-07-03 已完成；仅增加离线 deterministic parser、report/hints 信号和测试，
+未执行 live RAGFlow mutation。
+
+- [x] 定义 HTML table deterministic parser helper，统计 `<table>`、行列估算、header preview。
+- [x] 扩展 quality/runtime report，纳入 HTML table count。
+- [x] 扩展 `retrieval_hints.json` 的 `table_artifacts`，支持 HTML table source。
+- [x] 增加 APOLLO 类 HTML table fixture。
+- [x] 增加 `kb-build topology advise` 和 assistant test plan 消费测试。
 
 ### 4.3 P1：Chunk boundary profile 体系
 

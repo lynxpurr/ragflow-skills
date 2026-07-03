@@ -871,6 +871,53 @@ def _make_runtime_report(
     )
 
 
+def _quality_table_summary(quality_report: dict[str, Any] | None) -> dict[str, int]:
+    summary = {
+        "table_count": 0,
+        "markdown_table_count": 0,
+        "html_table_count": 0,
+        "html_table_review_warning_count": 0,
+    }
+    if not isinstance(quality_report, dict):
+        return summary
+    documents = quality_report.get("documents")
+    if not isinstance(documents, list):
+        return summary
+    for document in documents:
+        if not isinstance(document, dict):
+            continue
+        signals = document.get("quality_signals")
+        if not isinstance(signals, dict):
+            continue
+        table_count = int(signals.get("table_count", 0) or 0)
+        markdown_table_count = int(signals.get("markdown_table_count", table_count) or 0)
+        html_table_count = int(signals.get("html_table_count", 0) or 0)
+        summary["table_count"] += table_count
+        summary["markdown_table_count"] += markdown_table_count
+        summary["html_table_count"] += html_table_count
+        summary["html_table_review_warning_count"] += int(
+            signals.get("html_table_review_warning_count", 0) or 0
+        )
+    return summary
+
+
+def _attach_runtime_quality_summary(
+    *,
+    runtime_report: dict[str, Any] | None,
+    quality_report: dict[str, Any] | None,
+) -> None:
+    if not isinstance(runtime_report, dict):
+        return
+    table_summary = _quality_table_summary(quality_report)
+    runtime_report["document_quality_summary"] = table_summary
+    summary = runtime_report.get("summary")
+    if isinstance(summary, dict):
+        summary["quality_table_count"] = table_summary["table_count"]
+        summary["quality_markdown_table_count"] = table_summary["markdown_table_count"]
+        summary["quality_html_table_count"] = table_summary["html_table_count"]
+        summary["quality_html_table_review_warning_count"] = table_summary["html_table_review_warning_count"]
+
+
 def _runtime_report_paths(output_root: Path, args: argparse.Namespace) -> tuple[Path | None, Path | None]:
     return _sidecar_path(output_root, args.runtime_report_name), _sidecar_path(output_root, args.runtime_report_md)
 
@@ -1189,6 +1236,10 @@ def _run(args: argparse.Namespace) -> int:
         quality_report = make_quality_report_payload(
             output_root=output_root,
             documents=quality_documents,
+        )
+        _attach_runtime_quality_summary(
+            runtime_report=runtime_report,
+            quality_report=quality_report,
         )
         quality_report, runtime_report = _sanitize_conversion_reports(
             quality_report=quality_report,

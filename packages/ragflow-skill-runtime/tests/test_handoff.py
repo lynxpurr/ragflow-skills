@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from ragflow_skill_runtime.assistant_review import review_assistant_test_plan
 from ragflow_skill_runtime.handoff import (
     ASSISTANT_PROFILE_SCHEMA,
     ASSISTANT_TEST_PLAN_SCHEMA,
@@ -214,6 +215,95 @@ class HandoffTests(unittest.TestCase):
         self.assertIn("ocr_image_fact", assistant_stages)
         self.assertIn("exact_numeric_fact", assistant_stages)
         self.assertIn("paraphrase", assistant_stages)
+
+    def test_html_table_hints_feed_topology_and_assistant_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            documents.mkdir()
+            source = root / "apollo-html.pdf"
+            markdown = documents / "apollo-html.md"
+            source.write_bytes(b"%PDF fake")
+            markdown.write_text(
+                "<!-- page: 1 -->\n"
+                "# APOLLO 产品目录\n\n"
+                "APOLLO 传感器产品用于高精度选型。\n\n"
+                "## 技术参数\n\n"
+                "下表列出 APOLLO-H 系列规格参数。\n\n"
+                "<table>\n"
+                "<caption>APOLLO-H 规格参数</caption>\n"
+                "<thead><tr><th>型号</th><th>精度</th><th>尺寸</th></tr></thead>\n"
+                "<tbody><tr><td>APOLLO-H</td><td>0.01 mm</td><td>250 mm</td></tr></tbody>\n"
+                "</table>\n\n"
+                "APOLLO-H 适合紧凑安装和高精度测量。\n",
+                encoding="utf-8",
+            )
+            (root / "doc_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "quality_report": "quality_report.json",
+                        "documents": [
+                            {
+                                "source_path": "apollo-html.pdf",
+                                "markdown_path": "documents/apollo-html.md",
+                                "sha256": "abc",
+                                "title": "APOLLO 产品目录",
+                                "warnings": [],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "quality_report.json").write_text(
+                json.dumps({"schema": "doc_quality_report_v1", "gate": {"status": "PASS"}}),
+                encoding="utf-8",
+            )
+
+            create_rich_handoff_package(handoff_root=root)
+            retrieval_hints = json.loads((root / "retrieval_hints.json").read_text(encoding="utf-8"))
+            assistant_test_plan = json.loads((root / "assistant_test_plan.json").read_text(encoding="utf-8"))
+            assistant_profile = json.loads((root / "assistant_profile.json").read_text(encoding="utf-8"))
+            topology_advice = create_kb_topology_advice(
+                kb_name="kb:apollo-html",
+                documents=[BuildDocument(markdown)],
+                retrieval_hints_path=root / "retrieval_hints.json",
+                future_growth="medium",
+                min_documents=1,
+                min_total_chars=100,
+            )
+            assistant_review = review_assistant_test_plan(
+                assistant_test_plan,
+                assistant_profile=assistant_profile,
+                retrieval_hints=retrieval_hints,
+            )
+
+        tech_section = next(item for item in retrieval_hints["section_boundaries"] if item["title"] == "技术参数")
+        table_artifacts = retrieval_hints["table_artifacts"]
+        html_table = next(item for item in table_artifacts if item["source"] == "html_table")
+        question_types = {item["type"] for item in retrieval_hints["question_candidates"]}
+        topology_starter_types = {case["type"] for case in topology_advice["route_test_starters"]}
+        assistant_stages = {case["stage"] for case in assistant_test_plan["cases"]}
+
+        self.assertEqual(tech_section["table_count"], 1)
+        self.assertEqual(tech_section["html_table_count"], 1)
+        self.assertEqual(html_table["source_heading"], "技术参数")
+        self.assertEqual(html_table["header_preview"], ["型号", "精度", "尺寸"])
+        self.assertEqual(html_table["row_count"], 2)
+        self.assertEqual(html_table["column_count"], 3)
+        self.assertEqual(html_table["caption"], "APOLLO-H 规格参数")
+        self.assertEqual(html_table["page"], 1)
+        self.assertTrue(any(item["html_table_count"] == 1 for item in retrieval_hints["documents"]))
+        self.assertIn("table_fact", question_types)
+        self.assertIn("product_spec_lookup", question_types)
+        self.assertIn("product_spec_lookup", topology_starter_types)
+        self.assertEqual(topology_advice["signals"]["retrieval_hints"]["table_artifact_count"], 1)
+        self.assertIn("exact_numeric_fact", assistant_stages)
+        self.assertIn("paraphrase", assistant_stages)
+        self.assertEqual(assistant_review["status"], "PASS")
+        self.assertEqual(assistant_review["retrieval_hints_summary"]["table_artifact_count"], 1)
 
     def test_inspect_rich_handoff_reports_optional_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

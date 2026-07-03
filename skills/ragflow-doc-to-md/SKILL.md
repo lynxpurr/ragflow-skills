@@ -122,6 +122,7 @@ Notes:
 - Use `postprocess` with profiles `none`, `safe`, `ocr`, or `chunk-markers` when Markdown needs deterministic cleanup before ingestion. Use `--output` for non-destructive writes; `--write` is required for in-place rewrites.
 - `doc_manifest.json` uses `source_root: "."`, so downstream `ragflow-kb-build` can consume it after the handoff directory moves.
 - `quality_gate.status` is written into `doc_manifest.json`; `ragflow-kb-build` blocks `BLOCKED` handoffs unless the user passes `--allow-blocked`.
+- `quality_report.json` and process-backed `runtime_report.json` distinguish Markdown and HTML table counts; formal rich handoffs include HTML `<table>` entries in `retrieval_hints.json.table_artifacts`.
 - Use `--strict` when skipped files should fail the run.
 - Use `backend probe` before live conversion to classify backends as `available`, `missing`, `wrong_protocol`, `timeout`, or `not_configured`. It can emit `--redaction-report`, does not convert files, and endpoint checks require explicit `--network-check`.
 - Use `backend warmup --fixture <tiny-file>` when the user has approved a small converter fixture and wants to run one bounded conversion readiness check. Add `--fail-on-failed` for CI gates.
