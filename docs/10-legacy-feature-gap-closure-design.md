@@ -1323,6 +1323,14 @@ Implementation status: rich handoffs now embed `ragflow_asset_semantics_v1` unde
 advisory-only metadata, and propagate image semantics into `retrieval_hints.json` plus the
 visual assistant test case without rewriting Markdown or touching live RAGFlow.
 
+Implementation status: rich handoffs now write JSON-first
+`ragflow_doc_ingest_readiness_v1` reports as `ingest_readiness_report.json` plus a
+Markdown summary rendered from that JSON. The report derives `ready`,
+`ready_with_review`, or `blocked` from deterministic quality gate, local asset,
+sidecar completeness, chunk readiness, retrieval-hint richness, artifact coverage,
+ingest-plan, and redaction-safety checks. `ragflow-kb-build inspect-handoff` reads the
+sidecar and recomputes the status without mutating RAGFlow.
+
 Implementation status: rich-handoff sidecars for retrieval hints, assistant profiles, and
 assistant test plans are generated as review artifacts by `ragflow-doc-to-md package
 --rich` and surfaced by downstream acceptance/smoke checks. `ragflow-query

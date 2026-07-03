@@ -2249,6 +2249,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         "retrieval_hints.json",
         "assistant_profile.json",
         "assistant_test_plan.json",
+        "ingest_readiness_report.json",
+        "ingest_readiness_report.md",
     ):
         rich_path = handoff_dir / rich_name
         checks.append(
@@ -2288,6 +2290,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     for pipeline_name in (
         "postprocess_report.json",
         "retrieval_hints.json",
+        "ingest_readiness_report.json",
+        "ingest_readiness_report.md",
         "ragflow_ingest_plan.yaml",
     ):
         pipeline_path = pipeline_handoff / pipeline_name

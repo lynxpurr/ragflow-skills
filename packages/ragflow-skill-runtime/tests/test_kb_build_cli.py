@@ -20,6 +20,7 @@ RUNTIME_SRC = ROOT / "packages" / "ragflow-skill-runtime" / "src"
 APPEND_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "append.py"
 BUILD_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "build.py"
 CLEANUP_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "cleanup.py"
+DOC_CONVERT_SCRIPT = ROOT / "skills" / "ragflow-doc-to-md" / "scripts" / "convert.py"
 DIAGNOSE_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "diagnose.py"
 INSPECT_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "inspect_kb.py"
 PROBE_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "probe.py"
@@ -305,6 +306,82 @@ def inspect_kb_live_server():
 
 
 class KbBuildCliTests(unittest.TestCase):
+    def test_inspect_handoff_reviews_ingest_readiness_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            handoff = root / "handoff"
+            input_dir.mkdir()
+            (input_dir / "alpha.md").write_text("# Alpha\n\nBody\n", encoding="utf-8")
+
+            convert_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(DOC_CONVERT_SCRIPT),
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(handoff),
+                    "--mode",
+                    "passthrough",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            package_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(DOC_CONVERT_SCRIPT),
+                    "package",
+                    "--handoff",
+                    str(handoff),
+                    "--rich",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            report_json = root / "handoff_inspection.json"
+            report_md = root / "handoff_inspection.md"
+            inspect_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "inspect-handoff",
+                    "--handoff",
+                    str(handoff),
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            package_payload = json.loads(package_result.stdout)
+            inspect_payload = json.loads(inspect_result.stdout)
+            report_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            report_text = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(convert_result.returncode, 0, convert_result.stderr)
+        self.assertEqual(package_result.returncode, 0, package_result.stderr)
+        self.assertEqual(inspect_result.returncode, 0, inspect_result.stderr)
+        self.assertEqual(package_payload["package"]["ingest_readiness_status"], "ready_with_review")
+        self.assertEqual(inspect_payload["handoff"]["schema"], "ragflow_handoff_inspection_v1")
+        self.assertTrue(report_payload["ingest_readiness_report"]["exists"])
+        self.assertEqual(report_payload["ingest_readiness_report"]["declared_status"], "ready_with_review")
+        self.assertTrue(report_payload["ingest_readiness_report"]["matches_recomputed_status"])
+        self.assertEqual(report_payload["ingestion_readiness"]["status"], "ready_with_review")
+        self.assertIn("Readiness report exists: true", report_text)
+
     def test_build_dry_run_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             input_dir = Path(tmp) / "docs"

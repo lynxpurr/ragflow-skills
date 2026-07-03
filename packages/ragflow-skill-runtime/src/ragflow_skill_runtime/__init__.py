@@ -100,6 +100,7 @@ from .handoff import (
     ASSISTANT_TEST_PLAN_SCHEMA,
     ASSET_SEMANTICS_SCHEMA,
     ARTIFACT_INDEX_SCHEMA,
+    DOC_INGEST_READINESS_SCHEMA,
     DOCUMENT_METADATA_SCHEMA,
     HANDOFF_PACKAGE_SCHEMA,
     PROFILE_SUGGESTIONS_SCHEMA,
@@ -113,11 +114,14 @@ from .handoff import (
     make_assistant_test_plan_payload,
     make_asset_semantics_payload,
     make_artifact_index_payload,
+    make_doc_ingest_readiness_payload,
     make_document_metadata_payload,
     make_profile_suggestions_payload,
     make_ragflow_ingest_plan_payload,
     make_retrieval_hints_payload,
+    render_doc_ingest_readiness_markdown,
     render_handoff_inspection_markdown,
+    write_doc_ingest_readiness_report,
 )
 from .assistant_review import (
     ASSISTANT_PROFILE_RECOMMENDATION_SCHEMA,
@@ -520,6 +524,7 @@ __all__ = [
     "ASSISTANT_TEST_PLAN_SCHEMA",
     "ASSET_SEMANTICS_SCHEMA",
     "ARTIFACT_INDEX_SCHEMA",
+    "DOC_INGEST_READINESS_SCHEMA",
     "DOCUMENT_METADATA_SCHEMA",
     "HANDOFF_PACKAGE_SCHEMA",
     "POSTPROCESS_PROFILES",
@@ -769,6 +774,7 @@ __all__ = [
     "make_asset_semantics_payload",
     "make_artifact_index_payload",
     "make_doc_manifest_payload",
+    "make_doc_ingest_readiness_payload",
     "make_document_metadata_payload",
     "make_metadata_template_payload",
     "make_profile_suggestions_payload",
@@ -872,6 +878,7 @@ __all__ = [
     "render_query_pollution_markdown",
     "render_query_rerank_ab_markdown",
     "render_quality_markdown",
+    "render_doc_ingest_readiness_markdown",
     "render_handoff_inspection_markdown",
     "render_governance_markdown",
     "segment_metadata_report_file",
@@ -930,6 +937,7 @@ __all__ = [
     "weight_evidence",
     "write_centroid_plan",
     "write_centroid_report",
+    "write_doc_ingest_readiness_report",
 ]
 
 __version__ = "0.1.0"

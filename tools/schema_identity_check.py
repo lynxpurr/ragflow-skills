@@ -95,6 +95,14 @@ EXPECTED_IDENTITIES = (
         description="Embedded image-asset semantics report under artifact_index.json.",
     ),
     SchemaIdentity(
+        key="doc_ingest_readiness",
+        group="manifest",
+        identity="ragflow_doc_ingest_readiness_v1",
+        source_patterns=("ragflow_doc_ingest_readiness_v1", "DOC_INGEST_READINESS_SCHEMA"),
+        coverage_patterns=("ragflow_doc_ingest_readiness_v1", "DOC_INGEST_READINESS_SCHEMA"),
+        description="JSON-first formal document ingest readiness report.",
+    ),
+    SchemaIdentity(
         key="benchmark_report",
         group="benchmark",
         identity="ragflow_benchmark_report_v1",

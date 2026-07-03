@@ -23,6 +23,7 @@ PROFILE_SUGGESTIONS_SCHEMA = "ragflow_profile_suggestions_v1"
 RETRIEVAL_HINTS_SCHEMA = "ragflow_retrieval_hints_v1"
 ASSISTANT_PROFILE_SCHEMA = "ragflow_assistant_profile_v1"
 ASSISTANT_TEST_PLAN_SCHEMA = "ragflow_assistant_test_plan_v1"
+DOC_INGEST_READINESS_SCHEMA = "ragflow_doc_ingest_readiness_v1"
 RAGFLOW_INGEST_PLAN_SCHEMA = "ragflow_ingest_plan_v1"
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -1904,7 +1905,9 @@ def make_package_readme(
     retrieval_hints_name: str,
     assistant_profile_name: str,
     assistant_test_plan_name: str,
-    quality_report_name: str | None,
+    ingest_readiness_name: str = "ingest_readiness_report.json",
+    ingest_readiness_md_name: str | None = "ingest_readiness_report.md",
+    quality_report_name: str | None = None,
     handoff_mode: str | None = None,
 ) -> str:
     """Render a compact README for a rich handoff package."""
@@ -1924,7 +1927,10 @@ def make_package_readme(
         f"- `{retrieval_hints_name}`: section, keyword, question, and quality-risk hints for retrieval review.",
         f"- `{assistant_profile_name}`: advisory assistant retrieval and answer policy profile.",
         f"- `{assistant_test_plan_name}`: staged assistant validation questions for review.",
+        f"- `{ingest_readiness_name}`: JSON-first formal-ingest readiness report for deterministic review.",
     ]
+    if ingest_readiness_md_name:
+        lines.append(f"- `{ingest_readiness_md_name}`: Markdown summary rendered from `{ingest_readiness_name}`.")
     if quality_report_name:
         lines.append(f"- `{quality_report_name}`: document quality gate report.")
     lines.extend(
@@ -1957,6 +1963,687 @@ def make_package_readme(
     return "\n".join(lines)
 
 
+def _read_json_if_file(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    return _read_json(path)
+
+
+def _quality_status_from_reports(doc_manifest: Mapping[str, Any], quality_report: Mapping[str, Any] | None) -> str | None:
+    manifest_gate = doc_manifest.get("quality_gate") if isinstance(doc_manifest.get("quality_gate"), Mapping) else {}
+    status = manifest_gate.get("status") if isinstance(manifest_gate.get("status"), str) else None
+    if isinstance(quality_report, Mapping):
+        gate = quality_report.get("gate") if isinstance(quality_report.get("gate"), Mapping) else {}
+        if isinstance(gate.get("status"), str):
+            status = gate["status"]
+    return status
+
+
+def _quality_content_counts(quality_report: Mapping[str, Any] | None) -> dict[str, int]:
+    counts = {
+        "document_count": 0,
+        "image_count": 0,
+        "table_count": 0,
+        "html_table_count": 0,
+        "markdown_table_count": 0,
+        "warning_count": 0,
+        "error_count": 0,
+    }
+    if not isinstance(quality_report, Mapping):
+        return counts
+    documents = quality_report.get("documents")
+    if not isinstance(documents, list):
+        return counts
+    for document in documents:
+        if not isinstance(document, Mapping):
+            continue
+        counts["document_count"] += 1
+        for key in ("image_count", "table_count", "html_table_count", "markdown_table_count"):
+            try:
+                counts[key] += int(document.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                pass
+        issues = document.get("issues")
+        if isinstance(issues, list):
+            for issue in issues:
+                if not isinstance(issue, Mapping):
+                    continue
+                severity = issue.get("severity")
+                if severity == "error":
+                    counts["error_count"] += 1
+                elif severity == "warning":
+                    counts["warning_count"] += 1
+    return counts
+
+
+def _readiness_issue(
+    *,
+    check: str,
+    severity: str,
+    code: str,
+    message: str,
+    recommendation: str,
+) -> dict[str, str]:
+    return {
+        "check": check,
+        "severity": severity,
+        "code": code,
+        "message": message,
+        "recommendation": recommendation,
+    }
+
+
+def _readiness_status(issues: list[Mapping[str, Any]]) -> str:
+    if any(issue.get("severity") == "error" for issue in issues):
+        return "blocked"
+    if any(issue.get("severity") == "warning" for issue in issues):
+        return "ready_with_review"
+    return "ready"
+
+
+def _readiness_score(issues: list[Mapping[str, Any]]) -> int:
+    score = 100
+    for issue in issues:
+        if issue.get("severity") == "error":
+            score -= 35
+        elif issue.get("severity") == "warning":
+            score -= 10
+    return max(score, 0)
+
+
+def _sidecar_readiness(root: Path, sidecar_names: Mapping[str, str | None]) -> dict[str, Any]:
+    categories = {
+        "metadata": "rich",
+        "artifact_index": "rich",
+        "profile_suggestions": "rich",
+        "retrieval_hints": "rich",
+        "assistant_profile": "rich",
+        "assistant_test_plan": "rich",
+        "package_readme": "rich",
+        "quality_report": "core",
+        "postprocess_report": "pipeline",
+        "chunk_profile_report": "pipeline",
+        "ragflow_ingest_plan": "pipeline",
+    }
+    sidecars: dict[str, dict[str, Any]] = {}
+    missing_by_category: dict[str, list[str]] = {"core": [], "rich": [], "pipeline": []}
+    unsafe_paths: list[str] = []
+    for name, category in categories.items():
+        raw_path = sidecar_names.get(name)
+        if not raw_path:
+            if category != "pipeline" or name != "chunk_profile_report":
+                missing_by_category[category].append(name)
+            continue
+        safe_path = _safe_relative_reference(str(raw_path))
+        if not safe_path:
+            unsafe_paths.append(name)
+        path = root / str(raw_path)
+        record: dict[str, Any] = {
+            "path": str(raw_path),
+            "exists": path.is_file(),
+            "category": category,
+            "safe_relative_path": safe_path,
+        }
+        if path.is_file():
+            record["size_bytes"] = path.stat().st_size
+        else:
+            missing_by_category[category].append(name)
+        sidecars[name] = record
+    return {
+        "sidecars": sidecars,
+        "missing": missing_by_category,
+        "unsafe_paths": unsafe_paths,
+        "rich_complete": not missing_by_category["rich"],
+        "pipeline_complete": not missing_by_category["pipeline"],
+        "core_complete": not missing_by_category["core"],
+    }
+
+
+def _retrieval_hint_summary(retrieval_hints: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(retrieval_hints, Mapping):
+        return {
+            "exists": False,
+            "section_boundary_count": 0,
+            "keyword_candidate_count": 0,
+            "question_candidate_count": 0,
+            "preferred_boundary_count": 0,
+            "table_artifact_count": 0,
+            "image_artifact_count": 0,
+            "layout_signal_count": 0,
+            "asset_semantic_image_count": 0,
+        }
+    asset_semantics = retrieval_hints.get("asset_semantics") if isinstance(retrieval_hints.get("asset_semantics"), Mapping) else {}
+    asset_summary = asset_semantics.get("summary") if isinstance(asset_semantics.get("summary"), Mapping) else {}
+    return {
+        "exists": True,
+        "schema": retrieval_hints.get("schema"),
+        "section_boundary_count": len(retrieval_hints.get("section_boundaries", []))
+        if isinstance(retrieval_hints.get("section_boundaries"), list)
+        else 0,
+        "keyword_candidate_count": len(retrieval_hints.get("keyword_candidates", []))
+        if isinstance(retrieval_hints.get("keyword_candidates"), list)
+        else 0,
+        "question_candidate_count": len(retrieval_hints.get("question_candidates", []))
+        if isinstance(retrieval_hints.get("question_candidates"), list)
+        else 0,
+        "preferred_boundary_count": len(retrieval_hints.get("preferred_boundaries", []))
+        if isinstance(retrieval_hints.get("preferred_boundaries"), list)
+        else 0,
+        "table_artifact_count": len(retrieval_hints.get("table_artifacts", []))
+        if isinstance(retrieval_hints.get("table_artifacts"), list)
+        else 0,
+        "image_artifact_count": len(retrieval_hints.get("image_artifacts", []))
+        if isinstance(retrieval_hints.get("image_artifacts"), list)
+        else 0,
+        "layout_signal_count": len(retrieval_hints.get("layout_signals", []))
+        if isinstance(retrieval_hints.get("layout_signals"), list)
+        else 0,
+        "asset_semantic_image_count": int(asset_summary.get("image_count", 0) or 0),
+    }
+
+
+def _chunk_readiness_summary(
+    *,
+    postprocess_report: Mapping[str, Any] | None,
+    chunk_profile_report: Mapping[str, Any] | None,
+    sidecar_exists: bool,
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "chunk_profile_report_exists": sidecar_exists,
+        "marker_count": 0,
+        "warning_count": 0,
+        "profile": None,
+        "preferred_boundary_alignment_ratio": None,
+    }
+    source = chunk_profile_report
+    if not isinstance(source, Mapping) and isinstance(postprocess_report, Mapping):
+        embedded = postprocess_report.get("chunk_profile_report")
+        if isinstance(embedded, Mapping):
+            source = embedded
+    if isinstance(source, Mapping):
+        report_summary = source.get("summary") if isinstance(source.get("summary"), Mapping) else {}
+        summary["schema"] = source.get("schema")
+        summary["profile"] = source.get("profile")
+        for key in ("marker_count", "warning_count"):
+            try:
+                summary[key] = int(report_summary.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                summary[key] = 0
+        summary["preferred_boundary_alignment_ratio"] = report_summary.get("preferred_boundary_alignment_ratio")
+    return summary
+
+
+def _ingest_plan_summary(ragflow_ingest_plan: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(ragflow_ingest_plan, Mapping):
+        return {
+            "exists": False,
+            "schema": None,
+            "has_dry_run_command": False,
+            "stores_api_credentials": None,
+            "stores_ragflow_endpoint": None,
+            "mutation_default": None,
+        }
+    safety = ragflow_ingest_plan.get("safety") if isinstance(ragflow_ingest_plan.get("safety"), Mapping) else {}
+    recommended_build = (
+        ragflow_ingest_plan.get("recommended_build")
+        if isinstance(ragflow_ingest_plan.get("recommended_build"), Mapping)
+        else {}
+    )
+    dry_run_command = recommended_build.get("dry_run_command")
+    return {
+        "exists": True,
+        "schema": ragflow_ingest_plan.get("schema"),
+        "has_handoff_block": isinstance(ragflow_ingest_plan.get("handoff"), Mapping),
+        "has_dry_run_command": isinstance(dry_run_command, list) and "--dry-run" in [str(item) for item in dry_run_command],
+        "stores_api_credentials": safety.get("stores_api_credentials"),
+        "stores_ragflow_endpoint": safety.get("stores_ragflow_endpoint"),
+        "stores_secret": safety.get("stores_secret"),
+        "mutation_default": safety.get("mutation_default"),
+    }
+
+
+def _default_next_commands() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": "inspect_handoff",
+            "command": [
+                "ragflow-kb-build",
+                "inspect-handoff",
+                "--handoff",
+                "<handoff>",
+                "--report-json",
+                "<run>/handoff_inspection.json",
+                "--report-md",
+                "<run>/handoff_inspection.md",
+            ],
+        },
+        {
+            "name": "dry_run",
+            "command": [
+                "ragflow-kb-build",
+                "--doc-manifest",
+                "<handoff>/doc_manifest.json",
+                "--kb-name",
+                "<kb-name>",
+                "--profile",
+                "<reviewed-profile.json>",
+                "--dry-run",
+                "--json",
+            ],
+        },
+    ]
+
+
+def make_doc_ingest_readiness_payload(
+    *,
+    handoff_root: str | Path,
+    doc_manifest_name: str = "doc_manifest.json",
+    sidecar_names: Mapping[str, str | None] | None = None,
+) -> dict[str, Any]:
+    """Create a deterministic formal-ingest readiness report for a handoff."""
+
+    root = Path(handoff_root)
+    doc_manifest = load_doc_manifest_payload(root / doc_manifest_name)
+    documents = _manifest_documents(doc_manifest)
+    default_sidecars: dict[str, str | None] = {
+        "metadata": "metadata.json",
+        "artifact_index": "artifact_index.json",
+        "profile_suggestions": "profile_suggestions.json",
+        "retrieval_hints": "retrieval_hints.json",
+        "assistant_profile": "assistant_profile.json",
+        "assistant_test_plan": "assistant_test_plan.json",
+        "package_readme": "package_readme.md",
+        "quality_report": doc_manifest.get("quality_report") if isinstance(doc_manifest.get("quality_report"), str) else None,
+        "postprocess_report": doc_manifest.get("postprocess_report")
+        if isinstance(doc_manifest.get("postprocess_report"), str)
+        else "postprocess_report.json",
+        "chunk_profile_report": doc_manifest.get("chunk_profile_report")
+        if isinstance(doc_manifest.get("chunk_profile_report"), str)
+        else None,
+        "ragflow_ingest_plan": "ragflow_ingest_plan.yaml",
+    }
+    if sidecar_names:
+        default_sidecars.update({key: value for key, value in sidecar_names.items() if key in default_sidecars})
+    sidecar_summary = _sidecar_readiness(root, default_sidecars)
+    sidecars = sidecar_summary["sidecars"]
+
+    quality_report_name = default_sidecars.get("quality_report")
+    quality_report = _read_json_if_file(root / quality_report_name) if quality_report_name else None
+    artifact_index_name = default_sidecars.get("artifact_index")
+    artifact_index = _read_json_if_file(root / artifact_index_name) if artifact_index_name else None
+    retrieval_hints_name = default_sidecars.get("retrieval_hints")
+    retrieval_hints = _read_json_if_file(root / retrieval_hints_name) if retrieval_hints_name else None
+    postprocess_name = default_sidecars.get("postprocess_report")
+    postprocess_report = _read_json_if_file(root / postprocess_name) if postprocess_name else None
+    chunk_profile_name = default_sidecars.get("chunk_profile_report")
+    chunk_profile_report = _read_json_if_file(root / chunk_profile_name) if chunk_profile_name else None
+    ingest_plan_name = default_sidecars.get("ragflow_ingest_plan")
+    ingest_plan_error: str | None = None
+    try:
+        ragflow_ingest_plan = (
+            load_ragflow_ingest_plan(root / ingest_plan_name)
+            if ingest_plan_name and (root / ingest_plan_name).is_file()
+            else None
+        )
+    except HandoffError as exc:
+        ragflow_ingest_plan = None
+        ingest_plan_error = str(exc)
+
+    quality_status = _quality_status_from_reports(doc_manifest, quality_report)
+    quality_counts = _quality_content_counts(quality_report)
+    image_assets = _inspect_image_assets(root=root, documents=documents)
+    retrieval_summary = _retrieval_hint_summary(retrieval_hints)
+    chunk_summary = _chunk_readiness_summary(
+        postprocess_report=postprocess_report,
+        chunk_profile_report=chunk_profile_report,
+        sidecar_exists=bool(sidecars.get("chunk_profile_report", {}).get("exists")),
+    )
+    ingest_plan = _ingest_plan_summary(ragflow_ingest_plan)
+    if ingest_plan_error:
+        ingest_plan["exists"] = True
+        ingest_plan["load_error"] = ingest_plan_error
+    asset_semantics = artifact_index.get("asset_semantics") if isinstance(artifact_index, Mapping) else {}
+    asset_semantics_summary = (
+        asset_semantics.get("summary")
+        if isinstance(asset_semantics, Mapping) and isinstance(asset_semantics.get("summary"), Mapping)
+        else {}
+    )
+
+    issues: list[dict[str, str]] = []
+    if quality_status == "BLOCKED":
+        issues.append(
+            _readiness_issue(
+                check="quality_gate",
+                severity="error",
+                code="quality_gate_blocked",
+                message="doc handoff quality gate is BLOCKED",
+                recommendation="Resolve quality_report.json errors before any live build.",
+            )
+        )
+    elif quality_status == "PASS_WITH_REVIEW":
+        issues.append(
+            _readiness_issue(
+                check="quality_gate",
+                severity="warning",
+                code="quality_gate_review_required",
+                message="quality gate passed with manual review required",
+                recommendation="Review quality warnings before dry-run and live build.",
+            )
+        )
+    elif quality_status != "PASS":
+        issues.append(
+            _readiness_issue(
+                check="quality_gate",
+                severity="warning",
+                code="quality_gate_unknown",
+                message="quality gate status is missing or unknown",
+                recommendation="Run ragflow-doc-to-md conversion quality checks before formal ingestion.",
+            )
+        )
+
+    if image_assets["missing_image_count"]:
+        issues.append(
+            _readiness_issue(
+                check="local_assets",
+                severity="error",
+                code="image_assets_missing",
+                message="one or more Markdown image references or manifest image assets are missing",
+                recommendation="Regenerate the handoff with asset landing enabled or repair image paths.",
+            )
+        )
+    if sidecar_summary["unsafe_paths"]:
+        issues.append(
+            _readiness_issue(
+                check="redaction_safety",
+                severity="error",
+                code="unsafe_sidecar_path",
+                message="one or more sidecar paths are absolute, remote, or parent-relative",
+                recommendation="Use relative handoff-local sidecar names before sharing the package.",
+            )
+        )
+    if sidecar_summary["missing"]["rich"]:
+        issues.append(
+            _readiness_issue(
+                check="rich_sidecars",
+                severity="warning",
+                code="rich_sidecars_incomplete",
+                message="one or more rich handoff sidecars are missing",
+                recommendation="Run ragflow-doc-to-md pipeline or package --rich before formal ingestion review.",
+            )
+        )
+    if sidecar_summary["missing"]["pipeline"]:
+        issues.append(
+            _readiness_issue(
+                check="pipeline_sidecars",
+                severity="warning",
+                code="pipeline_sidecars_incomplete",
+                message="one or more formal pipeline sidecars are missing",
+                recommendation="Run ragflow-doc-to-md pipeline so postprocess, chunk profile, and ingest plan artifacts are generated together.",
+            )
+        )
+    if chunk_summary["chunk_profile_report_exists"] and chunk_summary.get("marker_count", 0) == 0:
+        issues.append(
+            _readiness_issue(
+                check="chunk_readiness",
+                severity="warning",
+                code="chunk_markers_absent",
+                message="chunk profile report exists but records no chunk markers",
+                recommendation="Review whether the selected postprocess profile provides enough chunk boundaries.",
+            )
+        )
+    elif not chunk_summary["chunk_profile_report_exists"]:
+        issues.append(
+            _readiness_issue(
+                check="chunk_readiness",
+                severity="warning",
+                code="chunk_profile_report_missing",
+                message="chunk profile readiness sidecar is missing",
+                recommendation="Use a chunk-marker postprocess profile before formal ingestion when chunk boundaries matter.",
+            )
+        )
+    if not retrieval_summary["exists"]:
+        issues.append(
+            _readiness_issue(
+                check="retrieval_hints",
+                severity="warning",
+                code="retrieval_hints_missing",
+                message="retrieval_hints.json is missing",
+                recommendation="Run ragflow-doc-to-md package --rich or pipeline before KB dry-run.",
+            )
+        )
+    elif retrieval_summary["section_boundary_count"] == 0 or retrieval_summary["question_candidate_count"] == 0:
+        issues.append(
+            _readiness_issue(
+                check="retrieval_hints",
+                severity="warning",
+                code="retrieval_hints_sparse",
+                message="retrieval hints have sparse section or question coverage",
+                recommendation="Review Markdown headings and package sidecars before formal ingestion.",
+            )
+        )
+    if quality_counts["image_count"] and retrieval_summary["image_artifact_count"] == 0:
+        issues.append(
+            _readiness_issue(
+                check="artifact_coverage",
+                severity="warning",
+                code="image_artifact_hints_missing",
+                message="quality report found images but retrieval hints contain no image artifacts",
+                recommendation="Regenerate rich handoff sidecars and verify image semantics before formal ingestion.",
+            )
+        )
+    if quality_counts["table_count"] and retrieval_summary["table_artifact_count"] == 0:
+        issues.append(
+            _readiness_issue(
+                check="artifact_coverage",
+                severity="warning",
+                code="table_artifact_hints_missing",
+                message="quality report found tables but retrieval hints contain no table artifacts",
+                recommendation="Review table extraction and regenerate retrieval hints before formal ingestion.",
+            )
+        )
+    if ingest_plan_error:
+        issues.append(
+            _readiness_issue(
+                check="ragflow_ingest_plan",
+                severity="error",
+                code="ingest_plan_invalid",
+                message="ragflow ingest plan could not be loaded or validated",
+                recommendation="Regenerate ragflow_ingest_plan.yaml with ragflow-doc-to-md pipeline.",
+            )
+        )
+    elif not ingest_plan["exists"]:
+        issues.append(
+            _readiness_issue(
+                check="ragflow_ingest_plan",
+                severity="warning",
+                code="ingest_plan_missing",
+                message="ragflow_ingest_plan.yaml is missing",
+                recommendation="Run ragflow-doc-to-md pipeline before a formal dry-run build.",
+            )
+        )
+    else:
+        if ingest_plan["schema"] != RAGFLOW_INGEST_PLAN_SCHEMA or not ingest_plan.get("has_handoff_block"):
+            issues.append(
+                _readiness_issue(
+                    check="ragflow_ingest_plan",
+                    severity="error",
+                    code="ingest_plan_invalid",
+                    message="ingest plan schema or handoff block is invalid",
+                    recommendation="Regenerate ragflow_ingest_plan.yaml with ragflow-doc-to-md pipeline.",
+                )
+            )
+        if ingest_plan.get("stores_api_credentials") or ingest_plan.get("stores_ragflow_endpoint") or ingest_plan.get("stores_secret"):
+            issues.append(
+                _readiness_issue(
+                    check="redaction_safety",
+                    severity="error",
+                    code="ingest_plan_stores_private_config",
+                    message="ingest plan claims to store endpoint, credential, or secret material",
+                    recommendation="Regenerate a non-secret ingest plan before sharing or building.",
+                )
+            )
+        if not ingest_plan.get("has_dry_run_command") or ingest_plan.get("mutation_default") != "dry_run_first":
+            issues.append(
+                _readiness_issue(
+                    check="ragflow_ingest_plan",
+                    severity="warning",
+                    code="ingest_plan_dry_run_not_explicit",
+                    message="ingest plan does not clearly prefer dry-run before mutation",
+                    recommendation="Review the plan and run ragflow-kb-build with --dry-run first.",
+                )
+            )
+
+    status = _readiness_status(issues)
+    score = _readiness_score(issues)
+    checks = {
+        "quality_gate": {
+            "status": "pass"
+            if quality_status == "PASS"
+            else "review"
+            if quality_status == "PASS_WITH_REVIEW"
+            else "blocked"
+            if quality_status == "BLOCKED"
+            else "review",
+            "quality_status": quality_status,
+            "allows_build": quality_status in {"PASS", "PASS_WITH_REVIEW"},
+            "summary": quality_counts,
+        },
+        "local_assets": image_assets,
+        "sidecar_completeness": {
+            "core_complete": sidecar_summary["core_complete"],
+            "rich_complete": sidecar_summary["rich_complete"],
+            "pipeline_complete": sidecar_summary["pipeline_complete"],
+            "missing": sidecar_summary["missing"],
+        },
+        "chunk_readiness": chunk_summary,
+        "retrieval_hints_richness": retrieval_summary,
+        "artifact_coverage": {
+            "quality_image_count": quality_counts["image_count"],
+            "quality_table_count": quality_counts["table_count"],
+            "hint_image_artifact_count": retrieval_summary["image_artifact_count"],
+            "hint_table_artifact_count": retrieval_summary["table_artifact_count"],
+            "asset_semantic_image_count": int(asset_semantics_summary.get("image_count", 0) or 0),
+        },
+        "ragflow_ingest_plan": ingest_plan,
+        "redaction_safety": {
+            "stores_private_paths": False,
+            "stores_remote_urls": False,
+            "unsafe_sidecar_paths": sidecar_summary["unsafe_paths"],
+            "sidecar_paths_are_relative": not sidecar_summary["unsafe_paths"],
+        },
+    }
+    return {
+        "schema": DOC_INGEST_READINESS_SCHEMA,
+        "created_at": _now(),
+        "handoff_mode": doc_manifest.get("handoff_mode") if isinstance(doc_manifest.get("handoff_mode"), str) else None,
+        "doc_manifest": doc_manifest_name,
+        "status": status,
+        "advisory_score": score,
+        "allowed_statuses": ["ready", "ready_with_review", "blocked"],
+        "summary": {
+            "document_count": len(documents),
+            "quality_status": quality_status,
+            "error_count": sum(1 for issue in issues if issue["severity"] == "error"),
+            "warning_count": sum(1 for issue in issues if issue["severity"] == "warning"),
+            "issue_count": len(issues),
+            "rich_sidecars_complete": sidecar_summary["rich_complete"],
+            "pipeline_sidecars_complete": sidecar_summary["pipeline_complete"],
+            "missing_image_count": image_assets["missing_image_count"],
+            "retrieval_hint_section_count": retrieval_summary["section_boundary_count"],
+            "chunk_marker_count": chunk_summary["marker_count"],
+        },
+        "checks": checks,
+        "sidecars": sidecars,
+        "issues": issues,
+        "recommended_next_commands": _default_next_commands(),
+        "safety": {
+            "live_ragflow_mutation": "not_performed",
+            "mutation_default": "dry_run_first",
+            "script_owned_llm": "not_used",
+        },
+    }
+
+
+def render_doc_ingest_readiness_markdown(report: Mapping[str, Any]) -> str:
+    """Render Markdown from a ragflow_doc_ingest_readiness_v1 JSON payload."""
+
+    summary = report.get("summary") if isinstance(report.get("summary"), Mapping) else {}
+    checks = report.get("checks") if isinstance(report.get("checks"), Mapping) else {}
+    sidecar_check = checks.get("sidecar_completeness") if isinstance(checks.get("sidecar_completeness"), Mapping) else {}
+    assets = checks.get("local_assets") if isinstance(checks.get("local_assets"), Mapping) else {}
+    hints = checks.get("retrieval_hints_richness") if isinstance(checks.get("retrieval_hints_richness"), Mapping) else {}
+    chunk = checks.get("chunk_readiness") if isinstance(checks.get("chunk_readiness"), Mapping) else {}
+    ingest_plan = checks.get("ragflow_ingest_plan") if isinstance(checks.get("ragflow_ingest_plan"), Mapping) else {}
+    lines = [
+        "# RAGFlow Doc Ingest Readiness",
+        "",
+        f"- schema: `{report.get('schema', DOC_INGEST_READINESS_SCHEMA)}`",
+        f"- status: `{report.get('status', 'unknown')}`",
+        f"- advisory_score: {report.get('advisory_score', 'unknown')}",
+        f"- handoff_mode: `{report.get('handoff_mode') or 'unspecified'}`",
+        f"- documents: {summary.get('document_count', 0)}",
+        f"- quality_status: `{summary.get('quality_status') or 'UNKNOWN'}`",
+        f"- issues: {summary.get('issue_count', 0)}",
+        "",
+        "## Checks",
+        "",
+        f"- rich_sidecars_complete: {str(bool(sidecar_check.get('rich_complete'))).lower()}",
+        f"- pipeline_sidecars_complete: {str(bool(sidecar_check.get('pipeline_complete'))).lower()}",
+        f"- missing_image_count: {assets.get('missing_image_count', 'unknown')}",
+        f"- chunk_marker_count: {chunk.get('marker_count', 'unknown')}",
+        f"- retrieval_hint_sections: {hints.get('section_boundary_count', 'unknown')}",
+        f"- image_artifacts: {hints.get('image_artifact_count', 'unknown')}",
+        f"- table_artifacts: {hints.get('table_artifact_count', 'unknown')}",
+        f"- ingest_plan_exists: {str(bool(ingest_plan.get('exists'))).lower()}",
+        f"- ingest_plan_dry_run: {str(bool(ingest_plan.get('has_dry_run_command'))).lower()}",
+        "",
+    ]
+    issues = report.get("issues") if isinstance(report.get("issues"), list) else []
+    if issues:
+        lines.extend(["## Issues", ""])
+        for issue in issues:
+            if not isinstance(issue, Mapping):
+                continue
+            lines.append(
+                f"- `{issue.get('code')}` ({issue.get('severity')} / {issue.get('check')}): {issue.get('message')}"
+            )
+        lines.append("")
+    lines.extend(["## Recommended Next Commands", ""])
+    commands = report.get("recommended_next_commands") if isinstance(report.get("recommended_next_commands"), list) else []
+    for item in commands:
+        if not isinstance(item, Mapping):
+            continue
+        command = item.get("command")
+        if isinstance(command, list):
+            rendered = " ".join(str(part) for part in command)
+            lines.append(f"- `{item.get('name')}`: `{rendered}`")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_doc_ingest_readiness_report(
+    *,
+    handoff_root: str | Path,
+    doc_manifest_name: str = "doc_manifest.json",
+    ingest_readiness_name: str = "ingest_readiness_report.json",
+    ingest_readiness_md_name: str | None = "ingest_readiness_report.md",
+    sidecar_names: Mapping[str, str | None] | None = None,
+) -> dict[str, Any]:
+    """Write JSON-first ingest readiness sidecars and return the JSON payload."""
+
+    root = Path(handoff_root)
+    payload = make_doc_ingest_readiness_payload(
+        handoff_root=root,
+        doc_manifest_name=doc_manifest_name,
+        sidecar_names=sidecar_names,
+    )
+    json_path = root / ingest_readiness_name
+    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    if ingest_readiness_md_name:
+        md_path = root / ingest_readiness_md_name
+        md_path.write_text(render_doc_ingest_readiness_markdown(payload), encoding="utf-8")
+    return payload
+
+
 def create_rich_handoff_package(
     *,
     handoff_root: str | Path,
@@ -1967,6 +2654,8 @@ def create_rich_handoff_package(
     retrieval_hints_name: str = "retrieval_hints.json",
     assistant_profile_name: str = "assistant_profile.json",
     assistant_test_plan_name: str = "assistant_test_plan.json",
+    ingest_readiness_name: str = "ingest_readiness_report.json",
+    ingest_readiness_md_name: str | None = "ingest_readiness_report.md",
     package_readme_name: str = "package_readme.md",
 ) -> dict[str, Any]:
     """Create optional rich sidecars beside an existing doc manifest."""
@@ -2022,6 +2711,8 @@ def create_rich_handoff_package(
         retrieval_hints_name=retrieval_hints_name,
         assistant_profile_name=assistant_profile_name,
         assistant_test_plan_name=assistant_test_plan_name,
+        ingest_readiness_name=ingest_readiness_name,
+        ingest_readiness_md_name=ingest_readiness_md_name,
         quality_report_name=quality_report_name if isinstance(quality_report_name, str) else None,
         handoff_mode=doc_manifest.get("handoff_mode") if isinstance(doc_manifest.get("handoff_mode"), str) else None,
     )
@@ -2040,6 +2731,22 @@ def create_rich_handoff_package(
     assistant_profile_path.write_text(json.dumps(assistant_profile, ensure_ascii=False, indent=2), encoding="utf-8")
     assistant_test_plan_path.write_text(json.dumps(assistant_test_plan, ensure_ascii=False, indent=2), encoding="utf-8")
     package_readme_path.write_text(readme, encoding="utf-8")
+    ingest_readiness = write_doc_ingest_readiness_report(
+        handoff_root=root,
+        doc_manifest_name=doc_manifest_name,
+        ingest_readiness_name=ingest_readiness_name,
+        ingest_readiness_md_name=ingest_readiness_md_name,
+        sidecar_names={
+            "metadata": metadata_name,
+            "artifact_index": artifact_index_name,
+            "profile_suggestions": profile_suggestions_name,
+            "retrieval_hints": retrieval_hints_name,
+            "assistant_profile": assistant_profile_name,
+            "assistant_test_plan": assistant_test_plan_name,
+            "package_readme": package_readme_name,
+            "quality_report": quality_report_name if isinstance(quality_report_name, str) else None,
+        },
+    )
 
     payload = {
         "schema": HANDOFF_PACKAGE_SCHEMA,
@@ -2052,11 +2759,15 @@ def create_rich_handoff_package(
         "retrieval_hints": retrieval_hints_name,
         "assistant_profile": assistant_profile_name,
         "assistant_test_plan": assistant_test_plan_name,
+        "ingest_readiness": ingest_readiness_name,
+        "ingest_readiness_md": ingest_readiness_md_name,
         "package_readme": package_readme_name,
         "quality_report": quality_report_name if isinstance(quality_report_name, str) else None,
         "document_count": len(metadata["documents"]),
         "artifact_count": artifact_index["artifact_count"],
         "asset_semantic_count": artifact_index["asset_semantics"]["summary"]["image_count"],
+        "ingest_readiness_status": ingest_readiness["status"],
+        "ingest_readiness_score": ingest_readiness["advisory_score"],
         "retrieval_hint_count": len(retrieval_hints["section_boundaries"]),
         "assistant_test_count": assistant_test_plan["test_count"],
         "quality_status": profile_suggestions.get("signals", {}).get("quality_status"),
@@ -2118,6 +2829,8 @@ def make_ragflow_ingest_plan_payload(
         "retrieval_hints": retrieval_hints_name,
         "assistant_profile": package.get("assistant_profile", "assistant_profile.json"),
         "assistant_test_plan": package.get("assistant_test_plan", "assistant_test_plan.json"),
+        "ingest_readiness": package.get("ingest_readiness", "ingest_readiness_report.json"),
+        "ingest_readiness_md": package.get("ingest_readiness_md", "ingest_readiness_report.md"),
     }
     return {
         "schema": RAGFLOW_INGEST_PLAN_SCHEMA,
@@ -2209,6 +2922,8 @@ def inspect_rich_handoff(
         "retrieval_hints": ("retrieval_hints.json", "rich"),
         "assistant_profile": ("assistant_profile.json", "rich"),
         "assistant_test_plan": ("assistant_test_plan.json", "rich"),
+        "ingest_readiness_report": ("ingest_readiness_report.json", "rich"),
+        "ingest_readiness_report_md": ("ingest_readiness_report.md", "rich"),
         "package_readme": ("package_readme.md", "rich"),
         "postprocess_report": (postprocess_report_name, "pipeline"),
         "chunk_profile_report": (chunk_profile_report_name, "pipeline"),
@@ -2268,48 +2983,21 @@ def inspect_rich_handoff(
             quality_status = gate["status"]
 
     image_assets = _inspect_image_assets(root=root, documents=documents)
-    readiness_issues: list[dict[str, str]] = []
-    if quality_status == "BLOCKED":
-        readiness_issues.append(
-            {
-                "severity": "error",
-                "code": "quality_gate_blocked",
-                "message": "doc handoff quality gate is BLOCKED",
-                "recommendation": "Resolve handoff quality blockers before running live kb-build.",
-            }
-        )
-    elif quality_status not in {"PASS", "PASS_WITH_REVIEW"}:
-        readiness_issues.append(
-            {
-                "severity": "warning",
-                "code": "quality_gate_unknown",
-                "message": "quality gate status is missing or unknown",
-                "recommendation": "Run or inspect ragflow-doc-to-md quality_report.json before live build.",
-            }
-        )
-    if image_assets["missing_image_count"]:
-        readiness_issues.append(
-            {
-                "severity": "error",
-                "code": "image_assets_missing",
-                "message": "one or more Markdown image references or manifest image assets are missing",
-                "recommendation": "Regenerate the handoff with asset landing enabled or repair image paths.",
-            }
-        )
-    if missing_rich_sidecars:
-        readiness_issues.append(
-            {
-                "severity": "warning",
-                "code": "rich_sidecars_incomplete",
-                "message": "one or more rich handoff sidecars are missing",
-                "recommendation": "Run ragflow-doc-to-md pipeline or package --rich before formal ingestion review.",
-            }
-        )
-    readiness_status = "ready"
-    if any(issue["severity"] == "error" for issue in readiness_issues):
-        readiness_status = "blocked"
-    elif readiness_issues:
-        readiness_status = "review"
+    recomputed_readiness = make_doc_ingest_readiness_payload(handoff_root=root, doc_manifest_name=doc_manifest_name)
+    readiness_report_path = root / "ingest_readiness_report.json"
+    stored_readiness = _read_json_if_file(readiness_report_path)
+    stored_status = stored_readiness.get("status") if isinstance(stored_readiness, Mapping) else None
+    readiness_status = str(recomputed_readiness.get("status") or "ready_with_review")
+    readiness_issues = (
+        recomputed_readiness.get("issues")
+        if isinstance(recomputed_readiness.get("issues"), list)
+        else []
+    )
+    readiness_checks = (
+        recomputed_readiness.get("checks")
+        if isinstance(recomputed_readiness.get("checks"), Mapping)
+        else {}
+    )
 
     return {
         "schema": "ragflow_handoff_inspection_v1",
@@ -2336,13 +3024,40 @@ def inspect_rich_handoff(
             "pipeline_complete": not missing_pipeline_sidecars,
         },
         "assets": {"images": image_assets},
+        "ingest_readiness_report": {
+            "path": "ingest_readiness_report.json",
+            "exists": readiness_report_path.is_file(),
+            "schema": stored_readiness.get("schema") if isinstance(stored_readiness, Mapping) else None,
+            "declared_status": stored_status,
+            "recomputed_status": readiness_status,
+            "matches_recomputed_status": stored_status == readiness_status if stored_status else False,
+        },
         "ingestion_readiness": {
             "status": readiness_status,
-            "quality_gate_allows_build": quality_status in {"PASS", "PASS_WITH_REVIEW"},
-            "image_assets_ok": image_assets["ok"],
-            "rich_sidecars_complete": not missing_rich_sidecars,
-            "pipeline_sidecars_complete": not missing_pipeline_sidecars,
+            "quality_gate_allows_build": (
+                readiness_checks.get("quality_gate", {}).get("allows_build")
+                if isinstance(readiness_checks.get("quality_gate"), Mapping)
+                else quality_status in {"PASS", "PASS_WITH_REVIEW"}
+            ),
+            "image_assets_ok": (
+                readiness_checks.get("local_assets", {}).get("ok")
+                if isinstance(readiness_checks.get("local_assets"), Mapping)
+                else image_assets["ok"]
+            ),
+            "rich_sidecars_complete": (
+                readiness_checks.get("sidecar_completeness", {}).get("rich_complete")
+                if isinstance(readiness_checks.get("sidecar_completeness"), Mapping)
+                else not missing_rich_sidecars
+            ),
+            "pipeline_sidecars_complete": (
+                readiness_checks.get("sidecar_completeness", {}).get("pipeline_complete")
+                if isinstance(readiness_checks.get("sidecar_completeness"), Mapping)
+                else not missing_pipeline_sidecars
+            ),
+            "advisory_score": recomputed_readiness.get("advisory_score"),
+            "report_matches_recomputed_status": stored_status == readiness_status if stored_status else False,
             "issues": readiness_issues,
+            "checks": readiness_checks,
         },
         "sidecars": sidecars,
     }
@@ -2367,15 +3082,23 @@ def render_handoff_inspection_markdown(report: Mapping[str, Any]) -> str:
     sidecar_summary = report.get("sidecar_summary", {}) if isinstance(report.get("sidecar_summary"), Mapping) else {}
     assets = report.get("assets", {}) if isinstance(report.get("assets"), Mapping) else {}
     images = assets.get("images", {}) if isinstance(assets.get("images"), Mapping) else {}
+    readiness = report.get("ingestion_readiness", {}) if isinstance(report.get("ingestion_readiness"), Mapping) else {}
+    readiness_report = (
+        report.get("ingest_readiness_report")
+        if isinstance(report.get("ingest_readiness_report"), Mapping)
+        else {}
+    )
     lines.extend(
         [
+            f"- Readiness report exists: {str(bool(readiness_report.get('exists'))).lower()}",
+            f"- Readiness report status matches review: {str(bool(readiness_report.get('matches_recomputed_status'))).lower()}",
+            f"- Advisory score: {readiness.get('advisory_score', 'unknown')}",
             f"- Rich sidecars complete: {str(bool(sidecar_summary.get('rich_complete'))).lower()}",
             f"- Pipeline sidecars complete: {str(bool(sidecar_summary.get('pipeline_complete'))).lower()}",
             f"- Missing image assets: {images.get('missing_image_count', 'unknown')}",
             "",
         ]
     )
-    readiness = report.get("ingestion_readiness", {}) if isinstance(report.get("ingestion_readiness"), Mapping) else {}
     readiness_issues = readiness.get("issues", []) if isinstance(readiness.get("issues"), list) else []
     if readiness_issues:
         lines.extend(["## Readiness Issues", ""])

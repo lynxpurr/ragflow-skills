@@ -11,6 +11,7 @@ from ragflow_skill_runtime.handoff import (
     ASSISTANT_TEST_PLAN_SCHEMA,
     ASSET_SEMANTICS_SCHEMA,
     ARTIFACT_INDEX_SCHEMA,
+    DOC_INGEST_READINESS_SCHEMA,
     DOCUMENT_METADATA_SCHEMA,
     HANDOFF_PACKAGE_SCHEMA,
     PROFILE_SUGGESTIONS_SCHEMA,
@@ -19,8 +20,11 @@ from ragflow_skill_runtime.handoff import (
     create_rich_handoff_package,
     inspect_rich_handoff,
     load_ragflow_ingest_plan,
+    make_doc_ingest_readiness_payload,
     make_ragflow_ingest_plan_payload,
+    render_doc_ingest_readiness_markdown,
     render_handoff_inspection_markdown,
+    write_doc_ingest_readiness_report,
 )
 from ragflow_skill_runtime.kb_build import BuildDocument
 from ragflow_skill_runtime.topology import create_kb_topology_advice
@@ -80,6 +84,8 @@ class HandoffTests(unittest.TestCase):
             retrieval_hints = json.loads((root / "retrieval_hints.json").read_text(encoding="utf-8"))
             assistant_profile = json.loads((root / "assistant_profile.json").read_text(encoding="utf-8"))
             assistant_test_plan = json.loads((root / "assistant_test_plan.json").read_text(encoding="utf-8"))
+            ingest_readiness = json.loads((root / "ingest_readiness_report.json").read_text(encoding="utf-8"))
+            ingest_readiness_md = (root / "ingest_readiness_report.md").read_text(encoding="utf-8")
             readme = (root / "package_readme.md").read_text(encoding="utf-8")
 
         self.assertEqual(package["schema"], HANDOFF_PACKAGE_SCHEMA)
@@ -87,6 +93,8 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(package["document_count"], 1)
         self.assertEqual(package["artifact_count"], 1)
         self.assertEqual(package["asset_semantic_count"], 1)
+        self.assertEqual(package["ingest_readiness"], "ingest_readiness_report.json")
+        self.assertEqual(package["ingest_readiness_status"], "ready_with_review")
         self.assertGreaterEqual(package["retrieval_hint_count"], 2)
         self.assertGreaterEqual(package["assistant_test_count"], 1)
         self.assertEqual(metadata["schema"], DOCUMENT_METADATA_SCHEMA)
@@ -109,7 +117,12 @@ class HandoffTests(unittest.TestCase):
         self.assertTrue(assistant_profile["retrieval"]["require_evidence"])
         self.assertEqual(assistant_test_plan["schema"], ASSISTANT_TEST_PLAN_SCHEMA)
         self.assertTrue(any(case["stage"] == "negative_boundary" for case in assistant_test_plan["cases"]))
+        self.assertEqual(ingest_readiness["schema"], DOC_INGEST_READINESS_SCHEMA)
+        self.assertEqual(ingest_readiness["status"], "ready_with_review")
+        self.assertIn("pipeline_sidecars_incomplete", {issue["code"] for issue in ingest_readiness["issues"]})
+        self.assertIn("RAGFlow Doc Ingest Readiness", ingest_readiness_md)
         self.assertIn("Handoff mode: `formal_ingest`", readme)
+        self.assertIn("ingest_readiness_report.json", readme)
         self.assertIn("ragflow-kb-build inspect-handoff", readme)
         self.assertIn("--dry-run", readme)
 
@@ -433,19 +446,52 @@ class HandoffTests(unittest.TestCase):
             )
             create_rich_handoff_package(handoff_root=root)
             (root / "postprocess_report.json").write_text(
-                json.dumps({"schema": "doc_postprocess_report_v1"}),
+                json.dumps(
+                    {
+                        "schema": "doc_postprocess_report_v1",
+                        "chunk_profile_report": {
+                            "schema": "ragflow_chunk_profile_report_v1",
+                            "profile": "chunk-markers",
+                            "summary": {"marker_count": 1, "warning_count": 0},
+                        },
+                    }
+                ),
                 encoding="utf-8",
             )
             (root / "chunk_profile_report.json").write_text(
-                json.dumps({"schema": "ragflow_chunk_profile_report_v1"}),
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_profile_report_v1",
+                        "profile": "chunk-markers",
+                        "summary": {"marker_count": 1, "warning_count": 0},
+                    }
+                ),
                 encoding="utf-8",
             )
             plan = make_ragflow_ingest_plan_payload(handoff_root=root)
             (root / "ragflow_ingest_plan.json").write_text(json.dumps(plan), encoding="utf-8")
             (root / "ragflow_ingest_plan.yaml").write_text(
-                'schema: "ragflow_ingest_plan_v1"\n',
+                "\n".join(
+                    [
+                        'schema: "ragflow_ingest_plan_v1"',
+                        "handoff:",
+                        '  doc_manifest: "doc_manifest.json"',
+                        '  retrieval_hints: "retrieval_hints.json"',
+                        "recommended_build:",
+                        "  dry_run_command:",
+                        '    - "ragflow-kb-build"',
+                        '    - "--dry-run"',
+                        "safety:",
+                        "  stores_api_credentials: false",
+                        "  stores_ragflow_endpoint: false",
+                        "  stores_secret: false",
+                        '  mutation_default: "dry_run_first"',
+                        "",
+                    ]
+                ),
                 encoding="utf-8",
             )
+            write_doc_ingest_readiness_report(handoff_root=root)
 
             report = inspect_rich_handoff(handoff_root=root)
             markdown = render_handoff_inspection_markdown(report)
@@ -455,8 +501,10 @@ class HandoffTests(unittest.TestCase):
         self.assertTrue(report["sidecars"]["retrieval_hints"]["exists"])
         self.assertTrue(report["sidecars"]["assistant_profile"]["exists"])
         self.assertTrue(report["sidecars"]["assistant_test_plan"]["exists"])
+        self.assertTrue(report["sidecars"]["ingest_readiness_report"]["exists"])
         self.assertTrue(report["sidecars"]["chunk_profile_report"]["exists"])
         self.assertEqual(report["ingestion_readiness"]["status"], "ready")
+        self.assertTrue(report["ingest_readiness_report"]["matches_recomputed_status"])
         self.assertTrue(report["ingestion_readiness"]["image_assets_ok"])
         self.assertEqual(report["assets"]["images"]["missing_image_count"], 0)
         self.assertTrue(report["sidecar_summary"]["rich_complete"])
@@ -484,10 +532,16 @@ class HandoffTests(unittest.TestCase):
             )
 
             report = inspect_rich_handoff(handoff_root=root)
+            readiness = make_doc_ingest_readiness_payload(handoff_root=root)
+            readiness_md = render_doc_ingest_readiness_markdown(readiness)
 
         self.assertEqual(report["ingestion_readiness"]["status"], "blocked")
         self.assertEqual(report["assets"]["images"]["missing_image_count"], 1)
         self.assertEqual(report["ingestion_readiness"]["issues"][0]["code"], "image_assets_missing")
+        self.assertEqual(readiness["schema"], DOC_INGEST_READINESS_SCHEMA)
+        self.assertEqual(readiness["status"], "blocked")
+        self.assertEqual(readiness["checks"]["local_assets"]["missing_image_count"], 1)
+        self.assertIn("image_assets_missing", readiness_md)
 
     def test_make_ragflow_ingest_plan_is_non_secret_and_points_to_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -346,13 +346,17 @@ ragflow-doc-to-md compare-retained-package
 
 ### 4.5 P1：Ingest readiness report
 
-- [ ] 定义 `ragflow_doc_ingest_readiness_v1` schema。
-- [ ] 生成 JSON-first `ingest_readiness_report.json`。
-- [ ] Markdown 摘要只从 JSON 渲染，不含额外私有信息。
-- [ ] 状态支持 `ready`、`ready_with_review`、`blocked`。
-- [ ] 复用 quality gate、asset completeness、sidecar completeness、chunk readiness、hints richness。
-- [ ] `ragflow-kb-build inspect-handoff` 读取并复核该报告。
-- [ ] 增加 fake-client tests：ready、review、blocked 三类 fixture。
+实现状态：2026-07-03 已完成；`package --rich` 和 `pipeline` 生成
+`ragflow_doc_ingest_readiness_v1` JSON-first 报告及 Markdown 摘要，`inspect-handoff`
+会读取 sidecar 并复算状态；未执行 live RAGFlow mutation。
+
+- [x] 定义 `ragflow_doc_ingest_readiness_v1` schema。
+- [x] 生成 JSON-first `ingest_readiness_report.json`。
+- [x] Markdown 摘要只从 JSON 渲染，不含额外私有信息。
+- [x] 状态支持 `ready`、`ready_with_review`、`blocked`。
+- [x] 复用 quality gate、asset completeness、sidecar completeness、chunk readiness、hints richness。
+- [x] `ragflow-kb-build inspect-handoff` 读取并复核该报告。
+- [x] 增加 fake-client tests：ready、review、blocked 三类 fixture。
 
 ### 4.6 P2：Formal handoff manifest
 
