@@ -1699,6 +1699,7 @@ def mineru_fastapi_convert(
         "final_status": None,
         "submit_duration_ms": None,
         "result_fetch_duration_ms": None,
+        "asset_download_duration_ms": None,
         "total_duration_ms": None,
         "timeout_seconds": timeout,
         "poll_interval_seconds": poll_interval,
@@ -1801,6 +1802,7 @@ def mineru_fastapi_convert(
                     )
                 saved_assets: list[dict[str, str]] = []
                 if normalized_asset_mode == "markdown_assets" and asset_output_dir is not None:
+                    asset_started = time.monotonic()
                     saved_assets = _write_mineru_fastapi_image_assets(
                         result_payload,
                         source=source,
@@ -1811,6 +1813,7 @@ def mineru_fastapi_convert(
                         timeout=remaining,
                         verify_ssl=verify_ssl,
                     )
+                    attempt["asset_download_duration_ms"] = round((time.monotonic() - asset_started) * 1000, 3)
                     markdown = _rewrite_mineru_fastapi_asset_references(markdown, saved_assets)
                     attempt["asset_policy"] = _mineru_fastapi_asset_policy(
                         fields,
@@ -2535,6 +2538,267 @@ def _run_local_process_with_cleanup(
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr), event
 
 
+def _coerce_duration_ms(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0:
+        return None
+    return round(parsed, 3)
+
+
+def _normalize_stage_timing(item: Mapping[str, Any]) -> dict[str, Any]:
+    stage = str(item.get("stage") or "unspecified").strip() or "unspecified"
+    operation = str(item.get("operation") or stage).strip() or stage
+    duration_ms = _coerce_duration_ms(item.get("duration_ms"))
+    timing_source = str(item.get("timing_source") or "monotonic_clock").strip() or "monotonic_clock"
+    normalized: dict[str, Any] = {
+        "stage": stage,
+        "operation": operation,
+        "status": str(item.get("status") or "unknown"),
+        "duration_ms": duration_ms,
+        "timing_source": timing_source,
+    }
+    for key in (
+        "backend",
+        "source_path",
+        "detail",
+        "included_in_stage",
+        "failure_class",
+    ):
+        value = item.get(key)
+        if value not in (None, ""):
+            normalized[key] = value
+    if "counts_toward_total" in item:
+        normalized["counts_toward_total"] = bool(item.get("counts_toward_total"))
+    else:
+        normalized["counts_toward_total"] = duration_ms is not None and not normalized.get("included_in_stage")
+    if item.get("derived_from_attempt"):
+        normalized["derived_from_attempt"] = True
+    return normalized
+
+
+def _asset_stage_timings_from_attempts(
+    process_attempts: list[Mapping[str, Any]],
+    remote_attempts: list[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    timings: list[dict[str, Any]] = []
+    for item in process_attempts:
+        duration_ms = _coerce_duration_ms(item.get("asset_copy_duration_ms"))
+        if duration_ms is None:
+            continue
+        timings.append(
+            _normalize_stage_timing(
+                {
+                    "stage": "asset",
+                    "operation": "local_asset_copy",
+                    "status": item.get("status") or "unknown",
+                    "duration_ms": duration_ms,
+                    "timing_source": "converter_internal",
+                    "included_in_stage": "conversion",
+                    "counts_toward_total": False,
+                    "backend": item.get("backend"),
+                    "source_path": item.get("source_path"),
+                    "derived_from_attempt": True,
+                }
+            )
+        )
+    for item in remote_attempts:
+        duration_ms = _coerce_duration_ms(item.get("asset_download_duration_ms"))
+        if duration_ms is None:
+            continue
+        timings.append(
+            _normalize_stage_timing(
+                {
+                    "stage": "asset",
+                    "operation": "remote_asset_materialization",
+                    "status": item.get("status") or "unknown",
+                    "duration_ms": duration_ms,
+                    "timing_source": "converter_internal",
+                    "included_in_stage": "conversion",
+                    "counts_toward_total": False,
+                    "backend": item.get("backend"),
+                    "source_path": item.get("source_path"),
+                    "derived_from_attempt": True,
+                }
+            )
+        )
+    return timings
+
+
+def _failure_class_from_process_attempt(item: Mapping[str, Any]) -> str | None:
+    status = str(item.get("status") or "")
+    if status == "timeout":
+        return "task_timeout"
+    if status == "execution_error":
+        return "resource_failure"
+    if status == "failed":
+        return "conversion_failure"
+    cleanup = item.get("cleanup", {}) if isinstance(item.get("cleanup"), Mapping) else {}
+    if cleanup.get("attempted") and (
+        not cleanup.get("process_exited")
+        or int(cleanup.get("leftover_process_count", 0) or 0) > 0
+    ):
+        return "resource_failure"
+    return None
+
+
+def _failure_class_from_remote_attempt(item: Mapping[str, Any]) -> str | None:
+    status = str(item.get("status") or "")
+    category = str(item.get("error_category") or "")
+    if status == "timeout" or category == "request_timeout":
+        return "task_timeout"
+    if category == "transient_remote_error":
+        return "resource_failure"
+    if category == "auth_failed":
+        return "credential_failure"
+    if category in {"protocol_error", "result_missing", "result_empty", "task_failed"}:
+        return "protocol_failure"
+    if status == "failed":
+        return "conversion_failure"
+    return None
+
+
+def _failure_classification(
+    process_attempts: list[Mapping[str, Any]],
+    remote_attempts: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    categories: dict[str, int] = {}
+    details: list[dict[str, Any]] = []
+    for kind, attempts, classifier in (
+        ("process", process_attempts, _failure_class_from_process_attempt),
+        ("remote", remote_attempts, _failure_class_from_remote_attempt),
+    ):
+        for item in attempts:
+            failure_class = classifier(item)
+            if not failure_class:
+                continue
+            categories[failure_class] = categories.get(failure_class, 0) + 1
+            details.append(
+                {
+                    "source": kind,
+                    "backend": item.get("backend"),
+                    "source_path": item.get("source_path"),
+                    "status": item.get("status"),
+                    "failure_class": failure_class,
+                    "failed_stage": item.get("failed_stage"),
+                    "error_category": item.get("error_category"),
+                }
+            )
+    return {
+        "failure_count": sum(categories.values()),
+        "timeout_count": categories.get("task_timeout", 0),
+        "resource_failure_count": categories.get("resource_failure", 0),
+        "categories": categories,
+        "details": details,
+    }
+
+
+def _infer_runtime_context(
+    process_attempts: list[Mapping[str, Any]],
+    remote_attempts: list[Mapping[str, Any]],
+    runtime_context: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    context = dict(runtime_context or {})
+    backends = {
+        str(item.get("backend"))
+        for item in [*process_attempts, *remote_attempts]
+        if item.get("backend")
+    }
+    if not context.get("backend"):
+        if len(backends) == 1:
+            context["backend"] = next(iter(backends))
+        elif len(backends) > 1:
+            context["backend"] = "mixed"
+        else:
+            context["backend"] = "unknown"
+    has_local_process = any(str(item.get("backend")) == "mineru-cli" for item in process_attempts)
+    has_persistent_mineru = any(
+        str(item.get("backend")) in {"mineru", "mineru-agent", "mineru-fastapi", "mineru-sync", "mineru-local"}
+        for item in remote_attempts
+    )
+    if "local_process_startup_included" not in context:
+        context["local_process_startup_included"] = has_local_process
+    if "persistent_mineru_reused" not in context:
+        context["persistent_mineru_reused"] = True if has_persistent_mineru else False if has_local_process else None
+    if "cold_warm" not in context:
+        if has_local_process and has_persistent_mineru:
+            context["cold_warm"] = "mixed"
+        elif has_local_process:
+            context["cold_warm"] = "cold_local_process"
+        elif has_persistent_mineru:
+            context["cold_warm"] = "warm_persistent_service"
+        else:
+            context["cold_warm"] = "unknown"
+    if "model_initialization_included" not in context:
+        context["model_initialization_included"] = "not_reported_by_backend"
+    if "mineru_execution" not in context:
+        if has_local_process and has_persistent_mineru:
+            context["mineru_execution"] = "mixed"
+        elif has_local_process:
+            context["mineru_execution"] = "local_process_per_document"
+        elif has_persistent_mineru:
+            context["mineru_execution"] = "persistent_service_reused"
+        else:
+            context["mineru_execution"] = "not_applicable_or_unknown"
+    return context
+
+
+def _normalize_slow_path_warnings(items: list[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for item in items or []:
+        if not isinstance(item, Mapping):
+            continue
+        code = str(item.get("code") or "").strip()
+        if not code:
+            continue
+        warnings.append(
+            {
+                "code": code,
+                "severity": str(item.get("severity") or "info"),
+                "message": str(item.get("message") or code),
+            }
+        )
+    return warnings
+
+
+def _build_doc_runtime_performance(
+    *,
+    process_attempts: list[Mapping[str, Any]],
+    remote_attempts: list[Mapping[str, Any]],
+    stage_timings: list[Mapping[str, Any]] | None = None,
+    runtime_context: Mapping[str, Any] | None = None,
+    slow_path_warnings: list[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    timings = [_normalize_stage_timing(item) for item in (stage_timings or []) if isinstance(item, Mapping)]
+    timings.extend(_asset_stage_timings_from_attempts(process_attempts, remote_attempts))
+    failure_classification = _failure_classification(process_attempts, remote_attempts)
+    counted_durations = [
+        float(item["duration_ms"])
+        for item in timings
+        if item.get("duration_ms") is not None and item.get("counts_toward_total", True)
+    ]
+    summary = {
+        "stage_count": len(timings),
+        "timed_stage_count": sum(1 for item in timings if item.get("duration_ms") is not None),
+        "not_measured_stage_count": sum(1 for item in timings if item.get("duration_ms") is None),
+        "known_duration_ms": round(sum(counted_durations), 3),
+        "timeout_failure_count": failure_classification["timeout_count"],
+        "resource_failure_count": failure_classification["resource_failure_count"],
+    }
+    return {
+        "measurement_scope": "command_runtime",
+        "runtime_context": _infer_runtime_context(process_attempts, remote_attempts, runtime_context),
+        "summary": summary,
+        "stage_timings": timings,
+        "failure_classification": failure_classification,
+        "slow_path_warnings": _normalize_slow_path_warnings(slow_path_warnings),
+    }
+
+
 def make_doc_runtime_report_payload(
     *,
     output_root: str | Path,
@@ -2542,6 +2806,9 @@ def make_doc_runtime_report_payload(
     remote_attempts: list[Mapping[str, Any]] | None = None,
     handoff_mode: str | None = None,
     handoff_advisory: list[Mapping[str, Any]] | None = None,
+    stage_timings: list[Mapping[str, Any]] | None = None,
+    runtime_context: Mapping[str, Any] | None = None,
+    slow_path_warnings: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Create a portable report for conversion runtime attempts."""
 
@@ -2577,6 +2844,17 @@ def make_doc_runtime_report_payload(
         "remote_insecure_tls": sum(1 for item in normalized_remote if item.get("verify_ssl") is False),
         "remote_error_categories": remote_error_categories,
     }
+    performance = _build_doc_runtime_performance(
+        process_attempts=normalized,
+        remote_attempts=normalized_remote,
+        stage_timings=stage_timings,
+        runtime_context=runtime_context,
+        slow_path_warnings=slow_path_warnings,
+    )
+    summary["stage_timing_count"] = performance["summary"]["stage_count"]
+    summary["stage_timing_known_duration_ms"] = performance["summary"]["known_duration_ms"]
+    summary["timeout_failure_count"] = performance["summary"]["timeout_failure_count"]
+    summary["resource_failure_count"] = performance["summary"]["resource_failure_count"]
     if handoff_mode:
         summary["handoff_mode"] = handoff_mode
     if handoff_mode or normalized_advisory:
@@ -2599,6 +2877,7 @@ def make_doc_runtime_report_payload(
         "summary": summary,
         "process_attempts": normalized,
         "remote_attempts": normalized_remote,
+        "performance": performance,
     }
     if handoff_mode:
         payload["handoff_mode"] = handoff_mode
@@ -2634,8 +2913,71 @@ def render_doc_runtime_markdown(report: Mapping[str, Any]) -> str:
             f"- remote timeout: `{summary.get('remote_timeout', 0)}`",
             f"- remote retries: `{summary.get('remote_retry_count', 0)}`",
             f"- http attempts: `{summary.get('http_attempts', 0)}`",
+            f"- stage timings: `{summary.get('stage_timing_count', 0)}`",
+            f"- known stage duration ms: `{summary.get('stage_timing_known_duration_ms', 0)}`",
+            f"- timeout failures: `{summary.get('timeout_failure_count', 0)}`",
+            f"- resource failures: `{summary.get('resource_failure_count', 0)}`",
             f"- quality table count: `{summary.get('quality_table_count', 0)}`",
             f"- quality HTML table count: `{summary.get('quality_html_table_count', 0)}`",
+        ]
+    )
+    performance = report.get("performance", {}) if isinstance(report.get("performance"), Mapping) else {}
+    if performance:
+        perf_summary = performance.get("summary", {}) if isinstance(performance.get("summary"), Mapping) else {}
+        context = performance.get("runtime_context", {}) if isinstance(performance.get("runtime_context"), Mapping) else {}
+        failure = (
+            performance.get("failure_classification", {})
+            if isinstance(performance.get("failure_classification"), Mapping)
+            else {}
+        )
+        lines.extend(
+            [
+                "",
+                "## Performance Telemetry",
+                "",
+                f"- configured backend: `{context.get('configured_backend', context.get('backend', 'unknown'))}`",
+                f"- observed backend: `{context.get('backend', 'unknown')}`",
+                f"- cold_warm: `{context.get('cold_warm', 'unknown')}`",
+                f"- mineru_execution: `{context.get('mineru_execution', 'unknown')}`",
+                f"- persistent_mineru_reused: `{context.get('persistent_mineru_reused')}`",
+                f"- local_process_startup_included: `{context.get('local_process_startup_included')}`",
+                f"- model_initialization_included: `{context.get('model_initialization_included', 'unknown')}`",
+                f"- known_duration_ms: `{perf_summary.get('known_duration_ms', 0)}`",
+                f"- failure_count: `{failure.get('failure_count', 0)}`",
+            ]
+        )
+        warnings = performance.get("slow_path_warnings", [])
+        if isinstance(warnings, list) and warnings:
+            lines.extend(["", "Slow path warnings:"])
+            for item in warnings:
+                if not isinstance(item, Mapping):
+                    continue
+                lines.append(
+                    f"- `{item.get('severity', 'info')}` `{item.get('code', 'slow_path')}`: {item.get('message', '')}"
+                )
+        stage_timings = performance.get("stage_timings", [])
+        if isinstance(stage_timings, list) and stage_timings:
+            lines.extend(
+                [
+                    "",
+                    "| Stage | Operation | Status | Duration ms | Timing source | Included in |",
+                    "| --- | --- | --- | --- | --- | --- |",
+                ]
+            )
+            for item in stage_timings:
+                if not isinstance(item, Mapping):
+                    continue
+                row = [
+                    str(item.get("stage", "")).replace("|", "\\|"),
+                    str(item.get("operation", "")).replace("|", "\\|"),
+                    str(item.get("status", "")).replace("|", "\\|"),
+                    str(item.get("duration_ms", "") if item.get("duration_ms") is not None else "").replace("|", "\\|"),
+                    str(item.get("timing_source", "")).replace("|", "\\|"),
+                    str(item.get("included_in_stage", "") or "").replace("|", "\\|"),
+                ]
+                lines.append("| " + " | ".join(row) + " |")
+    lines.extend(
+        [
             "",
             "| Source | Backend | Status | Cleanup | Leftovers |",
             "| --- | --- | --- | --- | --- |",
@@ -2763,12 +3105,16 @@ def mineru_cli_convert(
             raise DocConvertError(f"MinerU CLI produced no Markdown output for {source.source_path}{suffix}")
         markdown_file = markdown_files[0]
         markdown = markdown_file.read_text(encoding="utf-8")
-        return copy_local_markdown_assets(
+        asset_started = time.monotonic()
+        converted_markdown = copy_local_markdown_assets(
             markdown,
             markdown_path=markdown_file,
             source_root=output_dir,
             asset_output_dir=asset_output_dir,
         )
+        process_attempt["asset_copy_duration_ms"] = round((time.monotonic() - asset_started) * 1000, 3)
+        process_attempt["asset_copy_included_in_conversion"] = True
+        return converted_markdown
 
 
 def pandoc_convert(source: SourceDocument) -> str:

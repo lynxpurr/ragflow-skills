@@ -1113,6 +1113,10 @@ performs local/configuration checks only; bounded endpoint reachability is opt-i
 `--network-check`. The main conversion command now records local process-backed converter
 attempts in `ragflow_doc_runtime_report_v1` when they run, including timeout cleanup,
 signals sent, and leftover process counts without storing full command lines or host paths.
+The same runtime report now includes an offline `performance` section with conversion,
+asset, postprocess, package, retrieval-hints, and ingest-plan stage timings; cold/warm
+MinerU execution context; model-init reporting status; slow-path warnings; and
+timeout/resource failure classification.
 `ragflow-doc-to-md backend warmup` now runs only when the user supplies an explicit tiny
 fixture with `--fixture`, emits `ragflow_doc_backend_warmup_report_v1`, and can fail CI via
 `--fail-on-failed`. Main document conversion now preserves image sources as Markdown

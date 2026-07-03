@@ -754,10 +754,18 @@ def _run_mineru_env_check(
     if cli_runtime_path.exists():
         cli_runtime_payload = json.loads(cli_runtime_path.read_text(encoding="utf-8"))
         cli_runtime_summary = cli_runtime_payload.get("summary", {})
+        cli_runtime_performance = cli_runtime_payload.get("performance", {})
+        cli_runtime_context = (
+            cli_runtime_performance.get("runtime_context", {})
+            if isinstance(cli_runtime_performance, dict)
+            else {}
+        )
         cli_runtime_ok = (
             cli_runtime_payload.get("schema") == "ragflow_doc_runtime_report_v1"
             and cli_runtime_summary.get("process_attempts") == 1
             and cli_runtime_summary.get("success") == 1
+            and cli_runtime_summary.get("stage_timing_count", 0) >= 1
+            and cli_runtime_context.get("local_process_startup_included") is True
         )
     checks.append(
         {

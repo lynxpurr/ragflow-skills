@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from typing import Any
 
 
@@ -915,6 +916,182 @@ def _postprocess_chunk_profile_report_path(args: argparse.Namespace) -> Path | N
     return Path(args.markdown).parent / "chunk_profile_report.json"
 
 
+def _elapsed_ms(started: float) -> float:
+    return round((time.monotonic() - started) * 1000, 3)
+
+
+def _stage_timing(
+    *,
+    stage: str,
+    operation: str,
+    started: float,
+    status: str = "success",
+    backend: str | None = None,
+    source_path: str | None = None,
+    detail: str | None = None,
+    timing_source: str = "monotonic_clock",
+    included_in_stage: str | None = None,
+    counts_toward_total: bool | None = None,
+) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "stage": stage,
+        "operation": operation,
+        "status": status,
+        "duration_ms": _elapsed_ms(started),
+        "timing_source": timing_source,
+    }
+    if backend:
+        item["backend"] = backend
+    if source_path:
+        item["source_path"] = source_path
+    if detail:
+        item["detail"] = detail
+    if included_in_stage:
+        item["included_in_stage"] = included_in_stage
+    if counts_toward_total is not None:
+        item["counts_toward_total"] = counts_toward_total
+    return item
+
+
+def _included_stage_timing(
+    *,
+    stage: str,
+    operation: str,
+    included_in_stage: str,
+    status: str = "success",
+    backend: str | None = None,
+    detail: str | None = None,
+) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "stage": stage,
+        "operation": operation,
+        "status": status,
+        "duration_ms": None,
+        "timing_source": "included_in_parent_stage",
+        "included_in_stage": included_in_stage,
+        "counts_toward_total": False,
+    }
+    if backend:
+        item["backend"] = backend
+    if detail:
+        item["detail"] = detail
+    return item
+
+
+def _conversion_stage_status(
+    process_attempts: list[dict[str, Any]],
+    remote_attempts: list[dict[str, Any]],
+    *,
+    failed: bool,
+) -> str:
+    recent = [*process_attempts, *remote_attempts]
+    if any(item.get("status") == "timeout" for item in recent):
+        return "timeout"
+    if any(item.get("status") == "execution_error" for item in recent):
+        return "execution_error"
+    if failed:
+        return "failed"
+    return "success"
+
+
+def _conversion_runtime_context(
+    *,
+    backend: str,
+    mineru_asset_mode: str,
+    mineru_is_ocr: bool,
+    mineru_enable_table: bool,
+    mineru_enable_formula: bool,
+) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "configured_backend": backend,
+        "mineru_asset_mode": mineru_asset_mode,
+        "ocr_requested": bool(mineru_is_ocr),
+        "table_parsing_requested": bool(mineru_enable_table),
+        "formula_parsing_requested": bool(mineru_enable_formula),
+    }
+    if backend != "auto":
+        context["backend"] = backend
+    if backend == "mineru-cli":
+        context.update(
+            {
+                "cold_warm": "cold_local_process",
+                "mineru_execution": "local_process_per_document",
+                "persistent_mineru_reused": False,
+                "local_process_startup_included": True,
+            }
+        )
+    elif backend in {"mineru", "mineru-agent", "mineru-fastapi", "mineru-sync", "mineru-local"}:
+        context.update(
+            {
+                "cold_warm": "warm_persistent_service",
+                "mineru_execution": "persistent_service_reused",
+                "persistent_mineru_reused": True,
+                "local_process_startup_included": False,
+            }
+        )
+    elif backend in {"builtin", "pandoc", "remote"}:
+        context.update(
+            {
+                "cold_warm": "not_applicable",
+                "mineru_execution": "not_applicable",
+                "persistent_mineru_reused": None,
+                "local_process_startup_included": False,
+            }
+        )
+    return context
+
+
+def _conversion_slow_path_warnings(
+    *,
+    sources: list[Any],
+    backend: str,
+    mineru_asset_mode: str,
+    mineru_is_ocr: bool,
+    mineru_enable_table: bool,
+    mineru_enable_formula: bool,
+) -> list[dict[str, str]]:
+    mineru_candidate = backend.startswith("mineru") or (
+        backend == "auto"
+        and any(Path(getattr(source, "source_path", "")).suffix.lower() in FORMAL_PREP_SOURCE_EXTENSIONS for source in sources)
+    )
+    if not mineru_candidate:
+        return []
+    warnings: list[dict[str, str]] = []
+    if mineru_is_ocr:
+        warnings.append(
+            {
+                "code": "ocr_slow_path",
+                "severity": "review",
+                "message": "OCR mode was requested; conversion time may include text recognition slow path.",
+            }
+        )
+    if mineru_enable_table:
+        warnings.append(
+            {
+                "code": "table_slow_path",
+                "severity": "info",
+                "message": "Table parsing was enabled; table structure detection may add parser latency.",
+            }
+        )
+    if mineru_enable_formula:
+        warnings.append(
+            {
+                "code": "formula_slow_path",
+                "severity": "info",
+                "message": "Formula parsing was enabled; model-side formula handling may add parser latency.",
+            }
+        )
+    if mineru_asset_mode == "markdown_assets":
+        warnings.append(
+            {
+                "code": "asset_materialization_slow_path",
+                "severity": "info",
+                "message": "Markdown asset materialization was requested; image download/copy time is reported separately when measurable.",
+            }
+        )
+    return warnings
+
+
 def _make_runtime_report(
     *,
     output_root: Path,
@@ -922,8 +1099,11 @@ def _make_runtime_report(
     remote_attempts: list[dict[str, Any]] | None = None,
     handoff_mode: str | None = None,
     handoff_advisory: list[dict[str, Any]] | None = None,
+    stage_timings: list[dict[str, Any]] | None = None,
+    runtime_context: dict[str, Any] | None = None,
+    slow_path_warnings: list[dict[str, str]] | None = None,
 ) -> dict[str, Any] | None:
-    if not process_attempts and not remote_attempts:
+    if not process_attempts and not remote_attempts and not stage_timings and not slow_path_warnings:
         return None
     return make_doc_runtime_report_payload(
         output_root=output_root,
@@ -931,6 +1111,9 @@ def _make_runtime_report(
         remote_attempts=remote_attempts,
         handoff_mode=handoff_mode,
         handoff_advisory=handoff_advisory,
+        stage_timings=stage_timings,
+        runtime_context=runtime_context,
+        slow_path_warnings=slow_path_warnings,
     )
 
 
@@ -1002,6 +1185,101 @@ def _write_runtime_report_payload(
         report_md_path.parent.mkdir(parents=True, exist_ok=True)
         report_md_path.write_text(render_doc_runtime_markdown(report), encoding="utf-8")
     return report_json_path, report_md_path
+
+
+def _explicit_runtime_stage_timings(report: dict[str, Any]) -> list[dict[str, Any]]:
+    performance = report.get("performance")
+    if not isinstance(performance, dict):
+        return []
+    timings = performance.get("stage_timings")
+    if not isinstance(timings, list):
+        return []
+    return [
+        dict(item)
+        for item in timings
+        if isinstance(item, dict) and not item.get("derived_from_attempt")
+    ]
+
+
+def _runtime_context_from_report(report: dict[str, Any]) -> dict[str, Any]:
+    performance = report.get("performance")
+    if not isinstance(performance, dict):
+        return {}
+    context = performance.get("runtime_context")
+    return dict(context) if isinstance(context, dict) else {}
+
+
+def _slow_path_warnings_from_report(report: dict[str, Any]) -> list[dict[str, str]]:
+    performance = report.get("performance")
+    if not isinstance(performance, dict):
+        return []
+    warnings = performance.get("slow_path_warnings")
+    if not isinstance(warnings, list):
+        return []
+    return [dict(item) for item in warnings if isinstance(item, dict)]
+
+
+def _rewrite_runtime_report_payload(
+    *,
+    output_root: Path,
+    args: argparse.Namespace,
+    stage_timings: list[dict[str, Any]] | None = None,
+    runtime_context: dict[str, Any] | None = None,
+    slow_path_warnings: list[dict[str, str]] | None = None,
+    handoff_mode: str | None = None,
+    handoff_advisory: list[dict[str, Any]] | None = None,
+    formal_ingest: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    report_path = _sidecar_path(output_root, args.runtime_report_name)
+    if not report_path or not report_path.is_file():
+        return None
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if not isinstance(report, dict):
+        return None
+    merged_context = _runtime_context_from_report(report)
+    if runtime_context:
+        merged_context.update(runtime_context)
+    merged_warnings = _slow_path_warnings_from_report(report)
+    if slow_path_warnings:
+        existing_codes = {str(item.get("code")) for item in merged_warnings}
+        for item in slow_path_warnings:
+            if str(item.get("code")) not in existing_codes:
+                merged_warnings.append(dict(item))
+    rebuilt = make_doc_runtime_report_payload(
+        output_root=output_root,
+        process_attempts=report.get("process_attempts", []) if isinstance(report.get("process_attempts"), list) else [],
+        remote_attempts=report.get("remote_attempts", []) if isinstance(report.get("remote_attempts"), list) else [],
+        handoff_mode=handoff_mode or report.get("handoff_mode"),
+        handoff_advisory=handoff_advisory
+        if handoff_advisory is not None
+        else report.get("handoff_advisory") if isinstance(report.get("handoff_advisory"), list) else None,
+        stage_timings=[*_explicit_runtime_stage_timings(report), *(stage_timings or [])],
+        runtime_context=merged_context,
+        slow_path_warnings=merged_warnings,
+    )
+    for key in ("document_quality_summary",):
+        if key in report:
+            rebuilt[key] = report[key]
+    table_summary = rebuilt.get("document_quality_summary")
+    summary = rebuilt.get("summary")
+    if isinstance(table_summary, dict) and isinstance(summary, dict):
+        summary["quality_table_count"] = table_summary.get("table_count", 0)
+        summary["quality_markdown_table_count"] = table_summary.get("markdown_table_count", 0)
+        summary["quality_html_table_count"] = table_summary.get("html_table_count", 0)
+        summary["quality_html_table_review_warning_count"] = table_summary.get(
+            "html_table_review_warning_count",
+            0,
+        )
+    if formal_ingest is not None:
+        rebuilt["formal_ingest"] = formal_ingest
+    elif isinstance(report.get("formal_ingest"), dict):
+        rebuilt["formal_ingest"] = report["formal_ingest"]
+    report_path.write_text(json.dumps(rebuilt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    report_md_path = _sidecar_path(output_root, args.runtime_report_md)
+    if report_md_path:
+        report_md_path.parent.mkdir(parents=True, exist_ok=True)
+        report_md_path.write_text(render_doc_runtime_markdown(rebuilt), encoding="utf-8")
+    return rebuilt
 
 
 def _sanitize_conversion_reports(
@@ -1138,6 +1416,35 @@ def _run(args: argparse.Namespace) -> int:
             label="MINERU_VERIFY_SSL",
         )
         mineru_asset_mode = _mineru_asset_mode(args, config)
+        mineru_cli_backend = _config_or_arg(
+            args,
+            "mineru_cli_backend",
+            config.mineru.cli_backend,
+            "pipeline",
+        ) or "pipeline"
+        mineru_language = _config_or_arg(args, "mineru_language", config.mineru.language, "ch") or "ch"
+        mineru_page_range = _config_or_arg(args, "mineru_page_range", config.mineru.page_range)
+        mineru_enable_table = _bool_config_or_arg(
+            args,
+            "mineru_enable_table",
+            config.mineru.enable_table,
+            True,
+            label="MINERU_ENABLE_TABLE",
+        )
+        mineru_is_ocr = _bool_config_or_arg(
+            args,
+            "mineru_is_ocr",
+            config.mineru.is_ocr,
+            False,
+            label="MINERU_IS_OCR",
+        )
+        mineru_enable_formula = _bool_config_or_arg(
+            args,
+            "mineru_enable_formula",
+            config.mineru.enable_formula,
+            True,
+            label="MINERU_ENABLE_FORMULA",
+        )
         output_root = Path(args.output).expanduser().resolve()
         sources = discover_source_documents(args.input, recursive=not args.no_recursive)
         sources = [
@@ -1149,6 +1456,21 @@ def _run(args: argparse.Namespace) -> int:
             raise DocConvertError("no input files found outside the output directory")
         handoff_mode = THIN_PREVIEW_HANDOFF_MODE
         handoff_advisory = _thin_preview_handoff_advisory(sources)
+        runtime_context = _conversion_runtime_context(
+            backend=backend,
+            mineru_asset_mode=mineru_asset_mode,
+            mineru_is_ocr=mineru_is_ocr,
+            mineru_enable_table=mineru_enable_table,
+            mineru_enable_formula=mineru_enable_formula,
+        )
+        slow_path_warnings = _conversion_slow_path_warnings(
+            sources=sources,
+            backend=backend,
+            mineru_asset_mode=mineru_asset_mode,
+            mineru_is_ocr=mineru_is_ocr,
+            mineru_enable_table=mineru_enable_table,
+            mineru_enable_formula=mineru_enable_formula,
+        )
 
         docs_dir = output_root / "documents"
         docs_dir.mkdir(parents=True, exist_ok=True)
@@ -1157,12 +1479,15 @@ def _run(args: argparse.Namespace) -> int:
         skipped: list[dict[str, str]] = []
         process_attempts: list[dict[str, Any]] = []
         remote_attempts: list[dict[str, Any]] = []
+        stage_timings: list[dict[str, Any]] = []
 
         for source in sources:
             output_name = safe_markdown_name(source, used=used_names)
             markdown_path = docs_dir / output_name
+            conversion_started = time.monotonic()
+            process_attempt_start = len(process_attempts)
+            remote_attempt_start = len(remote_attempts)
             try:
-                remote_attempt_start = len(remote_attempts)
                 markdown, warnings = convert_source_to_markdown(
                     source,
                     mode=args.mode,
@@ -1176,44 +1501,35 @@ def _run(args: argparse.Namespace) -> int:
                     mineru_poll_interval=mineru_poll_interval,
                     mineru_verify_ssl=mineru_verify_ssl,
                     mineru_cli_path=mineru_cli_path,
-                    mineru_cli_backend=_config_or_arg(
-                        args,
-                        "mineru_cli_backend",
-                        config.mineru.cli_backend,
-                        "pipeline",
-                    )
-                    or "pipeline",
+                    mineru_cli_backend=mineru_cli_backend,
                     asset_output_dir=markdown_path.parent,
                     asset_document_stem=markdown_path.stem,
-                    mineru_language=_config_or_arg(args, "mineru_language", config.mineru.language, "ch") or "ch",
-                    mineru_page_range=_config_or_arg(args, "mineru_page_range", config.mineru.page_range),
-                    mineru_enable_table=_bool_config_or_arg(
-                        args,
-                        "mineru_enable_table",
-                        config.mineru.enable_table,
-                        True,
-                        label="MINERU_ENABLE_TABLE",
-                    ),
-                    mineru_is_ocr=_bool_config_or_arg(
-                        args,
-                        "mineru_is_ocr",
-                        config.mineru.is_ocr,
-                        False,
-                        label="MINERU_IS_OCR",
-                    ),
-                    mineru_enable_formula=_bool_config_or_arg(
-                        args,
-                        "mineru_enable_formula",
-                        config.mineru.enable_formula,
-                        True,
-                        label="MINERU_ENABLE_FORMULA",
-                    ),
+                    mineru_language=mineru_language,
+                    mineru_page_range=mineru_page_range,
+                    mineru_enable_table=mineru_enable_table,
+                    mineru_is_ocr=mineru_is_ocr,
+                    mineru_enable_formula=mineru_enable_formula,
                     mineru_asset_mode=mineru_asset_mode,
                     process_attempts=process_attempts,
                     remote_attempts=remote_attempts,
                     allow_image_fallback=not args.no_image_fallback,
                 )
             except (UnicodeDecodeError, OSError, DocConvertError) as exc:
+                stage_timings.append(
+                    _stage_timing(
+                        stage="conversion",
+                        operation=backend,
+                        started=conversion_started,
+                        status=_conversion_stage_status(
+                            process_attempts[process_attempt_start:],
+                            remote_attempts[remote_attempt_start:],
+                            failed=True,
+                        ),
+                        backend=backend,
+                        source_path=source.source_path,
+                        detail=exc.__class__.__name__,
+                    )
+                )
                 if args.strict:
                     runtime_report = _make_runtime_report(
                         output_root=output_root,
@@ -1221,6 +1537,9 @@ def _run(args: argparse.Namespace) -> int:
                         remote_attempts=remote_attempts,
                         handoff_mode=handoff_mode,
                         handoff_advisory=handoff_advisory,
+                        stage_timings=stage_timings,
+                        runtime_context=runtime_context,
+                        slow_path_warnings=slow_path_warnings,
                     )
                     _, runtime_report = _sanitize_conversion_reports(
                         quality_report=None,
@@ -1243,6 +1562,20 @@ def _run(args: argparse.Namespace) -> int:
                 skipped.append({"source_path": source.source_path, "reason": str(exc)})
                 continue
 
+            stage_timings.append(
+                _stage_timing(
+                    stage="conversion",
+                    operation=backend,
+                    started=conversion_started,
+                    status=_conversion_stage_status(
+                        process_attempts[process_attempt_start:],
+                        remote_attempts[remote_attempt_start:],
+                        failed=False,
+                    ),
+                    backend=backend,
+                    source_path=source.source_path,
+                )
+            )
             markdown_path.write_text(markdown, encoding="utf-8")
             converted.append(
                 ConvertedDocument(
@@ -1264,6 +1597,9 @@ def _run(args: argparse.Namespace) -> int:
             remote_attempts=remote_attempts,
             handoff_mode=handoff_mode,
             handoff_advisory=handoff_advisory,
+            stage_timings=stage_timings,
+            runtime_context=runtime_context,
+            slow_path_warnings=slow_path_warnings,
         )
         if not converted:
             _, runtime_report = _sanitize_conversion_reports(
@@ -1424,34 +1760,33 @@ def _update_manifest_handoff_state(
 def _update_runtime_report_handoff_state(
     *,
     output_root: Path,
-    runtime_report_name: str | None,
+    args: argparse.Namespace,
     handoff_mode: str,
     handoff_advisory: list[dict[str, Any]],
     formal_ingest: dict[str, Any] | None = None,
+    stage_timings: list[dict[str, Any]] | None = None,
+    runtime_context: dict[str, Any] | None = None,
+    slow_path_warnings: list[dict[str, str]] | None = None,
 ) -> None:
-    if not runtime_report_name:
+    if not getattr(args, "runtime_report_name", None):
         return
-    report_path = _sidecar_path(output_root, runtime_report_name)
-    if not report_path or not report_path.is_file():
-        return
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    if not isinstance(report, dict):
-        return
-    report["handoff_mode"] = handoff_mode
-    report["handoff_advisory"] = handoff_advisory
-    if formal_ingest is not None:
-        report["formal_ingest"] = formal_ingest
-    summary = report.get("summary")
-    if isinstance(summary, dict):
-        summary["handoff_mode"] = handoff_mode
-        summary["handoff_advisory_count"] = len(handoff_advisory)
-    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _rewrite_runtime_report_payload(
+        output_root=output_root,
+        args=args,
+        stage_timings=stage_timings,
+        runtime_context=runtime_context,
+        slow_path_warnings=slow_path_warnings,
+        handoff_mode=handoff_mode,
+        handoff_advisory=handoff_advisory,
+        formal_ingest=formal_ingest,
+    )
 
 
 def _run_pipeline(args: argparse.Namespace) -> int:
     try:
         output_root = Path(args.output).expanduser().resolve()
         manifest_path = output_root / args.manifest_name
+        pipeline_stage_timings: list[dict[str, Any]] = []
 
         convert_code, convert_payload, raw_convert_stdout = _run_convert_captured(args)
         if convert_code != 0:
@@ -1476,12 +1811,22 @@ def _run_pipeline(args: argparse.Namespace) -> int:
             ) or "chunk_profile_report.json"
         postprocess_report_path = output_root / postprocess_report_name
         chunk_profile_report_path = output_root / chunk_profile_report_name if chunk_profile_report_name else None
+        postprocess_started = time.monotonic()
         postprocess_report = postprocess_handoff(
             manifest_path,
             profile=args.postprocess_profile,
             write=True,
             report_json=postprocess_report_path,
             chunk_profile_report_json=chunk_profile_report_path,
+        )
+        pipeline_stage_timings.append(
+            _stage_timing(
+                stage="postprocess",
+                operation=args.postprocess_profile,
+                started=postprocess_started,
+                status="success",
+                detail=f"changed_documents={postprocess_report.get('summary', {}).get('changed_documents')}",
+            )
         )
         _update_manifest_postprocess_report(
             manifest_path,
@@ -1505,6 +1850,7 @@ def _run_pipeline(args: argparse.Namespace) -> int:
         ingest_readiness_md_name = _safe_handoff_sidecar_name(args.ingest_readiness_md_name, label="--ingest-readiness-md-name") if args.ingest_readiness_md_name else None
         formal_manifest_name = _safe_handoff_sidecar_name(args.formal_manifest_name, label="--formal-manifest-name") or "formal_handoff_manifest.json"
         package_readme_name = _safe_handoff_sidecar_name(args.package_readme_name, label="--package-readme-name") or "package_readme.md"
+        package_started = time.monotonic()
         package_payload = create_rich_handoff_package(
             handoff_root=output_root,
             doc_manifest_name=args.manifest_name,
@@ -1519,10 +1865,29 @@ def _run_pipeline(args: argparse.Namespace) -> int:
             formal_handoff_manifest_name=formal_manifest_name,
             package_readme_name=package_readme_name,
         )
+        pipeline_stage_timings.append(
+            _stage_timing(
+                stage="package",
+                operation="rich_handoff_package",
+                started=package_started,
+                status="success",
+                detail=f"sidecars={len(package_payload.get('sidecars', []))}",
+            )
+        )
+        pipeline_stage_timings.append(
+            _included_stage_timing(
+                stage="hints",
+                operation="retrieval_hints",
+                included_in_stage="package",
+                status="success",
+                detail=retrieval_hints_name,
+            )
+        )
 
         ingest_plan_name = _safe_handoff_sidecar_name(args.ingest_plan_name, label="--ingest-plan-name")
         if not ingest_plan_name:
             raise DocConvertError("--ingest-plan-name must not be empty")
+        ingest_plan_started = time.monotonic()
         ingest_plan = make_ragflow_ingest_plan_payload(
             handoff_root=output_root,
             doc_manifest_name=args.manifest_name,
@@ -1532,6 +1897,15 @@ def _run_pipeline(args: argparse.Namespace) -> int:
         )
         ingest_plan_path = output_root / ingest_plan_name
         _write_yaml_payload(ingest_plan_path, ingest_plan)
+        pipeline_stage_timings.append(
+            _stage_timing(
+                stage="ingest_plan",
+                operation="write_non_secret_ingest_plan",
+                started=ingest_plan_started,
+                status="success",
+            )
+        )
+        readiness_started = time.monotonic()
         ingest_readiness = write_doc_ingest_readiness_report(
             handoff_root=output_root,
             doc_manifest_name=args.manifest_name,
@@ -1551,10 +1925,20 @@ def _run_pipeline(args: argparse.Namespace) -> int:
                 "ragflow_ingest_plan": ingest_plan_name,
             },
         )
+        pipeline_stage_timings.append(
+            _stage_timing(
+                stage="ingest_plan",
+                operation="readiness_report",
+                started=readiness_started,
+                status=ingest_readiness["status"],
+                detail=f"score={ingest_readiness['advisory_score']}",
+            )
+        )
         package_payload["ingest_readiness"] = ingest_readiness_name
         package_payload["ingest_readiness_md"] = ingest_readiness_md_name
         package_payload["ingest_readiness_status"] = ingest_readiness["status"]
         package_payload["ingest_readiness_score"] = ingest_readiness["advisory_score"]
+        formal_manifest_started = time.monotonic()
         formal_handoff_manifest = write_formal_handoff_manifest(
             handoff_root=output_root,
             doc_manifest_name=args.manifest_name,
@@ -1574,6 +1958,15 @@ def _run_pipeline(args: argparse.Namespace) -> int:
                 "chunk_profile_report": chunk_profile_report_name,
                 "ragflow_ingest_plan": ingest_plan_name,
             },
+        )
+        pipeline_stage_timings.append(
+            _stage_timing(
+                stage="package",
+                operation="formal_handoff_manifest",
+                started=formal_manifest_started,
+                status="success",
+                detail=formal_manifest_name,
+            )
         )
         package_payload["formal_handoff_manifest"] = formal_manifest_name
         package_payload["formal_handoff_manifest_schema"] = formal_handoff_manifest["schema"]
@@ -1604,10 +1997,12 @@ def _run_pipeline(args: argparse.Namespace) -> int:
         )
         _update_runtime_report_handoff_state(
             output_root=output_root,
-            runtime_report_name=args.runtime_report_name,
+            args=args,
             handoff_mode=FORMAL_INGEST_HANDOFF_MODE,
             handoff_advisory=handoff_advisory,
             formal_ingest=formal_ingest,
+            stage_timings=pipeline_stage_timings,
+            runtime_context={"pipeline_mode": FORMAL_INGEST_HANDOFF_MODE},
         )
 
         response = {
@@ -2335,7 +2730,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest-name", default="doc_manifest.json")
     parser.add_argument("--quality-report-name", default="quality_report.json", help="Quality report sidecar name under the output directory")
     parser.add_argument("--quality-report-md", help="Optional Markdown quality report sidecar name under the output directory")
-    parser.add_argument("--runtime-report-name", default="runtime_report.json", help="Runtime process cleanup report sidecar name; written when local process-backed converters run")
+    parser.add_argument("--runtime-report-name", default="runtime_report.json", help="Runtime telemetry report sidecar name; records stage timings and process/remote attempts when available")
     parser.add_argument("--runtime-report-md", help="Optional Markdown runtime report sidecar name under the output directory")
     parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     parser.add_argument("--no-image-fallback", action="store_true", help="Skip source-image Markdown fallback when OCR/conversion is unavailable")

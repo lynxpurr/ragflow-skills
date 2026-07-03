@@ -667,6 +667,15 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(runtime_report["summary"]["handoff_mode"], "formal_ingest")
         self.assertEqual(runtime_report["handoff_advisory"][0]["code"], "inspect_and_dry_run_before_live_build")
         self.assertTrue(runtime_report["formal_ingest"]["rich_sidecars"]["complete"])
+        performance = runtime_report["performance"]
+        stage_names = {item["stage"] for item in performance["stage_timings"]}
+        self.assertTrue({"conversion", "postprocess", "package", "hints", "ingest_plan"}.issubset(stage_names))
+        self.assertEqual(performance["runtime_context"]["configured_backend"], "mineru-cli")
+        self.assertEqual(performance["runtime_context"]["pipeline_mode"], "formal_ingest")
+        self.assertFalse(performance["runtime_context"]["persistent_mineru_reused"])
+        self.assertTrue(performance["runtime_context"]["local_process_startup_included"])
+        self.assertEqual(performance["runtime_context"]["model_initialization_included"], "not_reported_by_backend")
+        self.assertGreater(runtime_report["summary"]["stage_timing_count"], 0)
 
     def test_pipeline_runtime_and_hints_count_html_tables(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -714,6 +723,9 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(runtime_report["document_quality_summary"]["html_table_count"], 1)
         self.assertEqual(runtime_report["summary"]["quality_html_table_count"], 1)
         self.assertIn("quality HTML table count: `1`", runtime_markdown)
+        self.assertIn("## Performance Telemetry", runtime_markdown)
+        self.assertIn("| postprocess | chunk-markers | success |", runtime_markdown)
+        self.assertIn("cold_warm: `cold_local_process`", runtime_markdown)
         self.assertEqual(html_table["header_preview"], ["型号", "精度", "尺寸"])
         self.assertEqual(html_table["row_count"], 2)
         self.assertEqual(html_table["column_count"], 3)
@@ -1433,6 +1445,16 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertTrue(asset_policy["requested"]["return_images"])
         self.assertTrue(asset_policy["saved"]["images"])
         self.assertEqual(asset_policy["saved"]["image_count"], 1)
+        asset_timing = next(
+            item
+            for item in runtime_report["performance"]["stage_timings"]
+            if item["stage"] == "asset" and item["operation"] == "remote_asset_materialization"
+        )
+        self.assertEqual(asset_timing["included_in_stage"], "conversion")
+        self.assertFalse(asset_timing["counts_toward_total"])
+        self.assertIsNotNone(asset_timing["duration_ms"])
+        self.assertTrue(runtime_report["performance"]["runtime_context"]["persistent_mineru_reused"])
+        self.assertFalse(runtime_report["performance"]["runtime_context"]["local_process_startup_included"])
         body = captured["body"]
         self.assertIsInstance(body, bytes)
         self.assertIn(b'name="return_images"', body)
@@ -1570,6 +1592,16 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertTrue(attempt["cleanup"]["process_exited"])
         self.assertEqual(attempt["cleanup"]["leftover_process_count"], 0)
         self.assertEqual(manifest["runtime_report"], "runtime_report.json")
+        failure = report["performance"]["failure_classification"]
+        self.assertEqual(failure["timeout_count"], 1)
+        self.assertEqual(report["summary"]["timeout_failure_count"], 1)
+        timeout_stage = next(
+            item
+            for item in report["performance"]["stage_timings"]
+            if item.get("source_path") == "slow.pdf"
+        )
+        self.assertEqual(timeout_stage["status"], "timeout")
+        self.assertEqual(report["performance"]["runtime_context"]["cold_warm"], "cold_local_process")
 
     def test_convert_image_fallback_preserves_source_image_for_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -307,6 +307,12 @@ live RAGFlow mutation。
 - 用户能公平理解 `ragflow-doc-to-md` 和 RAGFlux 的耗时差异。
 - 不把主机私有路径、endpoint 或 token 写入报告。
 
+实现状态：2026-07-03 已完成；`ragflow_doc_runtime_report_v1` 兼容扩展
+`performance` 区块，记录 conversion、asset、postprocess、package、hints 和 ingest plan
+阶段 timing，区分 local MinerU CLI 冷启动进程与常驻 MinerU service 复用口径，标记
+model init 未由 backend 汇报，并输出 timeout/resource failure 分类和 Markdown 摘要；未执行
+live RAGFlow mutation。
+
 ## 第四部分：开发任务清单
 
 ### 4.1 P0：正式入库模式可发现性和误用防护
@@ -396,12 +402,12 @@ smoke 覆盖；未执行 live RAGFlow mutation。
 
 ### 4.8 P2：Runtime performance telemetry
 
-- [ ] 扩展 `runtime_report.json` 的 stage timing。
-- [ ] 区分 cold/warm、model init 是否包含、常驻 MinerU 是否复用。
-- [ ] 记录 conversion、asset、postprocess、package、hints、ingest plan 阶段耗时。
-- [ ] 增加 timeout/resource failure 分类字段。
-- [ ] 增加 runtime report Markdown 摘要。
-- [ ] 增加 fixture 和 CLI tests。
+- [x] 扩展 `runtime_report.json` 的 stage timing。
+- [x] 区分 cold/warm、model init 是否包含、常驻 MinerU 是否复用。
+- [x] 记录 conversion、asset、postprocess、package、hints、ingest plan 阶段耗时。
+- [x] 增加 timeout/resource failure 分类字段。
+- [x] 增加 runtime report Markdown 摘要。
+- [x] 增加 fixture 和 CLI tests。
 
 ### 4.9 P3：多样本退役观察矩阵
 

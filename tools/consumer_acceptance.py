@@ -1238,10 +1238,14 @@ def _run_no_network_checks(
     if mineru_cli_runtime.exists():
         runtime_payload = json.loads(mineru_cli_runtime.read_text(encoding="utf-8"))
         runtime_summary = runtime_payload.get("summary", {})
+        runtime_performance = runtime_payload.get("performance", {})
+        runtime_context = runtime_performance.get("runtime_context", {}) if isinstance(runtime_performance, dict) else {}
         runtime_ok = (
             runtime_payload.get("schema") == "ragflow_doc_runtime_report_v1"
             and runtime_summary.get("process_attempts") == 1
             and runtime_summary.get("success") == 1
+            and runtime_summary.get("stage_timing_count", 0) >= 1
+            and runtime_context.get("local_process_startup_included") is True
         )
         checks.append(
             {
