@@ -87,6 +87,24 @@ _ASSIGNMENT_SECRET_VALUE_RE = re.compile(
     r"(?i)\b(?:api[_-]?key|token|secret|password|authorization)\s*[:=]\s*([^\s,;\"']+)"
 )
 DOC_SPLIT_CHECKPOINT_SCHEMA = "ragflow_doc_split_checkpoint_v1"
+THIN_PREVIEW_HANDOFF_MODE = "thin_preview"
+FORMAL_INGEST_HANDOFF_MODE = "formal_ingest"
+FORMAL_PREP_SOURCE_EXTENSIONS = {
+    ".bmp",
+    ".doc",
+    ".docx",
+    ".jpeg",
+    ".jpg",
+    ".pdf",
+    ".png",
+    ".ppt",
+    ".pptx",
+    ".tif",
+    ".tiff",
+    ".webp",
+    ".xls",
+    ".xlsx",
+}
 
 
 def _dump_json(data: Any) -> None:
@@ -100,6 +118,133 @@ def _utc_now() -> str:
 def _stable_digest(data: Any) -> str:
     payload = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _thin_preview_handoff_advisory(sources: list[Any]) -> list[dict[str, Any]]:
+    candidate_extensions = sorted(
+        {
+            source.path.suffix.lower()
+            for source in sources
+            if getattr(source, "path", None) is not None
+            and source.path.suffix.lower() in FORMAL_PREP_SOURCE_EXTENSIONS
+        }
+    )
+    severity = "review" if candidate_extensions else "info"
+    message = (
+        "This output is a thin preview handoff. For formal RAGFlow ingestion, use "
+        "`ragflow-doc-to-md pipeline` so postprocess, rich sidecars, retrieval hints, "
+        "and the non-secret ingest plan are generated together."
+    )
+    return [
+        {
+            "code": "formal_ingest_pipeline_recommended",
+            "severity": severity,
+            "message": message,
+            "recommended_command": [
+                "ragflow-doc-to-md",
+                "pipeline",
+                "--input",
+                "<source-docs>",
+                "--output",
+                "<handoff>",
+                "--postprocess-profile",
+                "chunk-markers",
+                "--json",
+            ],
+            "formal_candidate_input": bool(candidate_extensions),
+            "formal_candidate_extensions": candidate_extensions,
+        }
+    ]
+
+
+def _formal_ingest_handoff_advisory() -> list[dict[str, Any]]:
+    return [
+        {
+            "code": "inspect_and_dry_run_before_live_build",
+            "severity": "info",
+            "message": (
+                "Formal ingest handoff generated. Run `ragflow-kb-build inspect-handoff` "
+                "and a dry-run build before any live RAGFlow mutation."
+            ),
+            "recommended_commands": [
+                [
+                    "ragflow-kb-build",
+                    "inspect-handoff",
+                    "--handoff",
+                    "<handoff>",
+                    "--report-json",
+                    "<run>/handoff_inspection.json",
+                    "--report-md",
+                    "<run>/handoff_inspection.md",
+                ],
+                [
+                    "ragflow-kb-build",
+                    "--doc-manifest",
+                    "<handoff>/doc_manifest.json",
+                    "--kb-name",
+                    "<kb-name>",
+                    "--profile",
+                    "<reviewed-profile.json>",
+                    "--dry-run",
+                    "--json",
+                ],
+            ],
+        }
+    ]
+
+
+def _chunk_marker_count(postprocess_report: dict[str, Any]) -> int:
+    summary = postprocess_report.get("summary", {}) if isinstance(postprocess_report.get("summary"), dict) else {}
+    rule_counts = summary.get("rule_counts", {}) if isinstance(summary.get("rule_counts"), dict) else {}
+    return int(rule_counts.get("chunk_markers.heading_boundaries", 0) or 0)
+
+
+def _formal_ingest_readiness_signals(
+    *,
+    postprocess_report: dict[str, Any],
+    postprocess_profile: str,
+    package_payload: dict[str, Any],
+    ingest_plan_name: str,
+    retrieval_hints_name: str,
+) -> dict[str, Any]:
+    rich_sidecars = [
+        "metadata",
+        "artifact_index",
+        "profile_suggestions",
+        "retrieval_hints",
+        "assistant_profile",
+        "assistant_test_plan",
+        "package_readme",
+    ]
+    return {
+        "chunk_markers": {
+            "enabled": postprocess_profile == "chunk-markers",
+            "generated": _chunk_marker_count(postprocess_report) > 0,
+            "profile": postprocess_profile,
+            "marker_count": _chunk_marker_count(postprocess_report),
+        },
+        "rich_sidecars": {
+            "generated": True,
+            "complete": all(bool(package_payload.get(name)) for name in rich_sidecars),
+            "files": {name: package_payload.get(name) for name in rich_sidecars},
+        },
+        "retrieval_hints": {
+            "generated": bool(package_payload.get("retrieval_hints")),
+            "path": retrieval_hints_name,
+            "section_boundary_count": package_payload.get("retrieval_hint_count"),
+        },
+        "ragflow_ingest_plan": {
+            "generated": True,
+            "path": ingest_plan_name,
+            "stores_api_credentials": False,
+            "mutation_default": "dry_run_first",
+        },
+        "recommended_next_steps": {
+            "inspect_handoff": "ragflow-kb-build inspect-handoff --handoff <handoff>",
+            "dry_run": "ragflow-kb-build --doc-manifest <handoff>/doc_manifest.json --dry-run",
+            "live_mutation_requires_user_approval": True,
+        },
+    }
 
 
 def _yaml_scalar(value: Any) -> str:
@@ -712,6 +857,8 @@ def _make_runtime_report(
     output_root: Path,
     process_attempts: list[dict[str, Any]],
     remote_attempts: list[dict[str, Any]] | None = None,
+    handoff_mode: str | None = None,
+    handoff_advisory: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     if not process_attempts and not remote_attempts:
         return None
@@ -719,6 +866,8 @@ def _make_runtime_report(
         output_root=output_root,
         process_attempts=process_attempts,
         remote_attempts=remote_attempts,
+        handoff_mode=handoff_mode,
+        handoff_advisory=handoff_advisory,
     )
 
 
@@ -888,6 +1037,8 @@ def _run(args: argparse.Namespace) -> int:
         ]
         if not sources:
             raise DocConvertError("no input files found outside the output directory")
+        handoff_mode = THIN_PREVIEW_HANDOFF_MODE
+        handoff_advisory = _thin_preview_handoff_advisory(sources)
 
         docs_dir = output_root / "documents"
         docs_dir.mkdir(parents=True, exist_ok=True)
@@ -958,6 +1109,8 @@ def _run(args: argparse.Namespace) -> int:
                         output_root=output_root,
                         process_attempts=process_attempts,
                         remote_attempts=remote_attempts,
+                        handoff_mode=handoff_mode,
+                        handoff_advisory=handoff_advisory,
                     )
                     _, runtime_report = _sanitize_conversion_reports(
                         quality_report=None,
@@ -999,6 +1152,8 @@ def _run(args: argparse.Namespace) -> int:
             output_root=output_root,
             process_attempts=process_attempts,
             remote_attempts=remote_attempts,
+            handoff_mode=handoff_mode,
+            handoff_advisory=handoff_advisory,
         )
         if not converted:
             _, runtime_report = _sanitize_conversion_reports(
@@ -1021,6 +1176,8 @@ def _run(args: argparse.Namespace) -> int:
             raise DocConvertError("no documents were converted")
 
         manifest = make_doc_manifest_payload(output_root=output_root, documents=converted)
+        manifest["handoff_mode"] = handoff_mode
+        manifest["handoff_advisory"] = handoff_advisory
         quality_documents = [
             QualityDocument(
                 source_path=document.source.source_path,
@@ -1071,6 +1228,8 @@ def _run(args: argparse.Namespace) -> int:
         response = {
             "ok": True,
             "doc_manifest": str(manifest_path),
+            "handoff_mode": handoff_mode,
+            "handoff_advisory": handoff_advisory,
             "quality_report": str(quality_report_path) if quality_report_path else None,
             "quality_gate": quality_report["gate"],
             "runtime_report": str(runtime_report_path) if runtime_report_path else None,
@@ -1125,6 +1284,49 @@ def _update_manifest_postprocess_report(manifest_path: Path, *, postprocess_repo
     manifest_path.write_text(json.dumps(updated, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _update_manifest_handoff_state(
+    manifest_path: Path,
+    *,
+    handoff_mode: str,
+    handoff_advisory: list[dict[str, Any]],
+    formal_ingest: dict[str, Any] | None = None,
+) -> None:
+    manifest = load_doc_manifest_payload(manifest_path)
+    updated = dict(manifest)
+    updated["handoff_mode"] = handoff_mode
+    updated["handoff_advisory"] = handoff_advisory
+    if formal_ingest is not None:
+        updated["formal_ingest"] = formal_ingest
+    manifest_path.write_text(json.dumps(updated, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _update_runtime_report_handoff_state(
+    *,
+    output_root: Path,
+    runtime_report_name: str | None,
+    handoff_mode: str,
+    handoff_advisory: list[dict[str, Any]],
+    formal_ingest: dict[str, Any] | None = None,
+) -> None:
+    if not runtime_report_name:
+        return
+    report_path = _sidecar_path(output_root, runtime_report_name)
+    if not report_path or not report_path.is_file():
+        return
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if not isinstance(report, dict):
+        return
+    report["handoff_mode"] = handoff_mode
+    report["handoff_advisory"] = handoff_advisory
+    if formal_ingest is not None:
+        report["formal_ingest"] = formal_ingest
+    summary = report.get("summary")
+    if isinstance(summary, dict):
+        summary["handoff_mode"] = handoff_mode
+        summary["handoff_advisory_count"] = len(handoff_advisory)
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def _run_pipeline(args: argparse.Namespace) -> int:
     try:
         output_root = Path(args.output).expanduser().resolve()
@@ -1153,6 +1355,12 @@ def _run_pipeline(args: argparse.Namespace) -> int:
             report_json=postprocess_report_path,
         )
         _update_manifest_postprocess_report(manifest_path, postprocess_report_name=postprocess_report_name)
+        handoff_advisory = _formal_ingest_handoff_advisory()
+        _update_manifest_handoff_state(
+            manifest_path,
+            handoff_mode=FORMAL_INGEST_HANDOFF_MODE,
+            handoff_advisory=handoff_advisory,
+        )
 
         metadata_name = _safe_handoff_sidecar_name(args.metadata_name, label="--metadata-name") or "metadata.json"
         artifact_index_name = _safe_handoff_sidecar_name(args.artifact_index_name, label="--artifact-index-name") or "artifact_index.json"
@@ -1191,10 +1399,36 @@ def _run_pipeline(args: argparse.Namespace) -> int:
             alias_path = output_root / alias_name
             _write_yaml_payload(alias_path, ingest_plan)
 
+        formal_ingest = _formal_ingest_readiness_signals(
+            postprocess_report=postprocess_report,
+            postprocess_profile=args.postprocess_profile,
+            package_payload=package_payload,
+            ingest_plan_name=ingest_plan_name,
+            retrieval_hints_name=retrieval_hints_name,
+        )
+        _update_manifest_handoff_state(
+            manifest_path,
+            handoff_mode=FORMAL_INGEST_HANDOFF_MODE,
+            handoff_advisory=handoff_advisory,
+            formal_ingest=formal_ingest,
+        )
+        _update_runtime_report_handoff_state(
+            output_root=output_root,
+            runtime_report_name=args.runtime_report_name,
+            handoff_mode=FORMAL_INGEST_HANDOFF_MODE,
+            handoff_advisory=handoff_advisory,
+            formal_ingest=formal_ingest,
+        )
+
         response = {
             "ok": True,
+            "handoff_mode": FORMAL_INGEST_HANDOFF_MODE,
+            "handoff_advisory": handoff_advisory,
+            "formal_ingest": formal_ingest,
             "pipeline": {
                 "schema": "ragflow_doc_to_md_pipeline_summary_v1",
+                "handoff_mode": FORMAL_INGEST_HANDOFF_MODE,
+                "formal_ingest": formal_ingest,
                 "stages": {
                     "convert": {"ok": True, "doc_manifest": str(manifest_path)},
                     "postprocess": {

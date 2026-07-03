@@ -2540,11 +2540,14 @@ def make_doc_runtime_report_payload(
     output_root: str | Path,
     process_attempts: list[Mapping[str, Any]],
     remote_attempts: list[Mapping[str, Any]] | None = None,
+    handoff_mode: str | None = None,
+    handoff_advisory: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Create a portable report for conversion runtime attempts."""
 
     normalized = [dict(attempt) for attempt in process_attempts]
     normalized_remote = [dict(attempt) for attempt in (remote_attempts or [])]
+    normalized_advisory = [dict(item) for item in (handoff_advisory or [])]
     cleanups = [
         item.get("cleanup", {}) if isinstance(item.get("cleanup"), Mapping) else {}
         for item in normalized
@@ -2574,6 +2577,10 @@ def make_doc_runtime_report_payload(
         "remote_insecure_tls": sum(1 for item in normalized_remote if item.get("verify_ssl") is False),
         "remote_error_categories": remote_error_categories,
     }
+    if handoff_mode:
+        summary["handoff_mode"] = handoff_mode
+    if handoff_mode or normalized_advisory:
+        summary["handoff_advisory_count"] = len(normalized_advisory)
     summary["incomplete_cleanup"] = sum(
         1
         for cleanup in cleanups
@@ -2583,7 +2590,7 @@ def make_doc_runtime_report_payload(
             or int(cleanup.get("leftover_process_count", 0) or 0) > 0
         )
     )
-    return {
+    payload = {
         "schema": DOC_RUNTIME_REPORT_SCHEMA,
         "version": "0.1",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -2593,33 +2600,45 @@ def make_doc_runtime_report_payload(
         "process_attempts": normalized,
         "remote_attempts": normalized_remote,
     }
+    if handoff_mode:
+        payload["handoff_mode"] = handoff_mode
+    if normalized_advisory:
+        payload["handoff_advisory"] = normalized_advisory
+    return payload
 
 
 def render_doc_runtime_markdown(report: Mapping[str, Any]) -> str:
     """Render a compact Markdown runtime report."""
 
     summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    handoff_mode = report.get("handoff_mode") or summary.get("handoff_mode")
     lines = [
         "# RAGFlow Doc Runtime Report",
         "",
         f"- schema: `{report.get('schema', DOC_RUNTIME_REPORT_SCHEMA)}`",
-        f"- process attempts: `{summary.get('process_attempts', 0)}`",
-        f"- success: `{summary.get('success', 0)}`",
-        f"- failed: `{summary.get('failed', 0)}`",
-        f"- timeout: `{summary.get('timeout', 0)}`",
-        f"- cleanup attempts: `{summary.get('cleanup_attempts', 0)}`",
-        f"- leftover processes: `{summary.get('leftover_processes', 0)}`",
-        f"- incomplete cleanup: `{summary.get('incomplete_cleanup', 0)}`",
-        f"- remote attempts: `{summary.get('remote_attempts', 0)}`",
-        f"- remote success: `{summary.get('remote_success', 0)}`",
-        f"- remote failed: `{summary.get('remote_failed', 0)}`",
-        f"- remote timeout: `{summary.get('remote_timeout', 0)}`",
-        f"- remote retries: `{summary.get('remote_retry_count', 0)}`",
-        f"- http attempts: `{summary.get('http_attempts', 0)}`",
-        "",
-        "| Source | Backend | Status | Cleanup | Leftovers |",
-        "| --- | --- | --- | --- | --- |",
     ]
+    if handoff_mode:
+        lines.append(f"- handoff_mode: `{handoff_mode}`")
+    lines.extend(
+        [
+            f"- process attempts: `{summary.get('process_attempts', 0)}`",
+            f"- success: `{summary.get('success', 0)}`",
+            f"- failed: `{summary.get('failed', 0)}`",
+            f"- timeout: `{summary.get('timeout', 0)}`",
+            f"- cleanup attempts: `{summary.get('cleanup_attempts', 0)}`",
+            f"- leftover processes: `{summary.get('leftover_processes', 0)}`",
+            f"- incomplete cleanup: `{summary.get('incomplete_cleanup', 0)}`",
+            f"- remote attempts: `{summary.get('remote_attempts', 0)}`",
+            f"- remote success: `{summary.get('remote_success', 0)}`",
+            f"- remote failed: `{summary.get('remote_failed', 0)}`",
+            f"- remote timeout: `{summary.get('remote_timeout', 0)}`",
+            f"- remote retries: `{summary.get('remote_retry_count', 0)}`",
+            f"- http attempts: `{summary.get('http_attempts', 0)}`",
+            "",
+            "| Source | Backend | Status | Cleanup | Leftovers |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+    )
     attempts = report.get("process_attempts", [])
     if isinstance(attempts, list):
         for item in attempts:
@@ -2668,6 +2687,16 @@ def render_doc_runtime_markdown(report: Mapping[str, Any]) -> str:
                 str(item.get("endpoint", "") or "").replace("|", "\\|"),
             ]
             lines.append("| " + " | ".join(row) + " |")
+    advisories = report.get("handoff_advisory", [])
+    if isinstance(advisories, list) and advisories:
+        lines.extend(["", "## Handoff Advisory", ""])
+        for item in advisories:
+            if not isinstance(item, Mapping):
+                continue
+            severity = str(item.get("severity", "info"))
+            code = str(item.get("code", "handoff_advisory"))
+            message = str(item.get("message", ""))
+            lines.append(f"- `{severity}` `{code}`: {message}")
     return "\n".join(lines) + "\n"
 
 

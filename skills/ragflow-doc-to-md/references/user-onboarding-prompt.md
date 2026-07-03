@@ -35,7 +35,7 @@ mineru:
 
 请记住优先级：--mineru-base-url 高于 MINERU_BASE_URL，高于配置文件中的 mineru.base_url；--mineru-asset-mode 高于 MINERU_ASSET_MODE，高于配置文件中的 mineru.asset_mode。生产配置优先写入私有配置文件或环境变量；临时调试才使用命令行覆盖。正式入库前处理使用 markdown_assets，让 Markdown 图片引用落地到本地 documents/images/...；快速文本预览才使用 markdown_only。
 
-请先运行无网络 smoke test，再在我确认后运行 MinerU backend probe、warmup 和一次最小转换验证。所有报告只输出脱敏 endpoint、路径和结论，不输出 API key。
+请先运行无网络 smoke test，再在我确认后运行 MinerU backend probe、warmup 和一次最小转换验证。正式入库前处理必须使用 ragflow-doc-to-md pipeline，并从 stdout 或 doc_manifest.json 确认 handoff_mode: formal_ingest；如果看到 handoff_mode: thin_preview，只能把它当快速预览，不能当正式 KB 入库 handoff。所有报告只输出脱敏 endpoint、路径和结论，不输出 API key。
 ```
 
 ## Full Host-Agent Prompt
@@ -68,6 +68,7 @@ mineru:
 - 不确定 MinerU 协议时，不要把配置文件里的 `doc_to_md.backend` 从 `auto` 改成 `mineru`。确认 FastAPI v2 后用 `mineru-fastapi`，本机 CLI 可用 `mineru-cli` 或有意选择 `auto`，确认 Agent API 后用 `mineru`，确认同步 multipart `/parse` 后才用 `mineru-sync`。
 - MinerU FastAPI endpoint 的配置优先级是：`--mineru-base-url` 高于 `MINERU_BASE_URL`，高于配置文件中的 `mineru.base_url`。生产配置优先使用私有 config 文件或环境变量；命令行参数只用于临时覆盖。
 - 不要直接修改 release artifact 或 skill 里的 `scripts/_vendor`。如果需要新增 backend，请报告为源码级需求，由维护者修改 `packages/ragflow-skill-runtime` 后重新构建发布包。
+- 正式 RAGFlow KB 入库前处理默认使用 `ragflow-doc-to-md pipeline`。普通 `convert` 输出的 `handoff_mode: thin_preview` 只用于快速预览；不要拿它和 legacy thick package 做正式能力对比，也不要直接进入 live build。
 - 只询问缺失的信息，不要让我手动拼接每一条命令。
 
 请先检查并报告：
@@ -151,6 +152,7 @@ mineru:
 
 如果我提供了测试 PDF / Office 文件，并且 MinerU 配置完整，请运行一次最小转换测试：
 - 如果服务是 MinerU FastAPI v2，正式入库前处理使用 ragflow-doc-to-md pipeline --backend mineru-fastapi --mineru-asset-mode markdown_assets --postprocess-profile chunk-markers，并确认输出 Markdown、本地图片资产、postprocess_report.json、retrieval_hints.json 和 ragflow_ingest_plan.yaml
+- 确认 pipeline stdout 或 doc_manifest.json 中的 handoff_mode 是 formal_ingest；若是 thin_preview，请重新运行 pipeline
 - 如果本机 MinerU CLI 可用且用户希望本地优先，使用 ragflow-doc-to-md --backend auto 或 --backend mineru-cli，并确认输出 Markdown
 - 如果服务是 MinerU Agent API 或兼容 gateway，使用 ragflow-doc-to-md --backend mineru
 - 如果服务是同步 multipart /parse，使用 ragflow-doc-to-md --backend mineru-sync
@@ -169,6 +171,7 @@ kb:ragflow-skills-e2e-YYYYMMDD-HHMM
 
 然后执行：
 - ragflow-doc-to-md pipeline 生成 doc_manifest.json、retrieval_hints.json 和 ragflow_ingest_plan.yaml
+- 先确认 handoff_mode: formal_ingest，再运行 ragflow-kb-build inspect-handoff 和 --dry-run
 - ragflow-kb-build --dry-run 消费 doc_manifest.json 和用户确认的 profile
 - ragflow-kb-build 创建 RAGFlow KB、上传 Markdown、触发解析、等待完成
 - ragflow-kb-build validate --level smoke

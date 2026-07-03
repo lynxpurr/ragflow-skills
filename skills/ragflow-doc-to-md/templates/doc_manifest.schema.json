@@ -25,6 +25,34 @@
         "null"
       ]
     },
+    "handoff_mode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "thin_preview",
+        "formal_ingest",
+        null
+      ]
+    },
+    "handoff_advisory": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "formal_ingest": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true
+    },
     "quality_report": {
       "type": [
         "string",

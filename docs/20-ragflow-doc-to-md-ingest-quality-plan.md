@@ -297,13 +297,16 @@ ragflow-doc-to-md compare-retained-package
 
 ### 4.1 P0：正式入库模式可发现性和误用防护
 
-- [ ] 定义 `handoff_mode` 字段，支持 `thin_preview` 和 `formal_ingest`。
-- [ ] 在普通 convert summary/runtime report 中写入 thin preview advisory。
-- [ ] 在 pipeline summary/runtime report 中写入 formal ingest readiness signals。
-- [ ] 更新 `package_readme.md`，明确下一步 kb-build inspect/dry-run 命令。
-- [ ] 更新 `ragflow-doc-to-md/SKILL.md` 和 host-agent prompt，要求正式入库默认使用 pipeline。
-- [ ] 增加 CLI tests：普通 convert 输出 advisory；pipeline 输出 formal mode。
-- [ ] 增加 consumer acceptance：host agent 能从 summary 判断正式 handoff 是否齐全。
+实现状态：2026-07-03 已完成首个 P0 切片；仅增加离线 summary/report/advisory、文档和验收，
+未执行 live RAGFlow mutation。
+
+- [x] 定义 `handoff_mode` 字段，支持 `thin_preview` 和 `formal_ingest`。
+- [x] 在普通 convert summary/runtime report 中写入 thin preview advisory。
+- [x] 在 pipeline summary/runtime report 中写入 formal ingest readiness signals。
+- [x] 更新 `package_readme.md`，明确下一步 kb-build inspect/dry-run 命令。
+- [x] 更新 `ragflow-doc-to-md/SKILL.md` 和 host-agent prompt，要求正式入库默认使用 pipeline。
+- [x] 增加 CLI tests：普通 convert 输出 advisory；pipeline 输出 formal mode。
+- [x] 增加 consumer acceptance：host agent 能从 summary 判断正式 handoff 是否齐全。
 
 ### 4.2 P0：HTML table 识别和质量统计
 

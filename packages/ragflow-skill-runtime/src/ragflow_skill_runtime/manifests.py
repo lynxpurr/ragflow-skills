@@ -23,6 +23,12 @@ DOC_MANIFEST_JSON_SCHEMA: dict[str, Any] = {
         "version": {"type": "string", "const": "0.1"},
         "created_at": {"type": ["string", "null"]},
         "source_root": {"type": ["string", "null"]},
+        "handoff_mode": {"type": ["string", "null"], "enum": ["thin_preview", "formal_ingest", None]},
+        "handoff_advisory": {
+            "type": ["array", "null"],
+            "items": {"type": "object", "additionalProperties": True},
+        },
+        "formal_ingest": {"type": ["object", "null"], "additionalProperties": True},
         "quality_report": {"type": ["string", "null"]},
         "quality_gate": {"type": ["object", "null"], "additionalProperties": True},
         "documents": {

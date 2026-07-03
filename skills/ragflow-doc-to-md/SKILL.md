@@ -1,11 +1,17 @@
 ---
 name: ragflow-doc-to-md
-description: Convert raw documents into Markdown handoff bundles for portable RAGFlow ingestion. Use when Codex needs to turn PDF, Office, HTML, TXT, or existing Markdown inputs into normalized Markdown plus a thin manifest for downstream KB build workflows.
+description: Convert raw documents into Markdown handoff bundles for portable RAGFlow ingestion. Use when Codex needs to turn PDF, Office, HTML, TXT, or existing Markdown inputs into normalized Markdown handoffs; prefer pipeline for formal KB pre-ingest and convert for quick thin previews.
 ---
 
 # RAGFlow Doc To MD
 
 Use scripts in this skill to produce Markdown handoff directories that can be consumed by `ragflow-kb-build`.
+
+Use `pipeline` for formal RAGFlow KB pre-ingest. It writes `handoff_mode:
+formal_ingest` in the summary and manifest, then generates deterministic postprocess
+output, rich sidecars, retrieval hints, and a non-secret ingest plan. Use ordinary
+`convert` when the user only needs a quick Markdown preview; it writes `handoff_mode:
+thin_preview` and an advisory that formal ingestion should use `pipeline`.
 
 Inputs:
 
@@ -109,9 +115,10 @@ Notes:
 
 - The output directory contains `documents/*.md`, `doc_manifest.json`, and `quality_report.json`.
 - `templates/doc_manifest.schema.json` documents the public `doc_manifest.json` contract for host agents and downstream consumers.
+- Host agents should read `handoff_mode` from stdout or `doc_manifest.json`: `thin_preview` is a quick preview handoff, while `formal_ingest` is the recommended KB pre-ingest handoff.
 - For formal pre-ingest handoff generation, prefer `pipeline`; it runs conversion, deterministic postprocess, rich package generation, and writes the non-secret `ragflow_ingest_plan.yaml` sidecar in one step.
 - Use `package --rich` when the handoff should carry optional audit and review sidecars such as `metadata.json`, `artifact_index.json`, `profile_suggestions.json`, `retrieval_hints.json`, `assistant_profile.json`, `assistant_test_plan.json`, and `package_readme.md`.
-- When replacing a legacy preprocessor workflow, use `pipeline` for formal handoff generation, then pass `doc_manifest.json`, `retrieval_hints.json`, and `ragflow_ingest_plan.yaml` to `ragflow-kb-build` for inspect/dry-run before any live build.
+- When replacing a legacy preprocessor workflow, use `pipeline` for formal handoff generation, then pass `doc_manifest.json`, `retrieval_hints.json`, and `ragflow_ingest_plan.yaml` to `ragflow-kb-build inspect-handoff` and dry-run before any live build.
 - Use `postprocess` with profiles `none`, `safe`, `ocr`, or `chunk-markers` when Markdown needs deterministic cleanup before ingestion. Use `--output` for non-destructive writes; `--write` is required for in-place rewrites.
 - `doc_manifest.json` uses `source_root: "."`, so downstream `ragflow-kb-build` can consume it after the handoff directory moves.
 - `quality_gate.status` is written into `doc_manifest.json`; `ragflow-kb-build` blocks `BLOCKED` handoffs unless the user passes `--allow-blocked`.

@@ -145,7 +145,32 @@ python ragflow-doc-to-md/scripts/convert.py pipeline \
   --json
 ```
 
-Expected result: the handoff contains `doc_manifest.json`, `quality_report.json`, `runtime_report.json` when applicable, `postprocess_report.json`, `retrieval_hints.json`, rich package sidecars, and `ragflow_ingest_plan.yaml`. The ingest plan is advisory and non-secret; it must not contain RAGFlow endpoints or API keys.
+Expected result: stdout and `doc_manifest.json` contain `handoff_mode:
+formal_ingest`; the handoff contains `doc_manifest.json`, `quality_report.json`,
+`runtime_report.json` when applicable, `postprocess_report.json`,
+`retrieval_hints.json`, rich package sidecars, and `ragflow_ingest_plan.yaml`. The
+ingest plan is advisory and non-secret; it must not contain RAGFlow endpoints or API
+keys.
+
+If stdout or `doc_manifest.json` says `handoff_mode: thin_preview`, do not treat the
+output as a formal KB pre-ingest package. Re-run with `ragflow-doc-to-md pipeline`
+before comparing it with a legacy thick package or sending it to a live build.
+
+Before any live RAGFlow mutation, run:
+
+```bash
+python ragflow-kb-build/scripts/build.py inspect-handoff \
+  --handoff /tmp/ragflow-skills-handoff \
+  --report-json /tmp/ragflow-skills-handoff/inspection.json \
+  --report-md /tmp/ragflow-skills-handoff/inspection.md
+
+python ragflow-kb-build/scripts/build.py \
+  --doc-manifest /tmp/ragflow-skills-handoff/doc_manifest.json \
+  --kb-name kb:reviewed-name \
+  --profile ragflow-kb-build/templates/default-en-768.json \
+  --dry-run \
+  --json
+```
 
 ## Legacy Workflow Migration Gates
 

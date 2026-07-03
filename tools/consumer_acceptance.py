@@ -1018,6 +1018,32 @@ def _run_no_network_checks(
         env=env,
     )
     _record_command_check(checks, "doc-to-md pipeline handoff", pipeline_result, required_output='"ragflow_ingest_plan"')
+    try:
+        pipeline_summary = json.loads(pipeline_result.get("stdout") or "{}")
+    except json.JSONDecodeError as exc:
+        pipeline_summary = {}
+        pipeline_summary_error = str(exc)
+    else:
+        pipeline_summary_error = ""
+    formal_signals = pipeline_summary.get("formal_ingest", {}) if isinstance(pipeline_summary, dict) else {}
+    rich_sidecars = formal_signals.get("rich_sidecars", {}) if isinstance(formal_signals, dict) else {}
+    chunk_markers = formal_signals.get("chunk_markers", {}) if isinstance(formal_signals, dict) else {}
+    ingest_plan_signal = formal_signals.get("ragflow_ingest_plan", {}) if isinstance(formal_signals, dict) else {}
+    host_agent_formal_summary_ok = (
+        isinstance(pipeline_summary, dict)
+        and pipeline_summary.get("handoff_mode") == "formal_ingest"
+        and bool(rich_sidecars.get("complete"))
+        and bool(chunk_markers.get("enabled"))
+        and bool(ingest_plan_signal.get("generated"))
+    )
+    checks.append(
+        {
+            "name": "host agent can identify formal ingest handoff from summary",
+            "ok": host_agent_formal_summary_ok,
+            "path": str(pipeline_handoff),
+            "error": "" if host_agent_formal_summary_ok else pipeline_summary_error or _preview(pipeline_result.get("stdout", "")),
+        }
+    )
     for pipeline_name in (
         "postprocess_report.json",
         "retrieval_hints.json",

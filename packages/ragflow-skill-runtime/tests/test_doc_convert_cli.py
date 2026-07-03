@@ -114,9 +114,13 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertTrue(payload["ok"])
+        self.assertEqual(payload["handoff_mode"], "thin_preview")
+        self.assertEqual(payload["handoff_advisory"][0]["code"], "formal_ingest_pipeline_recommended")
         self.assertEqual(payload["document_count"], 1)
         self.assertEqual(payload["quality_gate"]["status"], "PASS")
         self.assertEqual(quality_report["gate"]["status"], "PASS")
+        self.assertEqual(manifest["handoff_mode"], "thin_preview")
+        self.assertEqual(manifest["handoff_advisory"][0]["severity"], "info")
         self.assertEqual(manifest["quality_gate"]["status"], "PASS")
         self.assertEqual(manifest["quality_report"], "quality_report.json")
         self.assertEqual(manifest["documents"][0]["markdown_path"], "documents/alpha.md")
@@ -248,18 +252,32 @@ class DocConvertCliTests(unittest.TestCase):
             markdown = (output_dir / "documents" / "alpha.md").read_text(encoding="utf-8")
             manifest = json.loads((output_dir / "doc_manifest.json").read_text(encoding="utf-8"))
             package_readme_exists = (output_dir / "package_readme.md").is_file()
+            package_readme = (output_dir / "package_readme.md").read_text(encoding="utf-8")
             retrieval_hints = json.loads((output_dir / "retrieval_hints.json").read_text(encoding="utf-8"))
             ingest_plan = (output_dir / "ragflow_ingest_plan.yaml").read_text(encoding="utf-8")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(payload["ok"])
+        self.assertEqual(payload["handoff_mode"], "formal_ingest")
+        self.assertEqual(payload["pipeline"]["handoff_mode"], "formal_ingest")
+        self.assertTrue(payload["formal_ingest"]["chunk_markers"]["enabled"])
+        self.assertGreaterEqual(payload["formal_ingest"]["chunk_markers"]["marker_count"], 1)
+        self.assertTrue(payload["formal_ingest"]["rich_sidecars"]["complete"])
+        self.assertTrue(payload["formal_ingest"]["ragflow_ingest_plan"]["generated"])
         self.assertEqual(payload["quality_gate"]["status"], "PASS")
         self.assertEqual(payload["pipeline"]["stages"]["postprocess"]["profile"], "chunk-markers")
         self.assertIn("<!-- chunk -->", markdown)
+        self.assertEqual(manifest["handoff_mode"], "formal_ingest")
+        self.assertTrue(manifest["formal_ingest"]["rich_sidecars"]["complete"])
         self.assertEqual(manifest["postprocess_report"], "postprocess_report.json")
         self.assertTrue(package_readme_exists)
+        self.assertIn("Handoff mode: `formal_ingest`", package_readme)
+        self.assertIn("ragflow-kb-build inspect-handoff", package_readme)
+        self.assertIn("--dry-run", package_readme)
         self.assertEqual(retrieval_hints["schema"], "ragflow_retrieval_hints_v1")
         self.assertIn('schema: "ragflow_ingest_plan_v1"', ingest_plan)
+        self.assertIn('handoff_mode: "formal_ingest"', ingest_plan)
+        self.assertIn('inspect_command:', ingest_plan)
         self.assertIn('command: "ragflow-kb-build"', ingest_plan)
         self.assertNotIn("api_key", ingest_plan)
         self.assertNotIn("base_url", ingest_plan)
@@ -298,6 +316,47 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertIn('schema: "ragflow_ingest_plan_v1"', alias_text)
         self.assertNotIn("api_key", alias_text)
         self.assertNotIn("base_url", alias_text)
+
+    def test_pipeline_updates_runtime_report_to_formal_ingest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "handoff"
+            fake_cli = _write_fake_mineru_cli(root / "mineru")
+            input_dir.mkdir()
+            (input_dir / "paper.pdf").write_bytes(b"%PDF fake cli")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "pipeline",
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                    "--backend",
+                    "mineru-cli",
+                    "--mineru-cli-path",
+                    str(fake_cli),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+            manifest = json.loads((output_dir / "doc_manifest.json").read_text(encoding="utf-8"))
+            runtime_report = json.loads((output_dir / "runtime_report.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["handoff_mode"], "formal_ingest")
+        self.assertEqual(manifest["handoff_mode"], "formal_ingest")
+        self.assertEqual(runtime_report["handoff_mode"], "formal_ingest")
+        self.assertEqual(runtime_report["summary"]["handoff_mode"], "formal_ingest")
+        self.assertEqual(runtime_report["handoff_advisory"][0]["code"], "inspect_and_dry_run_before_live_build")
+        self.assertTrue(runtime_report["formal_ingest"]["rich_sidecars"]["complete"])
 
     def test_pipeline_rejects_unsafe_sidecar_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -823,8 +882,15 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(payload["ok"])
         self.assertIn("# MinerU FastAPI", markdown)
+        self.assertEqual(payload["handoff_mode"], "thin_preview")
+        self.assertEqual(payload["handoff_advisory"][0]["severity"], "review")
         self.assertEqual(manifest["documents"][0]["markdown_path"], "documents/paper.md")
+        self.assertEqual(manifest["handoff_mode"], "thin_preview")
         self.assertEqual(manifest["runtime_report"], "runtime_report.json")
+        self.assertEqual(runtime_report["handoff_mode"], "thin_preview")
+        self.assertEqual(runtime_report["summary"]["handoff_mode"], "thin_preview")
+        self.assertEqual(runtime_report["handoff_advisory"][0]["code"], "formal_ingest_pipeline_recommended")
+        self.assertEqual(runtime_report["handoff_advisory"][0]["severity"], "review")
         self.assertEqual(payload["runtime_summary"]["remote_attempts"], 1)
         self.assertEqual(runtime_report["summary"]["remote_success"], 1)
         self.assertEqual(runtime_report["remote_attempts"][0]["task_id"], "task-fastapi-cli")

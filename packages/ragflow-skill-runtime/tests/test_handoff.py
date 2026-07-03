@@ -51,6 +51,7 @@ class HandoffTests(unittest.TestCase):
                     {
                         "version": "0.1",
                         "source_root": ".",
+                        "handoff_mode": "formal_ingest",
                         "quality_report": "quality_report.json",
                         "documents": [
                             {
@@ -77,8 +78,10 @@ class HandoffTests(unittest.TestCase):
             retrieval_hints = json.loads((root / "retrieval_hints.json").read_text(encoding="utf-8"))
             assistant_profile = json.loads((root / "assistant_profile.json").read_text(encoding="utf-8"))
             assistant_test_plan = json.loads((root / "assistant_test_plan.json").read_text(encoding="utf-8"))
+            readme = (root / "package_readme.md").read_text(encoding="utf-8")
 
         self.assertEqual(package["schema"], HANDOFF_PACKAGE_SCHEMA)
+        self.assertEqual(package["handoff_mode"], "formal_ingest")
         self.assertEqual(package["document_count"], 1)
         self.assertEqual(package["artifact_count"], 1)
         self.assertGreaterEqual(package["retrieval_hint_count"], 2)
@@ -99,6 +102,9 @@ class HandoffTests(unittest.TestCase):
         self.assertTrue(assistant_profile["retrieval"]["require_evidence"])
         self.assertEqual(assistant_test_plan["schema"], ASSISTANT_TEST_PLAN_SCHEMA)
         self.assertTrue(any(case["stage"] == "negative_boundary" for case in assistant_test_plan["cases"]))
+        self.assertIn("Handoff mode: `formal_ingest`", readme)
+        self.assertIn("ragflow-kb-build inspect-handoff", readme)
+        self.assertIn("--dry-run", readme)
 
     def test_retrieval_hints_include_pages_context_templates_and_layout_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -298,6 +304,7 @@ class HandoffTests(unittest.TestCase):
                     {
                         "version": "0.1",
                         "source_root": ".",
+                        "handoff_mode": "formal_ingest",
                         "quality_report": "quality_report.json",
                         "quality_gate": {"status": "PASS"},
                         "documents": [{"source_path": "a.md", "markdown_path": "documents/a.md"}],
@@ -315,9 +322,11 @@ class HandoffTests(unittest.TestCase):
 
         serialized = json.dumps(plan, ensure_ascii=False)
         self.assertEqual(plan["schema"], RAGFLOW_INGEST_PLAN_SCHEMA)
+        self.assertEqual(plan["handoff"]["handoff_mode"], "formal_ingest")
         self.assertEqual(plan["handoff"]["doc_manifest"], "doc_manifest.json")
         self.assertEqual(plan["handoff"]["retrieval_hints"], "retrieval_hints.json")
         self.assertEqual(plan["quality_gate"]["status"], "PASS")
+        self.assertEqual(plan["recommended_build"]["inspect_command"][0], "ragflow-kb-build")
         self.assertEqual(plan["recommended_build"]["dry_run_command"][0], "ragflow-kb-build")
         self.assertFalse(plan["safety"]["stores_api_credentials"])
         self.assertNotIn("api_key:", serialized)

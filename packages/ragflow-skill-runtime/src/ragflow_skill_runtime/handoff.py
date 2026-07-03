@@ -1498,6 +1498,7 @@ def make_package_readme(
     assistant_profile_name: str,
     assistant_test_plan_name: str,
     quality_report_name: str | None,
+    handoff_mode: str | None = None,
 ) -> str:
     """Render a compact README for a rich handoff package."""
 
@@ -1505,6 +1506,7 @@ def make_package_readme(
         "# RAGFlow Handoff Package",
         "",
         "This directory is a portable document handoff for the public RAGFlow skills.",
+        f"Handoff mode: `{handoff_mode or 'unspecified'}`.",
         "",
         "## Files",
         "",
@@ -1526,6 +1528,22 @@ def make_package_readme(
             "- Treat sidecars as advisory public metadata.",
             "- Do not add API keys, private config files, vault paths, or personal endpoints to this package.",
             "- `ragflow-kb-build` consumes `doc_manifest.json` first; rich sidecars remain optional.",
+            "",
+            "## Next Steps",
+            "",
+            "Inspect the handoff before upload:",
+            "",
+            "```bash",
+            "ragflow-kb-build inspect-handoff --handoff <handoff> --report-json <run>/handoff_inspection.json --report-md <run>/handoff_inspection.md",
+            "```",
+            "",
+            "Run a non-mutating build preview before any live RAGFlow action:",
+            "",
+            "```bash",
+            "ragflow-kb-build --doc-manifest <handoff>/doc_manifest.json --kb-name <kb-name> --profile <reviewed-profile.json> --dry-run --json",
+            "```",
+            "",
+            "Only run a live build after the user explicitly approves RAGFlow KB creation or upload.",
             "",
         ]
     )
@@ -1590,6 +1608,7 @@ def create_rich_handoff_package(
         assistant_profile_name=assistant_profile_name,
         assistant_test_plan_name=assistant_test_plan_name,
         quality_report_name=quality_report_name if isinstance(quality_report_name, str) else None,
+        handoff_mode=doc_manifest.get("handoff_mode") if isinstance(doc_manifest.get("handoff_mode"), str) else None,
     )
 
     metadata_path = root / metadata_name
@@ -1610,6 +1629,7 @@ def create_rich_handoff_package(
     payload = {
         "schema": HANDOFF_PACKAGE_SCHEMA,
         "created_at": _now(),
+        "handoff_mode": doc_manifest.get("handoff_mode") if isinstance(doc_manifest.get("handoff_mode"), str) else None,
         "doc_manifest": doc_manifest_name,
         "metadata": metadata_name,
         "artifact_index": artifact_index_name,
@@ -1669,6 +1689,7 @@ def make_ragflow_ingest_plan_payload(
         "language": suggestion.get("language") if isinstance(suggestion.get("language"), str) else None,
     }
     handoff: dict[str, Any] = {
+        "handoff_mode": doc_manifest.get("handoff_mode"),
         "doc_manifest": doc_manifest_name,
         "quality_report": doc_manifest.get("quality_report"),
         "runtime_report": doc_manifest.get("runtime_report"),
@@ -1693,6 +1714,16 @@ def make_ragflow_ingest_plan_payload(
             "command": "ragflow-kb-build",
             "profile_suggestions": profile_suggestions_name,
             "parser_profile": parser_profile,
+            "inspect_command": [
+                "ragflow-kb-build",
+                "inspect-handoff",
+                "--handoff",
+                "<handoff>",
+                "--report-json",
+                "<run>/handoff_inspection.json",
+                "--report-md",
+                "<run>/handoff_inspection.md",
+            ],
             "dry_run_command": [
                 "ragflow-kb-build",
                 "--doc-manifest",
