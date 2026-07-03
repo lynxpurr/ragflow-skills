@@ -1,6 +1,6 @@
 # 19. RAGFlux 能力补齐设计与开发计划
 
-状态：P0 已实现并通过离线验证；P1 pipeline、ingest plan 和 kb-build 串联验证已实现；P2 retrieval hints 离线质量增强已部分实现
+状态：P0/P1/P2 已实现并通过离线验证；迁移指引与 RAGFlux 退役门禁已补齐；真实服务 field-trial / live E2E 仍需按门禁执行
 日期：2026-07-02
 适用范围：`ragflow-doc-to-md` 作为正式文档转换 skill，配合 `ragflow-kb-build`
 和 `ragflow-query` 替代 RAGFlux 的文档预处理、入库和检索验证能力。
@@ -336,15 +336,39 @@ P2 retrieval hints 离线增强实现说明：
 
 ### 3.6 P2：文档和迁移指引
 
-- [ ] 更新 `ragflow-doc-to-md/SKILL.md`：区分快速预览和正式入库前处理。
-- [ ] 更新 `ragflow-kb-build/SKILL.md`：说明如何消费 pipeline 产物和 ingest plan。
-- [ ] 更新 Hermes/OpenClaw onboarding prompt：引导用户先跑 pipeline，再跑 kb-build dry-run，再决定是否 live build。
-- [ ] 增加 RAGFlux 迁移表：RAGFlux 产物 -> 三 skill 产物。
-- [ ] 标注 RAGFlux 退役前必须满足的 release gate。
+- [x] 更新 `ragflow-doc-to-md/SKILL.md`：区分快速预览和正式入库前处理。
+- [x] 更新 `ragflow-kb-build/SKILL.md`：说明如何消费 pipeline 产物和 ingest plan。
+- [x] 更新 Hermes/OpenClaw onboarding prompt：引导用户先跑 pipeline，再跑 kb-build dry-run，再决定是否 live build。
+- [x] 增加 RAGFlux 迁移表：RAGFlux 产物 -> 三 skill 产物。
+- [x] 标注 RAGFlux 退役前必须满足的 release gate。
+
+RAGFlux 产物迁移表：
+
+| RAGFlux 产物/能力 | 三 skill 替代产物/命令 | 状态 |
+| --- | --- | --- |
+| PDF/Office/image -> Markdown | `ragflow-doc-to-md pipeline --backend mineru-fastapi --mineru-asset-mode markdown_assets` | 已实现；真实 MinerU FastAPI field-trial 待执行 |
+| 图片目录 | `documents/images/...`，`doc_manifest.json` 的 `assets.images[]`，`artifact_index.json` 的 image artifacts | 已实现；需真实样本确认图片返回形态 |
+| `<!-- chunk -->` 标记 | `pipeline --postprocess-profile chunk-markers` 生成 `postprocess_report.json` 并改写 handoff Markdown | 已实现 |
+| `retrieval_hints.json` | `package --rich` / `pipeline` 生成增强 hints，含 section/page/table/image/numeric/template signals | 已实现 |
+| `retrieval_hints` 被后续工具消费 | `ragflow-kb-build topology advise/split-plan/activation-plan`，`ragflow-query assistant-profile/assistant-test-plan` | 已实现 |
+| RAGFlow 配置建议 | 非密钥 `ragflow_ingest_plan.yaml`，可选非密钥 alias `ragflow_config.yaml` | 已实现；真实 endpoint/API key 仍只放私有 config 或环境变量 |
+| 入库 dry-run | `ragflow-kb-build inspect-handoff` + `build.py --dry-run` | 已实现 |
+| live build / parse / validate | `ragflow-kb-build` build、`validate.py --level smoke/regression/benchmark`、`parse-report`、`health-report` | 已实现；live mutation 需用户批准 |
+| query / assistant 验证 | `ragflow-query ask`、`assistant-profile recommend`、`assistant-test-plan`、`audit-citations`、`evaluate-answer` | 已实现；assistant 设置不自动修改 |
+
+RAGFlux 退役前 release gate：
+
+1. 离线 release gate 通过：runtime tests、`git diff --check`、manifest schema、release hygiene、build release、archive export、consumer acceptance、strict-vendor platform smoke。
+2. 真实 MinerU FastAPI field-trial 至少覆盖一份含图片、表格、页码和中文标题的 PDF，确认 `markdown_assets` 后 quality gate 不再因已落地图片 BLOCKED。
+3. 正式 pipeline 产物包含 Markdown、本地图片、`doc_manifest.json`、`quality_report.json`、`postprocess_report.json`、`retrieval_hints.json`、rich package sidecars 和 `ragflow_ingest_plan.yaml`。
+4. `ragflow-kb-build inspect-handoff` 报告 `ingestion_readiness.status` 为 `ready` 或只有已被用户接受的 review 项；`build.py --dry-run` 成功且不需要 `--allow-blocked`。
+5. 经用户批准后，使用一次性 KB 完成 live build、parse wait、smoke validation、direct query、host-assisted query，并保留脱敏报告。
+6. 对 RAGFlux 对照样本确认关键指标不退化：图片数量、quality gate、chunk marker、retrieval hints、parse 成功率、chunk 数、smoke query evidence。
+7. 清理一次性 KB 或记录 dataset id / KB name 供用户清理；不得把真实 endpoint、API key、私有路径写入 public `skills/`、docs 或 release artifacts。
 
 ### 3.7 验证计划
 
-针对 P0/P1 代码实现，至少运行：
+针对 P0/P1/P2 代码和指引实现，至少运行：
 
 ```bash
 python3 -m py_compile \
@@ -384,4 +408,6 @@ python3 tools/platform_smoke_matrix.py --profile strict-vendor-env --work-dir /t
 3. 再实现非密钥 ingest plan sidecar，补齐 RAGFlux 使用体验。
 4. 最后增强 hints 质量和 kb-build activation/topology 串联。
 
-完成 P0/P1 后，`ragflow-doc-to-md + ragflow-kb-build + ragflow-query` 才能作为 RAGFlux 退役的默认替代链路。
+P0/P1/P2 离线能力补齐完成后，`ragflow-doc-to-md + ragflow-kb-build + ragflow-query`
+已具备作为 RAGFlux 退役候选替代链路的基础；正式退役仍以 3.6 中真实 MinerU FastAPI
+field-trial、一次性 KB live E2E 和对照样本不退化 gate 为准。

@@ -141,6 +141,12 @@ mineru:
 
 这一步不得连接 RAGFlow 或 MinerU。
 
+旧一体化流程迁移说明：
+- 转换和 handoff 产物由 ragflow-doc-to-md pipeline 接管。
+- RAGFlow 配置建议由非密钥 ragflow_ingest_plan.yaml 接管；真实 RAGFlow endpoint 和 API key 仍只放私有配置或环境变量。
+- 入库、解析、质量验证由 ragflow-kb-build 接管。
+- 后续检索和 assistant 验证由 ragflow-query 接管。
+
 第二阶段：可选的 MinerU 测试
 
 如果我提供了测试 PDF / Office 文件，并且 MinerU 配置完整，请运行一次最小转换测试：
@@ -197,4 +203,11 @@ kb:ragflow-skills-e2e-YYYYMMDD-HHMM
 - 产生的 doc_manifest.json、kb_manifest.json、validation report、query output 路径
 - 测试 KB 是否已清理
 - 是否可以把当前配置视为可用
+
+旧一体化流程退役前，请额外确认：
+- 真实 MinerU FastAPI 样本文档已通过 pipeline 生成本地图片资产，quality gate 未因已落地图片 BLOCKED。
+- handoff 中存在 postprocess_report.json、retrieval_hints.json、assistant_profile.json、assistant_test_plan.json 和 ragflow_ingest_plan.yaml。
+- ragflow-kb-build inspect-handoff 和 --dry-run 均通过。
+- 经我明确批准后，至少一个一次性 KB 完成 live build、parse、smoke validation、direct query 和 host-assisted query。
+- 所有报告和总结均未暴露真实 API key、私有 endpoint 明文、个人路径或 release artifacts 外的临时目录。
 ```

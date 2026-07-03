@@ -147,6 +147,27 @@ python ragflow-doc-to-md/scripts/convert.py pipeline \
 
 Expected result: the handoff contains `doc_manifest.json`, `quality_report.json`, `runtime_report.json` when applicable, `postprocess_report.json`, `retrieval_hints.json`, rich package sidecars, and `ragflow_ingest_plan.yaml`. The ingest plan is advisory and non-secret; it must not contain RAGFlow endpoints or API keys.
 
+## Legacy Workflow Migration Gates
+
+When replacing a legacy all-in-one workflow, map responsibilities explicitly:
+
+| Legacy responsibility | Public skill replacement |
+| --- | --- |
+| Document conversion and image handoff | `ragflow-doc-to-md pipeline` with `markdown_assets` |
+| Chunk markers and rich sidecars | `postprocess --profile chunk-markers` and `package --rich`, run by `pipeline` |
+| Retrieval hints and assistant review artifacts | `retrieval_hints.json`, `assistant_profile.json`, `assistant_test_plan.json` |
+| RAGFlow ingest guidance | non-secret `ragflow_ingest_plan.yaml` |
+| KB creation, parse, and validation | `ragflow-kb-build inspect-handoff`, `--dry-run`, build, validate, parse/health reports |
+| Retrieval and assistant validation | `ragflow-query ask`, `assistant-profile recommend`, `assistant-test-plan` |
+
+Before retiring the legacy workflow for a user workflow, confirm:
+
+- release-facing offline validation is green for the packaged skills;
+- a real MinerU FastAPI sample with images/tables produces local `documents/images/...` assets and a non-BLOCKED quality gate;
+- `inspect-handoff` and `build.py --dry-run` pass without `--allow-blocked`;
+- a user-approved disposable KB completes live build, parse wait, smoke validation, direct query, and host-assisted query;
+- no report, sidecar, copied config, or summary contains real API keys, private endpoint secrets, or user-specific paths.
+
 ## Live RAGFlow E2E
 
 Use a disposable KB name:

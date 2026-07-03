@@ -65,6 +65,7 @@ Notes:
 - Use `route-activation-check` offline with `kb_activation_plan_v1` to review route config registration, stale activation inputs, route-test coverage, and optional centroid alignment. It does not mutate route config or RAGFlow.
 - Use `assistant-profile recommend` offline with rich-handoff `assistant_profile.json` and optional `retrieval_hints.json` to review assistant retrieval settings. It does not mutate RAGFlow assistant settings.
 - Use `assistant-test-plan` offline with rich-handoff `assistant_test_plan.json` to review staged assistant validation cases. It does not run an assistant, call an LLM, or mutate RAGFlow.
+- When replacing a legacy all-in-one workflow, use these review commands after `ragflow-doc-to-md pipeline` and `ragflow-kb-build` have produced handoff/build artifacts; query commands validate retrieval and assistant behavior but do not upload documents or edit assistant settings.
 - `ask --fusion rrf` retrieves each selected dataset separately when multiple dataset IDs are present, then returns an offline fusion report and fused evidence order.
 - `--mode agentic --host-assisted` builds a deterministic `ragflow_agentic_plan_v1`, executes bounded sub-query retrieval, and returns evidence plus `ragflow_agentic_trace_v1` cost/latency data and `ragflow_host_synthesis_contract_v1` citation policy for host synthesis. It does not call an LLM or synthesize an answer.
 - `ask` returns deterministic evidence weights and can write `--trace-json` / `--trace-md` for host-agent debugging.

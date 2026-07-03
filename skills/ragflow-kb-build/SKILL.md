@@ -88,6 +88,7 @@ Notes:
 - Use `--dry-run` to validate local inputs without touching RAGFlow; dry-run prints JSON and does not write `kb_manifest.json`.
 - Use `--no-wait` only when the host platform should continue while RAGFlow parses asynchronously.
 - When `ragflow-doc-to-md pipeline` produced the handoff, review `ragflow_ingest_plan.yaml`, `profile_suggestions.json`, and `retrieval_hints.json`, then run `build.py --dry-run` against `doc_manifest.json` before any live build. Use `inspect-handoff` first to check sidecar completeness, image assets, and ingestion readiness.
+- When replacing a legacy ingestion workflow, treat `ragflow_ingest_plan.yaml` as the non-secret handoff guide, not as a private RAGFlow config file. Live build still requires user-reviewed credentials, profile choice, quality gate readiness, and explicit approval.
 - Use `model-providers probe` before live builds to check read-only RAGFlow model-provider endpoints, optional expected embedding/rerank model names, explicit adapter empty-input request shapes, and optional `--redaction-report` sidecars without creating datasets.
 - Use `inspect-handoff` before upload when a `ragflow-doc-to-md package --rich` handoff includes optional sidecars.
 - Use `metadata` and `tagset` subcommands to prepare advisory public metadata and tag reports offline. Metadata summaries can be attached to build reports with `--metadata`; default upload behavior is unchanged.
