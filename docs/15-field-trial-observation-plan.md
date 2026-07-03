@@ -146,6 +146,9 @@ The tool is intentionally narrow:
 - it can consume explicit `ragflow_field_trial_record_v1` JSON records when a run wants to
   record a gated trigger such as `serve`, `private_bridge`, `remote_conversion`,
   `provider`, `reranker`, or `llm_backend`;
+- it now includes a `ragflow_retirement_observation_matrix_v1` summary for explicit
+  sample types such as scanned documents, long documents, papers, contracts, complex
+  tables, image-heavy sources, low-quality OCR, and multi-document handoffs;
 - it does not mark roadmap checkboxes, start services, upload reports, or inspect private
   directories unless the operator passes them explicitly.
 

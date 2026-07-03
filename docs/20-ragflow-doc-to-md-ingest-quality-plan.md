@@ -411,12 +411,17 @@ smoke 覆盖；未执行 live RAGFlow mutation。
 
 ### 4.9 P3：多样本退役观察矩阵
 
-- [ ] 定义多样本 field-trial summary schema。
-- [ ] 覆盖扫描件、长文档、论文、合同、复杂表格、大量图片、低质量 OCR、多文档批量 handoff。
-- [ ] 汇总 quality、asset、chunk、hints、dry-run、live parse、smoke/query、cleanup 指标。
-- [ ] 仅使用显式 run roots；不默认扫描用户目录。
-- [ ] 输出 sanitized JSON 和 Markdown summary。
-- [ ] 将结果作为是否把 replacement path 提升为默认正式发布路径的证据。
+实现状态：2026-07-03 已完成；`tools/field_trial_metrics.py` 在既有显式 run-root
+扫描上新增 `ragflow_retirement_observation_matrix_v1` 多样本退役观察矩阵，按
+`ragflow_field_trial_record_v1.sample_types` 或同 run-root 记录归类样本，仅汇总已存在的
+脱敏 JSON 报告，不触发 live RAGFlow mutation 或隐式目录扫描。
+
+- [x] 定义多样本 field-trial summary schema。
+- [x] 覆盖扫描件、长文档、论文、合同、复杂表格、大量图片、低质量 OCR、多文档批量 handoff。
+- [x] 汇总 quality、asset、chunk、hints、dry-run、live parse、smoke/query、cleanup 指标。
+- [x] 仅使用显式 run roots；不默认扫描用户目录。
+- [x] 输出 sanitized JSON 和 Markdown summary。
+- [x] 将结果作为是否把 replacement path 提升为默认正式发布路径的证据。
 
 ## 第五部分：验收和发布门禁
 

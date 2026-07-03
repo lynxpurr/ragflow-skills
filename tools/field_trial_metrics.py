@@ -23,6 +23,17 @@ from ragflow_skill_runtime import configured_private_hosts_from_urls, sanitize_r
 
 SCHEMA = "ragflow_field_trial_metrics_v1"
 FIELD_TRIAL_RECORD_SCHEMA = "ragflow_field_trial_record_v1"
+RETIREMENT_MATRIX_SCHEMA = "ragflow_retirement_observation_matrix_v1"
+RETIREMENT_SAMPLE_TYPES = (
+    "scanned",
+    "long_document",
+    "paper",
+    "contract",
+    "complex_table",
+    "image_heavy",
+    "low_quality_ocr",
+    "multi_document_handoff",
+)
 _URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 _HOME_PATH_RE = re.compile(r"/(?:home|Users)/[A-Za-z0-9._-]+(?:/[^\s\"'<>]*)?")
 _CONFIG_PATH_RE = re.compile(r"[^\s\"'<>]*(?:config|auth|vault)[^\s\"'<>]*\.(?:json|ya?ml|toml)")
@@ -45,6 +56,32 @@ _TRIGGER_KEYS = {
     "llm backend": "llm_backend",
     "llm_backend": "llm_backend",
     "none": "none",
+}
+_SAMPLE_TYPE_ALIASES = {
+    "scan": "scanned",
+    "scanned": "scanned",
+    "scanned_pdf": "scanned",
+    "long": "long_document",
+    "long_document": "long_document",
+    "long_doc": "long_document",
+    "paper": "paper",
+    "research_paper": "paper",
+    "academic_paper": "paper",
+    "contract": "contract",
+    "agreement": "contract",
+    "complex_table": "complex_table",
+    "table": "complex_table",
+    "tables": "complex_table",
+    "image_heavy": "image_heavy",
+    "many_images": "image_heavy",
+    "images": "image_heavy",
+    "low_quality_ocr": "low_quality_ocr",
+    "ocr": "low_quality_ocr",
+    "poor_ocr": "low_quality_ocr",
+    "multi_document": "multi_document_handoff",
+    "multi_document_handoff": "multi_document_handoff",
+    "batch": "multi_document_handoff",
+    "batch_handoff": "multi_document_handoff",
 }
 
 
@@ -278,6 +315,338 @@ def _extract_triggers(payload: Mapping[str, Any]) -> list[str]:
     return sorted({trigger for trigger in triggers if trigger and trigger != "none"})
 
 
+def _normalize_sample_type(value: Any) -> str:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not text:
+        return ""
+    return _SAMPLE_TYPE_ALIASES.get(text, "other")
+
+
+def _extract_sample_types(payload: Mapping[str, Any]) -> list[str]:
+    raw_values: list[Any] = []
+    for key in ("sample_type", "sample_types", "document_type", "document_types", "source_type"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            raw_values.extend(value)
+        elif value is not None:
+            raw_values.append(value)
+    input_summary = payload.get("input_summary")
+    if isinstance(input_summary, Mapping):
+        for key in ("sample_type", "sample_types", "document_type", "document_types", "source_type"):
+            value = input_summary.get(key)
+            if isinstance(value, list):
+                raw_values.extend(value)
+            elif value is not None:
+                raw_values.append(value)
+    normalized = [_normalize_sample_type(value) for value in raw_values]
+    return sorted({item for item in normalized if item})
+
+
+def _root_key(path: Path, roots: Sequence[Path]) -> str:
+    for index, root in enumerate(roots):
+        base = root if root.is_dir() else root.parent
+        try:
+            path.relative_to(base)
+        except ValueError:
+            continue
+        return str(index)
+    return "unknown"
+
+
+def _collect_root_sample_types(paths: Sequence[Path], roots: Sequence[Path]) -> dict[str, list[str]]:
+    by_root: dict[str, set[str]] = {}
+    for path in paths:
+        payload, _ = _load_json(path)
+        if not payload:
+            continue
+        if _schema(payload) != FIELD_TRIAL_RECORD_SCHEMA and "gated_trigger" not in payload:
+            continue
+        sample_types = _extract_sample_types(payload)
+        if not sample_types:
+            continue
+        by_root.setdefault(_root_key(path, roots), set()).update(sample_types)
+    return {key: sorted(value) for key, value in by_root.items()}
+
+
+def _new_matrix_signal_counts() -> dict[str, Any]:
+    return {
+        "quality": {
+            "report_count": 0,
+            "pass_count": 0,
+            "pass_with_review_count": 0,
+            "blocked_count": 0,
+            "warning_count": 0,
+            "error_count": 0,
+        },
+        "assets": {
+            "local_image_asset_count": 0,
+            "missing_asset_issue_count": 0,
+        },
+        "chunking": {
+            "chunk_profile_report_count": 0,
+            "chunk_marker_count": 0,
+            "warning_count": 0,
+        },
+        "hints": {
+            "retrieval_hints_count": 0,
+            "section_boundary_count": 0,
+            "preferred_boundary_count": 0,
+            "question_candidate_count": 0,
+            "table_artifact_count": 0,
+            "image_artifact_count": 0,
+        },
+        "dry_run": {
+            "passed_count": 0,
+            "failed_count": 0,
+        },
+        "live_parse": {
+            "report_count": 0,
+            "passed_count": 0,
+            "failed_count": 0,
+            "chunk_count": 0,
+        },
+        "query": {
+            "output_count": 0,
+            "zero_result_count": 0,
+            "evidence_count": 0,
+        },
+        "cleanup": {
+            "plan_count": 0,
+            "execution_count": 0,
+            "executed_count": 0,
+        },
+        "comparison": {
+            "report_count": 0,
+            "paired_live_ab_executed_count": 0,
+        },
+    }
+
+
+def _new_matrix_entry(sample_type: str, *, expected: bool) -> dict[str, Any]:
+    return {
+        "sample_type": sample_type,
+        "expected": expected,
+        "status": "missing" if expected else "observed",
+        "report_count": 0,
+        "sources": [],
+        "signals": _new_matrix_signal_counts(),
+        "findings": [],
+    }
+
+
+def _new_retirement_matrix() -> dict[str, Any]:
+    coverage = {
+        sample_type: _new_matrix_entry(sample_type, expected=True)
+        for sample_type in RETIREMENT_SAMPLE_TYPES
+    }
+    return {
+        "schema": RETIREMENT_MATRIX_SCHEMA,
+        "expected_sample_types": list(RETIREMENT_SAMPLE_TYPES),
+        "coverage": coverage,
+    }
+
+
+def _matrix_entry(matrix: dict[str, Any], sample_type: str) -> dict[str, Any]:
+    coverage = matrix.setdefault("coverage", {})
+    if sample_type not in coverage:
+        coverage[sample_type] = _new_matrix_entry(sample_type, expected=False)
+    return coverage[sample_type]
+
+
+def _list_count(payload: Mapping[str, Any], key: str) -> int:
+    value = payload.get(key)
+    return len(value) if isinstance(value, list) else 0
+
+
+def _doc_manifest_image_asset_count(payload: Mapping[str, Any]) -> int:
+    count = 0
+    documents = payload.get("documents")
+    if not isinstance(documents, list):
+        return 0
+    for document in documents:
+        if not isinstance(document, Mapping):
+            continue
+        assets = document.get("assets")
+        if not isinstance(assets, Mapping):
+            continue
+        images = assets.get("images")
+        if isinstance(images, list):
+            count += len(images)
+    return count
+
+
+def _append_matrix_source(entry: dict[str, Any], relative_path: str) -> None:
+    sources = entry.setdefault("sources", [])
+    if relative_path not in sources and len(sources) < 20:
+        sources.append(relative_path)
+
+
+def _update_quality_matrix(entry: dict[str, Any], payload: Mapping[str, Any]) -> None:
+    quality = entry["signals"]["quality"]
+    status = _quality_status(payload).upper()
+    summary = _quality_summary(payload)
+    quality["report_count"] += 1
+    quality["warning_count"] += _safe_int(summary.get("warnings"))
+    quality["error_count"] += _safe_int(summary.get("errors"))
+    if status == "PASS":
+        quality["pass_count"] += 1
+    elif status == "PASS_WITH_REVIEW":
+        quality["pass_with_review_count"] += 1
+    elif status == "BLOCKED":
+        quality["blocked_count"] += 1
+
+
+def _update_matrix_for_payload(
+    matrix: dict[str, Any],
+    *,
+    sample_types: Sequence[str],
+    relative_path: str,
+    payload: Mapping[str, Any],
+    classes: set[str],
+    schema: str,
+) -> None:
+    for sample_type in sample_types or ["unspecified"]:
+        entry = _matrix_entry(matrix, sample_type)
+        entry["report_count"] += 1
+        _append_matrix_source(entry, relative_path)
+        signals = entry["signals"]
+
+        if "doc_manifest" in classes:
+            _update_quality_matrix(entry, payload)
+            signals["assets"]["local_image_asset_count"] += _doc_manifest_image_asset_count(payload)
+
+        if "quality_report" in classes:
+            _update_quality_matrix(entry, payload)
+            for document in payload.get("documents", []) if isinstance(payload.get("documents"), list) else []:
+                if not isinstance(document, Mapping):
+                    continue
+                for issue in document.get("issues", []) if isinstance(document.get("issues"), list) else []:
+                    if not isinstance(issue, Mapping):
+                        continue
+                    issue_type = str(issue.get("issue_type") or issue.get("code") or "")
+                    if "image" in issue_type and "missing" in issue_type:
+                        signals["assets"]["missing_asset_issue_count"] += 1
+
+        if schema == "ragflow_chunk_profile_report_v1":
+            summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
+            signals["chunking"]["chunk_profile_report_count"] += 1
+            signals["chunking"]["chunk_marker_count"] += _safe_int(summary.get("marker_count"))
+            signals["chunking"]["warning_count"] += _safe_int(summary.get("warning_count"))
+
+        if schema == "ragflow_retrieval_hints_v1":
+            signals["hints"]["retrieval_hints_count"] += 1
+            signals["hints"]["section_boundary_count"] += _list_count(payload, "section_boundaries")
+            signals["hints"]["preferred_boundary_count"] += _list_count(payload, "preferred_boundaries")
+            signals["hints"]["question_candidate_count"] += _list_count(payload, "question_candidates")
+            signals["hints"]["table_artifact_count"] += _list_count(payload, "table_artifacts")
+            signals["hints"]["image_artifact_count"] += _list_count(payload, "image_artifacts")
+
+        if payload.get("dry_run") is True:
+            if payload.get("ok") is False:
+                signals["dry_run"]["failed_count"] += 1
+            else:
+                signals["dry_run"]["passed_count"] += 1
+
+        if schema == "ragflow_parse_report_v1":
+            summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
+            status = str(payload.get("status") or summary.get("status") or "").lower()
+            signals["live_parse"]["report_count"] += 1
+            signals["live_parse"]["chunk_count"] += _safe_int(
+                summary.get("chunk_count") or summary.get("parsed_chunk_count") or payload.get("chunk_count")
+            )
+            if payload.get("ok") is False or status in {"failed", "error", "timeout"}:
+                signals["live_parse"]["failed_count"] += 1
+            else:
+                signals["live_parse"]["passed_count"] += 1
+
+        if "chunks" in payload or "retrieval_status" in payload:
+            chunks = payload.get("chunks")
+            evidence = payload.get("evidence")
+            zero_result = isinstance(chunks, list) and not chunks
+            if str(payload.get("retrieval_status") or "").lower() in {"empty", "zero_results", "no_results"}:
+                zero_result = True
+            signals["query"]["output_count"] += 1
+            signals["query"]["zero_result_count"] += 1 if zero_result else 0
+            signals["query"]["evidence_count"] += len(evidence) if isinstance(evidence, list) else 0
+
+        if schema in {"ragflow_cleanup_plan_v1", "ragflow_optimization_cleanup_plan_v1"}:
+            signals["cleanup"]["plan_count"] += 1
+        if schema in {"ragflow_cleanup_execution_report_v1", "ragflow_optimization_cleanup_execution_report_v1"}:
+            signals["cleanup"]["execution_count"] += 1
+            summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
+            if payload.get("ok") is not False and (
+                summary.get("cleanup_executed") is True
+                or summary.get("deleted_count")
+                or summary.get("success_count")
+            ):
+                signals["cleanup"]["executed_count"] += 1
+
+        if schema == "ragflow_handoff_comparison_v1":
+            signals["comparison"]["report_count"] += 1
+            paired = payload.get("live_evidence", {}).get("paired_live_ab", {}) if isinstance(payload.get("live_evidence"), Mapping) else {}
+            if isinstance(paired, Mapping) and paired.get("status") == "executed":
+                signals["comparison"]["paired_live_ab_executed_count"] += 1
+
+
+def _finalize_retirement_matrix(matrix: dict[str, Any]) -> dict[str, Any]:
+    coverage = matrix.get("coverage", {}) if isinstance(matrix.get("coverage"), Mapping) else {}
+    missing_expected: list[str] = []
+    observed_expected = 0
+    needs_review = 0
+    passed = 0
+    for sample_type, entry in coverage.items():
+        if not isinstance(entry, dict):
+            continue
+        signals = entry.get("signals", {}) if isinstance(entry.get("signals"), Mapping) else {}
+        quality = signals.get("quality", {}) if isinstance(signals.get("quality"), Mapping) else {}
+        dry_run = signals.get("dry_run", {}) if isinstance(signals.get("dry_run"), Mapping) else {}
+        live_parse = signals.get("live_parse", {}) if isinstance(signals.get("live_parse"), Mapping) else {}
+        query = signals.get("query", {}) if isinstance(signals.get("query"), Mapping) else {}
+        report_count = _safe_int(entry.get("report_count"))
+        if report_count == 0:
+            entry["status"] = "missing"
+            if entry.get("expected"):
+                missing_expected.append(str(sample_type))
+            continue
+        if entry.get("expected"):
+            observed_expected += 1
+        if quality.get("blocked_count") or dry_run.get("failed_count") or live_parse.get("failed_count") or query.get("zero_result_count"):
+            entry["status"] = "needs_review"
+            needs_review += 1
+        elif (
+            quality.get("pass_count")
+            or quality.get("pass_with_review_count")
+        ) and (
+            dry_run.get("passed_count")
+            or live_parse.get("passed_count")
+            or query.get("output_count")
+        ):
+            entry["status"] = "passed"
+            passed += 1
+        else:
+            entry["status"] = "observed"
+    matrix["summary"] = {
+        "expected_sample_type_count": len(RETIREMENT_SAMPLE_TYPES),
+        "observed_expected_sample_type_count": observed_expected,
+        "missing_expected_sample_types": missing_expected,
+        "missing_expected_sample_type_count": len(missing_expected),
+        "needs_review_sample_type_count": needs_review,
+        "passed_sample_type_count": passed,
+    }
+    if missing_expected:
+        status = "insufficient_samples"
+    elif needs_review:
+        status = "needs_review"
+    else:
+        status = "ready_for_review"
+    matrix["retirement_assessment"] = {
+        "status": status,
+        "strict_paired_live_ab_required_for_live_parity": True,
+        "default_live_mutation": "not_performed",
+    }
+    return matrix
+
+
 def _append_trigger(triggers: dict[str, dict[str, Any]], track: str, reason: str, source: str) -> None:
     entry = triggers.setdefault(track, {"track": track, "count": 0, "reasons": [], "sources": []})
     entry["count"] += 1
@@ -308,6 +677,9 @@ def build_field_trial_metrics(
     detected_urls: list[str] = []
     detected_homes: list[str] = []
     detected_configs: list[str] = []
+    json_paths = list(_iter_json_paths(roots))
+    root_sample_types = _collect_root_sample_types(json_paths, roots)
+    retirement_matrix = _new_retirement_matrix()
 
     metrics = {
         "handoff": {
@@ -353,7 +725,7 @@ def build_field_trial_metrics(
         elif not (root.is_dir() or root.is_file()):
             findings.append({"check": "invalid_run_root", "path": str(root), "message": "run root must be a directory or JSON file"})
 
-    for path in _iter_json_paths(roots):
+    for path in json_paths:
         relative_path = _relative(path, roots)
         payload, error = _load_json(path)
         if payload is None:
@@ -369,6 +741,11 @@ def build_field_trial_metrics(
         classes = _classify_report(path, payload)
         if not classes:
             classes.add("unknown")
+        sample_types = (
+            _extract_sample_types(payload)
+            or root_sample_types.get(_root_key(path, roots), [])
+            or ["unspecified"]
+        )
 
         report_entry = {
             "path": relative_path,
@@ -377,6 +754,14 @@ def build_field_trial_metrics(
             "ok": payload.get("ok") if isinstance(payload.get("ok"), bool) else None,
         }
         reports.append(report_entry)
+        _update_matrix_for_payload(
+            retirement_matrix,
+            sample_types=sample_types,
+            relative_path=relative_path,
+            payload=payload,
+            classes=classes,
+            schema=schema,
+        )
 
         if "doc_manifest" in classes:
             documents = payload.get("documents") if isinstance(payload.get("documents"), list) else []
@@ -487,6 +872,7 @@ def build_field_trial_metrics(
         "runtime_partial_failure_status_counts": _counter_payload(runtime_statuses),
         "release_status_counts": _counter_payload(release_statuses),
         "metrics": metrics,
+        "retirement_observation_matrix": _finalize_retirement_matrix(retirement_matrix),
         "gated_triggers": [triggers[key] for key in sorted(triggers)],
         "reports": reports,
         "findings": findings,
@@ -511,6 +897,17 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     kb_build = metrics.get("kb_build", {}) if isinstance(metrics.get("kb_build"), Mapping) else {}
     query = metrics.get("query", {}) if isinstance(metrics.get("query"), Mapping) else {}
     release = metrics.get("release", {}) if isinstance(metrics.get("release"), Mapping) else {}
+    matrix = (
+        report.get("retirement_observation_matrix", {})
+        if isinstance(report.get("retirement_observation_matrix"), Mapping)
+        else {}
+    )
+    matrix_summary = matrix.get("summary", {}) if isinstance(matrix.get("summary"), Mapping) else {}
+    assessment = (
+        matrix.get("retirement_assessment", {})
+        if isinstance(matrix.get("retirement_assessment"), Mapping)
+        else {}
+    )
     lines = [
         "# RAGFlow Field Trial Metrics",
         "",
@@ -547,9 +944,51 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             release.get("failure_count", 0),
         ),
         "",
+        "## Retirement Observation Matrix",
+        "",
+        f"- schema: `{matrix.get('schema', RETIREMENT_MATRIX_SCHEMA)}`",
+        f"- status: `{assessment.get('status', 'unknown')}`",
+        f"- observed expected sample types: `{matrix_summary.get('observed_expected_sample_type_count', 0)}` / `{matrix_summary.get('expected_sample_type_count', len(RETIREMENT_SAMPLE_TYPES))}`",
+        f"- missing expected sample types: `{matrix_summary.get('missing_expected_sample_type_count', 0)}`",
+        f"- needs-review sample types: `{matrix_summary.get('needs_review_sample_type_count', 0)}`",
+        "",
+        "| Sample Type | Status | Reports | Quality Pass/Review/Blocked | Dry-Run Pass/Fail | Parse Pass/Fail | Query Zero/Total |",
+        "| --- | --- | ---: | --- | --- | --- | --- |",
+    ]
+    coverage = matrix.get("coverage", {}) if isinstance(matrix.get("coverage"), Mapping) else {}
+    ordered_sample_types = [*RETIREMENT_SAMPLE_TYPES, *sorted(key for key in coverage if key not in RETIREMENT_SAMPLE_TYPES)]
+    for sample_type in ordered_sample_types:
+        entry = coverage.get(sample_type)
+        if not isinstance(entry, Mapping):
+            continue
+        signals = entry.get("signals", {}) if isinstance(entry.get("signals"), Mapping) else {}
+        quality = signals.get("quality", {}) if isinstance(signals.get("quality"), Mapping) else {}
+        dry_run = signals.get("dry_run", {}) if isinstance(signals.get("dry_run"), Mapping) else {}
+        live_parse = signals.get("live_parse", {}) if isinstance(signals.get("live_parse"), Mapping) else {}
+        query = signals.get("query", {}) if isinstance(signals.get("query"), Mapping) else {}
+        lines.append(
+            "| `{}` | `{}` | `{}` | `{}/{}/{}` | `{}/{}` | `{}/{}` | `{}/{}` |".format(
+                sample_type,
+                entry.get("status", "missing"),
+                entry.get("report_count", 0),
+                quality.get("pass_count", 0),
+                quality.get("pass_with_review_count", 0),
+                quality.get("blocked_count", 0),
+                dry_run.get("passed_count", 0),
+                dry_run.get("failed_count", 0),
+                live_parse.get("passed_count", 0),
+                live_parse.get("failed_count", 0),
+                query.get("zero_result_count", 0),
+                query.get("output_count", 0),
+            )
+        )
+    lines.extend(
+        [
+        "",
         "## Gated Triggers",
         "",
-    ]
+        ]
+    )
     triggers = report.get("gated_triggers") if isinstance(report.get("gated_triggers"), list) else []
     if not triggers:
         lines.append("- none")

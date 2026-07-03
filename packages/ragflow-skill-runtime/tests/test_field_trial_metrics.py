@@ -14,6 +14,7 @@ if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
 from field_trial_metrics import (  # noqa: E402
+    RETIREMENT_MATRIX_SCHEMA,
     SCHEMA,
     build_field_trial_metrics,
     render_markdown,
@@ -100,10 +101,36 @@ class FieldTrialMetricsTests(unittest.TestCase):
                 {"schema": "ragflow_release_hygiene_check_v1", "ok": True},
             )
             _write_json(
+                run / "handoff" / "chunk_profile_report.json",
+                {"schema": "ragflow_chunk_profile_report_v1", "summary": {"marker_count": 9, "warning_count": 1}},
+            )
+            _write_json(
+                run / "handoff" / "retrieval_hints.json",
+                {
+                    "schema": "ragflow_retrieval_hints_v1",
+                    "section_boundaries": [{"title": "A"}],
+                    "preferred_boundaries": [{"reason": "heading"}],
+                    "question_candidates": [{"question": "Q?"}],
+                    "table_artifacts": [{"source": "html_table"}],
+                    "image_artifacts": [{"path": "images/a.png"}],
+                },
+            )
+            _write_json(run / "kb_build_dry_run.json", {"ok": True, "dry_run": True})
+            _write_json(run / "parse_report.json", {"schema": "ragflow_parse_report_v1", "ok": True, "summary": {"chunk_count": 13}})
+            _write_json(
+                run / "cleanup_execute.json",
+                {
+                    "schema": "ragflow_optimization_cleanup_execution_report_v1",
+                    "ok": True,
+                    "summary": {"cleanup_executed": True},
+                },
+            )
+            _write_json(
                 run / "field_trial_record.json",
                 {
                     "schema": "ragflow_field_trial_record_v1",
                     "workflow": "host-agent",
+                    "sample_types": ["scanned", "complex_table"],
                     "gated_trigger": "serve",
                     "friction": f"Repeated CLI calls with api_key={fake_secret}",
                 },
@@ -113,7 +140,7 @@ class FieldTrialMetricsTests(unittest.TestCase):
 
         self.assertEqual(report["schema"], SCHEMA)
         self.assertTrue(report["ok"], report)
-        self.assertEqual(report["summary"]["json_report_count"], 6)
+        self.assertEqual(report["summary"]["json_report_count"], 11)
         self.assertEqual(report["metrics"]["handoff"]["doc_manifest_count"], 1)
         self.assertEqual(report["metrics"]["handoff"]["document_count"], 2)
         self.assertEqual(report["metrics"]["handoff"]["blocked_quality_count"], 2)
@@ -126,6 +153,17 @@ class FieldTrialMetricsTests(unittest.TestCase):
         self.assertIn("serve", trigger_tracks)
         self.assertIn("handoff_quality", trigger_tracks)
         self.assertIn("query_quality", trigger_tracks)
+        matrix = report["retirement_observation_matrix"]
+        self.assertEqual(matrix["schema"], RETIREMENT_MATRIX_SCHEMA)
+        self.assertEqual(matrix["summary"]["observed_expected_sample_type_count"], 2)
+        self.assertEqual(matrix["summary"]["missing_expected_sample_type_count"], 6)
+        scanned = matrix["coverage"]["scanned"]
+        self.assertEqual(scanned["status"], "needs_review")
+        self.assertEqual(scanned["signals"]["chunking"]["chunk_marker_count"], 9)
+        self.assertEqual(scanned["signals"]["hints"]["table_artifact_count"], 1)
+        self.assertEqual(scanned["signals"]["dry_run"]["passed_count"], 1)
+        self.assertEqual(scanned["signals"]["live_parse"]["chunk_count"], 13)
+        self.assertEqual(scanned["signals"]["cleanup"]["executed_count"], 1)
         combined = json.dumps(report, ensure_ascii=False) + json.dumps(redaction, ensure_ascii=False)
         self.assertNotIn(fake_secret, combined)
         self.assertNotIn(private_home, combined)
@@ -159,6 +197,28 @@ class FieldTrialMetricsTests(unittest.TestCase):
                 "release": {"report_count": 0, "ok_count": 0, "failure_count": 0},
             },
             "gated_triggers": [{"track": "serve", "count": 1, "reasons": ["host needs lifecycle"]}],
+            "retirement_observation_matrix": {
+                "schema": RETIREMENT_MATRIX_SCHEMA,
+                "summary": {
+                    "expected_sample_type_count": 8,
+                    "observed_expected_sample_type_count": 1,
+                    "missing_expected_sample_type_count": 7,
+                    "needs_review_sample_type_count": 0,
+                },
+                "retirement_assessment": {"status": "insufficient_samples"},
+                "coverage": {
+                    "scanned": {
+                        "status": "passed",
+                        "report_count": 2,
+                        "signals": {
+                            "quality": {"pass_count": 1, "pass_with_review_count": 0, "blocked_count": 0},
+                            "dry_run": {"passed_count": 1, "failed_count": 0},
+                            "live_parse": {"passed_count": 0, "failed_count": 0},
+                            "query": {"zero_result_count": 0, "output_count": 0},
+                        },
+                    }
+                },
+            },
             "findings": [],
         }
 
@@ -166,6 +226,8 @@ class FieldTrialMetricsTests(unittest.TestCase):
 
         self.assertIn("# RAGFlow Field Trial Metrics", text)
         self.assertIn("reports scanned: `2`", text)
+        self.assertIn("## Retirement Observation Matrix", text)
+        self.assertIn("| `scanned` | `passed` | `2` |", text)
         self.assertIn("`serve`", text)
 
     def test_cli_writes_json_markdown_and_redaction_sidecar(self) -> None:

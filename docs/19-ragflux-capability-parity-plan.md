@@ -529,5 +529,7 @@ P0/P1/P2 离线能力补齐完成后，`ragflow-doc-to-md + ragflow-kb-build + r
   readiness、assistant test plan 和 activation checklist，帮助用户完成上库后的检索启用。
 - Handoff 完整度评分：基于 quality gate、图片落地、sidecar 完整性、hint 信号、dry-run ready
   和 redaction 结果生成一个 advisory score，供 host agent 决定是否提示用户进入 live build。
-- 多样本退役观察矩阵：把后续真实 PDF/Office/图片样本按文档类型、页数、图片数、表格复杂度、
-  OCR 难度、parse chunk 数和 smoke/query 结果汇总，作为最终默认发布路径的证据。
+- 多样本退役观察矩阵：已在 `tools/field_trial_metrics.py` 中以
+  `ragflow_retirement_observation_matrix_v1` 离线 summary 形式实现；后续继续把真实
+  PDF/Office/图片样本按文档类型、图片/表格复杂度、OCR 难度、parse chunk 数和
+  smoke/query/cleanup 结果汇总，作为最终默认发布路径的证据。
