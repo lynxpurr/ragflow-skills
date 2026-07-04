@@ -588,6 +588,66 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(assistant_review["status"], "PASS")
         self.assertEqual(assistant_review["retrieval_hints_summary"]["table_artifact_count"], 1)
 
+    def test_html_table_term_alias_candidates_are_review_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            documents.mkdir()
+            markdown = documents / "apollo-alias.md"
+            original_text = (
+                "<!-- page: 1 -->\n"
+                "# APOLLO 产品目录\n\n"
+                "## 术语表\n\n"
+                "<table>\n"
+                "<caption>APOLLO 误差规格</caption>\n"
+                "<thead><tr><th>型号</th><th>$MPE_E$</th><th>MPE<sub>P</sub></th></tr></thead>\n"
+                "<tbody><tr><td>APOLLO-H</td><td>0.02 mm</td><td>0.03 mm</td></tr></tbody>\n"
+                "</table>\n"
+            )
+            markdown.write_text(original_text, encoding="utf-8")
+            (root / "doc_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [
+                            {
+                                "source_path": "apollo-alias.pdf",
+                                "markdown_path": "documents/apollo-alias.md",
+                                "title": "APOLLO 产品目录",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            create_rich_handoff_package(handoff_root=root)
+            retrieval_hints = json.loads((root / "retrieval_hints.json").read_text(encoding="utf-8"))
+            assistant_test_plan = json.loads((root / "assistant_test_plan.json").read_text(encoding="utf-8"))
+            inspect_report = inspect_rich_handoff(handoff_root=root)
+            markdown_after = markdown.read_text(encoding="utf-8")
+
+        candidates = retrieval_hints["table_term_alias_candidates"]
+        by_source = {item["source_label"]: item for item in candidates}
+        stages = {case["stage"] for case in assistant_test_plan["cases"]}
+
+        self.assertEqual(markdown_after, original_text)
+        self.assertIn("$MPE_E$", by_source)
+        self.assertIn("MPE P", by_source)
+        self.assertIn("MPEE", by_source["$MPE_E$"]["candidate_aliases"])
+        self.assertIn("MPE_E", by_source["$MPE_E$"]["candidate_aliases"])
+        self.assertIn("MPEP", by_source["MPE P"]["candidate_aliases"])
+        self.assertIn("MPE_P", by_source["MPE P"]["candidate_aliases"])
+        self.assertTrue(all(item["requires_review"] for item in candidates))
+        self.assertTrue(all(item["rewrites_markdown"] is False for item in candidates))
+        self.assertNotIn("table_term_alias_review", stages)
+        self.assertEqual(
+            inspect_report["ingestion_readiness"]["checks"]["retrieval_hints_richness"]["table_term_alias_candidate_count"],
+            2,
+        )
+
     def test_inspect_rich_handoff_reports_optional_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

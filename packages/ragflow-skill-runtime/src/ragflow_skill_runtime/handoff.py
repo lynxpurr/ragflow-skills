@@ -7,6 +7,7 @@ import json
 import hashlib
 import mimetypes
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1079,6 +1080,147 @@ def _html_table_contexts(
     return contexts
 
 
+_SUBSCRIPT_TRANSLATION = str.maketrans(
+    {
+        "₀": "0",
+        "₁": "1",
+        "₂": "2",
+        "₃": "3",
+        "₄": "4",
+        "₅": "5",
+        "₆": "6",
+        "₇": "7",
+        "₈": "8",
+        "₉": "9",
+        "ₐ": "a",
+        "ₑ": "e",
+        "ₕ": "h",
+        "ᵢ": "i",
+        "ⱼ": "j",
+        "ₖ": "k",
+        "ₗ": "l",
+        "ₘ": "m",
+        "ₙ": "n",
+        "ₒ": "o",
+        "ₚ": "p",
+        "ᵣ": "r",
+        "ₛ": "s",
+        "ₜ": "t",
+        "ᵤ": "u",
+        "ᵥ": "v",
+        "ₓ": "x",
+    }
+)
+
+
+def _clean_table_term_label(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = unicodedata.normalize("NFKC", value).translate(_SUBSCRIPT_TRANSLATION)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\\(?:mathrm|text|operatorname)\s*\{([^{}]+)\}", r"\1", text)
+    text = re.sub(r"\\[A-Za-z]+", "", text)
+    text = text.replace("{", "").replace("}", "")
+    text = " ".join(text.strip().split())
+    return text or None
+
+
+def _unique_preserve_order(values: list[str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = _clean_table_term_label(value)
+        if not cleaned:
+            continue
+        key = cleaned.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(cleaned)
+    return output
+
+
+def _term_alias_variants(source_label: str) -> tuple[str, list[str]]:
+    label = _clean_table_term_label(source_label) or ""
+    if not label:
+        return "", []
+    math_stripped = label.strip("$").strip()
+    tex_subscript_spaced = re.sub(r"_\s*\{?([A-Za-z0-9]+)\}?", r" \1", math_stripped)
+    tex_subscript_joined = re.sub(r"_\s*\{?([A-Za-z0-9]+)\}?", r"\1", math_stripped)
+    tex_subscript_underscore = re.sub(r"_\s*\{?([A-Za-z0-9]+)\}?", r"_\1", math_stripped)
+    ascii_tokens = re.findall(r"[A-Za-z0-9]+", tex_subscript_spaced)
+    explicit_symbolic = any(marker in label for marker in ("$", "_", "\\", "{", "}"))
+    if len(ascii_tokens) < 2 and not explicit_symbolic:
+        return "", []
+    compact = "".join(ascii_tokens)
+    underscored = "_".join(ascii_tokens)
+    spaced = " ".join(ascii_tokens)
+    variants = _unique_preserve_order(
+        [
+            math_stripped,
+            tex_subscript_underscore,
+            tex_subscript_spaced,
+            tex_subscript_joined,
+            compact,
+            underscored,
+            spaced,
+        ]
+    )
+    normalized = compact or re.sub(r"\W+", "", math_stripped)
+    aliases = [variant for variant in variants if variant.casefold() != label.casefold()]
+    aliases = [alias for alias in aliases if alias and alias.casefold() != normalized.casefold()]
+    if normalized and normalized.casefold() != label.casefold():
+        aliases.insert(0, normalized)
+    aliases = _unique_preserve_order(aliases)
+    return normalized or math_stripped, aliases
+
+
+def _table_term_alias_candidates(table_artifacts: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for table_index, artifact in enumerate(table_artifacts, start=1):
+        if not isinstance(artifact, Mapping):
+            continue
+        labels: list[tuple[str, str]] = []
+        header_preview = artifact.get("header_preview", [])
+        headers = header_preview if isinstance(header_preview, list) else []
+        for label in headers:
+            cleaned = _clean_table_term_label(label)
+            if cleaned:
+                labels.append(("header", cleaned))
+        for field_name in ("caption", "source_heading"):
+            cleaned = _clean_table_term_label(artifact.get(field_name))
+            if cleaned:
+                labels.append((field_name, cleaned))
+        for field_name, source_label in labels:
+            normalized_label, aliases = _term_alias_variants(source_label)
+            if not normalized_label or not aliases:
+                continue
+            key = (str(artifact.get("document") or ""), field_name, source_label.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            candidate: dict[str, Any] = {
+                "source_label": source_label,
+                "normalized_label": normalized_label,
+                "candidate_aliases": aliases[:8],
+                "evidence_field": field_name,
+                "document": artifact.get("document"),
+                "source": artifact.get("source"),
+                "table_index": table_index,
+                "line_start": artifact.get("line_start"),
+                "source_heading": artifact.get("source_heading"),
+                "caption": artifact.get("caption"),
+                "confidence": "review",
+                "requires_review": True,
+                "rewrites_markdown": False,
+            }
+            if artifact.get("page") is not None:
+                candidate["page"] = artifact.get("page")
+            candidates.append({key: value for key, value in candidate.items() if value is not None})
+    return candidates[:80]
+
+
 def _section_stats(lines: list[str], *, line_start: int, line_end: int) -> dict[str, int]:
     section_lines = lines[max(line_start - 1, 0) : max(line_end, line_start - 1)]
     section_text = "\n".join(section_lines)
@@ -1753,6 +1895,7 @@ def make_retrieval_hints_payload(
         contexts=markdown_table_artifacts,
         kind="table",
     )
+    table_term_alias_candidates = _table_term_alias_candidates(table_artifacts)
     image_contexts = [] if semantic_images else markdown_image_artifacts
     image_artifacts = _enrich_image_artifacts(
         _merge_artifact_contexts(
@@ -1790,6 +1933,7 @@ def make_retrieval_hints_payload(
         "documents": document_summaries,
         "section_boundaries": sections,
         "table_artifacts": table_artifacts[:30],
+        "table_term_alias_candidates": table_term_alias_candidates,
         "image_artifacts": image_artifacts[:30],
         "asset_semantics": {
             "schema": ASSET_SEMANTICS_SCHEMA,
@@ -2341,6 +2485,7 @@ def _retrieval_hint_summary(retrieval_hints: Mapping[str, Any] | None) -> dict[s
             "image_artifact_count": 0,
             "layout_signal_count": 0,
             "asset_semantic_image_count": 0,
+            "table_term_alias_candidate_count": 0,
         }
     asset_semantics = retrieval_hints.get("asset_semantics") if isinstance(retrieval_hints.get("asset_semantics"), Mapping) else {}
     asset_summary = asset_semantics.get("summary") if isinstance(asset_semantics.get("summary"), Mapping) else {}
@@ -2361,6 +2506,9 @@ def _retrieval_hint_summary(retrieval_hints: Mapping[str, Any] | None) -> dict[s
         else 0,
         "table_artifact_count": len(retrieval_hints.get("table_artifacts", []))
         if isinstance(retrieval_hints.get("table_artifacts"), list)
+        else 0,
+        "table_term_alias_candidate_count": len(retrieval_hints.get("table_term_alias_candidates", []))
+        if isinstance(retrieval_hints.get("table_term_alias_candidates"), list)
         else 0,
         "image_artifact_count": len(retrieval_hints.get("image_artifacts", []))
         if isinstance(retrieval_hints.get("image_artifacts"), list)

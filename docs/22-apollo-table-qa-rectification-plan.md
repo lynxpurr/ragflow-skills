@@ -279,3 +279,21 @@ ragflow-kb-build --doc-manifest <handoff>/doc_manifest.json --profile <reviewed-
   后续需要由 host agent 在私有侧把 16 问按 `apollo_table_qa_fixture_v1` 填入，再运行
   `qa apollo-validate` 确认无私有路径、真实服务地址、dataset/document id 或 KB 名称。
 - 表格术语候选 sidecar、per-table 结构风险评分、以及 retrieval hints 接入仍按任务清单继续推进。
+
+日期：2026-07-05
+
+已推进 P0 术语别名 sidecar 的第一段实现：
+
+- `retrieval_hints.json` 新增 `table_term_alias_candidates` 字段，从 table artifacts 的 HTML/Markdown
+  header、caption 和邻近 heading 中提取可审阅术语候选。
+- 候选记录包含 `source_label`、`normalized_label`、`candidate_aliases`、table evidence、review
+  confidence、`requires_review` 和 `rewrites_markdown=false`。
+- `$MPE_E$`、`MPE<sub>P</sub>` / `MPE P` 等数学、下标、大小写和空格变体会生成候选别名；
+  普通 caption 不会被过度拆成宽泛别名。
+- `inspect-handoff` 的 retrieval-hints richness 摘要可看到 `table_term_alias_candidate_count`。
+
+仍未关闭的 P0 条目：
+
+- 术语候选目前只作为 retrieval hints sidecar 暴露，尚未用于 query expansion 或 APOLLO fixture
+  的自动映射消费。
+- per-table 结构风险评分和结构风险接入 retrieval hints / assistant starter 仍待实现。
