@@ -275,6 +275,9 @@ P0 实现说明：
 - 新增 `--mineru-asset-mode markdown_assets`、`MINERU_ASSET_MODE` 和 `mineru.asset_mode`。
 - `markdown_assets` 下会把 MinerU FastAPI 返回的图片保存到 `documents/images/<markdown-stem>/...`，并重写 Markdown 图片引用。
 - 图片资产写入使用 staging 目录，中途失败不会留下半成品图片目录。
+- 对 MinerU 返回的哈希/opaque 图片文件名执行 semantic rename，Markdown 主引用、
+  `doc_manifest.json` 和 `runtime_report.json.asset_policy` 同步指向可读文件名；sha256
+  继续保留在公开 manifest/sidecar 中作为完整性审计字段。
 - `doc_manifest.json` 的 document entry 可包含 `assets.images[]`，每项记录 `documents/...` 相对路径、sha256 和 bytes。
 - `runtime_report.json` 的 `asset_policy.saved.image_assets[]` 只保留可公开的本地资产信息，不记录原始下载 URL、API key 或服务端路径。
 - 默认兼容模式仍是 `markdown_only`；Hermes/OpenClaw 正式入库配置推荐 `markdown_assets`。

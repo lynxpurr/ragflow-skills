@@ -116,6 +116,10 @@ MINERU_FASTAPI_MAX_IMAGE_BYTES = 512 * 1024 * 1024
 MARKDOWN_IMAGE_RE = re.compile(r"(!\[[^\]]*]\()([^)]+)(\))")
 HTML_IMAGE_SRC_RE = re.compile(r"(<img\b[^>]*?\bsrc=[\"'])([^\"']+)([\"'][^>]*>)", re.IGNORECASE)
 DATA_URL_RE = re.compile(r"^data:([^;,]+)?(?:;[^,]*)?;base64,(.*)$", re.IGNORECASE | re.DOTALL)
+OPAQUE_IMAGE_STEM_RE = re.compile(r"^[a-f0-9]{24,}$", re.IGNORECASE)
+WORD_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{1,}")
+MARKDOWN_HEADING_RE = re.compile(r"^\s*#{1,6}\s+(.+?)\s*$")
+MARKDOWN_IMAGE_INLINE_RE = re.compile(r"!\[([^\]]*)]\(([^)]+)\)")
 
 
 @dataclass(frozen=True)
@@ -1118,6 +1122,201 @@ def _safe_asset_filename(value: str | None, *, default: str) -> str:
     if suffix not in IMAGE_EXTENSIONS:
         safe = f"{safe}.png"
     return safe
+
+
+def _asset_filename_is_opaque(value: str | None) -> bool:
+    if not value:
+        return False
+    stem = Path(PurePosixPath(str(value).replace("\\", "/")).name).stem
+    if OPAQUE_IMAGE_STEM_RE.fullmatch(stem):
+        return True
+    compact = re.sub(r"[^A-Za-z0-9]", "", stem)
+    return len(compact) >= 32 and len(re.findall(r"[a-fA-F0-9]", compact)) >= 24
+
+
+def _slugify_image_label(*values: str | None) -> str:
+    words: list[str] = []
+    for value in values:
+        if not value:
+            continue
+        for word in WORD_TOKEN_RE.findall(value):
+            lowered = word.strip("_-").lower()
+            if lowered and lowered not in {"image", "img", "figure", "fig", "picture"}:
+                words.append(lowered)
+            if len(words) >= 5:
+                break
+        if len(words) >= 5:
+            break
+    if not words:
+        return "image"
+    return "-".join(words)[:64].strip("-") or "image"
+
+
+def _semantic_image_kind(*values: str | None) -> str:
+    text = " ".join(value.lower() for value in values if value)
+    if any(token in text for token in ("logo", "brand", "商标", "标识")):
+        return "logo"
+    if any(token in text for token in ("table", "spreadsheet", "表格", "表截图")):
+        return "table"
+    if any(token in text for token in ("chart", "graph", "plot", "diagram", "curve", "图表", "曲线", "示意图")):
+        return "chart"
+    return "image"
+
+
+def _line_without_images(line: str) -> str:
+    value = MARKDOWN_IMAGE_INLINE_RE.sub(" ", line)
+    value = HTML_IMAGE_SRC_RE.sub(" ", value)
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = value.lstrip("#").strip()
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _semantic_image_filename(
+    *,
+    original_name: str,
+    sequence: int,
+    alt_text: str | None,
+    line_context: str | None,
+    heading: str | None,
+) -> str:
+    suffix = Path(original_name).suffix.lower()
+    if suffix not in IMAGE_EXTENSIONS:
+        suffix = ".png"
+    kind = _semantic_image_kind(alt_text, line_context, heading, original_name)
+    slug = _slugify_image_label(alt_text, line_context, heading)
+    prefix = f"image-{sequence:03d}"
+    if slug == kind:
+        return f"{prefix}_{kind}{suffix}"
+    return f"{prefix}_{kind}_{slug}{suffix}"
+
+
+def _unique_semantic_asset_name(
+    directory: Path,
+    preferred_name: str,
+    *,
+    source_name: str,
+    used_names: set[str],
+) -> str:
+    path = Path(preferred_name)
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", path.stem).strip(".-") or "image"
+    suffix = path.suffix.lower() if path.suffix.lower() in IMAGE_EXTENSIONS else ".png"
+    candidate = f"{stem}{suffix}"
+    existing = {item.name for item in directory.iterdir()} if directory.is_dir() else set()
+    existing.discard(source_name)
+    counter = 2
+    while candidate in used_names or candidate in existing:
+        candidate = f"{stem}-{counter}{suffix}"
+        counter += 1
+    used_names.add(candidate)
+    return candidate
+
+
+def semantic_rename_markdown_images(
+    markdown: str,
+    *,
+    markdown_path: Path,
+    source_root: Path | None = None,
+) -> tuple[str, list[dict[str, str]]]:
+    """Rename opaque local image filenames using nearby Markdown semantics.
+
+    The file content hash remains available through manifests and sidecars; this pass
+    only replaces human-hostile hash basenames in local Markdown image references.
+    """
+
+    root = source_root or markdown_path.parent
+    lines = markdown.splitlines(keepends=True)
+    target_rewrites: dict[str, str] = {}
+    records: list[dict[str, str]] = []
+    used_by_dir: dict[Path, set[str]] = {}
+    current_heading: str | None = None
+    sequence = 0
+
+    def rename_target(raw_target: str, *, alt_text: str | None, line_context: str | None) -> str | None:
+        nonlocal sequence
+        target_path, target_suffix, angle_wrapped = _split_markdown_asset_target(raw_target)
+        if not target_path:
+            return None
+        lookup_path = target_path.split("#", 1)[0].split("?", 1)[0]
+        lookup_keys = {
+            lookup_path.replace("\\", "/").lstrip("./"),
+            PurePosixPath(lookup_path.replace("\\", "/")).name,
+        }
+        for key in lookup_keys:
+            if key and key in target_rewrites:
+                new_relative = target_rewrites[key]
+                return f"<{new_relative}>{target_suffix}" if angle_wrapped else f"{new_relative}{target_suffix}"
+        source_path = _local_asset_source_path(
+            lookup_path,
+            markdown_path=markdown_path,
+            source_root=root,
+        )
+        if source_path is None or not _asset_filename_is_opaque(source_path.name):
+            return None
+        old_relative = os.path.relpath(source_path, markdown_path.parent).replace("\\", "/")
+        if old_relative in target_rewrites:
+            new_relative = target_rewrites[old_relative]
+            return f"<{new_relative}>{target_suffix}" if angle_wrapped else f"{new_relative}{target_suffix}"
+
+        sequence += 1
+        preferred = _semantic_image_filename(
+            original_name=source_path.name,
+            sequence=sequence,
+            alt_text=alt_text,
+            line_context=line_context,
+            heading=current_heading,
+        )
+        used_names = used_by_dir.setdefault(source_path.parent, set())
+        new_name = _unique_semantic_asset_name(
+            source_path.parent,
+            preferred,
+            source_name=source_path.name,
+            used_names=used_names,
+        )
+        destination = source_path.with_name(new_name)
+        source_path.rename(destination)
+        new_relative = os.path.relpath(destination, markdown_path.parent).replace("\\", "/")
+        target_rewrites[old_relative] = new_relative
+        target_rewrites[lookup_path.replace("\\", "/").lstrip("./")] = new_relative
+        target_rewrites[PurePosixPath(lookup_path.replace("\\", "/")).name] = new_relative
+        records.append(
+            {
+                "old_path": old_relative,
+                "new_path": new_relative,
+                "reason": "opaque_hash_filename",
+            }
+        )
+        return f"<{new_relative}>{target_suffix}" if angle_wrapped else f"{new_relative}{target_suffix}"
+
+    rewritten_lines: list[str] = []
+    for line in lines:
+        stripped_context = _line_without_images(line)
+        heading_match = MARKDOWN_HEADING_RE.match(stripped_context)
+        if heading_match:
+            current_heading = heading_match.group(1).strip()
+        line_context = stripped_context or current_heading
+
+        def replace_markdown(match: re.Match[str]) -> str:
+            prefix, raw_target, suffix = match.groups()
+            alt_match = MARKDOWN_IMAGE_INLINE_RE.match(match.group(0))
+            alt_text = alt_match.group(1) if alt_match else ""
+            replacement = rename_target(raw_target, alt_text=alt_text, line_context=line_context)
+            if not replacement:
+                return match.group(0)
+            return f"{prefix}{replacement}{suffix}"
+
+        def replace_html(match: re.Match[str]) -> str:
+            prefix, raw_target, suffix = match.groups()
+            replacement = rename_target(raw_target, alt_text=None, line_context=line_context)
+            if not replacement:
+                return match.group(0)
+            target, _target_suffix, _angle_wrapped = _split_markdown_asset_target(replacement)
+            return f"{prefix}{target}{suffix}"
+
+        rewritten = MARKDOWN_IMAGE_RE.sub(replace_markdown, line)
+        rewritten = HTML_IMAGE_SRC_RE.sub(replace_html, rewritten)
+        rewritten_lines.append(rewritten)
+
+    return "".join(rewritten_lines), records
 
 
 def _looks_like_download_url(value: str | None) -> bool:

@@ -33,7 +33,7 @@ mineru:
   verify_ssl: true
   asset_mode: markdown_assets
 
-请记住优先级：--mineru-base-url 高于 MINERU_BASE_URL，高于配置文件中的 mineru.base_url；--mineru-asset-mode 高于 MINERU_ASSET_MODE，高于配置文件中的 mineru.asset_mode。生产配置优先写入私有配置文件或环境变量；临时调试才使用命令行覆盖。正式入库前处理使用 markdown_assets，让 Markdown 图片引用落地到本地 documents/images/...；快速文本预览才使用 markdown_only。
+请记住优先级：--mineru-base-url 高于 MINERU_BASE_URL，高于配置文件中的 mineru.base_url；--mineru-asset-mode 高于 MINERU_ASSET_MODE，高于配置文件中的 mineru.asset_mode。生产配置优先写入私有配置文件或环境变量；临时调试才使用命令行覆盖。正式入库前处理使用 markdown_assets，让 Markdown 图片引用落地到本地 documents/images/...；哈希/opaque 图片文件名会在最终 handoff 中改写为可读语义名，sha256 保留在 manifest/sidecar 中用于审计；快速文本预览才使用 markdown_only。
 
 请先运行无网络 smoke test，再在我确认后运行 MinerU backend probe、warmup 和一次最小转换验证。正式入库前处理必须使用 ragflow-doc-to-md pipeline，并从 stdout 或 doc_manifest.json 确认 handoff_mode: formal_ingest；如果看到 handoff_mode: thin_preview，只能把它当快速预览，不能当正式 KB 入库 handoff。所有报告只输出脱敏 endpoint、路径和结论，不输出 API key。
 ```

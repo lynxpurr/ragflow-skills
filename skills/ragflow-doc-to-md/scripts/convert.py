@@ -68,6 +68,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_quality_markdown,
     safe_markdown_name,
     sanitize_report_payload,
+    semantic_rename_markdown_images,
     sha256_file,
     write_doc_ingest_readiness_report,
     write_formal_handoff_manifest,
@@ -443,7 +444,9 @@ def _manifest_assets_from_remote_attempts(
     remote_attempts: list[dict[str, Any]],
     *,
     start_index: int,
+    asset_renames: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    rename_map = asset_renames or {}
     images: list[dict[str, Any]] = []
     for attempt in remote_attempts[start_index:]:
         if not isinstance(attempt, dict):
@@ -457,6 +460,7 @@ def _manifest_assets_from_remote_attempts(
             path = item.get("path")
             if not isinstance(path, str) or not path:
                 continue
+            path = rename_map.get(path, path)
             entry = {"path": f"documents/{path}"}
             if isinstance(item.get("sha256"), str):
                 entry["sha256"] = item["sha256"]
@@ -464,6 +468,50 @@ def _manifest_assets_from_remote_attempts(
                 entry["bytes"] = int(item["bytes"])
             images.append(entry)
     return {"images": images} if images else {}
+
+
+def _apply_semantic_image_rename_records_to_remote_attempts(
+    remote_attempts: list[dict[str, Any]],
+    *,
+    start_index: int,
+    records: list[dict[str, str]],
+) -> dict[str, str]:
+    rename_map = {
+        item["old_path"]: item["new_path"]
+        for item in records
+        if isinstance(item.get("old_path"), str) and isinstance(item.get("new_path"), str)
+    }
+    if not rename_map:
+        return {}
+    for attempt in remote_attempts[start_index:]:
+        if not isinstance(attempt, dict):
+            continue
+        policy = attempt.get("asset_policy")
+        if not isinstance(policy, dict):
+            continue
+        saved = policy.get("saved")
+        if not isinstance(saved, dict):
+            continue
+        image_paths = saved.get("image_paths")
+        if isinstance(image_paths, list):
+            saved["image_paths"] = [
+                rename_map.get(path, path) if isinstance(path, str) else path
+                for path in image_paths
+            ]
+        image_assets = saved.get("image_assets")
+        if isinstance(image_assets, list):
+            for item in image_assets:
+                if not isinstance(item, dict):
+                    continue
+                path = item.get("path")
+                if isinstance(path, str):
+                    item["path"] = rename_map.get(path, path)
+        saved["image_naming"] = {
+            "mode": "semantic_alias",
+            "renamed_count": len(rename_map),
+            "reason": "opaque hash filenames were replaced with deterministic semantic names",
+        }
+    return rename_map
 
 
 def _sanitize_generated_report(
@@ -1577,6 +1625,18 @@ def _run(args: argparse.Namespace) -> int:
                 )
             )
             markdown_path.write_text(markdown, encoding="utf-8")
+            markdown, image_rename_records = semantic_rename_markdown_images(
+                markdown,
+                markdown_path=markdown_path,
+                source_root=markdown_path.parent,
+            )
+            if image_rename_records:
+                markdown_path.write_text(markdown, encoding="utf-8")
+            image_asset_renames = _apply_semantic_image_rename_records_to_remote_attempts(
+                remote_attempts,
+                start_index=remote_attempt_start,
+                records=image_rename_records,
+            )
             converted.append(
                 ConvertedDocument(
                     source=source,
@@ -1587,6 +1647,7 @@ def _run(args: argparse.Namespace) -> int:
                     assets=_manifest_assets_from_remote_attempts(
                         remote_attempts,
                         start_index=remote_attempt_start,
+                        asset_renames=image_asset_renames,
                     ),
                 )
             )

@@ -253,6 +253,8 @@ python ragflow-query/scripts/query.py \
 
 For PDF/Office/image E2E, use `--backend mineru-fastapi` when the service implements MinerU FastAPI protocol v2. Keep `--backend auto` only when a local MinerU CLI is configured and should be preferred. Use `--backend mineru-cli` to force local CLI, `--backend mineru` when the service implements the MinerU Agent API, or `--backend mineru-sync` only for legacy synchronous multipart `/parse`. If no compatible CLI or service protocol can be identified, report the uncertainty and skip the MinerU test rather than guessing.
 
+For formal `markdown_assets` handoffs, expect local image references to use readable semantic filenames when MinerU or another converter returns hash-like names. Do not treat the absence of hash filenames as lost provenance; content hashes remain in the public manifest and rich sidecars.
+
 ## GitHub Release E2E
 
 When testing a published release from the source repository, prefer the bundled harness:

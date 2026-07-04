@@ -26,6 +26,7 @@ from ragflow_skill_runtime.doc_convert import (
     probe_conversion_backends,
     render_backend_probe_markdown,
     safe_markdown_name,
+    semantic_rename_markdown_images,
     sha256_file,
     text_to_markdown,
 )
@@ -1215,6 +1216,49 @@ class DocConvertTests(unittest.TestCase):
 
         self.assertIn("![chart](images/chart.jpg)", rewritten)
         self.assertTrue(copied_exists)
+
+    def test_semantic_rename_markdown_images_replaces_opaque_hash_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            images = documents / "images"
+            images.mkdir(parents=True)
+            markdown_path = documents / "apollo.md"
+            opaque_name = "bf6c1779f2d8366285acc1e7fe5f21c6eccde9622f2c600842b9975bc4cdb9c2.jpg"
+            readable_name = "chart.jpg"
+            (images / opaque_name).write_bytes(b"opaque image bytes")
+            (images / readable_name).write_bytes(b"readable image bytes")
+            markdown = (
+                "# APOLLO\n\n"
+                "## PC-DMIS PRO\n\n"
+                "Software overview ![](images/"
+                + opaque_name
+                + ")\n"
+                "Repeated view ![](images/"
+                + opaque_name
+                + ")\n"
+                "![chart](images/chart.jpg)\n"
+            )
+
+            rewritten, records = semantic_rename_markdown_images(
+                markdown,
+                markdown_path=markdown_path,
+                source_root=documents,
+            )
+            renamed_path = records[0]["new_path"]
+            renamed_exists = (documents / renamed_path).is_file()
+            old_exists = (images / opaque_name).exists()
+            readable_exists = (images / readable_name).is_file()
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["old_path"], f"images/{opaque_name}")
+        self.assertTrue(renamed_path.startswith("images/image-001_image_software-overview"))
+        self.assertIn(f"![]({renamed_path})", rewritten)
+        self.assertEqual(rewritten.count(renamed_path), 2)
+        self.assertIn("![chart](images/chart.jpg)", rewritten)
+        self.assertTrue(renamed_exists)
+        self.assertFalse(old_exists)
+        self.assertTrue(readable_exists)
 
     def test_quality_report_marks_conversion_warning_for_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

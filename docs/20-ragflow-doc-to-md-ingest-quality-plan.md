@@ -99,7 +99,7 @@ RAGFlux 的优势不只是文件多，而是它更接近“为入库服务”的
 应迁移 RAGFlux 对用户真正有价值的能力，而不是复制旧实现：
 
 - `ragflow_config.yaml` -> 非密钥 `ragflow_ingest_plan.yaml`。
-- 图片语义文件名 -> 稳定文件名 + 语义 metadata / optional alias。
+- 图片语义文件名 -> 对哈希/opaque 图片名生成稳定可读文件名，并在 metadata 中保留 hash 审计。
 - 密集 chunk markers -> 可配置 chunk boundary profile。
 - retrieval hints -> schema 化、可被 kb-build/query 消费的增强 hints。
 - package manifest -> public formal handoff manifest 和 completeness report。
@@ -154,19 +154,27 @@ chunk-markers-ragflux-like   面向 RAGFlux 迁移对比的兼容密度
 - 离线 fixture 能证明不同 profile 的 marker 数和边界类型稳定。
 - live field-trial 只作为后续验证，不作为默认开启条件。
 
-### 3.3 图片语义 metadata 和 optional alias
+### 3.3 图片语义 metadata 和可读文件名
 
-保持现有 hash 文件名作为稳定主路径，同时增强图片语义：
+正式 handoff 不应把哈希值暴露为主要图片文件名。参考 RAGFlux 的 `--rename-images`
+实践，当前实现应在不牺牲审计性的前提下，把哈希/opaque 图片名改写为稳定、可读、
+可回归的本地文件名：
 
+- 在转换写出 manifest 前，对 Markdown 中本地图片引用做 deterministic semantic rename；
+  已经可读的 `chart.png`、`diagram.jpg` 等名称保持不变。
+- 对哈希/opaque 文件名，优先使用图片 alt、同一行文本、附近标题和类型推断生成
+  `image-001_<kind>_<slug>.<ext>` 风格名称，并处理重名碰撞。
 - 在 `artifact_index.json` 或新的 asset semantics report 中记录页码、类型、alt/caption、附近标题、上下文片段。
 - 区分 image、chart、table_image、logo、decorative、unknown 等可解释类型。
-- 可选生成 semantic alias map，但不默认改写 Markdown 主引用，避免破坏现有稳定路径。
+- 文件内容 hash 继续保存在 `doc_manifest.json`、`artifact_index.json` 和
+  `formal_handoff_manifest.json` 中，作为审计和完整性校验依据，而不是作为人读文件名。
 - 把图片语义信号传递给 `retrieval_hints.json` 和 assistant test plan。
 
 验收标准：
 
 - 没有页码或类型信息时保持兼容，不伪造精确信号。
-- 有 `content_list` / `middle_json` 时优先使用结构化信号。
+- 有 `content_list` / `middle_json` 时优先使用结构化信号；没有结构化信号时使用 Markdown
+  alt、同一行文本和附近标题作为 fallback。
 - 报告不包含原始私有路径或远程下载 URL。
 
 ### 3.4 HTML table artifact 和表格质量信号
@@ -352,17 +360,23 @@ live RAGFlow mutation。
 - [x] 增加离线 fixture：产品目录、论文、合同、长文档。
 - [x] 增加 smoke comparison：不同 profile 下 marker 数、hints 数和 chunk profile report 稳定。
 
-### 4.4 P1：图片语义 metadata
+### 4.4 P1：图片语义 metadata 和可读命名
 
 实现状态：2026-07-03 已完成；扩展 `artifact_index.json` 内嵌图片语义报告，并传递到
 `retrieval_hints.json` 和 `assistant_test_plan.json`，未执行 live RAGFlow mutation。
 
+补充状态：2026-07-04 已完成；新增转换阶段 semantic image rename，对 Markdown 中的
+哈希/opaque 本地图片文件名生成稳定可读名称并重写引用。`doc_manifest.json`、
+`runtime_report.json.asset_policy`、`artifact_index.json`、`retrieval_hints.json` 和
+`formal_handoff_manifest.json` 均指向最终可读文件名；sha256 继续作为审计字段保留。
+
 - [x] 定义 `ragflow_asset_semantics_v1` 或扩展 `artifact_index.json`。
 - [x] 从 Markdown image refs、artifact index、content_list、middle_json 合并图片语义。
 - [x] 记录 page、kind、caption、source_heading、context、exists、sha256、bytes。
-- [x] 增加 optional semantic alias map，但默认不改写 Markdown 主引用。
+- [x] 对哈希/opaque 图片名执行 deterministic semantic rename，并同步 Markdown 主引用。
 - [x] 将图片语义写入 retrieval hints 和 assistant test plan。
 - [x] 增加 release hygiene 测试，确认不泄露远程 URL、原始路径或临时路径。
+- [x] 增加 runtime 和 CLI 测试，确认 MinerU FastAPI 图片改名后 manifest/runtime 路径同步。
 
 ### 4.5 P1：Ingest readiness report
 
@@ -537,3 +551,47 @@ RAGFlux 退役不应只看单次样本。至少需要：
   `doc_manifest.json` 被真实私有 workflow 证明不足时，才在 public `skills/` 外开发。
 - Paired live A/B 或新的 live RAGFlow mutation 需要单独明确批准、一次性资源、cleanup 记录和脱敏
   evidence；普通继续开发请求不自动打开 live gate。
+
+### 6.4 2026-07-04 图片可读命名补充
+
+本次补充来自最新实践体验：代表性 MinerU FastAPI pipeline 虽然已经能正确落地本地图片资产，
+但 Markdown 和 handoff 目录中的图片文件名仍可能是长哈希值。这样的文件名适合内容寻址，却不适合
+用户检查、host-agent 复核、RAGFlux retained package 对比或后续问题定位。因此本轮参考 RAGFlux
+`--rename-images` 的用户体验，将“图片语义 metadata / alias”推进为“正式 handoff 中优先使用可读
+图片文件名”。
+
+已完成的行为变化：
+
+- 新增转换阶段 semantic image rename，在写出 `doc_manifest.json`、quality report 和 rich sidecars
+  之前执行，确保后续所有 manifest/report 都引用最终文件名。
+- 仅对哈希/opaque 本地图片文件名改名；已经可读的 `chart.png`、`diagram.jpg` 等名称保持不变，
+  以降低兼容性扰动。
+- 可读名基于 Markdown alt、同一行上下文、附近标题和 deterministic kind 推断生成，当前风格为
+  `image-001_<kind>_<slug>.<ext>`，并对同目录碰撞做稳定后缀处理。
+- Markdown 主引用会同步改写；`runtime_report.json.asset_policy.saved.image_paths`、
+  `runtime_report.json.asset_policy.saved.image_assets[]` 和 `doc_manifest.json.documents[].assets.images[]`
+  也同步指向可读文件名。
+- sha256 仍保留在 `doc_manifest.json`、`artifact_index.json` 和
+  `formal_handoff_manifest.json` 中，作为完整性校验和审计依据；不再把 hash 本身作为正式 handoff
+  的主要人读文件名。
+- public skill 文案、host-agent setup、user onboarding prompt 和 RAGFlux parity plan 已同步说明
+  该命名策略，避免后续 agent 误判“没有 hash 文件名”等同于“缺少 provenance”。
+
+验证覆盖：
+
+- Runtime 单测覆盖哈希图片名改写、重复引用同步改写、可读文件名保持不变。
+- CLI fake MinerU FastAPI 测试覆盖 `markdown_assets` 下 base64 图片落地、Markdown 引用改写、
+  `doc_manifest.json` 和 `runtime_report.json.asset_policy` 路径同步。
+- 回归验证已覆盖 `test_doc_convert.py`、`test_doc_convert_cli.py`、`test_handoff.py` 和
+  `test_kb_build_cli.py`；同时通过 `git diff --check` 和 release hygiene。
+- 本轮未执行 live RAGFlow mutation；该能力属于正式 handoff 生成阶段的离线可复核改进。
+
+后续持续观察：
+
+- 真实中文 PDF 中，若同一行上下文过长或标题本身较差，可读名可能仍偏泛化；后续可在
+  structured assets 稳定后优先使用 `content_list` / `middle_json` 的 page、block type、caption
+  和 image source signal 来进一步接近 RAGFlux 的 `p001_<subtype>_<description>_<short-id>` 风格。
+- 当前策略只改哈希/opaque 名，避免对用户已有可读资产名做不必要重写；如果后续 field-trial 证明
+  某些非哈希但低语义名称也影响排查，可增加 opt-in rename profile，而不改变默认兼容策略。
+- 应继续观察 `artifact_index.json.asset_semantics.semantic_aliases` 与实际文件名的关系，避免 alias
+  字段和主路径在后续迭代中表达重复或冲突。

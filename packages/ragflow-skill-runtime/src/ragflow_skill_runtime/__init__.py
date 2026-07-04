@@ -54,6 +54,7 @@ from .doc_convert import (
     render_backend_warmup_markdown,
     render_doc_runtime_markdown,
     safe_markdown_name,
+    semantic_rename_markdown_images,
     sha256_file,
     text_to_markdown,
     warmup_conversion_backend,
