@@ -51,6 +51,8 @@ SANITIZED_MARKDOWN_VERIFIED_COMMANDS = (
     "ragflow-kb-build profile compare",
     "ragflow-kb-build profile experiment",
     "ragflow-kb-build profile lint",
+    "ragflow-kb-build qa apollo-evaluate",
+    "ragflow-kb-build qa apollo-validate",
     "ragflow-kb-build qa generate",
     "ragflow-kb-build qa map-evidence",
     "ragflow-kb-build qa suggest-request",

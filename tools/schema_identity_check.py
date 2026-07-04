@@ -231,6 +231,22 @@ EXPECTED_IDENTITIES = (
         coverage_patterns=("ragflow_grounded_qa_suggestion_review_report_v1", "GROUNDED_QA_SUGGESTION_REVIEW_REPORT_SCHEMA"),
     ),
     SchemaIdentity(
+        key="apollo_table_qa_fixture_validation_report",
+        group="benchmark",
+        identity="apollo_table_qa_fixture_validation_report_v1",
+        source_patterns=("apollo_table_qa_fixture_validation_report_v1", "APOLLO_TABLE_QA_FIXTURE_VALIDATION_REPORT_SCHEMA"),
+        coverage_patterns=("apollo_table_qa_fixture_validation_report_v1", "APOLLO_TABLE_QA_FIXTURE_VALIDATION_REPORT_SCHEMA"),
+        description="No-network validation report for sanitized APOLLO table-QA fixtures.",
+    ),
+    SchemaIdentity(
+        key="apollo_table_qa_evaluation_report",
+        group="benchmark",
+        identity="apollo_table_qa_evaluation_report_v1",
+        source_patterns=("apollo_table_qa_evaluation_report_v1", "APOLLO_TABLE_QA_EVALUATION_REPORT_SCHEMA"),
+        coverage_patterns=("apollo_table_qa_evaluation_report_v1", "APOLLO_TABLE_QA_EVALUATION_REPORT_SCHEMA"),
+        description="No-network strict/normalized contains report for APOLLO table-QA result JSON.",
+    ),
+    SchemaIdentity(
         key="suppression_report",
         group="benchmark",
         identity="ragflow_suppression_report_v1",

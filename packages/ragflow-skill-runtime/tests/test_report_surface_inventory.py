@@ -20,12 +20,12 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_report_surface_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 89)
+        self.assertEqual(report["summary"]["command_count"], 91)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
             {
-                "covered": 80,
+                "covered": 82,
                 "needs_redaction": 0,
                 "not_applicable": 9,
             },
@@ -87,6 +87,11 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
         self.assertEqual(qa_suggest_review["status"], "covered")
         self.assertIn("redaction_sidecar", qa_suggest_review["output_categories"])
         self.assertIn("markdown_report", qa_suggest_review["output_categories"])
+
+        qa_apollo_evaluate = by_command["ragflow-kb-build qa apollo-evaluate"]
+        self.assertEqual(qa_apollo_evaluate["status"], "covered")
+        self.assertIn("redaction_sidecar", qa_apollo_evaluate["output_categories"])
+        self.assertIn("markdown_report", qa_apollo_evaluate["output_categories"])
 
         agentic_answer_request = by_command["ragflow-query agentic-answer request"]
         self.assertEqual(agentic_answer_request["status"], "covered")

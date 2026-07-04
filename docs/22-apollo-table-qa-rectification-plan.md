@@ -257,3 +257,25 @@ ragflow-kb-build --doc-manifest <handoff>/doc_manifest.json --profile <reviewed-
 - 不默认启用 script-owned LLM judge、LLM 表格重写或 live disposable workflow。
 - 不把 `$MPE_E$` / `$MPE_P$` 这类领域映射硬编码成全局 postprocess 规则；先用可审阅 sidecar
   和 fixture 验证收益。
+
+## 9. 开发启动记录
+
+日期：2026-07-04
+
+已启动 P0 离线回归基线的第一段实现：
+
+- 新增 `apollo_table_qa_fixture_v1` 的 no-network schema/read validation helper。
+- 新增 `apollo_table_qa_evaluation_report_v1`，可对已有 retrieval/answer JSON 做 strict
+  contains 与 normalized contains 分开统计。
+- 新增 `ragflow-kb-build qa apollo-validate` 与 `ragflow-kb-build qa apollo-evaluate`，默认不访问
+  RAGFlow、不调用模型、不执行 live mutation。
+- normalized contains 支持在 fixture 中声明术语别名和格式变体，用于 APOLLO 表头符号、
+  单位、温度符号等误判校正；Markdown 原文仍保持不改写。
+- schema identity gate 已登记新增 report schema，避免后续 release hygiene 漏检。
+
+尚未关闭的 P0 条目：
+
+- 原私有 16 问 QA 原文未进入 public repo；当前实现先提供可验证框架和脱敏样例测试。
+  后续需要由 host agent 在私有侧把 16 问按 `apollo_table_qa_fixture_v1` 填入，再运行
+  `qa apollo-validate` 确认无私有路径、真实服务地址、dataset/document id 或 KB 名称。
+- 表格术语候选 sidecar、per-table 结构风险评分、以及 retrieval hints 接入仍按任务清单继续推进。

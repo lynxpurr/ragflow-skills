@@ -306,6 +306,114 @@ def inspect_kb_live_server():
 
 
 class KbBuildCliTests(unittest.TestCase):
+    def test_qa_apollo_validate_and_evaluate_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = root / "apollo-fixture.json"
+            results = root / "apollo-results.json"
+            validate_report = root / "validate-report.json"
+            evaluate_report = root / "evaluate-report.json"
+            validate_md = root / "validate-report.md"
+            evaluate_md = root / "evaluate-report.md"
+            validate_redaction = root / "validate-redaction.json"
+            evaluate_redaction = root / "evaluate-redaction.json"
+            fixture.write_text(
+                json.dumps(
+                    {
+                        "schema": "apollo_table_qa_fixture_v1",
+                        "items": [
+                            {
+                                "id": "apollo-q1",
+                                "question": "What is the MPEE value?",
+                                "strict_terms": ["$MPE_E$", "0.02 mm"],
+                                "normalized_facts": [
+                                    {"id": "mpe_e", "canonical": "$MPE_E$", "aliases": ["MPE_E", "MPEE", "MPEe"]},
+                                    {"id": "value", "canonical": "0.02 mm", "aliases": ["0.02mm"]},
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            results.write_text(
+                json.dumps(
+                    {
+                        "results": [
+                            {
+                                "id": "apollo-q1",
+                                "answer": "The MPEe value is 0.02mm.",
+                                "top_chunks": [{"content": "Header $MPE_E$ lists 0.02 mm."}],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            validate_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "qa",
+                    "apollo-validate",
+                    "--fixture",
+                    str(fixture),
+                    "--report-json",
+                    str(validate_report),
+                    "--report-md",
+                    str(validate_md),
+                    "--redaction-report",
+                    str(validate_redaction),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            evaluate_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "qa",
+                    "apollo-evaluate",
+                    "--fixture",
+                    str(fixture),
+                    "--results",
+                    str(results),
+                    "--target",
+                    "answer",
+                    "--report-json",
+                    str(evaluate_report),
+                    "--report-md",
+                    str(evaluate_md),
+                    "--redaction-report",
+                    str(evaluate_redaction),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+            validate_payload = json.loads(validate_report.read_text(encoding="utf-8"))
+            evaluate_payload = json.loads(evaluate_report.read_text(encoding="utf-8"))
+            validate_md_text = validate_md.read_text(encoding="utf-8")
+            evaluate_md_text = evaluate_md.read_text(encoding="utf-8")
+            validate_redaction_payload = json.loads(validate_redaction.read_text(encoding="utf-8"))
+            evaluate_redaction_payload = json.loads(evaluate_redaction.read_text(encoding="utf-8"))
+
+        self.assertEqual(validate_result.returncode, 0, validate_result.stderr)
+        self.assertEqual(evaluate_result.returncode, 0, evaluate_result.stderr)
+        self.assertEqual(validate_payload["schema"], "apollo_table_qa_fixture_validation_report_v1")
+        self.assertEqual(evaluate_payload["schema"], "apollo_table_qa_evaluation_report_v1")
+        self.assertEqual(evaluate_payload["summary"]["normalized_answer_pass_count"], 1)
+        self.assertEqual(evaluate_payload["summary"]["strict_answer_pass_count"], 0)
+        self.assertIn("# APOLLO Table QA Fixture Validation", validate_md_text)
+        self.assertIn("# APOLLO Table QA Evaluation", evaluate_md_text)
+        self.assertEqual(validate_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertEqual(evaluate_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+
     def test_inspect_handoff_reviews_ingest_readiness_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

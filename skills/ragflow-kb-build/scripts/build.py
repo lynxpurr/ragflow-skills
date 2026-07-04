@@ -32,6 +32,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     BuildError,
     HandoffError,
     RAGFlowClient,
+    ApolloQaError,
     attach_benchmark_evaluation,
     build_runtime_metrics_summary,
     build_runtime_partial_failure_report,
@@ -83,6 +84,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     sample_benchmark_dataset,
     segment_metadata_report_file,
     render_activation_plan_markdown,
+    render_apollo_table_qa_markdown,
     render_split_plan_markdown,
     render_topology_advice_markdown,
     render_optimization_plan_markdown,
@@ -96,8 +98,10 @@ from ragflow_skill_runtime import (  # noqa: E402
     delta_benchmark_reports,
     summarize_metadata_for_documents,
     export_tagset_file,
+    evaluate_apollo_table_qa_results,
     tagset_report_file,
     generate_grounded_qa,
+    validate_apollo_table_qa_fixture,
     validate_grounded_qa,
     wait_for_document_states,
     run_retrieval_validation,
@@ -1655,6 +1659,48 @@ def _run_qa_suggest_review(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_qa_apollo_validate(args: argparse.Namespace) -> int:
+    try:
+        report = validate_apollo_table_qa_fixture(args.fixture)
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.fixture],
+                context_json_paths=[args.fixture],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_apollo_table_qa_markdown(report, title="APOLLO Table QA Fixture Validation"))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (ApolloQaError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
+def _run_qa_apollo_evaluate(args: argparse.Namespace) -> int:
+    try:
+        report = evaluate_apollo_table_qa_results(
+            fixture_path=args.fixture,
+            results_path=args.results,
+            target=args.target,
+        )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.fixture, args.results],
+                context_json_paths=[args.fixture, args.results],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_apollo_table_qa_markdown(report, title="APOLLO Table QA Evaluation"))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (ApolloQaError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _run_segment_metadata_report(args: argparse.Namespace) -> int:
     try:
         report = segment_metadata_report_file(
@@ -2746,6 +2792,35 @@ def build_qa_parser() -> argparse.ArgumentParser:
     suggest_review.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     suggest_review.add_argument("--json", action="store_true", help="Emit JSON errors")
     suggest_review.set_defaults(func=_run_qa_suggest_review)
+
+    apollo_validate = subparsers.add_parser(
+        "apollo-validate",
+        help="Validate a sanitized APOLLO table-QA fixture",
+    )
+    apollo_validate.add_argument("--fixture", required=True, help="apollo_table_qa_fixture_v1 JSON")
+    apollo_validate.add_argument("--report-json", help="Optional fixture validation report JSON path")
+    apollo_validate.add_argument("--report-md", help="Optional fixture validation report Markdown path")
+    apollo_validate.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
+    apollo_validate.add_argument("--json", action="store_true", help="Emit JSON errors")
+    apollo_validate.set_defaults(func=_run_qa_apollo_validate)
+
+    apollo_evaluate = subparsers.add_parser(
+        "apollo-evaluate",
+        help="Evaluate existing retrieval/answer JSON against an APOLLO table-QA fixture",
+    )
+    apollo_evaluate.add_argument("--fixture", required=True, help="apollo_table_qa_fixture_v1 JSON")
+    apollo_evaluate.add_argument("--results", required=True, help="Existing retrieval/answer results JSON")
+    apollo_evaluate.add_argument(
+        "--target",
+        choices=("auto", "answer", "retrieval", "both"),
+        default="auto",
+        help="Evaluation target used for case pass/fail status",
+    )
+    apollo_evaluate.add_argument("--report-json", help="Optional evaluation report JSON path")
+    apollo_evaluate.add_argument("--report-md", help="Optional evaluation report Markdown path")
+    apollo_evaluate.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
+    apollo_evaluate.add_argument("--json", action="store_true", help="Emit JSON errors")
+    apollo_evaluate.set_defaults(func=_run_qa_apollo_evaluate)
 
     return parser
 
