@@ -44,12 +44,60 @@ class DocPostprocessTests(unittest.TestCase):
         self.assertGreater(counts["ocr.cjk_spaces"], 0)
         self.assertGreater(counts["ocr.ligatures"], 0)
 
+    def test_ocr_cleanup_preserves_html_and_markdown_table_blocks(self) -> None:
+        html_table = (
+            "<table><tr><td>型 号</td><td>HP-TMe</td></tr>"
+            "<tr><td>温 度</td><td>18 °C - 22 °C</td></tr></table>"
+        )
+        pipe_table = "| 字 段 | 值 |\n| --- | --- |\n| 精 度 | 4 μ m |\n"
+        text = f"龙 门 式 结构 ， 精度 高\n\n{html_table}\n\n{pipe_table}\n结 束 。\n"
+
+        processed, rules = postprocess_markdown_text(text, profile="ocr")
+        counts = {rule.rule_id: rule.count for rule in rules}
+
+        self.assertIn("龙门式结构，精度高", processed)
+        self.assertIn("结束。", processed)
+        self.assertIn(html_table, processed)
+        self.assertIn(pipe_table, processed)
+        self.assertGreater(counts["ocr.cjk_spaces"], 0)
+
     def test_chunk_markers_insert_before_later_headings(self) -> None:
         processed, rules = postprocess_markdown_text("# One\nBody\n## Two\nBody\n", profile="chunk-markers")
         counts = {rule.rule_id: rule.count for rule in rules}
 
         self.assertIn("Body\n\n<!-- chunk -->\n## Two", processed)
         self.assertEqual(counts["chunk_markers.heading_boundaries"], 1)
+
+    def test_chunk_markers_report_table_integrity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "table.md"
+            markdown.write_text(
+                "# One\n\n"
+                "<table><tr><td>型 号</td><td>HP-TMe</td></tr></table>\n\n"
+                "## Two\n\n结 束 。\n",
+                encoding="utf-8",
+            )
+
+            report = postprocess_single_markdown(
+                markdown,
+                profile="chunk-markers",
+                output_path=root / "out.md",
+            )
+            output_text = (root / "out.md").read_text(encoding="utf-8")
+
+        document = report["documents"][0]
+        table_integrity = document["table_integrity"]
+        self.assertTrue(table_integrity["ok"])
+        self.assertEqual(table_integrity["html_table_count_before"], 1)
+        self.assertEqual(table_integrity["html_table_count_after"], 1)
+        self.assertTrue(table_integrity["html_table_fingerprints_unchanged"])
+        self.assertEqual(table_integrity["chunk_marker_inside_html_table_count"], 0)
+        self.assertFalse(table_integrity["postprocess_table_delta"]["html_table_count_changed"])
+        self.assertFalse(table_integrity["postprocess_table_delta"]["html_table_fingerprints_changed"])
+        self.assertFalse(table_integrity["postprocess_table_delta"]["html_table_cell_count_changed"])
+        self.assertIn("<table><tr><td>型 号</td><td>HP-TMe</td></tr></table>", output_text)
+        self.assertIn("结束。", output_text)
 
     def test_chunk_marker_profiles_emit_stable_report_sidecar(self) -> None:
         text = (

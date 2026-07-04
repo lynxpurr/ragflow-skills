@@ -29,6 +29,7 @@ IGNORED_DIRS = {
     ".pytest_cache",
     ".ruff_cache",
     "__pycache__",
+    "doc",
     "dist",
     "htmlcov",
     "release-artifacts",

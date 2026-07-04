@@ -141,9 +141,13 @@ python ragflow-doc-to-md/scripts/convert.py pipeline \
   --output /tmp/ragflow-skills-handoff \
   --backend mineru-fastapi \
   --mineru-asset-mode markdown_assets \
-  --postprocess-profile chunk-markers \
+  --postprocess-profile chunk-markers-dense \
   --json
 ```
+
+For complex table documents on MinerU FastAPI, add `--table-quality high` for an explicit
+high-accuracy pass, or `--table-quality auto` when the host should promote only formal
+PDF/Office/image candidates.
 
 Expected result: stdout and `doc_manifest.json` contain `handoff_mode:
 formal_ingest`; the handoff contains `doc_manifest.json`, `quality_report.json`,
@@ -197,7 +201,7 @@ When replacing a legacy all-in-one workflow, map responsibilities explicitly:
 | Legacy responsibility | Public skill replacement |
 | --- | --- |
 | Document conversion and image handoff | `ragflow-doc-to-md pipeline` with `markdown_assets` |
-| Chunk markers and rich sidecars | `postprocess --profile chunk-markers` and `package --rich`, run by `pipeline` |
+| Chunk markers and rich sidecars | `postprocess --profile chunk-markers-dense` and `package --rich`, run by `pipeline` |
 | Retrieval hints and assistant review artifacts | `retrieval_hints.json`, `assistant_profile.json`, `assistant_test_plan.json` |
 | RAGFlow ingest guidance | non-secret `ragflow_ingest_plan.yaml` |
 | KB creation, parse, and validation | `ragflow-kb-build inspect-handoff`, `--dry-run`, build, validate, parse/health reports |

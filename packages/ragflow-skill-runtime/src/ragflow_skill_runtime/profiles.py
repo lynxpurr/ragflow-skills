@@ -22,6 +22,7 @@ SUPPORTED_PARSER_KEYS = {
     "chunk_token_num",
     "auto_keywords",
     "auto_questions",
+    "delimiter",
 }
 ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA = "ragflow_enrichment_experiment_matrix_v1"
 ENRICHMENT_EXPERIMENT_REPORT_SCHEMA = "ragflow_enrichment_experiment_report_v1"

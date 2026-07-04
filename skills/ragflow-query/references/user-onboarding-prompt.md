@@ -152,7 +152,7 @@ mineru:
 第二阶段：可选的 MinerU 测试
 
 如果我提供了测试 PDF / Office 文件，并且 MinerU 配置完整，请运行一次最小转换测试：
-- 如果服务是 MinerU FastAPI v2，正式入库前处理使用 ragflow-doc-to-md pipeline --backend mineru-fastapi --mineru-asset-mode markdown_assets --postprocess-profile chunk-markers，并确认输出 Markdown、本地图片资产、postprocess_report.json、retrieval_hints.json 和 ragflow_ingest_plan.yaml
+- 如果服务是 MinerU FastAPI v2，正式入库前处理使用 ragflow-doc-to-md pipeline --backend mineru-fastapi --mineru-asset-mode markdown_assets --postprocess-profile chunk-markers-dense；含复杂表格时加 --table-quality high 或 --table-quality auto，并确认输出 Markdown、本地图片资产、postprocess_report.json、retrieval_hints.json 和 ragflow_ingest_plan.yaml
 - 确认 pipeline stdout 或 doc_manifest.json 中的 handoff_mode 是 formal_ingest；若是 thin_preview，请重新运行 pipeline
 - 如果本机 MinerU CLI 可用且用户希望本地优先，使用 ragflow-doc-to-md --backend auto 或 --backend mineru-cli，并确认输出 Markdown
 - 如果服务是 MinerU Agent API 或兼容 gateway，使用 ragflow-doc-to-md --backend mineru

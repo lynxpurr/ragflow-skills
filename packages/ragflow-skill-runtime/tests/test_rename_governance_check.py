@@ -92,6 +92,37 @@ class RenameGovernanceCheckTests(unittest.TestCase):
         self.assertFalse(blocked["naming_drift"]["ok"], blocked)
         self.assertEqual(blocked["naming_drift"]["summary"]["finding_count"], 1)
 
+    def test_skill_doc_directory_is_ignored_as_local_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs = root / "docs"
+            docs.mkdir()
+            docs.joinpath("11-public-rename-policy.md").write_text(
+                "\n".join(
+                    [
+                        "## CLI Aliases",
+                        "## Schema Migration",
+                        "## Documentation Updates",
+                        "## Downstream Gates",
+                        "## Release Notes",
+                        "## Rollback Plan",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            skill_doc = root / "skills" / "ragflow-doc-to-md" / "doc"
+            skill_doc.mkdir(parents=True)
+            (skill_doc / "private-input.md").write_text("ragflux kb ops local notes\n", encoding="utf-8")
+
+            report = run_rename_governance_check(
+                root=root,
+                compatibility_aliases=(),
+                drift_roots=(Path("skills"),),
+            )
+
+        self.assertTrue(report["naming_drift"]["ok"], report)
+        self.assertEqual(report["naming_drift"]["summary"]["finding_count"], 0)
+
     def test_compatibility_alias_requires_facade_evidence(self) -> None:
         alias = CompatibilityAlias(
             kind="command",

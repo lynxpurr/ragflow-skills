@@ -2017,6 +2017,11 @@ Completed changes:
   marker density warnings, image semantics, retrieval hints, assistant test-plan inputs,
   ingest readiness reports, package-level formal manifests, and retained-package static
   comparison reports.
+- The table-quality follow-up adds `--table-quality high|auto|standard` for MinerU
+  FastAPI, table-safe postprocess protection, table integrity reporting, and
+  table-aware `profile_suggestions.json` entries that recommend dense chunk markers,
+  the exact RAGFlow delimiter value (`<!-- chunk -->` wrapped in backticks), larger parent chunks, and no
+  `children_delimiter` for complex-table handoffs.
 - Runtime reports now expose performance timing for conversion, asset handling,
   postprocess, package, hints, and ingest-plan stages, with local CLI cold-start versus
   persistent service reuse called out where the backend can report it.

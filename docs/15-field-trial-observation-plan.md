@@ -291,6 +291,66 @@ Decision:
   broad corpus-quality guarantee, and require a separate explicit live-mutation approval
   for any paired RAGFlux live A/B run.
 
+### 2026-07-04 run-003
+
+Workflow:
+- `ragflow-doc-to-md` / `ragflow-kb-build`
+
+Input summary:
+- Source type: Chinese product datasheet PDF with complex HTML tables, images, headings,
+  formulas, and numeric product specifications.
+- Approximate document count: one full representative PDF.
+- Private details removed: exact source path, endpoint, run-root path, and raw Markdown.
+
+Commands:
+- `ragflow-doc-to-md pipeline --backend mineru-fastapi --table-quality high
+  --mineru-asset-mode markdown_assets --postprocess-profile chunk-markers-dense`
+- `ragflow-kb-build inspect-handoff`
+- `ragflow-kb-build --dry-run` with a reviewed table-atomic profile using
+  the `<!-- chunk -->` delimiter wrapped in backticks and no `children_delimiter`.
+
+Artifacts:
+- Public-safe artifact names: `runtime_report.json`, `quality_report.json`,
+  `postprocess_report.json`, `chunk_profile_report.json`, `retrieval_hints.json`,
+  `profile_suggestions.json`, `ingest_readiness_report.json`, `inspect_handoff.json`,
+  and dry-run JSON output.
+- Private artifact location retained outside public repo.
+
+Results:
+- Pass/fail: passed for the full representative PDF with the high-accuracy FastAPI
+  backend; no fallback was used.
+- Quality gate: `PASS_WITH_REVIEW`; review warnings are table-structure warnings for
+  complex HTML tables, not missing assets or blocked conversion.
+- Handoff summary: one Markdown document, 6 HTML tables, 6 table artifacts, 24 image
+  artifacts, 15 section boundaries, 29 question candidates, rich sidecars, and
+  `ragflow_ingest_plan.yaml`.
+- Table safety: postprocess preserved all 6 HTML table fingerprints, inserted 6 table
+  boundary markers through the dense profile, and inserted 0 markers inside table blocks.
+- Runtime summary: the conversion reused a persistent MinerU FastAPI service, selected a
+  high-accuracy backend, completed one remote attempt successfully, and reported no
+  resource failure, timeout, or degraded table-quality fallback.
+- Handoff inspection: `ingestion_readiness.status: ready_with_review`, rich and pipeline
+  sidecars complete, 0 missing image assets, and quality table count aligned with table
+  artifact count.
+- Dry-run: passed with the reviewed table-atomic parser profile.
+- Live mutation: not run.
+
+Friction:
+- Complex-table warnings remain intentionally conservative. They should drive human review
+  before live KB creation, not force a fallback to the lower-quality pipeline backend.
+- KB-side upload packaging for Markdown plus local images remains a separate
+  `ragflow-kb-build` live-mutation design question; this run only validates conversion,
+  handoff inspection, and dry-run readiness.
+
+Gated trigger:
+- none for new product surface. The current CLI pipeline is sufficient for high-quality
+  table handoff generation and dry-run review.
+
+Decision:
+- Treat `--table-quality high` plus `chunk-markers-dense` as the recommended formal path
+  for complex-table PDFs when a compatible MinerU FastAPI service is available. Keep live
+  RAGFlow KB creation gated by explicit user approval.
+
 ## Current Decision
 
 The next stage remains observation, not feature expansion. The representative PDF

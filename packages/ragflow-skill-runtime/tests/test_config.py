@@ -115,6 +115,34 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(config.mineru.asset_mode, "markdown_assets")
 
+    def test_load_skill_config_reads_doc_table_quality(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / ".ragflow"
+            config_dir.mkdir()
+            (config_dir / "config.local.yaml").write_text(
+                "doc_to_md:\n"
+                "  table_quality: auto\n"
+                "  allow_table_quality_fallback: true\n",
+                encoding="utf-8",
+            )
+
+            config = load_skill_config(env={}, cwd=root)
+
+        self.assertEqual(config.doc_to_md.table_quality, "auto")
+        self.assertTrue(config.doc_to_md.allow_table_quality_fallback)
+
+    def test_environment_overrides_doc_table_quality(self) -> None:
+        config = load_skill_config(
+            env={
+                "DOC_TO_MD_TABLE_QUALITY": "high",
+                "DOC_TO_MD_ALLOW_TABLE_QUALITY_FALLBACK": "true",
+            }
+        )
+
+        self.assertEqual(config.doc_to_md.table_quality, "high")
+        self.assertTrue(config.doc_to_md.allow_table_quality_fallback)
+
     def test_load_skill_config_merges_project_local_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

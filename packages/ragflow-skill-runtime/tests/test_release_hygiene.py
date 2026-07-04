@@ -93,6 +93,20 @@ class ReleaseHygieneTests(unittest.TestCase):
         self.assertEqual(findings[0].check, "personal_home_path")
         self.assertEqual(findings[0].line, 1)
 
+    def test_skill_doc_directory_is_ignored_as_local_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "skills" / "ragflow-doc-to-md" / "doc"
+            target.mkdir(parents=True)
+            (target / "private-input.md").write_text(
+                "Local next-round input from /home/private-user/source.pdf\n",
+                encoding="utf-8",
+            )
+
+            findings = scan_forbidden_patterns(root, base=root)
+
+        self.assertEqual(findings, [])
+
     def test_generated_report_safety_accepts_sanitized_report_with_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

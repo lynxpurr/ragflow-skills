@@ -45,6 +45,8 @@ class DocToMdConfig:
     """Document conversion configuration shared by doc-to-md scripts."""
 
     backend: str | None = None
+    table_quality: str | None = None
+    allow_table_quality_fallback: bool | None = None
     remote_url: str | None = None
     remote_api_key: str | None = None
     remote_timeout: float | None = None
@@ -58,6 +60,8 @@ class MineruConfig:
     api_key: str | None = None
     cli_path: str | None = None
     cli_backend: str | None = None
+    fastapi_backend: str | None = None
+    fastapi_server_url: str | None = None
     timeout: float | None = None
     poll_interval: float | None = None
     language: str | None = None
@@ -245,6 +249,11 @@ def _doc_to_md_from_mapping(data: Mapping[str, Any]) -> DocToMdConfig:
     timeout = _pick(merged, "remote_timeout", "timeout")
     return DocToMdConfig(
         backend=_pick(merged, "backend"),
+        table_quality=_pick(merged, "table_quality", "doc_to_md_table_quality"),
+        allow_table_quality_fallback=_parse_bool(
+            _pick(merged, "allow_table_quality_fallback", "doc_to_md_allow_table_quality_fallback"),
+            default=None,
+        ),
         remote_url=_pick(merged, "remote_url"),
         remote_api_key=_pick(merged, "remote_api_key"),
         remote_timeout=float(timeout) if timeout is not None else None,
@@ -261,6 +270,8 @@ def _mineru_from_mapping(data: Mapping[str, Any]) -> MineruConfig:
         api_key=_pick(merged, "api_key", "mineru_api_key"),
         cli_path=_pick(merged, "cli_path", "mineru_cli_path"),
         cli_backend=_pick(merged, "cli_backend", "mineru_cli_backend"),
+        fastapi_backend=_pick(merged, "fastapi_backend", "mineru_fastapi_backend"),
+        fastapi_server_url=_pick(merged, "fastapi_server_url", "mineru_fastapi_server_url", "server_url"),
         timeout=float(timeout) if timeout is not None else None,
         poll_interval=float(poll_interval) if poll_interval is not None else None,
         language=_pick(merged, "language"),
@@ -287,6 +298,10 @@ def _merge(base: RagflowConfig, override: RagflowConfig) -> RagflowConfig:
 def _merge_doc_to_md(base: DocToMdConfig, override: DocToMdConfig) -> DocToMdConfig:
     return DocToMdConfig(
         backend=override.backend or base.backend,
+        table_quality=override.table_quality or base.table_quality,
+        allow_table_quality_fallback=override.allow_table_quality_fallback
+        if override.allow_table_quality_fallback is not None
+        else base.allow_table_quality_fallback,
         remote_url=override.remote_url or base.remote_url,
         remote_api_key=override.remote_api_key or base.remote_api_key,
         remote_timeout=override.remote_timeout if override.remote_timeout is not None else base.remote_timeout,
@@ -299,6 +314,8 @@ def _merge_mineru(base: MineruConfig, override: MineruConfig) -> MineruConfig:
         api_key=override.api_key or base.api_key,
         cli_path=override.cli_path or base.cli_path,
         cli_backend=override.cli_backend or base.cli_backend,
+        fastapi_backend=override.fastapi_backend or base.fastapi_backend,
+        fastapi_server_url=override.fastapi_server_url or base.fastapi_server_url,
         timeout=override.timeout if override.timeout is not None else base.timeout,
         poll_interval=override.poll_interval if override.poll_interval is not None else base.poll_interval,
         language=override.language or base.language,
@@ -366,6 +383,11 @@ def load_skill_config(
         ),
         doc_to_md=DocToMdConfig(
             backend=env_map.get("DOC_TO_MD_BACKEND"),
+            table_quality=env_map.get("DOC_TO_MD_TABLE_QUALITY"),
+            allow_table_quality_fallback=_parse_bool(
+                env_map.get("DOC_TO_MD_ALLOW_TABLE_QUALITY_FALLBACK"),
+                default=None,
+            ),
             remote_url=env_map.get("DOC_TO_MD_REMOTE_URL"),
             remote_api_key=env_map.get("DOC_TO_MD_REMOTE_API_KEY"),
             remote_timeout=float(env_map["DOC_TO_MD_TIMEOUT"])
@@ -377,6 +399,8 @@ def load_skill_config(
             api_key=env_map.get("MINERU_API_KEY"),
             cli_path=env_map.get("MINERU_CLI_PATH"),
             cli_backend=env_map.get("MINERU_CLI_BACKEND"),
+            fastapi_backend=env_map.get("MINERU_FASTAPI_BACKEND"),
+            fastapi_server_url=env_map.get("MINERU_FASTAPI_SERVER_URL"),
             timeout=float(env_map["MINERU_TIMEOUT"]) if env_map.get("MINERU_TIMEOUT") else None,
             poll_interval=float(env_map["MINERU_POLL_INTERVAL"])
             if env_map.get("MINERU_POLL_INTERVAL")

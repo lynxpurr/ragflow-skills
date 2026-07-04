@@ -243,6 +243,8 @@ class DocConvertTests(unittest.TestCase):
         self.assertIn("ocr", body)
         self.assertIn('name="table_enable"', body)
         self.assertIn("false", body)
+        self.assertIn('name="backend"', body)
+        self.assertIn("pipeline", body)
         self.assertIn('name="start_page_id"', body)
         self.assertIn("1", body)
         self.assertIn('name="end_page_id"', body)
@@ -265,6 +267,88 @@ class DocConvertTests(unittest.TestCase):
         self.assertFalse(asset_policy["requested"]["return_content_list"])
         self.assertFalse(asset_policy["requested"]["return_middle_json"])
         self.assertFalse(asset_policy["manifest_assets"])
+
+    def test_mineru_fastapi_convert_passes_high_accuracy_backend_and_server_url(self) -> None:
+        captured: dict[str, object] = {"status_calls": 0}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0"))
+                captured["path"] = self.path
+                captured["body"] = self.rfile.read(length).decode("utf-8", errors="replace")
+                raw = json.dumps({"task_id": "task-hybrid", "status": "pending"}).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/tasks/task-hybrid":
+                    captured["status_calls"] = int(captured["status_calls"]) + 1
+                    raw = json.dumps({"task_id": "task-hybrid", "status": "completed"}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                if self.path == "/tasks/task-hybrid/result":
+                    raw = json.dumps({"results": {"paper": {"md_content": "# Hybrid\n\nConverted.\n"}}}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        remote_attempts: list[dict[str, object]] = []
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                source_path = Path(tmp) / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake")
+                markdown = mineru_fastapi_convert(
+                    SourceDocument(path=source_path, source_path="paper.pdf"),
+                    base_url=f"http://127.0.0.1:{server.server_port}",
+                    timeout=5,
+                    poll_interval=0.01,
+                    fastapi_backend="hybrid-engine",
+                    fastapi_server_url="https://vlm.example.internal/v1",
+                    remote_attempts=remote_attempts,
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(markdown, "# Hybrid\n\nConverted.\n")
+        body = str(captured["body"])
+        self.assertIn('name="backend"', body)
+        self.assertIn("hybrid-auto-engine", body)
+        self.assertIn('name="server_url"', body)
+        self.assertIn("https://vlm.example.internal/v1", body)
+        self.assertEqual(remote_attempts[0]["requested_mineru_fastapi_backend"], "hybrid-engine")
+        self.assertEqual(remote_attempts[0]["mineru_fastapi_backend"], "hybrid-auto-engine")
+        self.assertEqual(remote_attempts[0]["mineru_fastapi_server_url"], "https://<redacted-host>/v1")
+
+    def test_mineru_fastapi_convert_rejects_unknown_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "paper.pdf"
+            source_path.write_bytes(b"%PDF fake")
+            with self.assertRaises(DocConvertError):
+                mineru_fastapi_convert(
+                    SourceDocument(path=source_path, source_path="paper.pdf"),
+                    base_url="http://127.0.0.1:1",
+                    fastapi_backend="surprise-engine",
+                )
 
     def test_mineru_fastapi_convert_saves_base64_image_assets(self) -> None:
         image_bytes = b"fake png bytes"
@@ -1149,9 +1233,15 @@ class DocConvertTests(unittest.TestCase):
                 "# APOLLO 产品目录\n\n"
                 "## 技术参数\n\n"
                 "<table>\n"
-                "<tr><th>型号</th><th>精度</th><th>尺寸</th></tr>\n"
-                "<tr><td>APOLLO-H</td><td>0.01 mm</td><td>250 mm</td></tr>\n"
+                "<caption>APOLLO 规格参数</caption>\n"
+                "<tr><th>型号</th><th colspan=\"2\">性能</th></tr>\n"
+                "<tr><td rowspan=\"2\">APOLLO-H</td><td>精度</td><td>0.01 mm</td></tr>\n"
+                "<tr><td>尺寸</td><td>250 mm</td></tr>\n"
                 "</table>\n",
+                encoding="utf-8",
+            )
+            (root / "content_list.json").write_text(
+                json.dumps([{"type": "table", "page": 1, "text": "APOLLO 规格参数"}]),
                 encoding="utf-8",
             )
 
@@ -1161,11 +1251,50 @@ class DocConvertTests(unittest.TestCase):
             )
 
         signals = report["documents"][0]["quality_signals"]
-        self.assertEqual(report["gate"]["status"], PASS)
+        self.assertEqual(report["gate"]["status"], PASS_WITH_REVIEW)
         self.assertEqual(signals["table_count"], 1)
         self.assertEqual(signals["markdown_table_count"], 0)
         self.assertEqual(signals["html_table_count"], 1)
-        self.assertEqual(signals["html_table_review_warning_count"], 0)
+        self.assertEqual(signals["html_table_review_warning_count"], 1)
+        self.assertEqual(signals["table_source_counts"]["content_list_table_count"], 1)
+        self.assertEqual(signals["table_source_counts"]["total_source_table_count"], 2)
+        self.assertTrue(signals["table_heavy_document"])
+        self.assertTrue(signals["chunk_marker_table_atomicity"]["ok"])
+        self.assertEqual(signals["chunk_marker_table_atomicity"]["unbalanced_fragment_count"], 0)
+        table_fingerprint = signals["table_fingerprints"][0]
+        self.assertEqual(table_fingerprint["row_count"], 3)
+        self.assertEqual(table_fingerprint["column_count"], 3)
+        self.assertEqual(table_fingerprint["cell_count"], 7)
+        self.assertEqual(table_fingerprint["rowspan_count"], 1)
+        self.assertEqual(table_fingerprint["colspan_count"], 1)
+        self.assertEqual(table_fingerprint["caption_preview"], "APOLLO 规格参数")
+        self.assertRegex(table_fingerprint["sha256"], r"^[a-f0-9]{64}$")
+
+    def test_quality_report_flags_chunk_marker_inside_html_table_fragment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "documents" / "fragmented.md"
+            markdown.parent.mkdir()
+            markdown.write_text(
+                "# Fragmented\n\n"
+                "<table>\n"
+                "<tr><th>型号</th><th>精度</th></tr>\n"
+                "<!-- chunk -->\n"
+                "<tr><td>APOLLO-H</td><td>0.01 mm</td></tr>\n"
+                "</table>\n",
+                encoding="utf-8",
+            )
+
+            report = make_quality_report_payload(
+                output_root=root,
+                documents=[QualityDocument(source_path="fragmented.pdf", markdown_path=markdown)],
+            )
+
+        signals = report["documents"][0]["quality_signals"]
+        atomicity = signals["chunk_marker_table_atomicity"]
+        self.assertFalse(atomicity["ok"])
+        self.assertEqual(atomicity["chunk_marker_count"], 1)
+        self.assertEqual(atomicity["unbalanced_fragment_count"], 2)
 
     def test_quality_report_blocks_empty_and_missing_image(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

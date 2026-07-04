@@ -104,6 +104,16 @@ POSTPROCESS_PROFILE_CHOICES = [
     "chunk-markers-dense",
     "chunk-markers-ragflux-like",
 ]
+TABLE_QUALITY_CHOICES = {"standard", "high", "auto"}
+TABLE_QUALITY_HIGH_FASTAPI_BACKEND = "hybrid-auto-engine"
+TABLE_QUALITY_HIGH_FASTAPI_BACKENDS = {
+    "hybrid-auto-engine",
+    "vlm-auto-engine",
+    "hybrid-http-client",
+    "vlm-http-client",
+    "hybrid-engine",
+    "vlm-engine",
+}
 FORMAL_PREP_SOURCE_EXTENSIONS = {
     ".bmp",
     ".doc",
@@ -163,7 +173,7 @@ def _thin_preview_handoff_advisory(sources: list[Any]) -> list[dict[str, Any]]:
                 "--output",
                 "<handoff>",
                 "--postprocess-profile",
-                "chunk-markers",
+                "chunk-markers-dense",
                 "--json",
             ],
             "formal_candidate_input": bool(candidate_extensions),
@@ -371,6 +381,28 @@ def _mineru_asset_mode(args: argparse.Namespace, config) -> str:
     if normalized not in allowed:
         raise DocConvertError("MINERU_ASSET_MODE must be one of: markdown_only, markdown_assets")
     return normalized
+
+
+def _mineru_fastapi_backend(args: argparse.Namespace, config) -> str:
+    return (
+        _config_or_arg(
+            args,
+            "mineru_fastapi_backend",
+            getattr(config.mineru, "fastapi_backend", None),
+            "pipeline",
+        )
+        or "pipeline"
+    )
+
+
+def _candidate_table_quality_sources(sources: list[Any]) -> list[str]:
+    candidates: list[str] = []
+    for source in sources:
+        path = getattr(source, "path", None)
+        suffix = Path(path).suffix.lower() if path is not None else ""
+        if suffix in FORMAL_PREP_SOURCE_EXTENSIONS:
+            candidates.append(str(getattr(source, "source_path", path)))
+    return candidates
 
 
 def _sidecar_path(root: Path, name: str | None) -> Path | None:
@@ -1046,6 +1078,8 @@ def _conversion_runtime_context(
     *,
     backend: str,
     mineru_asset_mode: str,
+    mineru_fastapi_backend: str,
+    mineru_fastapi_server_url: str | None,
     mineru_is_ocr: bool,
     mineru_enable_table: bool,
     mineru_enable_formula: bool,
@@ -1053,6 +1087,8 @@ def _conversion_runtime_context(
     context: dict[str, Any] = {
         "configured_backend": backend,
         "mineru_asset_mode": mineru_asset_mode,
+        "mineru_fastapi_backend": mineru_fastapi_backend,
+        "mineru_fastapi_server_url_configured": bool(mineru_fastapi_server_url),
         "ocr_requested": bool(mineru_is_ocr),
         "table_parsing_requested": bool(mineru_enable_table),
         "formula_parsing_requested": bool(mineru_enable_formula),
@@ -1342,6 +1378,7 @@ def _sanitize_conversion_reports(
     mineru_base_url: str | None,
     mineru_api_key: str | None,
     mineru_cli_path: str | None,
+    mineru_fastapi_server_url: str | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     if not args.redaction_report:
         return quality_report, runtime_report
@@ -1361,7 +1398,7 @@ def _sanitize_conversion_reports(
             config.doc_to_md.remote_api_key,
             config.mineru.api_key,
         ],
-        url_candidates=[remote_url, mineru_base_url],
+        url_candidates=[remote_url, mineru_base_url, mineru_fastapi_server_url],
         home_paths=[
             args.input,
             args.output,
@@ -1386,7 +1423,7 @@ def _sanitize_conversion_reports(
 
 
 def _config_or_arg(args: argparse.Namespace, field: str, config_value, default=None):
-    value = getattr(args, field)
+    value = getattr(args, field, None)
     return value if value not in (None, "") else config_value if config_value not in (None, "") else default
 
 
@@ -1428,6 +1465,185 @@ def _bool_config_or_arg(args: argparse.Namespace, field: str, config_value, defa
     raise DocConvertError(f"{label} must be true or false")
 
 
+def _table_quality(args: argparse.Namespace, config) -> str:
+    value = _config_or_arg(args, "table_quality", getattr(config.doc_to_md, "table_quality", None), "standard")
+    normalized = str(value or "standard").strip().lower().replace("_", "-")
+    if normalized not in TABLE_QUALITY_CHOICES:
+        allowed = ", ".join(sorted(TABLE_QUALITY_CHOICES))
+        raise DocConvertError(f"DOC_TO_MD_TABLE_QUALITY must be one of: {allowed}")
+    return normalized
+
+
+def _allow_table_quality_fallback(args: argparse.Namespace, config) -> bool:
+    return _bool_config_or_arg(
+        args,
+        "allow_table_quality_fallback",
+        getattr(config.doc_to_md, "allow_table_quality_fallback", None),
+        False,
+        label="DOC_TO_MD_ALLOW_TABLE_QUALITY_FALLBACK",
+    )
+
+
+def _table_quality_decision(
+    *,
+    backend: str,
+    sources: list[Any],
+    table_quality: str,
+    mineru_fastapi_backend: str,
+    mineru_enable_table: bool,
+    allow_fallback: bool,
+) -> dict[str, Any]:
+    requested_backend = (mineru_fastapi_backend or "pipeline").strip().lower() or "pipeline"
+    effective_backend = requested_backend
+    candidate_sources = _candidate_table_quality_sources(sources)
+    applied = False
+    reason = "standard_compatibility"
+
+    if table_quality == "standard":
+        reason = "standard_compatibility"
+    elif backend != "mineru-fastapi":
+        reason = "requires_mineru_fastapi_backend"
+    elif not mineru_enable_table:
+        reason = "table_parsing_disabled"
+    elif table_quality == "high":
+        effective_backend = (
+            requested_backend
+            if requested_backend in TABLE_QUALITY_HIGH_FASTAPI_BACKENDS
+            else TABLE_QUALITY_HIGH_FASTAPI_BACKEND
+        )
+        applied = effective_backend != "pipeline"
+        reason = "forced_high_accuracy"
+    elif candidate_sources:
+        effective_backend = (
+            requested_backend
+            if requested_backend in TABLE_QUALITY_HIGH_FASTAPI_BACKENDS
+            else TABLE_QUALITY_HIGH_FASTAPI_BACKEND
+        )
+        applied = effective_backend != "pipeline"
+        reason = "auto_candidate_source"
+    else:
+        reason = "auto_no_candidate_source"
+
+    degraded = False
+    return {
+        "schema": "ragflow_doc_table_quality_decision_v1",
+        "mode": table_quality,
+        "configured_backend": backend,
+        "candidate_source_count": len(candidate_sources),
+        "candidate_source_extensions": sorted(
+            {
+                Path(str(source)).suffix.lower()
+                for source in candidate_sources
+                if Path(str(source)).suffix
+            }
+        ),
+        "requested_mineru_fastapi_backend": requested_backend,
+        "effective_mineru_fastapi_backend": effective_backend,
+        "high_accuracy_backend_requested": applied and effective_backend != "pipeline",
+        "auto_triggered": table_quality == "auto" and applied,
+        "fallback_allowed": bool(allow_fallback),
+        "fallback_count": 0,
+        "table_quality_degraded": degraded,
+        "reason": reason,
+    }
+
+
+def _table_quality_runtime_context(decision: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "table_quality": decision["mode"],
+        "table_quality_reason": decision["reason"],
+        "table_quality_candidate_source_count": decision["candidate_source_count"],
+        "table_quality_high_accuracy_requested": decision["high_accuracy_backend_requested"],
+        "table_quality_auto_triggered": decision["auto_triggered"],
+        "table_quality_fallback_allowed": decision["fallback_allowed"],
+        "table_quality_degraded": decision["table_quality_degraded"],
+        "table_quality_fallback_count": decision["fallback_count"],
+        "mineru_fastapi_backend": decision["effective_mineru_fastapi_backend"],
+    }
+
+
+def _table_quality_warnings(decision: dict[str, Any]) -> list[dict[str, str]]:
+    if decision["high_accuracy_backend_requested"]:
+        return [
+            {
+                "code": "table_high_accuracy_backend",
+                "severity": "info",
+                "message": (
+                    "High-accuracy MinerU FastAPI backend was selected for table-quality conversion; "
+                    "expect higher latency or resource usage than pipeline."
+                ),
+            }
+        ]
+    if decision["mode"] in {"high", "auto"} and decision["reason"] in {
+        "requires_mineru_fastapi_backend",
+        "table_parsing_disabled",
+    }:
+        return [
+            {
+                "code": "table_quality_not_applied",
+                "severity": "review",
+                "message": "Table-quality strategy was requested but could not select a high-accuracy FastAPI backend.",
+            }
+        ]
+    return []
+
+
+def _latest_failed_fastapi_attempt(remote_attempts: list[dict[str, Any]], start_index: int) -> dict[str, Any] | None:
+    for item in reversed(remote_attempts[start_index:]):
+        if item.get("backend") == "mineru-fastapi" and item.get("status") in {"failed", "timeout"}:
+            return item
+    return None
+
+
+def _is_backend_unsupported_attempt(attempt: dict[str, Any] | None) -> bool:
+    if not attempt:
+        return False
+    text = " ".join(
+        str(value or "")
+        for value in (
+            attempt.get("error_category"),
+            attempt.get("error"),
+            attempt.get("http_status"),
+        )
+    ).lower()
+    return (
+        str(attempt.get("error_category") or "") == "protocol_error"
+        and ("backend" in text or "unsupported" in text or "not supported" in text or "invalid" in text)
+    )
+
+
+def _table_quality_fallback_event(
+    *,
+    source_path: str,
+    remote_attempts: list[dict[str, Any]],
+    remote_attempt_start: int,
+    decision: dict[str, Any],
+    allow_fallback: bool,
+) -> dict[str, Any] | None:
+    if not decision.get("high_accuracy_backend_requested"):
+        return None
+    if decision.get("effective_mineru_fastapi_backend") == "pipeline":
+        return None
+    attempt = _latest_failed_fastapi_attempt(remote_attempts, remote_attempt_start)
+    if not attempt:
+        return None
+    unsupported = _is_backend_unsupported_attempt(attempt)
+    if not unsupported and not allow_fallback:
+        return None
+    fallback_reason = "backend_unsupported" if unsupported else str(attempt.get("error_category") or "conversion_failed")
+    return {
+        "source_path": source_path,
+        "from_backend": decision.get("effective_mineru_fastapi_backend"),
+        "to_backend": "pipeline",
+        "reason": fallback_reason,
+        "allowed_by": "backend_unsupported_policy" if unsupported else "allow_table_quality_fallback",
+        "failed_attempt_status": attempt.get("status"),
+        "failed_attempt_error_category": attempt.get("error_category"),
+        "failed_attempt_http_status": attempt.get("http_status"),
+        "status": "started",
+    }
+
+
 def _run(args: argparse.Namespace) -> int:
     try:
         config = load_skill_config(config_file=args.config)
@@ -1464,6 +1680,14 @@ def _run(args: argparse.Namespace) -> int:
             label="MINERU_VERIFY_SSL",
         )
         mineru_asset_mode = _mineru_asset_mode(args, config)
+        mineru_fastapi_backend = _mineru_fastapi_backend(args, config)
+        mineru_fastapi_server_url = _config_or_arg(
+            args,
+            "mineru_fastapi_server_url",
+            getattr(config.mineru, "fastapi_server_url", None),
+        )
+        table_quality = _table_quality(args, config)
+        allow_table_quality_fallback = _allow_table_quality_fallback(args, config)
         mineru_cli_backend = _config_or_arg(
             args,
             "mineru_cli_backend",
@@ -1502,15 +1726,27 @@ def _run(args: argparse.Namespace) -> int:
         ]
         if not sources:
             raise DocConvertError("no input files found outside the output directory")
+        table_quality_decision = _table_quality_decision(
+            backend=backend,
+            sources=sources,
+            table_quality=table_quality,
+            mineru_fastapi_backend=mineru_fastapi_backend,
+            mineru_enable_table=mineru_enable_table,
+            allow_fallback=allow_table_quality_fallback,
+        )
+        mineru_fastapi_backend = table_quality_decision["effective_mineru_fastapi_backend"]
         handoff_mode = THIN_PREVIEW_HANDOFF_MODE
         handoff_advisory = _thin_preview_handoff_advisory(sources)
         runtime_context = _conversion_runtime_context(
             backend=backend,
             mineru_asset_mode=mineru_asset_mode,
+            mineru_fastapi_backend=mineru_fastapi_backend,
+            mineru_fastapi_server_url=mineru_fastapi_server_url,
             mineru_is_ocr=mineru_is_ocr,
             mineru_enable_table=mineru_enable_table,
             mineru_enable_formula=mineru_enable_formula,
         )
+        runtime_context.update(_table_quality_runtime_context(table_quality_decision))
         slow_path_warnings = _conversion_slow_path_warnings(
             sources=sources,
             backend=backend,
@@ -1519,6 +1755,7 @@ def _run(args: argparse.Namespace) -> int:
             mineru_enable_table=mineru_enable_table,
             mineru_enable_formula=mineru_enable_formula,
         )
+        slow_path_warnings.extend(_table_quality_warnings(table_quality_decision))
 
         docs_dir = output_root / "documents"
         docs_dir.mkdir(parents=True, exist_ok=True)
@@ -1528,6 +1765,7 @@ def _run(args: argparse.Namespace) -> int:
         process_attempts: list[dict[str, Any]] = []
         remote_attempts: list[dict[str, Any]] = []
         stage_timings: list[dict[str, Any]] = []
+        table_quality_fallback_events: list[dict[str, Any]] = []
 
         for source in sources:
             output_name = safe_markdown_name(source, used=used_names)
@@ -1536,32 +1774,61 @@ def _run(args: argparse.Namespace) -> int:
             process_attempt_start = len(process_attempts)
             remote_attempt_start = len(remote_attempts)
             try:
-                markdown, warnings = convert_source_to_markdown(
-                    source,
-                    mode=args.mode,
-                    backend=backend,
-                    remote_url=remote_url,
-                    remote_api_key=remote_api_key,
-                    remote_timeout=remote_timeout,
-                    mineru_base_url=mineru_base_url,
-                    mineru_api_key=mineru_api_key,
-                    mineru_timeout=mineru_timeout,
-                    mineru_poll_interval=mineru_poll_interval,
-                    mineru_verify_ssl=mineru_verify_ssl,
-                    mineru_cli_path=mineru_cli_path,
-                    mineru_cli_backend=mineru_cli_backend,
-                    asset_output_dir=markdown_path.parent,
-                    asset_document_stem=markdown_path.stem,
-                    mineru_language=mineru_language,
-                    mineru_page_range=mineru_page_range,
-                    mineru_enable_table=mineru_enable_table,
-                    mineru_is_ocr=mineru_is_ocr,
-                    mineru_enable_formula=mineru_enable_formula,
-                    mineru_asset_mode=mineru_asset_mode,
-                    process_attempts=process_attempts,
-                    remote_attempts=remote_attempts,
-                    allow_image_fallback=not args.no_image_fallback,
-                )
+                def convert_with_fastapi_backend(fastapi_backend: str) -> tuple[str, list[str]]:
+                    return convert_source_to_markdown(
+                        source,
+                        mode=args.mode,
+                        backend=backend,
+                        remote_url=remote_url,
+                        remote_api_key=remote_api_key,
+                        remote_timeout=remote_timeout,
+                        mineru_base_url=mineru_base_url,
+                        mineru_api_key=mineru_api_key,
+                        mineru_timeout=mineru_timeout,
+                        mineru_poll_interval=mineru_poll_interval,
+                        mineru_verify_ssl=mineru_verify_ssl,
+                        mineru_cli_path=mineru_cli_path,
+                        mineru_cli_backend=mineru_cli_backend,
+                        mineru_fastapi_backend=fastapi_backend,
+                        mineru_fastapi_server_url=mineru_fastapi_server_url,
+                        asset_output_dir=markdown_path.parent,
+                        asset_document_stem=markdown_path.stem,
+                        mineru_language=mineru_language,
+                        mineru_page_range=mineru_page_range,
+                        mineru_enable_table=mineru_enable_table,
+                        mineru_is_ocr=mineru_is_ocr,
+                        mineru_enable_formula=mineru_enable_formula,
+                        mineru_asset_mode=mineru_asset_mode,
+                        process_attempts=process_attempts,
+                        remote_attempts=remote_attempts,
+                        allow_image_fallback=not args.no_image_fallback,
+                    )
+
+                try:
+                    markdown, warnings = convert_with_fastapi_backend(mineru_fastapi_backend)
+                except DocConvertError as exc:
+                    fallback_event = _table_quality_fallback_event(
+                        source_path=source.source_path,
+                        remote_attempts=remote_attempts,
+                        remote_attempt_start=remote_attempt_start,
+                        decision=table_quality_decision,
+                        allow_fallback=allow_table_quality_fallback,
+                    )
+                    if fallback_event is None:
+                        raise
+                    try:
+                        markdown, warnings = convert_with_fastapi_backend("pipeline")
+                    except DocConvertError as fallback_exc:
+                        fallback_event["status"] = "fallback_failed"
+                        fallback_event["fallback_error"] = str(fallback_exc)
+                        table_quality_fallback_events.append(fallback_event)
+                        raise exc from fallback_exc
+                    fallback_event["status"] = "fallback_succeeded"
+                    table_quality_fallback_events.append(fallback_event)
+                    warnings.append(
+                        "table_quality_degraded: high-accuracy table backend failed; "
+                        "retried MinerU FastAPI pipeline backend"
+                    )
             except (UnicodeDecodeError, OSError, DocConvertError) as exc:
                 stage_timings.append(
                     _stage_timing(
@@ -1600,6 +1867,7 @@ def _run(args: argparse.Namespace) -> int:
                         mineru_base_url=mineru_base_url,
                         mineru_api_key=mineru_api_key,
                         mineru_cli_path=mineru_cli_path,
+                        mineru_fastapi_server_url=mineru_fastapi_server_url,
                     )
                     _write_runtime_report_payload(
                         output_root=output_root,
@@ -1652,6 +1920,15 @@ def _run(args: argparse.Namespace) -> int:
                 )
             )
 
+        table_quality_decision["fallback_count"] = len(
+            [item for item in table_quality_fallback_events if item.get("status") == "fallback_succeeded"]
+        )
+        table_quality_decision["table_quality_degraded"] = table_quality_decision["fallback_count"] > 0
+        if table_quality_fallback_events:
+            table_quality_decision["fallback_events"] = table_quality_fallback_events[:50]
+        runtime_context.update(_table_quality_runtime_context(table_quality_decision))
+        if table_quality_fallback_events:
+            runtime_context["table_quality_fallback_events"] = table_quality_fallback_events[:50]
         runtime_report = _make_runtime_report(
             output_root=output_root,
             process_attempts=process_attempts,
@@ -1674,6 +1951,7 @@ def _run(args: argparse.Namespace) -> int:
                 mineru_base_url=mineru_base_url,
                 mineru_api_key=mineru_api_key,
                 mineru_cli_path=mineru_cli_path,
+                mineru_fastapi_server_url=mineru_fastapi_server_url,
             )
             _write_runtime_report_payload(
                 output_root=output_root,
@@ -1712,6 +1990,7 @@ def _run(args: argparse.Namespace) -> int:
             mineru_base_url=mineru_base_url,
             mineru_api_key=mineru_api_key,
             mineru_cli_path=mineru_cli_path,
+            mineru_fastapi_server_url=mineru_fastapi_server_url,
         )
         runtime_report_path, runtime_report_md_path = _write_runtime_report_payload(
             output_root=output_root,
@@ -1745,6 +2024,7 @@ def _run(args: argparse.Namespace) -> int:
             "quality_gate": quality_report["gate"],
             "runtime_report": str(runtime_report_path) if runtime_report_path else None,
             "runtime_summary": runtime_report["summary"] if runtime_report else None,
+            "table_quality": table_quality_decision,
             "document_count": len(converted),
             "skipped": skipped,
         }
@@ -1752,7 +2032,7 @@ def _run(args: argparse.Namespace) -> int:
             response = _sanitize_output_payload(
                 response,
                 explicit_secrets=[remote_api_key, mineru_api_key],
-                url_candidates=[remote_url, mineru_base_url],
+                url_candidates=[remote_url, mineru_base_url, mineru_fastapi_server_url],
                 home_paths=[args.input, args.output, str(output_root), mineru_cli_path],
                 config_paths=[
                     args.input,
@@ -2092,6 +2372,7 @@ def _run_pipeline(args: argparse.Namespace) -> int:
             "quality_report": convert_payload.get("quality_report"),
             "quality_gate": convert_payload.get("quality_gate"),
             "runtime_report": convert_payload.get("runtime_report"),
+            "table_quality": convert_payload.get("table_quality"),
             "postprocess_report": str(postprocess_report_path),
             "chunk_profile_report": str(chunk_profile_report_path) if chunk_profile_report_path else None,
             "handoff_package": package_payload,
@@ -2574,6 +2855,12 @@ def _run_backend_warmup(args: argparse.Namespace) -> int:
                 "pipeline",
             )
             or "pipeline",
+            mineru_fastapi_backend=_mineru_fastapi_backend(args, config),
+            mineru_fastapi_server_url=_config_or_arg(
+                args,
+                "mineru_fastapi_server_url",
+                getattr(config.mineru, "fastapi_server_url", None),
+            ),
             mineru_language=_config_or_arg(args, "mineru_language", config.mineru.language, "ch") or "ch",
             mineru_page_range=_config_or_arg(args, "mineru_page_range", config.mineru.page_range),
             mineru_enable_table=_bool_config_or_arg(
@@ -2610,6 +2897,11 @@ def _run_backend_warmup(args: argparse.Namespace) -> int:
             url_candidates=[
                 _config_or_arg(args, "remote_url", config.doc_to_md.remote_url),
                 _config_or_arg(args, "mineru_base_url", config.mineru.base_url),
+                _config_or_arg(
+                    args,
+                    "mineru_fastapi_server_url",
+                    getattr(config.mineru, "fastapi_server_url", None),
+                ),
             ],
             home_paths=[
                 args.fixture,
@@ -2748,6 +3040,8 @@ def build_backend_parser() -> argparse.ArgumentParser:
     warmup.add_argument("--mineru-timeout", type=float, help="MinerU parse timeout in seconds; defaults to MINERU_TIMEOUT or 300")
     warmup.add_argument("--mineru-poll-interval", type=float, help="MinerU parse polling interval; defaults to MINERU_POLL_INTERVAL or 3")
     warmup.add_argument("--mineru-cli-backend", help="Local MinerU CLI backend passed with -b; defaults to MINERU_CLI_BACKEND, mineru.cli_backend, or pipeline")
+    warmup.add_argument("--mineru-fastapi-backend", help="MinerU FastAPI parsing backend; defaults to MINERU_FASTAPI_BACKEND, mineru.fastapi_backend, or pipeline")
+    warmup.add_argument("--mineru-fastapi-server-url", help="OpenAI-compatible server URL passed as server_url for MinerU *-http-client backends")
     warmup.add_argument("--mineru-language", help="MinerU language option; defaults to MINERU_LANGUAGE or ch")
     warmup.add_argument("--mineru-page-range", help="MinerU page range; defaults to MINERU_PAGE_RANGE")
     warmup.add_argument("--mineru-enable-table", help="MinerU table parsing true/false; defaults to MINERU_ENABLE_TABLE or true")
@@ -2775,6 +3069,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--remote-url", help="Remote conversion endpoint; defaults to DOC_TO_MD_REMOTE_URL")
     parser.add_argument("--remote-api-key", help="Remote conversion bearer token; defaults to DOC_TO_MD_REMOTE_API_KEY")
     parser.add_argument("--remote-timeout", type=float, help="Remote conversion timeout in seconds; defaults to DOC_TO_MD_TIMEOUT or 120")
+    parser.add_argument("--table-quality", choices=sorted(TABLE_QUALITY_CHOICES), help="Table extraction strategy; defaults to DOC_TO_MD_TABLE_QUALITY or standard")
+    parser.add_argument("--allow-table-quality-fallback", action="store_true", default=None, help="Allow high-accuracy table conversion to fall back to MinerU FastAPI pipeline after resource or timeout failures")
     parser.add_argument("--mineru-base-url", help="MinerU service base URL; Agent API defaults to MINERU_BASE_URL or https://mineru.net/api/v1/agent, mineru-sync appends /parse when needed, mineru-fastapi uses /tasks")
     parser.add_argument("--mineru-api-key", help="MinerU API key; defaults to MINERU_API_KEY")
     parser.add_argument("--mineru-timeout", type=float, help="MinerU parse timeout in seconds; defaults to MINERU_TIMEOUT or 300")
@@ -2782,6 +3078,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mineru-verify-ssl", help="MinerU TLS certificate verification true/false; defaults to MINERU_VERIFY_SSL or true")
     parser.add_argument("--mineru-cli-path", help="Local MinerU CLI path; defaults to MINERU_CLI_PATH, mineru.cli_path, or PATH lookup")
     parser.add_argument("--mineru-cli-backend", help="Local MinerU CLI backend passed with -b; defaults to MINERU_CLI_BACKEND, mineru.cli_backend, or pipeline")
+    parser.add_argument("--mineru-fastapi-backend", help="MinerU FastAPI parsing backend; defaults to MINERU_FASTAPI_BACKEND, mineru.fastapi_backend, or pipeline")
+    parser.add_argument("--mineru-fastapi-server-url", help="OpenAI-compatible server URL passed as server_url for MinerU *-http-client backends")
     parser.add_argument("--mineru-language", help="MinerU language option; defaults to MINERU_LANGUAGE or ch")
     parser.add_argument("--mineru-page-range", help="MinerU page range; defaults to MINERU_PAGE_RANGE")
     parser.add_argument("--mineru-enable-table", help="MinerU table parsing true/false; defaults to MINERU_ENABLE_TABLE or true")
@@ -2804,7 +3102,7 @@ def build_parser() -> argparse.ArgumentParser:
 def build_pipeline_parser() -> argparse.ArgumentParser:
     parser = build_parser()
     parser.description = "Run convert -> postprocess -> rich package -> non-secret ingest plan"
-    parser.add_argument("--postprocess-profile", choices=POSTPROCESS_PROFILE_CHOICES, default="chunk-markers", help="Post-processing profile for the formal handoff")
+    parser.add_argument("--postprocess-profile", choices=POSTPROCESS_PROFILE_CHOICES, default="chunk-markers-dense", help="Post-processing profile for the formal handoff")
     parser.add_argument("--postprocess-report-name", default="postprocess_report.json", help="Postprocess report sidecar name under the output directory")
     parser.add_argument("--chunk-profile-report-name", default="chunk_profile_report.json", help="Chunk profile report sidecar name under the output directory")
     parser.add_argument("--metadata-name", default="metadata.json", help="Rich package metadata sidecar name")

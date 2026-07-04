@@ -112,6 +112,19 @@ MINERU_FASTAPI_PENDING_STATES = {"pending", "processing", "queued", "running"}
 MINERU_FASTAPI_RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
 MINERU_FASTAPI_DEFAULT_END_PAGE_ID = 99999
 MINERU_FASTAPI_ASSET_MODES = {"markdown_only", "markdown_assets"}
+MINERU_FASTAPI_BACKENDS = {
+    "pipeline",
+    "hybrid-auto-engine",
+    "vlm-auto-engine",
+    "hybrid-http-client",
+    "vlm-http-client",
+    "hybrid-engine",
+    "vlm-engine",
+}
+MINERU_FASTAPI_BACKEND_ALIASES = {
+    "hybrid-engine": "hybrid-auto-engine",
+    "vlm-engine": "vlm-auto-engine",
+}
 MINERU_FASTAPI_MAX_IMAGE_BYTES = 512 * 1024 * 1024
 MARKDOWN_IMAGE_RE = re.compile(r"(!\[[^\]]*]\()([^)]+)(\))")
 HTML_IMAGE_SRC_RE = re.compile(r"(<img\b[^>]*?\bsrc=[\"'])([^\"']+)([\"'][^>]*>)", re.IGNORECASE)
@@ -1058,6 +1071,16 @@ def _normalize_mineru_fastapi_asset_mode(asset_mode: str | None) -> str:
     return mode
 
 
+def _normalize_mineru_fastapi_backend(backend: str | None) -> tuple[str, str]:
+    requested = (backend or "pipeline").strip().lower()
+    if not requested:
+        requested = "pipeline"
+    if requested not in MINERU_FASTAPI_BACKENDS:
+        allowed = ", ".join(sorted(MINERU_FASTAPI_BACKENDS))
+        raise DocConvertError(f"MinerU FastAPI backend must be one of: {allowed}")
+    return requested, MINERU_FASTAPI_BACKEND_ALIASES.get(requested, requested)
+
+
 def _mineru_fastapi_asset_policy(
     fields: Mapping[str, Any],
     *,
@@ -1845,6 +1868,8 @@ def mineru_fastapi_convert(
     remote_attempts: list[dict[str, Any]] | None = None,
     retry_budget: int = 2,
     retry_backoff_seconds: float = 0.25,
+    fastapi_backend: str | None = None,
+    fastapi_server_url: str | None = None,
 ) -> str:
     """Convert one file through the MinerU 3.2+ FastAPI async task API."""
 
@@ -1865,9 +1890,10 @@ def mineru_fastapi_convert(
     start_page_id, end_page_id = _mineru_fastapi_page_bounds(page_range)
     root = base_url.rstrip("/")
     request_images = normalized_asset_mode == "markdown_assets"
+    requested_fastapi_backend, resolved_fastapi_backend = _normalize_mineru_fastapi_backend(fastapi_backend)
     fields: dict[str, Any] = {
         "lang_list": _mineru_fastapi_language_list(language),
-        "backend": "pipeline",
+        "backend": resolved_fastapi_backend,
         "parse_method": "ocr" if is_ocr else "auto",
         "formula_enable": enable_formula,
         "table_enable": enable_table,
@@ -1883,6 +1909,8 @@ def mineru_fastapi_convert(
         "start_page_id": start_page_id,
         "end_page_id": end_page_id,
     }
+    if fastapi_server_url:
+        fields["server_url"] = fastapi_server_url
 
     metrics = {"http_attempts": 0, "retry_count": 0}
     deadline = time.monotonic() + timeout
@@ -1891,6 +1919,9 @@ def mineru_fastapi_convert(
         "source_path": source.source_path,
         "backend": "mineru-fastapi",
         "endpoint": _redacted_endpoint(root),
+        "mineru_fastapi_backend": resolved_fastapi_backend,
+        "requested_mineru_fastapi_backend": requested_fastapi_backend,
+        "mineru_fastapi_server_url": _redacted_endpoint(fastapi_server_url) if fastapi_server_url else None,
         "status": "failed",
         "task_id": None,
         "poll_count": 0,
@@ -2046,6 +2077,7 @@ def mineru_fastapi_convert(
     except MinerUFastAPIError as exc:
         attempt["status"] = "timeout" if exc.category == "request_timeout" else "failed"
         attempt["error_category"] = exc.category
+        attempt["http_status"] = exc.http_status
         attempt["failed_stage"] = exc.stage or stage
         attempt["error"] = str(exc)
         raise
@@ -3141,6 +3173,9 @@ def render_doc_runtime_markdown(report: Mapping[str, Any]) -> str:
                 f"- persistent_mineru_reused: `{context.get('persistent_mineru_reused')}`",
                 f"- local_process_startup_included: `{context.get('local_process_startup_included')}`",
                 f"- model_initialization_included: `{context.get('model_initialization_included', 'unknown')}`",
+                f"- table_quality: `{context.get('table_quality', 'standard')}`",
+                f"- table_quality_degraded: `{context.get('table_quality_degraded', False)}`",
+                f"- table_quality_fallback_count: `{context.get('table_quality_fallback_count', 0)}`",
                 f"- known_duration_ms: `{perf_summary.get('known_duration_ms', 0)}`",
                 f"- failure_count: `{failure.get('failure_count', 0)}`",
             ]
@@ -3390,6 +3425,8 @@ def convert_source_to_markdown(
     mineru_verify_ssl: bool = True,
     mineru_cli_path: str | None = None,
     mineru_cli_backend: str | None = None,
+    mineru_fastapi_backend: str | None = None,
+    mineru_fastapi_server_url: str | None = None,
     asset_output_dir: str | Path | None = None,
     asset_document_stem: str | None = None,
     mineru_language: str = "ch",
@@ -3537,6 +3574,8 @@ def convert_source_to_markdown(
                 asset_output_dir=asset_output_dir,
                 asset_document_stem=asset_document_stem,
                 remote_attempts=remote_attempts,
+                fastapi_backend=mineru_fastapi_backend,
+                fastapi_server_url=mineru_fastapi_server_url,
             ), warnings
         except DocConvertError:
             if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
@@ -3590,6 +3629,8 @@ def warmup_conversion_backend(
     mineru_verify_ssl: bool = True,
     mineru_cli_path: str | None = None,
     mineru_cli_backend: str | None = None,
+    mineru_fastapi_backend: str | None = None,
+    mineru_fastapi_server_url: str | None = None,
     mineru_language: str = "ch",
     mineru_page_range: str | None = None,
     mineru_enable_table: bool = True,
@@ -3642,6 +3683,8 @@ def warmup_conversion_backend(
                     mineru_verify_ssl=mineru_verify_ssl,
                     mineru_cli_path=mineru_cli_path,
                     mineru_cli_backend=mineru_cli_backend,
+                    mineru_fastapi_backend=mineru_fastapi_backend,
+                    mineru_fastapi_server_url=mineru_fastapi_server_url,
                     asset_output_dir=asset_output_dir,
                     mineru_language=mineru_language,
                     mineru_page_range=mineru_page_range,

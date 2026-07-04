@@ -539,6 +539,7 @@ class HandoffTests(unittest.TestCase):
             )
 
             create_rich_handoff_package(handoff_root=root)
+            profile_suggestions = json.loads((root / "profile_suggestions.json").read_text(encoding="utf-8"))
             retrieval_hints = json.loads((root / "retrieval_hints.json").read_text(encoding="utf-8"))
             assistant_test_plan = json.loads((root / "assistant_test_plan.json").read_text(encoding="utf-8"))
             assistant_profile = json.loads((root / "assistant_profile.json").read_text(encoding="utf-8"))
@@ -559,10 +560,16 @@ class HandoffTests(unittest.TestCase):
         tech_section = next(item for item in retrieval_hints["section_boundaries"] if item["title"] == "技术参数")
         table_artifacts = retrieval_hints["table_artifacts"]
         html_table = next(item for item in table_artifacts if item["source"] == "html_table")
+        table_profile = next(item for item in profile_suggestions["suggestions"] if item["id"] == "table-atomic-zh-4096")
         question_types = {item["type"] for item in retrieval_hints["question_candidates"]}
         topology_starter_types = {case["type"] for case in topology_advice["route_test_starters"]}
         assistant_stages = {case["stage"] for case in assistant_test_plan["cases"]}
 
+        self.assertEqual(profile_suggestions["signals"]["html_table_count"], 1)
+        self.assertEqual(table_profile["postprocess_profile"], "chunk-markers-dense")
+        self.assertEqual(table_profile["parser_config"]["delimiter"], "`<!-- chunk -->`")
+        self.assertEqual(table_profile["parser_config"]["chunk_token_num"], 4096)
+        self.assertTrue(table_profile["avoid_children_delimiter"])
         self.assertEqual(tech_section["table_count"], 1)
         self.assertEqual(tech_section["html_table_count"], 1)
         self.assertEqual(html_table["source_heading"], "技术参数")
@@ -587,7 +594,12 @@ class HandoffTests(unittest.TestCase):
             documents = root / "documents"
             images = documents / "images"
             images.mkdir(parents=True)
-            (documents / "a.md").write_text("# A\n\n![chart](images/chart.png)\n", encoding="utf-8")
+            (documents / "a.md").write_text(
+                "# A\n\n"
+                "<table><tr><th>型号</th><th>精度</th></tr><tr><td>A</td><td>1 um</td></tr></table>\n\n"
+                "![chart](images/chart.png)\n",
+                encoding="utf-8",
+            )
             (images / "chart.png").write_bytes(b"fake chart")
             (root / "doc_manifest.json").write_text(
                 json.dumps(
@@ -595,12 +607,34 @@ class HandoffTests(unittest.TestCase):
                         "version": "0.1",
                         "source_root": ".",
                         "quality_gate": {"status": "PASS"},
+                        "quality_report": "quality_report.json",
                         "chunk_profile_report": "chunk_profile_report.json",
                         "documents": [
                             {
                                 "source_path": "a.md",
                                 "markdown_path": "documents/a.md",
                                 "assets": {"images": [{"path": "documents/images/chart.png"}]},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "quality_report.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "doc_quality_report_v1",
+                        "gate": {"status": "PASS"},
+                        "documents": [
+                            {
+                                "markdown_path": "documents/a.md",
+                                "image_count": 1,
+                                "quality_signals": {
+                                    "table_count": 1,
+                                    "html_table_count": 1,
+                                    "markdown_table_count": 0,
+                                },
+                                "issues": [],
                             }
                         ],
                     }
@@ -671,6 +705,9 @@ class HandoffTests(unittest.TestCase):
         self.assertTrue(report["ingestion_readiness"]["image_assets_ok"])
         self.assertEqual(report["assets"]["images"]["missing_image_count"], 0)
         self.assertTrue(report["sidecar_summary"]["rich_complete"])
+        self.assertEqual(report["ingestion_readiness"]["checks"]["quality_gate"]["summary"]["table_count"], 1)
+        self.assertEqual(report["ingestion_readiness"]["checks"]["quality_gate"]["summary"]["html_table_count"], 1)
+        self.assertEqual(report["ingestion_readiness"]["checks"]["artifact_coverage"]["quality_table_count"], 1)
         self.assertIn("RAGFlow Handoff Inspection", markdown)
         self.assertIn("Ingestion readiness", markdown)
         self.assertIn("metadata", markdown)

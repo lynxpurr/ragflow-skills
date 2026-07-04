@@ -13,11 +13,18 @@ TOOLS_DIR = ROOT / "tools"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from build_release import PUBLIC_SKILLS  # noqa: E402
+from build_release import PUBLIC_SKILLS, ignore_filter  # noqa: E402
 from export_release_archives import export_release_archives, sha256_file  # noqa: E402
 
 
 class ExportReleaseArchivesTests(unittest.TestCase):
+    def test_release_build_ignores_skill_local_doc_inputs(self) -> None:
+        ignored = ignore_filter("skills/ragflow-doc-to-md", ["SKILL.md", "doc", "references"])
+
+        self.assertIn("doc", ignored)
+        self.assertNotIn("SKILL.md", ignored)
+        self.assertNotIn("references", ignored)
+
     def test_export_release_archives_creates_manifest_and_archives(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

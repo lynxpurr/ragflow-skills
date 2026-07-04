@@ -1365,6 +1365,12 @@ then emits `ragflow_assistant_test_plan_review_v1` with stage coverage, case rea
 profile consistency, and offline-only execution guards. These commands do not run an
 assistant, call an LLM, modify RAGFlow assistant settings, or mutate route/KB config.
 
+Implementation status: table-rich handoffs now also feed `profile_suggestions.json` with
+a table-atomic parser profile recommendation: `chunk-markers-dense`, the RAGFlow
+delimiter value `<!-- chunk -->` wrapped in backticks, larger parent chunks, and no
+`children_delimiter`. `ragflow-kb-build inspect-handoff` reads table counts from
+`quality_signals` so readiness and artifact coverage agree with HTML table hints.
+
 ## Feature Design 22: Parser Performance And KB Health Telemetry
 
 ### Problem

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,10 @@ BLOCKED = "BLOCKED"
 
 IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
 TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+HTML_TABLE_BLOCK_RE = re.compile(r"<table\b[^>]*>.*?</table>", re.IGNORECASE | re.DOTALL)
+HTML_TABLE_OPEN_RE = re.compile(r"<table\b", re.IGNORECASE)
+HTML_TABLE_CLOSE_RE = re.compile(r"</table\s*>", re.IGNORECASE)
+CHUNK_MARKER_RE = re.compile(r"<!--\s*chunk\s*-->", re.IGNORECASE)
 PAGE_MARKER_RE = re.compile(r"(?im)<!--\s*page\b|^\s*(?:page|p\.)\s+\d+\s*$|\f")
 MATH_MARKER_RE = re.compile(r"(?<!\\)(?:\$\$|\$)|\\\(|\\\)|\\\[|\\\]")
 PDF_SOURCE_EXTENSIONS = {".pdf"}
@@ -26,6 +31,9 @@ TABULAR_SOURCE_EXTENSIONS = {".csv", ".tsv", ".xls", ".xlsx"}
 PAGE_SIGNAL_LOW_CHAR_THRESHOLD = 24
 GARBLED_REPLACEMENT_RATIO_THRESHOLD = 0.05
 GARBLED_CONTROL_RATIO_THRESHOLD = 0.02
+TABLE_HEAVY_TABLE_COUNT_THRESHOLD = 3
+TABLE_HEAVY_CELL_COUNT_THRESHOLD = 50
+TABLE_HEAVY_CHAR_RATIO_THRESHOLD = 0.25
 
 
 class DocQualityError(RuntimeError):
@@ -78,6 +86,10 @@ class QualityDocumentReport:
     control_char_count: int = 0
     replacement_char_ratio: float = 0.0
     control_char_ratio: float = 0.0
+    table_source_counts: dict[str, int] = field(default_factory=dict)
+    table_fingerprints: list[dict[str, Any]] = field(default_factory=list)
+    chunk_marker_table_atomicity: dict[str, Any] = field(default_factory=dict)
+    table_heavy_document: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -100,6 +112,10 @@ class QualityDocumentReport:
                 "control_char_count": self.control_char_count,
                 "replacement_char_ratio": self.replacement_char_ratio,
                 "control_char_ratio": self.control_char_ratio,
+                "table_source_counts": self.table_source_counts,
+                "table_fingerprints": self.table_fingerprints,
+                "chunk_marker_table_atomicity": self.chunk_marker_table_atomicity,
+                "table_heavy_document": self.table_heavy_document,
             },
             "issues": [issue.to_dict() for issue in self.issues],
         }
@@ -159,6 +175,101 @@ def _count_tables(lines: list[str]) -> int:
     return count
 
 
+def _html_table_blocks(text: str) -> list[str]:
+    return [match.group(0) for match in HTML_TABLE_BLOCK_RE.finditer(text)]
+
+
+def _html_table_fingerprint(block: str) -> str:
+    normalized = block.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _table_char_ratio(text: str, blocks: list[str]) -> float:
+    denominator = max(len(text), 1)
+    return round(sum(len(block) for block in blocks) / denominator, 6)
+
+
+def _chunk_marker_table_atomicity(text: str) -> dict[str, Any]:
+    markers = CHUNK_MARKER_RE.findall(text)
+    fragments = CHUNK_MARKER_RE.split(text)
+    unbalanced_fragments: list[dict[str, int]] = []
+    for index, fragment in enumerate(fragments):
+        open_count = len(HTML_TABLE_OPEN_RE.findall(fragment))
+        close_count = len(HTML_TABLE_CLOSE_RE.findall(fragment))
+        if open_count != close_count:
+            unbalanced_fragments.append(
+                {
+                    "fragment_index": index,
+                    "html_table_open_count": open_count,
+                    "html_table_close_count": close_count,
+                }
+            )
+    return {
+        "delimiter": "`<!-- chunk -->`",
+        "chunk_marker_count": len(markers),
+        "fragment_count": len(fragments),
+        "unbalanced_fragment_count": len(unbalanced_fragments),
+        "unbalanced_fragments": unbalanced_fragments[:20],
+        "ok": not unbalanced_fragments,
+    }
+
+
+def _content_list_table_count(*, markdown_path: Path, output_root: Path) -> int:
+    candidates = []
+    for base in (output_root, markdown_path.parent, markdown_path.parent.parent):
+        candidates.extend((base / "content_list.json", base / "mineru_content_list.json"))
+    seen: set[Path] = set()
+    count = 0
+    for path in candidates:
+        if path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        count += _count_table_like_content_items(payload)
+    return count
+
+
+def _count_table_like_content_items(value: Any) -> int:
+    if isinstance(value, list):
+        return sum(_count_table_like_content_items(item) for item in value)
+    if not isinstance(value, Mapping):
+        return 0
+    type_text = " ".join(
+        str(value.get(key) or "")
+        for key in ("type", "category", "kind", "semantic_kind")
+    ).lower()
+    count = 1 if "table" in type_text else 0
+    for key in ("children", "items", "content"):
+        count += _count_table_like_content_items(value.get(key))
+    return count
+
+
+def _table_fingerprint_records(text: str, html_tables: list[Any]) -> list[dict[str, Any]]:
+    blocks = _html_table_blocks(text)
+    records: list[dict[str, Any]] = []
+    for index, table in enumerate(html_tables, start=1):
+        block = blocks[index - 1] if index <= len(blocks) else ""
+        record = {
+            "index": index,
+            "sha256": _html_table_fingerprint(block) if block else None,
+            "line_start": table.line_start,
+            "line_end": table.line_end,
+            "row_count": table.row_count,
+            "column_count": table.column_count,
+            "cell_count": table.cell_count,
+            "rowspan_count": table.rowspan_count,
+            "colspan_count": table.colspan_count,
+            "caption_preview": table.caption,
+            "header_preview": table.header_preview,
+            "warnings": list(table.warnings),
+        }
+        records.append(record)
+    return records
+
+
 def _count_control_chars(text: str) -> int:
     allowed = {"\n", "\r", "\t"}
     return sum(1 for char in text if ord(char) < 32 and char not in allowed)
@@ -203,6 +314,22 @@ def inspect_quality_document(document: QualityDocument, *, output_root: str | Pa
     control_char_count = 0
     replacement_char_ratio = 0.0
     control_char_ratio = 0.0
+    table_source_counts: dict[str, int] = {
+        "markdown_table_count": 0,
+        "html_table_count": 0,
+        "content_list_table_count": 0,
+        "total_source_table_count": 0,
+    }
+    table_fingerprints: list[dict[str, Any]] = []
+    chunk_marker_table_atomicity: dict[str, Any] = {
+        "delimiter": "`<!-- chunk -->`",
+        "chunk_marker_count": 0,
+        "fragment_count": 1,
+        "unbalanced_fragment_count": 0,
+        "unbalanced_fragments": [],
+        "ok": True,
+    }
+    table_heavy_document = False
 
     if not markdown_path.exists():
         issues.append(
@@ -257,9 +384,25 @@ def inspect_quality_document(document: QualityDocument, *, output_root: str | Pa
     heading_count = sum(1 for line in lines if line.lstrip().startswith("#"))
     markdown_table_count = _count_tables(lines)
     html_tables = parse_html_tables(text)
+    html_table_blocks = _html_table_blocks(text)
     html_table_count = len(html_tables)
     html_table_review_warning_count = sum(1 for table in html_tables if table.warnings)
+    content_list_table_count = _content_list_table_count(markdown_path=markdown_path, output_root=output_root_path)
     table_count = markdown_table_count + html_table_count
+    table_source_counts = {
+        "markdown_table_count": markdown_table_count,
+        "html_table_count": html_table_count,
+        "content_list_table_count": content_list_table_count,
+        "total_source_table_count": markdown_table_count + html_table_count + content_list_table_count,
+    }
+    table_fingerprints = _table_fingerprint_records(text, html_tables)
+    chunk_marker_table_atomicity = _chunk_marker_table_atomicity(text)
+    max_html_cell_count = max((int(record.get("cell_count") or 0) for record in table_fingerprints), default=0)
+    table_heavy_document = (
+        table_count >= TABLE_HEAVY_TABLE_COUNT_THRESHOLD
+        or max_html_cell_count >= TABLE_HEAVY_CELL_COUNT_THRESHOLD
+        or _table_char_ratio(text, html_table_blocks) >= TABLE_HEAVY_CHAR_RATIO_THRESHOLD
+    )
     formula_marker_count = len(MATH_MARKER_RE.findall(text))
     page_marker_count = len(PAGE_MARKER_RE.findall(text))
     replacement_char_count = text.count("\ufffd")
@@ -376,6 +519,10 @@ def inspect_quality_document(document: QualityDocument, *, output_root: str | Pa
         control_char_count=control_char_count,
         replacement_char_ratio=replacement_char_ratio,
         control_char_ratio=control_char_ratio,
+        table_source_counts=table_source_counts,
+        table_fingerprints=table_fingerprints,
+        chunk_marker_table_atomicity=chunk_marker_table_atomicity,
+        table_heavy_document=table_heavy_document,
     )
 
 
@@ -499,6 +646,9 @@ def render_quality_markdown(report: Mapping[str, Any]) -> str:
                     f"- Tables: {signals.get('table_count', 0)}",
                     f"- Markdown tables: {signals.get('markdown_table_count', signals.get('table_count', 0))}",
                     f"- HTML tables: {signals.get('html_table_count', 0)}",
+                    f"- Table heavy document: `{signals.get('table_heavy_document', False)}`",
+                    "- Chunk marker table atomicity: "
+                    f"`{(signals.get('chunk_marker_table_atomicity') or {}).get('ok', True)}`",
                     f"- Formula markers: {signals.get('formula_marker_count', 0)}",
                     f"- Page markers: {signals.get('page_marker_count', 0)}",
                     f"- Replacement char ratio: {signals.get('replacement_char_ratio', 0)}",

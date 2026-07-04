@@ -512,6 +512,8 @@ def make_profile_suggestions_payload(
     documents = metadata.get("documents", []) if isinstance(metadata.get("documents"), list) else []
     total_chars = 0
     image_count = 0
+    markdown_table_count = 0
+    html_table_count = 0
     has_cjk = False
     for document in documents:
         if not isinstance(document, Mapping):
@@ -522,41 +524,75 @@ def make_profile_suggestions_payload(
             text = markdown_path.read_text(encoding="utf-8", errors="replace")
             total_chars += len(text)
             image_count += text.count("![")
+            lines = text.splitlines()
+            markdown_table_count += _count_table_blocks(lines)
+            html_table_count += len(parse_html_tables(text))
             has_cjk = has_cjk or any("\u4e00" <= char <= "\u9fff" for char in text[:5000])
 
     gate = quality_report.get("gate", {}) if isinstance(quality_report, Mapping) else {}
     quality_status = gate.get("status") if isinstance(gate, Mapping) else None
+    quality_counts = _quality_content_counts(quality_report)
+    markdown_table_count = max(markdown_table_count, quality_counts["markdown_table_count"])
+    html_table_count = max(html_table_count, quality_counts["html_table_count"])
+    table_count = max(markdown_table_count + html_table_count, quality_counts["table_count"])
     language = "zh" if has_cjk else "en"
     average_chars = int(total_chars / len(documents)) if documents else 0
     chunk_size = 512 if language == "zh" else 768
     if average_chars > 24000:
         chunk_size = 1024 if language == "en" else 768
 
+    suggestions: list[dict[str, Any]] = [
+        {
+            "id": f"default-{language}-{chunk_size}",
+            "language": language,
+            "chunk_size": chunk_size,
+            "chunk_overlap": 96 if chunk_size >= 768 else 64,
+            "reason": "deterministic starter suggestion based on language and document size",
+        }
+    ]
+    if table_count:
+        suggestions.append(
+            {
+                "id": f"table-atomic-{language}-4096",
+                "language": language,
+                "chunk_method": "naive",
+                "chunk_size": 4096,
+                "chunk_overlap": 0,
+                "postprocess_profile": "chunk-markers-dense",
+                "parser_config": {
+                    "chunk_token_num": 4096,
+                    "delimiter": f"`{CHUNK_MARKER}`",
+                    "auto_keywords": 0,
+                    "auto_questions": 0,
+                    "__language__": "Chinese" if language == "zh" else "English",
+                },
+                "avoid_children_delimiter": True,
+                "reason": "tables detected; preserve table blocks with chunk markers and a larger parent chunk",
+            }
+        )
+
     warnings: list[str] = []
     if quality_status == "BLOCKED":
         warnings.append("quality gate is BLOCKED; fix the handoff before building unless the user explicitly allows it")
     if image_count:
         warnings.append("image-rich Markdown detected; verify parser profile preserves image/table context as needed")
+    if table_count:
+        warnings.append("table-rich Markdown detected; prefer chunk-markers-dense plus delimiter-based RAGFlow parsing")
     if average_chars > 32000:
         warnings.append("large average document size detected; consider segmentation before upload")
 
     return {
         "schema": PROFILE_SUGGESTIONS_SCHEMA,
         "created_at": _now(),
-        "suggestions": [
-            {
-                "id": f"default-{language}-{chunk_size}",
-                "language": language,
-                "chunk_size": chunk_size,
-                "chunk_overlap": 96 if chunk_size >= 768 else 64,
-                "reason": "deterministic starter suggestion based on language and document size",
-            }
-        ],
+        "suggestions": suggestions,
         "signals": {
             "document_count": len(documents),
             "total_chars": total_chars,
             "average_chars": average_chars,
             "image_count": image_count,
+            "table_count": table_count,
+            "markdown_table_count": markdown_table_count,
+            "html_table_count": html_table_count,
             "quality_status": quality_status,
         },
         "warnings": warnings,
@@ -2186,9 +2222,15 @@ def _quality_content_counts(quality_report: Mapping[str, Any] | None) -> dict[st
         if not isinstance(document, Mapping):
             continue
         counts["document_count"] += 1
+        signals = document.get("quality_signals")
+        if not isinstance(signals, Mapping):
+            signals = {}
         for key in ("image_count", "table_count", "html_table_count", "markdown_table_count"):
+            value = document.get(key)
+            if value is None:
+                value = signals.get(key)
             try:
-                counts[key] += int(document.get(key, 0) or 0)
+                counts[key] += int(value or 0)
             except (TypeError, ValueError):
                 pass
         issues = document.get("issues")

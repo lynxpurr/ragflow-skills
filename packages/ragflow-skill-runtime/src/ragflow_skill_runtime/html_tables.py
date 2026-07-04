@@ -17,6 +17,9 @@ class HtmlTableArtifact:
     line_end: int
     row_count: int
     column_count: int
+    cell_count: int
+    rowspan_count: int
+    colspan_count: int
     header_preview: list[str]
     caption: str | None = None
     warnings: tuple[str, ...] = ()
@@ -27,6 +30,9 @@ class HtmlTableArtifact:
             "line_end": self.line_end,
             "row_count": self.row_count,
             "column_count": self.column_count,
+            "cell_count": self.cell_count,
+            "rowspan_count": self.rowspan_count,
+            "colspan_count": self.colspan_count,
             "header_preview": self.header_preview,
         }
         if self.caption:
@@ -39,6 +45,7 @@ class HtmlTableArtifact:
 @dataclass
 class _Cell:
     is_header: bool
+    rowspan: int
     colspan: int
     line_start: int
     text_parts: list[str] = field(default_factory=list)
@@ -86,9 +93,9 @@ def _compact_text(value: str, *, limit: int = 40) -> str:
     return compacted[: max(limit - 1, 0)].rstrip() + "..."
 
 
-def _safe_colspan(attrs: list[tuple[str, str | None]]) -> int:
+def _safe_span(attrs: list[tuple[str, str | None]], name: str) -> int:
     values = {name.lower(): value for name, value in attrs if name}
-    raw = values.get("colspan")
+    raw = values.get(name)
     if not raw:
         return 1
     try:
@@ -123,7 +130,8 @@ class _HtmlTableParser(HTMLParser):
                 table.current_row = _Row(line_start=line, in_thead=table.thead_depth > 0)
             table.current_row.current_cell = _Cell(
                 is_header=name == "th" or table.thead_depth > 0,
-                colspan=_safe_colspan(attrs),
+                rowspan=_safe_span(attrs, "rowspan"),
+                colspan=_safe_span(attrs, "colspan"),
                 line_start=line,
             )
         elif name == "br":
@@ -188,6 +196,10 @@ class _HtmlTableParser(HTMLParser):
 def _finalize_table(table: _TableDraft, *, line_end: int) -> HtmlTableArtifact:
     row_widths = [sum(cell.colspan for cell in row.cells) for row in table.rows if row.cells]
     column_count = max(row_widths) if row_widths else 0
+    cells = [cell for row in table.rows for cell in row.cells]
+    cell_count = len(cells)
+    rowspan_count = sum(1 for cell in cells if cell.rowspan > 1)
+    colspan_count = sum(1 for cell in cells if cell.colspan > 1)
     header_row = next(
         (
             row
@@ -216,6 +228,9 @@ def _finalize_table(table: _TableDraft, *, line_end: int) -> HtmlTableArtifact:
         line_end=max(line_end, table.line_start),
         row_count=len(table.rows),
         column_count=column_count,
+        cell_count=cell_count,
+        rowspan_count=rowspan_count,
+        colspan_count=colspan_count,
         header_preview=header_preview,
         caption=caption,
         warnings=tuple(warnings),
@@ -235,4 +250,3 @@ def parse_html_tables(text: str) -> list[HtmlTableArtifact]:
     finally:
         parser.finish(final_line=max(1, len(masked.splitlines())))
     return parser.tables
-

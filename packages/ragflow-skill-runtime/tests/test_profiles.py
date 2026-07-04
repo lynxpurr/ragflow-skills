@@ -76,6 +76,30 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(payload["parser_config"]["chunk_token_num"], 512)
         self.assertEqual(manifest["parser_config"]["__language__"], "Chinese")
 
+    def test_lint_profile_accepts_chunk_marker_delimiter(self) -> None:
+        profile = ChunkProfile.from_dict(
+            {
+                "profile_id": "zh-table-atomic-2048",
+                "chunk_size": 2048,
+                "chunk_overlap": 0,
+                "parser_config": {
+                    "chunk_token_num": 2048,
+                    "delimiter": "`<!-- chunk -->`",
+                    "auto_keywords": 0,
+                    "auto_questions": 0,
+                    "__language__": "Chinese",
+                },
+            }
+        )
+
+        report = lint_profile(profile)
+        codes = {issue.code for issue in report.issues}
+        payload = profile.to_dataset_payload()
+
+        self.assertTrue(report.ok)
+        self.assertNotIn("unsupported_parser_key", codes)
+        self.assertEqual(payload["parser_config"]["delimiter"], "`<!-- chunk -->`")
+
     def test_lint_profile_reports_internal_metadata_and_mismatch(self) -> None:
         profile = ChunkProfile.from_dict(
             {

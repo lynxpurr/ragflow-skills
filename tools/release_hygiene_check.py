@@ -45,6 +45,7 @@ IGNORED_DIRS = {
     ".ruff_cache",
     ".venv",
     "__pycache__",
+    "doc",
     "dist",
     "htmlcov",
     "venv",

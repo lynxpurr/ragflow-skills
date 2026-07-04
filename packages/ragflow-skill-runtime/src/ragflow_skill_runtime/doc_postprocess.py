@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import hashlib
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .doc_quality import load_doc_manifest_payload
+from .html_tables import parse_html_tables
 
 
 POSTPROCESS_REPORT_SCHEMA = "doc_postprocess_report_v1"
@@ -30,6 +32,9 @@ HEADING_WITHOUT_SPACE_RE = re.compile(r"^(#{1,6})([^#\s].*)$")
 MARKDOWN_IMAGE_TARGET_RE = re.compile(r"(!\[[^\]]*]\()([^)]+)(\))")
 MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*]\([^)]+\)")
 MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+HTML_TABLE_BLOCK_RE = re.compile(r"<table\b.*?</table\s*>", re.IGNORECASE | re.DOTALL)
+HTML_TABLE_OPEN_RE = re.compile(r"<table\b", re.IGNORECASE)
+HTML_TABLE_CLOSE_RE = re.compile(r"</table\s*>", re.IGNORECASE)
 PAGE_COMMENT_RE = re.compile(
     r"<!--\s*(?:page|page_id|page-id|page_index|page-index)\s*[:=]?\s*\d+\s*-->",
     re.IGNORECASE,
@@ -93,6 +98,7 @@ class PostprocessDocumentResult:
     rule_results: list[PostprocessRuleResult] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     chunk_profile: dict[str, Any] | None = None
+    table_integrity: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -107,6 +113,8 @@ class PostprocessDocumentResult:
         }
         if self.chunk_profile is not None:
             payload["chunk_profile"] = self.chunk_profile
+        if self.table_integrity is not None:
+            payload["table_integrity"] = self.table_integrity
         return payload
 
 
@@ -255,6 +263,118 @@ def _normalize_ocr_ligatures(text: str) -> tuple[str, int]:
             current = current.replace(old, new)
             changed += count
     return current, changed
+
+
+def _markdown_table_spans(text: str) -> list[tuple[int, int]]:
+    lines = text.splitlines(keepends=True)
+    offsets: list[int] = []
+    offset = 0
+    for line in lines:
+        offsets.append(offset)
+        offset += len(line)
+    spans: list[tuple[int, int]] = []
+    index = 0
+    while index < len(lines) - 1:
+        if "|" not in lines[index] or not MARKDOWN_TABLE_SEPARATOR_RE.match(lines[index + 1]):
+            index += 1
+            continue
+        start = offsets[index]
+        end_index = index + 2
+        while end_index < len(lines):
+            stripped = lines[end_index].strip()
+            if not stripped or "|" not in stripped:
+                break
+            end_index += 1
+        end = offsets[end_index] if end_index < len(lines) else len(text)
+        spans.append((start, end))
+        index = end_index
+    return spans
+
+
+def _table_protected_spans(text: str) -> list[tuple[int, int]]:
+    spans = [(match.start(), match.end()) for match in HTML_TABLE_BLOCK_RE.finditer(text)]
+    spans.extend(_markdown_table_spans(text))
+    if not spans:
+        return []
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if not merged or start > merged[-1][1]:
+            merged.append((start, end))
+        else:
+            previous_start, previous_end = merged[-1]
+            merged[-1] = (previous_start, max(previous_end, end))
+    return merged
+
+
+def _apply_outside_table_blocks(text: str, func) -> tuple[str, int]:
+    spans = _table_protected_spans(text)
+    if not spans:
+        return func(text)
+    output: list[str] = []
+    changed = 0
+    cursor = 0
+    for start, end in spans:
+        if cursor < start:
+            processed, count = func(text[cursor:start])
+            output.append(processed)
+            changed += count
+        output.append(text[start:end])
+        cursor = end
+    if cursor < len(text):
+        processed, count = func(text[cursor:])
+        output.append(processed)
+        changed += count
+    return "".join(output), changed
+
+
+def _html_table_blocks(text: str) -> list[str]:
+    return [match.group(0) for match in HTML_TABLE_BLOCK_RE.finditer(text)]
+
+
+def _html_table_fingerprint(block: str) -> str:
+    normalized = block.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _table_integrity_summary(before: str, after: str) -> dict[str, Any]:
+    before_blocks = _html_table_blocks(before)
+    after_blocks = _html_table_blocks(after)
+    before_hashes = [_html_table_fingerprint(block) for block in before_blocks]
+    after_hashes = [_html_table_fingerprint(block) for block in after_blocks]
+    before_cell_count = sum(table.cell_count for table in parse_html_tables(before))
+    after_cell_count = sum(table.cell_count for table in parse_html_tables(after))
+    marker_inside_count = sum(block.count("<!-- chunk -->") for block in after_blocks)
+    before_open = len(HTML_TABLE_OPEN_RE.findall(before))
+    before_close = len(HTML_TABLE_CLOSE_RE.findall(before))
+    after_open = len(HTML_TABLE_OPEN_RE.findall(after))
+    after_close = len(HTML_TABLE_CLOSE_RE.findall(after))
+    hashes_unchanged = before_hashes == after_hashes
+    return {
+        "html_table_count_before": len(before_blocks),
+        "html_table_count_after": len(after_blocks),
+        "html_table_fingerprints_before": before_hashes,
+        "html_table_fingerprints_after": after_hashes,
+        "html_table_fingerprints_unchanged": hashes_unchanged,
+        "postprocess_table_delta": {
+            "html_table_count_before": len(before_blocks),
+            "html_table_count_after": len(after_blocks),
+            "html_table_count_changed": len(before_blocks) != len(after_blocks),
+            "html_table_fingerprints_changed": not hashes_unchanged,
+            "html_table_cell_count_before": before_cell_count,
+            "html_table_cell_count_after": after_cell_count,
+            "html_table_cell_count_changed": before_cell_count != after_cell_count,
+        },
+        "chunk_marker_inside_html_table_count": marker_inside_count,
+        "unbalanced_html_table_before": before_open != before_close,
+        "unbalanced_html_table_after": after_open != after_close,
+        "ok": (
+            len(before_blocks) == len(after_blocks)
+            and hashes_unchanged
+            and marker_inside_count == 0
+            and before_open == before_close
+            and after_open == after_close
+        ),
+    }
 
 
 def _is_chunk_marker(line: str) -> bool:
@@ -579,9 +699,21 @@ def postprocess_markdown_text(text: str, *, profile: str) -> tuple[str, list[Pos
     apply("safe.trailing_newline", "Ensure a final newline", _ensure_trailing_newline)
 
     if profile in {"ocr", "chunk-markers"}:
-        apply("ocr.cjk_spaces", "Remove spaces inserted between adjacent CJK characters", _remove_cjk_inner_spaces)
-        apply("ocr.punctuation_spacing", "Remove OCR spaces before punctuation or closing brackets", _fix_ocr_punctuation_spacing)
-        apply("ocr.ligatures", "Normalize common OCR ligatures", _normalize_ocr_ligatures)
+        apply(
+            "ocr.cjk_spaces",
+            "Remove spaces inserted between adjacent CJK characters outside table blocks",
+            lambda value: _apply_outside_table_blocks(value, _remove_cjk_inner_spaces),
+        )
+        apply(
+            "ocr.punctuation_spacing",
+            "Remove OCR spaces before punctuation or closing brackets outside table blocks",
+            lambda value: _apply_outside_table_blocks(value, _fix_ocr_punctuation_spacing),
+        )
+        apply(
+            "ocr.ligatures",
+            "Normalize common OCR ligatures outside table blocks",
+            lambda value: _apply_outside_table_blocks(value, _normalize_ocr_ligatures),
+        )
 
     if _chunk_marker_profile_config(profile) is not None:
         canonical = _chunk_marker_profile_config(profile).get("canonical")
@@ -652,6 +784,7 @@ def postprocess_markdown_file(
             before=before,
             after=after,
         ),
+        table_integrity=_table_integrity_summary(before, after),
     )
 
 
@@ -714,6 +847,22 @@ def _report_payload(*, profile: str, mode: str, documents: list[PostprocessDocum
             "changed_documents": changed,
             "total_rule_applications": sum(rule_counts.values()),
             "rule_counts": rule_counts,
+            "table_integrity": {
+                "documents_with_html_tables": sum(
+                    1
+                    for document in documents
+                    if document.table_integrity
+                    and int(document.table_integrity.get("html_table_count_before", 0) or 0) > 0
+                ),
+                "documents_with_table_integrity_issues": sum(
+                    1 for document in documents if document.table_integrity and not document.table_integrity.get("ok")
+                ),
+                "chunk_marker_inside_html_table_count": sum(
+                    int(document.table_integrity.get("chunk_marker_inside_html_table_count", 0) or 0)
+                    for document in documents
+                    if document.table_integrity
+                ),
+            },
         },
         "documents": [document.to_dict() for document in documents],
     }

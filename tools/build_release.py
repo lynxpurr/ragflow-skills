@@ -26,6 +26,7 @@ EXCLUDE_NAMES = {
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
+    "doc",
 }
 
 OPTIONAL_RESOURCE_DIRS = {"agents", "references"}
