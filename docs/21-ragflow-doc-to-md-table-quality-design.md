@@ -465,3 +465,74 @@ python scripts/convert.py pipeline \
 
 这条路线能同时满足三件事：Hermes 有 chunk markers 辅助生成段落，复杂表格能优先走
 high-accuracy 解析，表格在 RAGFlow chunking 中保持原子性。
+
+## 11. 本轮优化完成总结
+
+本轮优化已经把表格质量问题从“经验性操作建议”推进为可配置、可观测、可验证的
+`ragflow-doc-to-md` 正式能力：
+
+- 后处理链路已 table-safe：OCR 空格清理会跳过 HTML table 和 Markdown pipe table；
+  `chunk-markers-dense` 会插入表格边界 marker，但不会把 marker 写进 `<table>` 内部。
+- MinerU FastAPI 路径已不再固定 `pipeline`：CLI、env、config 均可设置
+  `mineru_fastapi_backend` 和 `mineru_fastapi_server_url`，并兼容新旧 hybrid/VLM backend 命名。
+- `--table-quality standard|high|auto` 已成为 host agent 的正式决策入口：
+  `standard` 保持兼容，`high` 走 high-accuracy backend，`auto` 对正式 PDF/Office/图片候选自动提升。
+- fallback 行为已显式化：unsupported backend 可降级到 `pipeline`，资源/timeout 类失败只有显式允许时
+  才降级；所有降级都会写入 runtime/table-quality 报告并标记 `table_quality_degraded`。
+- 表格质量信号已补齐到报告层：`quality_report.json` 现在包含 `table_source_counts`、
+  `table_fingerprints`、`chunk_marker_table_atomicity`、`table_heavy_document`；
+  `postprocess_report.json` 包含 `postprocess_table_delta` 和 table integrity 汇总。
+- rich handoff 已能给出 table-aware profile suggestion：检测到表格时会生成
+  `table-atomic-*-4096` 建议，包含 `chunk-markers-dense`、带反引号的 `<!-- chunk -->`
+  delimiter、较大的父 chunk、零 overlap 和 `avoid_children_delimiter: true`。
+- `ragflow-kb-build inspect-handoff` 已能读取 quality report 中的 HTML/Markdown table 计数，
+  并与 `retrieval_hints.json.table_artifacts` 做覆盖对齐，避免下游漏判表格文档。
+- release 工具链已把 public release surface 和本地开发输入分开：skill-local `doc/` 目录可保留
+  下一轮分析输入，但不会进入 release archive、hygiene scan 或 rename governance 的发布面判断。
+- 本轮收尾已通过完整 release-facing validation chain：runtime tests、diff check、manifest schema、
+  release hygiene、release build、archive export、consumer acceptance 和 strict vendor platform smoke。
+
+实际使用上，Hermes 面对含复杂表格的正式入库任务时，应优先生成 formal ingest handoff：
+
+```bash
+python scripts/convert.py pipeline \
+  --input /path/to/input \
+  --output /path/to/handoff \
+  --backend mineru-fastapi \
+  --mineru-base-url https://mineru.example.internal \
+  --table-quality high \
+  --mineru-asset-mode markdown_assets \
+  --postprocess-profile chunk-markers-dense \
+  --json
+```
+
+如果 host agent 需要自行判断是否提升，可把 `--table-quality high` 换成 `--table-quality auto`。
+
+## 12. 持续跟踪问题和改善方向
+
+本轮完成的是表格质量主路径的工程闭环，不代表复杂表格问答已经没有剩余风险。后续应持续跟踪：
+
+- **High-accuracy backend 可用性**：不同 MinerU 版本、FastAPI schema 和模型部署可能支持不同 backend
+  名称或参数。需要继续记录 backend unsupported、timeout、OOM、upstream 5xx 的真实比例，并据此优化
+  `auto` 策略和错误建议。
+- **`auto` 策略触发条件**：当前主要基于正式候选文件类型提升。后续可接入上一轮 quality warning、
+  content-list `complex_table` 信号、表格密度、数字/单位密度和用户意图提示，让自动提升更精确。
+- **超大表格原子性**：`chunk-markers-dense` 和 delimiter 可以保护普通表格边界，但如果 RAGFlow 部署的
+  `chunk_token_num` 上限偏小，超大表格仍可能被服务端二次切分。需要在入库前用
+  `chunk_marker_table_atomicity`、table cell count 和 table char ratio 标记人工复核或 profile 上限风险。
+- **复杂 HTML 结构语义**：rowspan/colspan、多级表头、公式符号和单位关系仍主要取决于上游 MinerU 解析。
+  后续可增加更细的 per-table 结构评分、表头层级摘要、单位列检测，以及对 row/colspan 异常的 review hints。
+- **表格问答准确率**：APOLLO 类规格表中，表头别名、型号族、单位符号和跨表对比仍可能导致检索或回答误判。
+  后续应基于人工审核的问题集维护小型 table QA regression，而不是只看 Markdown/table count。
+- **图片与表格联合证据**：复杂产品数据页经常需要图片、表格、caption 和页面上下文共同解释。后续可加强
+  `retrieval_hints` 中 table artifact 与 image artifact 的同页/同标题关联，辅助 KB profile 和查询阶段引用。
+- **KB 侧 zip/资产上传策略**：`ragflow-doc-to-md` 已能产出 Markdown assets 和 rich handoff，但是否用 zip
+  或 API 批量携带图片资产入库仍属于 `ragflow-kb-build` 的单独 live mutation 设计问题，需要另起方案并经过批准。
+- **Live RAGFlow 端到端验证**：本轮只把代表样本的 high-accuracy 转换、handoff、inspect 和 dry-run 路径跑通。
+  真正的 live KB 创建、解析、查询和清理仍需显式批准，并应记录为脱敏 field-trial evidence。
+- **跨文档/跨版本回归矩阵**：除代表产品数据页外，还应持续收集扫描件、财报、论文、长合同、图片密集文档和
+  Office 表格样本，比较 `standard`、`auto`、`high` 的质量、耗时、失败率和 fallback 频率。
+
+后续改进应坚持两个边界：一是 `ragflow-doc-to-md` 只负责高质量 Markdown handoff 和可审计报告，不直接创建
+或修改 RAGFlow KB；二是任何 live mutation、LLM 表格重写、远端 VLM 服务绑定或 KB 侧资产上传，都必须作为
+独立设计和显式批准任务推进。
