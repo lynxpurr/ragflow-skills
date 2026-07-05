@@ -120,6 +120,7 @@ DOC_COVERED_COMMANDS = (
     "ragflow-doc-to-md adaptive",
     "ragflow-doc-to-md backend probe",
     "ragflow-doc-to-md compare-retained-package",
+    "ragflow-doc-to-md compare-adaptive-summaries",
     "ragflow-doc-to-md backend warmup",
     "ragflow-doc-to-md inspect",
     "ragflow-doc-to-md inspect-source",
@@ -323,6 +324,7 @@ def discover_public_commands(root: Path = ROOT) -> list[DiscoveredCommand]:
         (("ragflow-doc-to-md", "package"), doc.build_package_parser),
         (("ragflow-doc-to-md", "postprocess"), doc.build_postprocess_parser),
         (("ragflow-doc-to-md", "adaptive"), doc.build_adaptive_parser),
+        (("ragflow-doc-to-md", "compare-adaptive-summaries"), doc.build_compare_adaptive_summaries_parser),
         (("ragflow-doc-to-md", "compare-retained-package"), doc.build_compare_retained_package_parser),
         (("ragflow-doc-to-md", "backend"), doc.build_backend_parser),
     ):

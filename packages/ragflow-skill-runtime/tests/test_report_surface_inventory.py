@@ -20,12 +20,12 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_report_surface_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 96)
+        self.assertEqual(report["summary"]["command_count"], 97)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
             {
-                "covered": 87,
+                "covered": 88,
                 "needs_redaction": 0,
                 "not_applicable": 9,
             },
@@ -59,6 +59,12 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
         self.assertIn("json_report", adaptive["output_categories"])
         self.assertIn("markdown_report", adaptive["output_categories"])
         self.assertIn("redaction_sidecar", adaptive["output_categories"])
+
+        adaptive_compare = by_command["ragflow-doc-to-md compare-adaptive-summaries"]
+        self.assertEqual(adaptive_compare["status"], "covered")
+        self.assertIn("json_report", adaptive_compare["output_categories"])
+        self.assertIn("markdown_report", adaptive_compare["output_categories"])
+        self.assertIn("redaction_sidecar", adaptive_compare["output_categories"])
 
         inspect_source = by_command["ragflow-doc-to-md inspect-source"]
         self.assertEqual(inspect_source["status"], "covered")

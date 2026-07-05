@@ -186,6 +186,68 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertTrue(snapshot["chunks"][0]["stable_hash"].startswith("sha256:"))
         self.assertIn("chunk-a", snapshot["chunks"][0]["aliases"])
 
+    def test_snapshot_chunks_reviews_table_fragmentation_duplicates_and_delimiters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_path = root / "validation_report.json"
+            snapshot_path = root / "chunk_snapshot.json"
+            table = "| Model | Value |\n| --- | --- |\n| HH-A | 10 |"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "cases": [
+                            {
+                                "id": "q1",
+                                "top_chunks": [
+                                    {
+                                        "content": table,
+                                        "document_name": "table.md",
+                                        "chunk_id": "table-a",
+                                    },
+                                    {
+                                        "content": "| Model | Value |\n| HH-B | 20 |",
+                                        "document_name": "table.md",
+                                        "chunk_id": "table-b",
+                                    },
+                                    {
+                                        "content": table,
+                                        "document_name": "duplicate.md",
+                                        "chunk_id": "table-duplicate",
+                                    },
+                                    {
+                                        "content": "![chart](images/chart.png)",
+                                        "document_name": "image.md",
+                                        "chunk_id": "image-only",
+                                    },
+                                    {
+                                        "content": "Plain text <!-- chunk --> still visible.",
+                                        "document_name": "plain.md",
+                                        "chunk_id": "delimiter",
+                                    },
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = snapshot_chunks(input_path=report_path, output_path=snapshot_path)
+
+        review = report["chunk_review"]
+        self.assertTrue(review["advisory_only"])
+        self.assertEqual(review["ragflow_calls"], 0)
+        self.assertEqual(review["metrics"]["table_like_chunk_count"], 3)
+        self.assertGreaterEqual(review["metrics"]["possible_split_table_chunk_count"], 1)
+        self.assertEqual(review["metrics"]["duplicate_table_like_chunk_count"], 1)
+        self.assertEqual(review["metrics"]["delimiter_visible_chunk_count"], 1)
+        self.assertEqual(review["metrics"]["image_only_chunk_count"], 1)
+        self.assertGreater(report["summary"]["max_chunk_chars"], 0)
+        issue_codes = {issue["code"] for issue in review["issues"]}
+        self.assertIn("possible_table_fragmentation", issue_codes)
+        self.assertIn("duplicate_table_like_chunks", issue_codes)
+        self.assertIn("chunk_delimiter_visible_in_snapshot", issue_codes)
+
     def test_validate_grounded_qa_accepts_exact_source_spans(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

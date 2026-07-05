@@ -84,6 +84,39 @@ class AdaptivePipelineTests(unittest.TestCase):
         self.assertEqual(decision["recommendation"]["kb_profile"]["id"], "table-atomic-zh-4096")
         self.assertEqual(decision["recommendation"]["mineru_fastapi_backend"], "pipeline")
 
+    def test_scanned_pdf_without_filename_hint_stays_unknown_not_confident_english(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "scanned-sample.pdf"
+            garbage = bytes([0xF1, 0x9D, 0x62, 0x40, 0x21, 0x90, 0x84, 0xDE, 0x64, 0xFE, 0x20]) * 80
+            source.write_bytes(
+                b"%PDF-1.7\n"
+                b"1 0 obj << /Type /Page >> endobj\n"
+                b"2 0 obj ("
+                + garbage
+                + b") endobj\n"
+                + b"0" * 12000
+            )
+
+            report = inspect_source_document(source)
+            decision = make_pipeline_decision(
+                report,
+                requested_backend="mineru-fastapi",
+                requested_table_quality="standard",
+                requested_mineru_fastapi_backend="pipeline",
+                policy="table-atomic",
+            )
+
+        document = report["documents"][0]
+        self.assertEqual(report["summary"]["primary_language"], "unknown")
+        self.assertEqual(document["sample"]["language_source"], "unknown_low_confidence")
+        self.assertNotEqual(document["sample"]["language"], "en")
+        self.assertIn(document["pdf_text_sample_quality"], {"binary_garbage", "low_text"})
+        self.assertTrue(document["risks"]["scanned_or_low_text_pdf"])
+        self.assertEqual(decision["signals"]["language_source"], "inspect_source")
+        self.assertEqual(decision["signals"]["primary_language"], "auto")
+        self.assertEqual(decision["recommendation"]["kb_profile"]["id"], "table-atomic-auto-4096")
+
     def test_decision_selects_table_atomic_profile(self) -> None:
         features = {
             "schema": DOCUMENT_FEATURES_SCHEMA,
@@ -232,11 +265,17 @@ class AdaptivePipelineTests(unittest.TestCase):
                 env=_env(),
             )
             decision = json.loads((output / "pipeline_decision.json").read_text(encoding="utf-8"))
+            summary = json.loads((output / "adaptive_summary.json").read_text(encoding="utf-8"))
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(decision["recommendation"]["table_quality"], "high")
+        self.assertEqual(decision["signals"]["user_requested_language"], "zh")
         self.assertEqual(decision["recommendation"]["mineru_fastapi_backend"], "pipeline")
         self.assertEqual(decision["recommendation"]["kb_profile"]["id"], "table-atomic-zh-4096")
+        self.assertEqual(summary["inspected_primary_language"], "zh")
+        self.assertEqual(summary["decision_primary_language"], "zh")
+        self.assertEqual(summary["effective_language_source"], "user_hint")
+        self.assertEqual(summary["user_requested_language"], "zh")
 
     def test_adaptive_cli_runs_pipeline_for_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -272,6 +311,9 @@ class AdaptivePipelineTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["adaptive_summary"]["schema"], ADAPTIVE_PIPELINE_SUMMARY_SCHEMA)
+        self.assertEqual(payload["adaptive_summary"]["inspected_primary_language"], "zh")
+        self.assertEqual(payload["adaptive_summary"]["decision_primary_language"], "zh")
+        self.assertEqual(payload["adaptive_summary"]["effective_language_source"], "inspect_source")
         self.assertEqual(payload["adaptive_summary"]["recommended_profile_id"], "table-atomic-zh-4096")
         self.assertTrue(manifest_exists)
         self.assertTrue(hints_exists)

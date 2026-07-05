@@ -1889,6 +1889,117 @@ def _document_chunk_coverage(chunks: list[NormalizedChunk]) -> list[dict[str, An
     return sorted(documents.values(), key=lambda item: (item["document_name"], item.get("document_id") or ""))
 
 
+TABLE_HINT_RE = re.compile(r"(<table\b|</table>|\|[^\n]*\|)", re.IGNORECASE)
+IMAGE_HINT_RE = re.compile(r"!\[[^\]]*]\([^)]+\)|<img\b", re.IGNORECASE)
+CHUNK_DELIMITER_RE = re.compile(r"<!--\s*chunk\s*-->", re.IGNORECASE)
+
+
+def _table_signature(content: str) -> str:
+    rows = []
+    for line in content.splitlines():
+        stripped = " ".join(line.strip().lower().split())
+        if not stripped:
+            continue
+        if "|" in stripped or "<tr" in stripped or "<td" in stripped or "<th" in stripped:
+            rows.append(stripped)
+    return "\n".join(rows[:12])[:2000]
+
+
+def _chunk_snapshot_review(chunks: list[NormalizedChunk], *, source_chunks: list[NormalizedChunk] | None = None) -> dict[str, Any]:
+    review_chunks = list(source_chunks or chunks)
+    table_like_indexes: list[int] = []
+    image_only_indexes: list[int] = []
+    delimiter_consumed_indexes: list[int] = []
+    max_chunk_chars = 0
+    table_signatures: dict[str, int] = {}
+    documents_with_table_chunks: set[str] = set()
+    documents_without_table_chunks: set[str] = set()
+
+    for index, chunk in enumerate(review_chunks, start=1):
+        content = chunk.content or ""
+        text_without_images = IMAGE_HINT_RE.sub("", content).strip()
+        has_table = bool(TABLE_HINT_RE.search(content))
+        has_image = bool(IMAGE_HINT_RE.search(content))
+        max_chunk_chars = max(max_chunk_chars, len(content))
+        document_name = chunk.document_name or chunk.document_id or "<unknown>"
+        if has_table:
+            table_like_indexes.append(index)
+            documents_with_table_chunks.add(document_name)
+            signature = _table_signature(content)
+            if signature:
+                table_signatures[signature] = table_signatures.get(signature, 0) + 1
+        else:
+            documents_without_table_chunks.add(document_name)
+        if has_image and not text_without_images:
+            image_only_indexes.append(index)
+        if CHUNK_DELIMITER_RE.search(content):
+            delimiter_consumed_indexes.append(index)
+
+    duplicate_table_like_count = sum(count - 1 for count in table_signatures.values() if count > 1)
+    split_table_chunk_count = 0
+    previous_table_doc = None
+    for index in table_like_indexes:
+        document_name = review_chunks[index - 1].document_name or review_chunks[index - 1].document_id or "<unknown>"
+        if previous_table_doc == document_name:
+            split_table_chunk_count += 1
+        previous_table_doc = document_name
+    missing_table_evidence_count = len(documents_without_table_chunks) if table_like_indexes else 0
+    issues: list[dict[str, Any]] = []
+    if split_table_chunk_count:
+        issues.append(
+            {
+                "severity": "review",
+                "code": "possible_table_fragmentation",
+                "message": "Adjacent table-like chunks may indicate table fragmentation.",
+            }
+        )
+    if duplicate_table_like_count:
+        issues.append(
+            {
+                "severity": "review",
+                "code": "duplicate_table_like_chunks",
+                "message": "Repeated table-like chunk signatures may indicate duplicate table evidence.",
+            }
+        )
+    if missing_table_evidence_count:
+        issues.append(
+            {
+                "severity": "info",
+                "code": "documents_without_table_evidence",
+                "message": "Some documents in the snapshot have no table-like chunk evidence.",
+            }
+        )
+    if delimiter_consumed_indexes:
+        issues.append(
+            {
+                "severity": "review",
+                "code": "chunk_delimiter_visible_in_snapshot",
+                "message": "One or more chunks still contain the chunk delimiter marker.",
+            }
+        )
+    return {
+        "advisory_only": True,
+        "ragflow_calls": 0,
+        "metrics": {
+            "chunk_count": len(chunks),
+            "source_chunk_count": len(review_chunks),
+            "table_like_chunk_count": len(table_like_indexes),
+            "possible_split_table_chunk_count": split_table_chunk_count,
+            "duplicate_table_like_chunk_count": duplicate_table_like_count,
+            "missing_table_evidence_document_count": missing_table_evidence_count,
+            "delimiter_visible_chunk_count": len(delimiter_consumed_indexes),
+            "image_only_chunk_count": len(image_only_indexes),
+            "max_chunk_chars": max_chunk_chars,
+        },
+        "examples": {
+            "table_like_chunk_indexes": table_like_indexes[:20],
+            "image_only_chunk_indexes": image_only_indexes[:20],
+            "delimiter_visible_chunk_indexes": delimiter_consumed_indexes[:20],
+        },
+        "issues": issues,
+    }
+
+
 def snapshot_chunks(
     *,
     input_path: str | Path,
@@ -1933,6 +2044,7 @@ def snapshot_chunks(
     chunks_with_chunk_id = sum(1 for chunk in unique_chunks if chunk.chunk_id)
     content_char_count = sum(len(chunk.content) for chunk in unique_chunks)
     document_coverage = _document_chunk_coverage(unique_chunks)
+    review = _chunk_snapshot_review(unique_chunks, source_chunks=chunks)
     snapshot = {
         "schema": CHUNK_SNAPSHOT_SCHEMA,
         "created_at": _now(),
@@ -1980,6 +2092,13 @@ def snapshot_chunks(
             "runtime_failure_count": runtime_partial_summary["failure_count"],
             "runtime_timeout_count": runtime_partial_summary["timeout_count"],
             "runtime_skipped_count": runtime_partial_summary["skipped_count"],
+            "table_like_chunk_count": review["metrics"]["table_like_chunk_count"],
+            "possible_split_table_chunk_count": review["metrics"]["possible_split_table_chunk_count"],
+            "duplicate_table_like_chunk_count": review["metrics"]["duplicate_table_like_chunk_count"],
+            "missing_table_evidence_document_count": review["metrics"]["missing_table_evidence_document_count"],
+            "delimiter_visible_chunk_count": review["metrics"]["delimiter_visible_chunk_count"],
+            "image_only_chunk_count": review["metrics"]["image_only_chunk_count"],
+            "max_chunk_chars": review["metrics"]["max_chunk_chars"],
         }
     )
     return {
@@ -1988,6 +2107,7 @@ def snapshot_chunks(
         "chunk_snapshot": str(output_path),
         "summary": report_summary,
         "runtime_partial_failure": runtime_partial_failure,
+        "chunk_review": review,
         "document_coverage": document_coverage,
         "source_hashes": snapshot["source_hashes"],
     }

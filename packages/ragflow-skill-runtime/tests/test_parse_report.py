@@ -174,6 +174,71 @@ class ParseReportTests(unittest.TestCase):
         self.assertEqual(report["document_states"][0]["parse_state"], "succeeded")
         self.assertEqual(report["summary"]["matched_status_document_count"], 1)
 
+    def test_parse_report_surfaces_requested_effective_profile_drift_as_advisory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kb_manifest = root / "kb_manifest.json"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-drift", "name": "kb:drift"},
+                        "profile": {
+                            "id": "effective-profile",
+                            "chunk_size": 512,
+                            "chunk_overlap": 64,
+                            "parser_config": {
+                                "chunk_token_num": 512,
+                                "auto_keywords": 0,
+                                "auto_questions": 0,
+                            },
+                        },
+                        "documents": [
+                            {
+                                "document_id": "doc-1",
+                                "source_path": "source.md",
+                                "markdown_path": "documents/source.md",
+                                "status": "done",
+                                "chunk_count": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            requested_profile = root / "requested.json"
+            requested_profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "requested-profile",
+                        "chunk_size": 4096,
+                        "chunk_overlap": 0,
+                        "parser_config": {
+                            "chunk_token_num": 4096,
+                            "auto_keywords": 0,
+                            "auto_questions": 0,
+                            "delimiter": "`<!-- chunk -->`",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = create_parse_report(kb_manifest_path=kb_manifest, profile_path=requested_profile)
+            markdown = render_parse_report_markdown(report)
+
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["execution"]["ragflow_calls"], 0)
+        self.assertEqual(report["mutation"], "none")
+        visibility = report["profile_visibility"]
+        self.assertTrue(visibility["advisory_only"])
+        self.assertTrue(visibility["drift"]["drift"])
+        self.assertEqual(visibility["requested_profile"]["id"], "requested-profile")
+        self.assertEqual(visibility["effective_profile"]["id"], "effective-profile")
+        self.assertIn("delimiter", visibility["drift"]["missing_effective_keys"])
+        self.assertIn("requested_effective_profile_drift", {issue["code"] for issue in report["issues"]})
+        self.assertIn("Requested/effective drift: True", markdown)
+
     def test_parse_report_rejects_documents_json_without_documents(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

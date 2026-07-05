@@ -192,6 +192,7 @@ def _table_char_ratio(text: str, blocks: list[str]) -> float:
 def _chunk_marker_table_atomicity(text: str) -> dict[str, Any]:
     markers = CHUNK_MARKER_RE.findall(text)
     fragments = CHUNK_MARKER_RE.split(text)
+    marker_inside_table_count = sum(len(CHUNK_MARKER_RE.findall(block)) for block in _html_table_blocks(text))
     unbalanced_fragments: list[dict[str, int]] = []
     for index, fragment in enumerate(fragments):
         open_count = len(HTML_TABLE_OPEN_RE.findall(fragment))
@@ -207,10 +208,11 @@ def _chunk_marker_table_atomicity(text: str) -> dict[str, Any]:
     return {
         "delimiter": "`<!-- chunk -->`",
         "chunk_marker_count": len(markers),
+        "marker_inside_table_count": marker_inside_table_count,
         "fragment_count": len(fragments),
         "unbalanced_fragment_count": len(unbalanced_fragments),
         "unbalanced_fragments": unbalanced_fragments[:20],
-        "ok": not unbalanced_fragments,
+        "ok": marker_inside_table_count == 0 and not unbalanced_fragments,
     }
 
 
@@ -324,6 +326,7 @@ def inspect_quality_document(document: QualityDocument, *, output_root: str | Pa
     chunk_marker_table_atomicity: dict[str, Any] = {
         "delimiter": "`<!-- chunk -->`",
         "chunk_marker_count": 0,
+        "marker_inside_table_count": 0,
         "fragment_count": 1,
         "unbalanced_fragment_count": 0,
         "unbalanced_fragments": [],
@@ -469,6 +472,24 @@ def inspect_quality_document(document: QualityDocument, *, output_root: str | Pa
                         path=_relative(markdown_path, output_root_path),
                     )
                 )
+        if int(chunk_marker_table_atomicity.get("marker_inside_table_count", 0) or 0) > 0:
+            issues.append(
+                QualityIssue(
+                    severity="warning",
+                    issue_type="chunk_marker_inside_html_table",
+                    message="chunk marker appears inside an HTML table; verify table atomicity before formal ingestion",
+                    path=_relative(markdown_path, output_root_path),
+                )
+            )
+        if int(chunk_marker_table_atomicity.get("unbalanced_fragment_count", 0) or 0) > 0:
+            issues.append(
+                QualityIssue(
+                    severity="warning",
+                    issue_type="chunk_marker_unbalanced_html_table_fragment",
+                    message="chunk markers split HTML table open/close tags across fragments; verify table reconstruction",
+                    path=_relative(markdown_path, output_root_path),
+                )
+            )
         if _math_delimiters_unbalanced(text):
             issues.append(
                 QualityIssue(

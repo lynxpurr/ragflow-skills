@@ -319,13 +319,101 @@ def _load_profile_from_manifest(kb_manifest: KbManifest) -> ChunkProfile | None:
         return None
 
 
+def _public_parser_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    return {str(key): value for key, value in config.items() if not str(key).startswith("__")}
+
+
+def _diff_parser_configs(requested: Mapping[str, Any], effective: Mapping[str, Any]) -> dict[str, Any]:
+    requested_public = _public_parser_config(requested)
+    effective_public = _public_parser_config(effective)
+    requested_keys = set(requested_public)
+    effective_keys = set(effective_public)
+    changed = sorted(key for key in requested_keys & effective_keys if requested_public.get(key) != effective_public.get(key))
+    return {
+        "missing_effective_keys": sorted(requested_keys - effective_keys),
+        "extra_effective_keys": sorted(effective_keys - requested_keys),
+        "changed_values": [
+            {"key": key, "requested": requested_public.get(key), "effective": effective_public.get(key)}
+            for key in changed
+        ],
+        "drift": bool((requested_keys - effective_keys) or (effective_keys - requested_keys) or changed),
+    }
+
+
+def _profile_visibility_report(
+    *,
+    kb_manifest: KbManifest,
+    requested_profile: ChunkProfile | None,
+    effective_parser_config: Mapping[str, Any],
+    effective_source: str,
+    parser_config_path: str | Path | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    manifest_profile = _load_profile_from_manifest(kb_manifest)
+    requested = requested_profile or manifest_profile
+    requested_config = dict(requested.parser_config) if requested else {}
+    effective_config = dict(effective_parser_config)
+    drift = _diff_parser_configs(requested_config, effective_config) if requested_config or effective_config else {
+        "missing_effective_keys": [],
+        "extra_effective_keys": [],
+        "changed_values": [],
+        "drift": False,
+    }
+    unsupported = sorted(
+        key
+        for key in effective_config
+        if not str(key).startswith("__") and key not in SUPPORTED_PARSER_KEYS
+    )
+    requested_profile_payload = asdict(requested) if requested else None
+    if requested_profile_payload:
+        requested_profile_payload["id"] = requested_profile_payload.pop("profile_id")
+    effective_profile_payload = asdict(manifest_profile) if manifest_profile else None
+    if effective_profile_payload:
+        effective_profile_payload["id"] = effective_profile_payload.pop("profile_id")
+    report = {
+        "available": bool(requested_config or effective_config),
+        "advisory_only": True,
+        "mutation": "none",
+        "requested_source": "profile" if requested_profile else "kb_manifest.profile" if manifest_profile else "none",
+        "effective_source": effective_source,
+        "requested_profile": requested_profile_payload,
+        "effective_profile": effective_profile_payload,
+        "requested_parser_config": requested_config,
+        "effective_parser_config": effective_config,
+        "parser_config_override": str(parser_config_path) if parser_config_path else None,
+        "unsupported_effective_keys": unsupported,
+        "drift": drift,
+    }
+    issues: list[dict[str, Any]] = []
+    if unsupported:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="effective_parser_config_unsupported_keys",
+                field="profile_visibility.effective_parser_config",
+                message="Effective parser settings include keys outside the public profile contract.",
+                recommendation="Treat unsupported parser settings as advisory and verify them through a profile lint or live parse report before relying on them.",
+            )
+        )
+    if drift["drift"]:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="requested_effective_profile_drift",
+                field="profile_visibility.drift",
+                message="Requested parser settings differ from the effective parser settings available in current-suite artifacts.",
+                recommendation="Review requested versus effective settings before using this build as profile-parity evidence.",
+            )
+        )
+    return report, issues
+
+
 def _parser_settings_report(
     *,
     kb_manifest: KbManifest,
     profile_path: str | Path | None,
     parser_config_path: str | Path | None,
     markdown_stats: Mapping[str, Any],
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], ChunkProfile | None, ChunkProfile | None]:
     profile: ChunkProfile | None = None
     profile_source = "none"
     profile_load_issue: dict[str, Any] | None = None
@@ -345,6 +433,8 @@ def _parser_settings_report(
         profile = _load_profile_from_manifest(kb_manifest)
         profile_source = "kb_manifest.profile" if profile is not None else "none"
 
+    requested_profile = profile if profile_path and profile_load_issue is None else None
+    effective_profile = _load_profile_from_manifest(kb_manifest)
     parser_config: dict[str, Any] = dict(profile.parser_config) if profile else {}
     parser_config_source = profile_source
     parser_config_load_issue: dict[str, Any] | None = None
@@ -463,7 +553,7 @@ def _parser_settings_report(
         "unsupported_keys": unsupported_keys,
         "visual_or_layout_keys": visual_keys,
         "issues": issues,
-    }
+    }, requested_profile, effective_profile
 
 
 def _duration_ms(value: float, unit: str) -> float:
@@ -874,11 +964,27 @@ def create_parse_report(
     parse_log_list = list(parse_log_paths or [])
     parse_log_summary = _parse_logs(parse_log_list) if parse_log_list else _empty_parse_log_summary()
     markdown_stats = _manifest_markdown_stats(kb_manifest)
-    parser_settings = _parser_settings_report(
+    parser_settings, requested_profile, effective_profile = _parser_settings_report(
         kb_manifest=kb_manifest,
         profile_path=profile_path,
         parser_config_path=parser_config_path,
         markdown_stats=markdown_stats,
+    )
+    if parser_config_path:
+        visibility_effective_config = parser_settings.get("parser_config", {})
+        visibility_effective_source = str(parser_settings.get("source") or "none")
+    elif effective_profile is not None:
+        visibility_effective_config = effective_profile.parser_config
+        visibility_effective_source = "kb_manifest.profile"
+    else:
+        visibility_effective_config = parser_settings.get("parser_config", {})
+        visibility_effective_source = str(parser_settings.get("source") or "none")
+    profile_visibility, profile_visibility_issues = _profile_visibility_report(
+        kb_manifest=kb_manifest,
+        requested_profile=requested_profile,
+        effective_parser_config=visibility_effective_config,
+        effective_source=visibility_effective_source,
+        parser_config_path=parser_config_path,
     )
     document_states, document_issues, document_summary = _document_states_report(
         kb_manifest=kb_manifest,
@@ -912,6 +1018,7 @@ def create_parse_report(
     issues.extend(document_issues)
     issues.extend(chunk_issues)
     issues.extend(parser_settings["issues"])
+    issues.extend(profile_visibility_issues)
     issues.extend(_issues_from_parse_logs(parse_log_summary))
 
     issue_counts = Counter(str(issue.get("severity") or "info") for issue in issues)
@@ -947,6 +1054,7 @@ def create_parse_report(
         "document_states": document_states,
         "chunk_consistency": chunk_consistency,
         "parser_settings": parser_settings,
+        "profile_visibility": profile_visibility,
         "markdown_stats": markdown_stats,
         "parse_log_summary": parse_log_summary,
         "issues": issues,
@@ -966,6 +1074,7 @@ def render_parse_report_markdown(report: Mapping[str, Any]) -> str:
     summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
     chunk_consistency = report.get("chunk_consistency", {}) if isinstance(report.get("chunk_consistency"), Mapping) else {}
     parser_settings = report.get("parser_settings", {}) if isinstance(report.get("parser_settings"), Mapping) else {}
+    profile_visibility = report.get("profile_visibility", {}) if isinstance(report.get("profile_visibility"), Mapping) else {}
     parse_logs = report.get("parse_log_summary", {}) if isinstance(report.get("parse_log_summary"), Mapping) else {}
     issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
     document_states = report.get("document_states", []) if isinstance(report.get("document_states"), list) else []
@@ -1017,6 +1126,8 @@ def render_parse_report_markdown(report: Mapping[str, Any]) -> str:
             f"- Warning settings: {parser_settings.get('expensive_setting_count', 0)}",
             f"- Unsupported keys: {', '.join(parser_settings.get('unsupported_keys', []) or []) or '-'}",
             f"- Visual/layout keys: {', '.join(parser_settings.get('visual_or_layout_keys', []) or []) or '-'}",
+            f"- Requested/effective drift: {profile_visibility.get('drift', {}).get('drift', False) if isinstance(profile_visibility.get('drift'), Mapping) else False}",
+            f"- Effective unsupported keys: {', '.join(profile_visibility.get('unsupported_effective_keys', []) or []) or '-'}",
             "",
             "## Parse Logs",
             "",

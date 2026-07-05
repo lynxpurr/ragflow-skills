@@ -26,6 +26,127 @@ def _env() -> dict[str, str]:
     return env
 
 
+def _write_adaptive_compare_run(
+    root: Path,
+    *,
+    primary_language: str,
+    language_source: str,
+    fastapi_backend: str,
+    profile_id: str,
+    quality_status: str,
+    marker_count: int,
+    image_count: int,
+    renamed_count: int,
+) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "document_features.json").write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_document_features_v1",
+                "summary": {
+                    "document_count": 1,
+                    "primary_language": primary_language,
+                    "language_source_counts": {language_source: 1},
+                    "scanned_or_low_text_pdf_count": 1,
+                    "sample_table_count": 1,
+                    "sample_html_table_count": 1,
+                    "sample_image_ref_count": image_count,
+                },
+                "documents": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "pipeline_decision.json").write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_pipeline_decision_v1",
+                "confidence": "review",
+                "signals": {
+                    "primary_language": primary_language,
+                    "inspected_primary_language": primary_language,
+                    "language_source": language_source,
+                },
+                "recommendation": {
+                    "backend": "mineru-fastapi",
+                    "table_quality": "standard",
+                    "postprocess_profile": "chunk-markers-dense",
+                    "mineru_fastapi_backend": fastapi_backend,
+                    "mineru_asset_mode": "markdown_assets",
+                    "kb_profile": {"id": profile_id},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "adaptive_summary.json").write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_adaptive_pipeline_summary_v1",
+                "ok": True,
+                "pipeline_exit_code": 0,
+                "decision_confidence": "review",
+                "recommended_profile_id": profile_id,
+                "quality_gate_status": quality_status,
+                "ingest_readiness_status": "ready_with_review",
+                "post_conversion_profile_id": profile_id,
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "quality_report.json").write_text(
+        json.dumps(
+            {
+                "schema": "doc_quality_report_v1",
+                "gate": {"status": quality_status},
+                "documents": [
+                    {
+                        "quality_signals": {
+                            "chunk_marker_table_atomicity": {
+                                "chunk_marker_count": marker_count,
+                                "marker_inside_table_count": 0,
+                                "unbalanced_fragment_count": 0,
+                            }
+                        }
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "chunk_profile_report.json").write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_chunk_profile_report_v1",
+                "summary": {
+                    "marker_count": marker_count,
+                    "preferred_boundary_alignment_ratio": 1.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "runtime_report.json").write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_doc_runtime_report_v1",
+                "remote_attempts": [
+                    {
+                        "asset_policy": {
+                            "saved": {
+                                "image_count": image_count,
+                                "image_naming": {"renamed_count": renamed_count},
+                            }
+                        }
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _write_fake_mineru_cli(path: Path) -> Path:
     path.write_text(
         "#!/usr/bin/env python3\n"
@@ -532,6 +653,78 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(report["safety"]["live_ragflow_mutation"], "not_performed")
         self.assertIn("RAGFlow Handoff Comparison", markdown)
         self.assertIn("strict_paired_live_ab_not_run", markdown)
+
+    def test_compare_adaptive_summaries_cli_writes_sanitized_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline = root / "private-home" / "baseline-run"
+            candidate = root / "private-home" / "candidate-run"
+            _write_adaptive_compare_run(
+                baseline,
+                primary_language="zh",
+                language_source="filename_hint",
+                fastapi_backend="pipeline",
+                profile_id="table-atomic-zh-4096",
+                quality_status="PASS_WITH_REVIEW",
+                marker_count=32,
+                image_count=21,
+                renamed_count=12,
+            )
+            _write_adaptive_compare_run(
+                candidate,
+                primary_language="en",
+                language_source="inspect_source",
+                fastapi_backend="hybrid-auto-engine",
+                profile_id="table-atomic-en-4096",
+                quality_status="BLOCKED",
+                marker_count=12,
+                image_count=21,
+                renamed_count=4,
+            )
+            report_json = root / "private-home" / "adaptive_compare.json"
+            report_md = root / "private-home" / "adaptive_compare.md"
+            redaction = root / "private-home" / "adaptive_compare.redaction.json"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "compare-adaptive-summaries",
+                    "--baseline",
+                    str(baseline),
+                    "--candidate",
+                    str(candidate),
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                    "--redaction-report",
+                    str(redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+            report = json.loads(report_json.read_text(encoding="utf-8"))
+            markdown = report_md.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction.read_text(encoding="utf-8"))
+            combined = "\n".join([result.stdout, report_json.read_text(encoding="utf-8"), markdown])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["schema"], "ragflow_adaptive_summary_comparison_v1")
+        self.assertEqual(report["schema"], "ragflow_adaptive_summary_comparison_v1")
+        self.assertEqual(report["summary"]["status"], "review")
+        self.assertTrue(report["summary"]["language_source_changed"])
+        self.assertTrue(report["summary"]["backend_changed"])
+        self.assertTrue(report["summary"]["quality_gate_changed"])
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["summary"]["redaction_count"], 1)
+        self.assertIn("RAGFlow Adaptive Summary Comparison", markdown)
+        self.assertNotIn(str(root), combined)
+        self.assertIn("<redacted:config-path>", combined)
 
     def test_compare_retained_package_redaction_omits_private_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

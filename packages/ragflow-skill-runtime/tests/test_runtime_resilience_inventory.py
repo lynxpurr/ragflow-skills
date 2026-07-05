@@ -20,7 +20,7 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_runtime_resilience_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 96)
+        self.assertEqual(report["summary"]["command_count"], 97)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
@@ -28,7 +28,7 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
                 "candidate": 0,
                 "covered": 21,
                 "deferred": 0,
-                "not_applicable": 75,
+                "not_applicable": 76,
             },
         )
 
@@ -106,6 +106,10 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
         ask = by_command["ragflow-query ask"]
         self.assertEqual(ask["status"], "covered")
         self.assertEqual(ask["features"], ["metrics", "partial_failure", "retry"])
+
+        adaptive_compare = by_command["ragflow-doc-to-md compare-adaptive-summaries"]
+        self.assertEqual(adaptive_compare["status"], "not_applicable")
+        self.assertEqual(adaptive_compare["features"], [])
 
         template = by_command["ragflow-kb-build metadata generate-template"]
         self.assertEqual(template["status"], "not_applicable")

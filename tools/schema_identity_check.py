@@ -112,6 +112,14 @@ EXPECTED_IDENTITIES = (
         description="Adaptive document pipeline summary and offline review command manifest.",
     ),
     SchemaIdentity(
+        key="adaptive_summary_comparison",
+        group="doc_convert",
+        identity="ragflow_adaptive_summary_comparison_v1",
+        source_patterns=("ragflow_adaptive_summary_comparison_v1", "ADAPTIVE_SUMMARY_COMPARISON_SCHEMA"),
+        coverage_patterns=("ragflow_adaptive_summary_comparison_v1", "ADAPTIVE_SUMMARY_COMPARISON_SCHEMA"),
+        description="Offline comparison report for adaptive pipeline run-summary drift.",
+    ),
+    SchemaIdentity(
         key="doc_quality_report",
         group="quality",
         identity="doc_quality_report_v1",

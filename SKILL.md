@@ -289,3 +289,4 @@ print(out.count('<!-- chunk -->'))
 - Reference: `references/ragflow-skills-vs-ragflux-vs-kb-ops.md` — 三套管线对比表
 - Reference: `references/ragflow-skills-adaptive-pipeline-guide.md` — adaptive pipeline 端到端使用指南
 - Reference: `references/blackwell-mineru-fastapi-backend-pitfall.md` — Blackwell GPU 上 MinerU high-accuracy backend 陷阱
+- Reference: `references/ragflow-doc-to-md-table-parameter-impact.md` — 参数调整对表格解析质量的影响与决策树

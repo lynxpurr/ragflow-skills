@@ -340,6 +340,7 @@ def make_pipeline_decision(
         "signals": {
             "primary_language": language,
             "inspected_primary_language": inspected_language,
+            "user_requested_language": user_language if user_language != "auto" else None,
             "language_source": language_source,
             "formal_ingest_candidate": formal_candidate,
             "table_heavy": table_heavy,
@@ -422,6 +423,7 @@ def make_adaptive_pipeline_summary(
     recommendation = decision.get("recommendation") if isinstance(decision.get("recommendation"), Mapping) else {}
     if isinstance(recommendation.get("kb_profile"), Mapping):
         kb_profile = dict(recommendation["kb_profile"])
+    signals = decision.get("signals") if isinstance(decision.get("signals"), Mapping) else {}
     review_commands = [
         [
             "ragflow-kb-build",
@@ -507,6 +509,10 @@ def make_adaptive_pipeline_summary(
         "features_schema": features.get("schema"),
         "decision_schema": decision.get("schema"),
         "decision_confidence": decision.get("confidence"),
+        "inspected_primary_language": signals.get("inspected_primary_language"),
+        "decision_primary_language": signals.get("primary_language"),
+        "effective_language_source": signals.get("language_source"),
+        "user_requested_language": signals.get("user_requested_language"),
         "recommended_profile_id": kb_profile.get("id") or kb_profile.get("profile_id"),
         "post_conversion_profile_id": post_conversion_profile_id,
         "handoff_root": output_root,
@@ -567,6 +573,10 @@ def render_adaptive_pipeline_summary_markdown(report: Mapping[str, Any]) -> str:
         f"- ok: `{report.get('ok')}`",
         f"- pipeline exit code: `{report.get('pipeline_exit_code')}`",
         f"- decision confidence: `{report.get('decision_confidence', 'unknown')}`",
+        f"- inspected language: `{report.get('inspected_primary_language', 'unknown')}`",
+        f"- decision language: `{report.get('decision_primary_language', 'unknown')}`",
+        f"- effective language source: `{report.get('effective_language_source', 'unknown')}`",
+        f"- user requested language: `{report.get('user_requested_language', None)}`",
         f"- recommended profile: `{report.get('recommended_profile_id', 'none')}`",
         f"- ingest readiness: `{report.get('ingest_readiness_status', 'unknown')}`",
         "",

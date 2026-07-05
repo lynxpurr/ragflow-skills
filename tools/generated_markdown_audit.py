@@ -24,6 +24,7 @@ SANITIZED_MARKDOWN_VERIFIED_COMMANDS = (
     "ragflow-doc-to-md adaptive",
     "ragflow-doc-to-md backend probe",
     "ragflow-doc-to-md backend warmup",
+    "ragflow-doc-to-md compare-adaptive-summaries",
     "ragflow-doc-to-md compare-retained-package",
     "ragflow-doc-to-md inspect",
     "ragflow-doc-to-md inspect-source",

@@ -33,6 +33,8 @@ from ragflow_skill_runtime.handoff import (
     write_formal_handoff_manifest,
 )
 from ragflow_skill_runtime.kb_build import BuildDocument
+from ragflow_skill_runtime.doc_postprocess import postprocess_handoff
+from ragflow_skill_runtime.doc_quality import QualityDocument, make_quality_report_payload
 from ragflow_skill_runtime.topology import create_kb_topology_advice
 
 
@@ -907,6 +909,76 @@ class HandoffTests(unittest.TestCase):
         self.assertIn("Ingestion readiness", markdown)
         self.assertIn("metadata", markdown)
         self.assertIn("Retrieval hint sections", markdown)
+
+    def test_report_consistency_for_quality_postprocess_chunk_profile_and_ingest_readiness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            documents.mkdir()
+            markdown = documents / "table.md"
+            markdown.write_text(
+                "# Catalog\n\n"
+                "Intro.\n\n"
+                "## Specs\n\n"
+                "<table>\n"
+                "<tr><th>Model</th><th>Accuracy</th></tr>\n"
+                "<tr><td>APOLLO-H</td><td>0.01 mm</td></tr>\n"
+                "</table>\n",
+                encoding="utf-8",
+            )
+            (root / "doc_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "handoff_mode": "formal_ingest",
+                        "documents": [
+                            {
+                                "source_path": "table.pdf",
+                                "markdown_path": "documents/table.md",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            postprocess_report = postprocess_handoff(
+                root / "doc_manifest.json",
+                profile="chunk-markers-dense",
+                write=True,
+                report_json=root / "postprocess_report.json",
+                chunk_profile_report_json=root / "chunk_profile_report.json",
+            )
+            quality_report = make_quality_report_payload(
+                output_root=root,
+                documents=[QualityDocument(source_path="table.pdf", markdown_path=markdown)],
+            )
+            (root / "quality_report.json").write_text(json.dumps(quality_report), encoding="utf-8")
+            manifest = json.loads((root / "doc_manifest.json").read_text(encoding="utf-8"))
+            manifest["quality_report"] = "quality_report.json"
+            manifest["postprocess_report"] = "postprocess_report.json"
+            manifest["chunk_profile_report"] = "chunk_profile_report.json"
+            manifest["quality_gate"] = quality_report["gate"]
+            (root / "doc_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            ingest_readiness = write_doc_ingest_readiness_report(handoff_root=root)
+            chunk_profile_report = json.loads((root / "chunk_profile_report.json").read_text(encoding="utf-8"))
+
+        quality_signals = quality_report["documents"][0]["quality_signals"]
+        postprocess_table = postprocess_report["summary"]["table_integrity"]
+        postprocess_chunk = postprocess_report["chunk_profile_report"]["summary"]
+        readiness_quality = ingest_readiness["checks"]["quality_gate"]["summary"]
+        readiness_chunk = ingest_readiness["checks"]["chunk_readiness"]
+
+        self.assertEqual(quality_signals["html_table_count"], 1)
+        self.assertEqual(readiness_quality["html_table_count"], quality_signals["html_table_count"])
+        self.assertEqual(readiness_quality["table_count"], quality_signals["table_count"])
+        self.assertEqual(postprocess_table["documents_with_html_tables"], 1)
+        self.assertEqual(postprocess_table["chunk_marker_inside_html_table_count"], 0)
+        self.assertEqual(postprocess_chunk["marker_count"], chunk_profile_report["summary"]["marker_count"])
+        self.assertEqual(readiness_chunk["marker_count"], chunk_profile_report["summary"]["marker_count"])
+        self.assertEqual(quality_signals["chunk_marker_table_atomicity"]["chunk_marker_count"], readiness_chunk["marker_count"])
+        self.assertEqual(ingest_readiness["summary"]["chunk_marker_count"], readiness_chunk["marker_count"])
+        self.assertEqual(ingest_readiness["status"], "ready_with_review")
 
     def test_inspect_rich_handoff_blocks_missing_images(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

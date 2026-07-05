@@ -1261,6 +1261,8 @@ class DocConvertTests(unittest.TestCase):
         self.assertTrue(signals["table_heavy_document"])
         self.assertTrue(signals["chunk_marker_table_atomicity"]["ok"])
         self.assertEqual(signals["chunk_marker_table_atomicity"]["unbalanced_fragment_count"], 0)
+        issue_types = {issue["issue_type"] for issue in report["documents"][0]["issues"]}
+        self.assertIn("html_table_column_misalignment_suspected", issue_types)
         table_fingerprint = signals["table_fingerprints"][0]
         self.assertEqual(table_fingerprint["row_count"], 3)
         self.assertEqual(table_fingerprint["column_count"], 3)
@@ -1268,7 +1270,45 @@ class DocConvertTests(unittest.TestCase):
         self.assertEqual(table_fingerprint["rowspan_count"], 1)
         self.assertEqual(table_fingerprint["colspan_count"], 1)
         self.assertEqual(table_fingerprint["caption_preview"], "APOLLO 规格参数")
+        self.assertEqual(table_fingerprint["warnings"], ["column_misalignment_suspected"])
         self.assertRegex(table_fingerprint["sha256"], r"^[a-f0-9]{64}$")
+
+    def test_quality_report_keeps_html_table_warning_classes_specific(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "documents" / "tables.md"
+            markdown.parent.mkdir()
+            wide_header = "".join(f"<th>C{index}</th>" for index in range(13))
+            wide_cells = "".join(f"<td>{index}</td>" for index in range(13))
+            markdown.write_text(
+                "# Tables\n\n"
+                "<table><tr><td>No header</td></tr></table>\n\n"
+                "<table><tr><th>A</th><th>B</th></tr><tr><td>only one</td></tr></table>\n\n"
+                f"<table><tr>{wide_header}</tr><tr>{wide_cells}</tr></table>\n",
+                encoding="utf-8",
+            )
+
+            report = make_quality_report_payload(
+                output_root=root,
+                documents=[QualityDocument(source_path="tables.pdf", markdown_path=markdown)],
+            )
+
+        signals = report["documents"][0]["quality_signals"]
+        issue_types = {issue["issue_type"] for issue in report["documents"][0]["issues"]}
+        warning_classes = {
+            warning
+            for table in signals["table_fingerprints"]
+            for warning in table.get("warnings", [])
+        }
+        self.assertEqual(report["gate"]["status"], PASS_WITH_REVIEW)
+        self.assertEqual(signals["html_table_count"], 3)
+        self.assertEqual(signals["html_table_review_warning_count"], 3)
+        self.assertIn("html_table_header_missing", issue_types)
+        self.assertIn("html_table_column_misalignment_suspected", issue_types)
+        self.assertIn("html_table_large_table", issue_types)
+        self.assertIn("header_missing", warning_classes)
+        self.assertIn("column_misalignment_suspected", warning_classes)
+        self.assertIn("large_table", warning_classes)
 
     def test_quality_report_flags_chunk_marker_inside_html_table_fragment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1294,7 +1334,11 @@ class DocConvertTests(unittest.TestCase):
         atomicity = signals["chunk_marker_table_atomicity"]
         self.assertFalse(atomicity["ok"])
         self.assertEqual(atomicity["chunk_marker_count"], 1)
+        self.assertEqual(atomicity["marker_inside_table_count"], 1)
         self.assertEqual(atomicity["unbalanced_fragment_count"], 2)
+        issue_types = {issue["issue_type"] for issue in report["documents"][0]["issues"]}
+        self.assertIn("chunk_marker_inside_html_table", issue_types)
+        self.assertIn("chunk_marker_unbalanced_html_table_fragment", issue_types)
 
     def test_quality_report_blocks_empty_and_missing_image(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

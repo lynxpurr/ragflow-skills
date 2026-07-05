@@ -11,6 +11,12 @@ from .adaptive_decision import (
     render_adaptive_pipeline_summary_markdown,
     render_pipeline_decision_markdown,
 )
+from .adaptive_compare import (
+    ADAPTIVE_SUMMARY_COMPARISON_SCHEMA,
+    AdaptiveSummaryComparisonError,
+    compare_adaptive_summary_runs,
+    render_adaptive_summary_comparison_markdown,
+)
 from .agentic import (
     AGENTIC_ANSWER_REQUEST_SCHEMA,
     AGENTIC_ANSWER_REVIEW_REPORT_SCHEMA,
@@ -562,6 +568,8 @@ from .validation import (
 
 __all__ = [
     "AuthError",
+    "ADAPTIVE_PIPELINE_SUMMARY_SCHEMA",
+    "ADAPTIVE_SUMMARY_COMPARISON_SCHEMA",
     "BLOCKED",
     "ConfigError",
     "DEFAULT_HARD_MAX_CHARS",
@@ -612,6 +620,7 @@ __all__ = [
     "ManifestError",
     "HandoffError",
     "HealthReportError",
+    "AdaptiveSummaryComparisonError",
     "AssistantReviewError",
     "MetadataGovernanceError",
     "ParseReportError",
@@ -779,6 +788,7 @@ __all__ = [
     "build_query_session_inspection",
     "build_centroid_index",
     "build_centroid_plan",
+    "compare_adaptive_summary_runs",
     "compare_validation_reports",
     "convert_source_to_markdown",
     "create_optimization_cleanup_plan",
@@ -915,6 +925,7 @@ __all__ = [
     "render_assistant_profile_recommendation_markdown",
     "render_assistant_test_plan_review_markdown",
     "render_backend_probe_markdown",
+    "render_adaptive_summary_comparison_markdown",
     "render_citation_audit_markdown",
     "render_query_cross_language_ab_markdown",
     "render_centroid_build_markdown",

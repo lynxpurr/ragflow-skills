@@ -34,6 +34,8 @@ bootstrap_runtime()
 
 from ragflow_skill_runtime import (  # noqa: E402
     ADAPTIVE_PIPELINE_SUMMARY_SCHEMA,
+    ADAPTIVE_SUMMARY_COMPARISON_SCHEMA,
+    AdaptiveSummaryComparisonError,
     ConvertedDocument,
     DEFAULT_HARD_MAX_CHARS,
     DEFAULT_MIN_SEGMENT_CHARS,
@@ -45,6 +47,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     DocSegmentError,
     PIPELINE_DECISION_SCHEMA,
     QualityDocument,
+    compare_adaptive_summary_runs,
     convert_source_to_markdown,
     create_rich_handoff_package,
     configured_private_hosts_from_urls,
@@ -68,6 +71,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     postprocess_single_markdown,
     probe_conversion_backends,
     render_adaptive_pipeline_summary_markdown,
+    render_adaptive_summary_comparison_markdown,
     quality_documents_from_manifest,
     render_backend_probe_markdown,
     render_backend_warmup_markdown,
@@ -2738,6 +2742,45 @@ def _run_adaptive(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_compare_adaptive_summaries(args: argparse.Namespace) -> int:
+    try:
+        report = compare_adaptive_summary_runs(
+            baseline=args.baseline,
+            candidate=args.candidate,
+            baseline_label=args.baseline_label,
+            candidate_label=args.candidate_label,
+        )
+        report = _sanitize_generated_report(
+            report,
+            args.redaction_report,
+            home_paths=[
+                args.baseline,
+                args.candidate,
+                args.report_json,
+                args.report_md,
+                args.redaction_report,
+            ],
+            config_paths=[
+                args.baseline,
+                args.candidate,
+                args.report_json,
+                args.report_md,
+                args.redaction_report,
+            ],
+        )
+        if args.report_json:
+            _write_json_payload(Path(args.report_json), report)
+        if args.report_md:
+            _write_text_payload(Path(args.report_md), render_adaptive_summary_comparison_markdown(report))
+        if args.json or not (args.report_json or args.report_md):
+            _dump_json(report)
+        if args.fail_on_review and report.get("summary", {}).get("status") == "review":
+            return 1
+        return 0
+    except (AdaptiveSummaryComparisonError, OSError, ValueError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _run_inspect(args: argparse.Namespace) -> int:
     try:
         manifest = load_doc_manifest_payload(args.doc_manifest)
@@ -3503,6 +3546,22 @@ def build_compare_retained_package_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_compare_adaptive_summaries_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Compare two existing adaptive pipeline summary runs without conversion",
+    )
+    parser.add_argument("--baseline", required=True, help="Baseline adaptive run root or adaptive_summary.json path")
+    parser.add_argument("--candidate", required=True, help="Candidate adaptive run root or adaptive_summary.json path")
+    parser.add_argument("--baseline-label", default="baseline", help="Display label for the baseline run")
+    parser.add_argument("--candidate-label", default="candidate", help="Display label for the candidate run")
+    parser.add_argument("--report-json", help="Optional JSON comparison report output path")
+    parser.add_argument("--report-md", help="Optional Markdown comparison report output path")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    parser.add_argument("--fail-on-review", action="store_true", help="Return non-zero when review-level changes are detected")
+    parser.add_argument("--json", action="store_true", help="Emit JSON output or errors")
+    return parser
+
+
 def main(argv: list[str] | None = None) -> int:
     actual_argv = list(sys.argv[1:] if argv is None else argv)
     if actual_argv:
@@ -3526,6 +3585,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_pipeline(build_pipeline_parser().parse_args(command_args))
         if command == "compare-retained-package":
             return _run_compare_retained_package(build_compare_retained_package_parser().parse_args(command_args))
+        if command == "compare-adaptive-summaries":
+            return _run_compare_adaptive_summaries(build_compare_adaptive_summaries_parser().parse_args(command_args))
         if command == "backend":
             parsed = build_backend_parser().parse_args(command_args)
             return parsed.func(parsed)
