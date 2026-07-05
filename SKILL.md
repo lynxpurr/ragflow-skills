@@ -1,0 +1,193 @@
+---
+name: ragflow-skills
+description: "RAGFlow 文档→知识库 skill 套件：ragflow-doc-to-md + ragflow-kb-build 的测试、使用与对比。覆盖 regression test、handoff 契约、chunk marker/table 原子性、与 ragflux 和 ragflow-kb-ops 的取舍。"
+version: 1.0.0
+author: Architect (Luca)
+_updated: '2026-07-05'
+license: MIT
+metadata:
+  hermes:
+    tags: [ragflow, rag, document-pipeline, knowledge-base, mineru, markdown, chunking, regression-test]
+    related_skills: [ragflux, ragflow-kb-ops, ragflow-smart-query, rag-systems]
+---
+
+# RAGFlow Skills — 文档入库技能套件
+
+本 skill 记录 `ragflow-skills` 套件（`ragflow-doc-to-md` + `ragflow-kb-build`）的标准用法、回归测试、与 `ragflux`/`ragflow-kb-ops` 的取舍，以及 chunk marker / table 原子性等关键行为。
+
+## 触发条件
+
+- 用户提到 "ragflow-skills"、"doc-to-md"、"kb-build"
+- 需要跑一轮 `ragflow-skills` 回归测试
+- 需要对比 `ragflow-skills` vs `ragflux` vs `ragflow-kb-ops`
+- 需要确认 chunk marker 是否会在表格中间插入
+- 需要理解 handoff 产物（`doc_manifest.json`、`ragflow_ingest_plan.yaml`）如何传给下游
+
+## 仓库结构
+
+```
+~/.hermes/skills/research/ragflow-skills/
+├── packages/ragflow-skill-runtime/    # 核心运行时库（被 skills/ 和 dist/ 共用）
+│   ├── src/ragflow_skill_runtime/     # doc_convert, doc_postprocess, kb_build, handoff ...
+│   └── tests/                         # 510 项回归测试
+├── skills/ragflow-doc-to-md/          # 开发版 CLI
+├── skills/ragflow-kb-build/          # 开发版 CLI
+├── dist/ragflow-doc-to-md/            # 发布版，带 _vendor/ 内嵌 runtime
+└── dist/ragflow-kb-build/             # 发布版，带 _vendor/ 内嵌 runtime
+```
+
+`skills/` 与 `dist/` 的脚本主体同步。差异：
+- `skills/` 多 `agents/`、`doc/`、`__pycache__`
+- `dist/` 多 `_vendor/` 内嵌 runtime
+
+CLI 脚本通过 `bootstrap_runtime()` 优先从 `RAGFLOW_SKILL_RUNTIME_PATH` → 自身 `_vendor` → 相邻 `_shared` 加载 runtime。
+
+## 标准回归测试
+
+```bash
+cd ~/.hermes/skills/research/ragflow-skills
+python3 -m venv .venv
+.venv/bin/pip install -e packages/ragflow-skill-runtime
+.venv/bin/pip install pytest pyyaml requests
+.venv/bin/python -m pytest packages/ragflow-skill-runtime/tests -v --tb=short
+```
+
+**基准结果**：510 passed, 6 subtests passed, 0 failed，耗时约 110–120 秒。
+
+若新增 commit 或修改 runtime，跑完这轮测试后再评估是否可用。
+
+## 核心能力与 profile
+
+### doc-to-md
+
+标准入口：
+
+```bash
+python scripts/convert.py pipeline \
+  --input ./raw \
+  --output ./handoff \
+  --backend mineru-fastapi \
+  --mineru-base-url https://mineru.example.internal \
+  --mineru-asset-mode markdown_assets \
+  --postprocess-profile chunk-markers-dense
+```
+
+关键产物：
+- `documents/*.md`
+- `doc_manifest.json` — 文档级契约，下游 `ragflow-kb-build` 消费
+- `formal_handoff_manifest.json` — 包级审计清单
+- `ragflow_ingest_plan.yaml` — 非机密入库计划
+- `retrieval_hints.json` — 检索提示
+- `quality_report.json` — 质量报告
+- `chunk_profile_report.json` — chunk marker 统计
+
+### chunk marker profile
+
+| Profile | 边界类型 | 说明 |
+|---|---|---|
+| `chunk-markers` / `chunk-markers-conservative` | `heading` | 仅在 heading 前插入 |
+| `chunk-markers-dense` | `heading`, `page`, `table`, `image` | 推荐常规使用 |
+| `chunk-markers-ragflux-like` | `heading`, `page`, `table`, `image`, `list` | 最密集，用于迁移对比 |
+
+### kb-build
+
+标准入口：
+
+```bash
+python scripts/build.py \
+  --doc-manifest ./handoff/doc_manifest.json \
+  --kb-name "<kb-name>" \
+  --profile ./templates/default-zh-512.json \
+  --dry-run --json
+```
+
+一定要先 `--dry-run`，再决定 live build。
+
+## 与 ragflux / ragflow-kb-ops 的取舍
+
+| 维度 | ragflow-skills | ragflux | ragflow-kb-ops |
+|---|---|---|---|
+| 定位 | 新一代可移植 handoff 管线 | 上一代本地 MinerU 预处理 | 生产级 RAGFlow 运维 |
+| 入口 | `convert.py pipeline` / `build.py` | `python -m ragflux.cli.main run` | `chunking_runner.py` / `cli.py chunk-build` |
+| MinerU backend | 多种，含 `mineru-fastapi` | `fast` (pipeline) / `accurate` (hybrid-auto) | 不解析 |
+| Blackwell 兼容 | `mineru-fastapi`/`pipeline` 可用 | ⚠️ `accurate` 在 sm_120 必崩 | 无关 |
+| 产物 | handoff bundle + 契约文件 | `doc.md` + `images/` + `quality_report.json` | 直接写 RAGFlow |
+| 质量门禁 | 有 `PASS`/`PASS_WITH_REVIEW`/`BLOCKED` | 有 | 无原生 |
+| benchmark/optimize | 内建完整 | 无 | 有独立脚本 |
+| ES backfill / MySQL 直写 | 无 | 无 | 核心能力 |
+| 推荐 | ⭐ 默认首选 | 仅在旧本地 fast 模式使用 | 生产运维/补数据/诊断 |
+
+**推荐组合**：`ragflow-skills` 做解析与 handoff → `ragflow-kb-ops` 做 chunk-build / ES backfill / 诊断。
+
+## Table 与 Chunk Marker 原子性
+
+### doc-to-md 层面的保证
+
+- `_table_protected_spans()` 会合并 HTML `<table>` 和 Markdown 表格范围
+- 后处理规则（OCR 清理、CJK 空格修复）只作用于表格外部
+- chunk marker 插入在表格开始行**之前**，不会落入表格内部
+- 质量报告输出 `chunk_marker_table_atomicity`：
+  - `ok: true` — 没有 marker 把 HTML table 切成不平衡 fragment
+  - `ok: false` — 需要检查 `unbalanced_fragments`
+
+### 关键限制
+
+`doc-to-md` 保证**不在表格中间插入 marker**，但**不能保证 RAGFlow 的 chunker 不切表格**。
+
+| 层级 | 谁负责 | 能否保证 |
+|---|---|---|
+| doc-to-md chunk marker | 插入 Markdown 边界标记 | ✅ 不落在表格中间 |
+| RAGFlow chunker | 按 token/字符切分 | ⚠️ 超大表格仍可能被切 |
+
+对表格重的文档，建议：
+- 使用 `chunk-markers-dense` 或 `chunk-markers-ragflux-like`
+- 在 RAGFlow 端使用较大的 `chunk_token_num`，或把表格作为独立 segment
+- 入库后检查 `quality_report.json` 的 `chunk_marker_table_atomicity.ok`
+
+## Pitfalls
+
+### Pitfall #1: 混淆 dist 和 skills 两套路径
+
+`skills/` 和 `dist/` 脚本主体同步，但 `_vendor` 与 `__pycache__` 差异可能导致运行结果不同。回归测试应跑 `packages/ragflow-skill-runtime/tests`，而不是直接比较两个 CLI 的输出。
+
+### Pitfall #2: 在 Blackwell 上误用 accurate/hybrid-auto-engine
+
+RTX 5070 Ti / 5080 / 5090 (sm_120) 上，`ragflux` 的 `accurate` 模式与 `ragflow-skills` 的 `mineru-fastapi` 的 `hybrid-auto-engine` 后端都会崩溃。应使用 `pipeline` 或 `mineru-fastapi` 的 `pipeline` backend。
+
+### Pitfall #3: 认为 chunk marker 能阻止 RAGFlow 切表格
+
+chunk marker 是**提示性边界**，不是**硬约束**。RAGFlow 的 chunker 仍可能按 `chunk_token_num` 切超大表格。表格原子性需要结合 RAGFlow profile 和入库后验证。
+
+### Pitfall #4: 直接用 ragflow-kb-ops 的 chunk-build 处理大批量文档
+
+`chunk-build` 单次处理 ≥5 文件可能超时（约 600 秒），导致 KB 碎片。大批量应分步：RAGFlow API 逐文件上传 → 一次性触发 parse。详见 `ragflow-kb-ops` skill。
+
+## 常用验证命令
+
+```bash
+# 跑完整回归测试并输出到日志
+.venv/bin/python -m pytest packages/ragflow-skill-runtime/tests -v --tb=short \
+  > ragflow-skills-test.log 2>&1
+
+# 检查 skills/ 与 dist/ 脚本差异
+diff -r skills/ragflow-doc-to-md/scripts dist/ragflow-doc-to-md/scripts
+diff -r skills/ragflow-kb-build/scripts dist/ragflow-kb-build/scripts
+
+# 快速测试 chunk marker 行为（Python 单行）
+.venv/bin/python -c "
+from ragflow_skill_runtime.doc_postprocess import postprocess_markdown_text
+text = '| A | B |\n| --- | --- |\n' + '\n'.join([f'| {i} | {i} |' for i in range(20)])
+out, _ = postprocess_markdown_text('# T\n\n' + text + '\n\n## Next\n', profile='chunk-markers-dense')
+print(out.count('<!-- chunk -->'))
+"
+```
+
+## Cross-refs
+
+- Skill: `ragflux` — 本地 MinerU 快速预处理管线
+- Skill: `ragflow-kb-build` — 使用 `ragflow-skills` 的 handoff 产物构建 RAGFlow KB
+- Skill: `ragflow-kb-ops` — 生产级 RAGFlow 运维、ES backfill、task 诊断
+- Skill: `ragflow-smart-query` — 检索入口
+- Skill: `rag-systems` — RAG 系统总览
+- Reference: `references/ragflow-skills-table-atomicity.md` — chunk marker / table 原子性实测记录
+- Reference: `references/ragflow-skills-vs-ragflux-vs-kb-ops.md` — 三套管线对比表
