@@ -209,6 +209,12 @@ from .query_rewrite import (
     load_multi_query_file,
     render_query_rewrite_markdown,
 )
+from .query_table_strategy import (
+    TABLE_QUERY_STRATEGY_REPORT_SCHEMA,
+    TableQueryStrategyError,
+    build_table_query_strategy_report,
+    render_table_query_strategy_markdown,
+)
 from .query_intent import (
     QUERY_INTENT_SCHEMA,
     QUERY_ROUTE_DECISION_SCHEMA,
@@ -693,6 +699,7 @@ __all__ = [
     "PROFILE_EXPERIMENT_RESULTS_SCHEMA",
     "QueryResult",
     "QUERY_REWRITE_PLAN_SCHEMA",
+    "TABLE_QUERY_STRATEGY_REPORT_SCHEMA",
     "QUERY_INTENT_SCHEMA",
     "QUERY_ROUTE_DECISION_SCHEMA",
     "QUERY_SESSION_ENRICHMENT_SCHEMA",
@@ -701,6 +708,7 @@ __all__ = [
     "QueryIntentError",
     "QueryRewriteError",
     "QuerySessionError",
+    "TableQueryStrategyError",
     "RAGFLOW_METADATA_SCHEMA",
     "RAGFLOW_TAGSET_SCHEMA",
     "RetrievalError",
@@ -741,6 +749,7 @@ __all__ = [
     "build_query_output_cache_report",
     "build_query_trace",
     "build_query_rewrite_plan",
+    "build_table_query_strategy_report",
     "build_runtime_metrics_summary",
     "build_query_session_inspection",
     "build_centroid_index",
@@ -900,6 +909,7 @@ __all__ = [
     "render_query_session_enrichment_markdown",
     "render_query_session_inspection_markdown",
     "render_query_rewrite_markdown",
+    "render_table_query_strategy_markdown",
     "render_query_route_decision_markdown",
     "render_centroid_plan_markdown",
     "render_query_pollution_markdown",

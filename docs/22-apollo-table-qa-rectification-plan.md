@@ -292,8 +292,39 @@ ragflow-kb-build --doc-manifest <handoff>/doc_manifest.json --profile <reviewed-
   普通 caption 不会被过度拆成宽泛别名。
 - `inspect-handoff` 的 retrieval-hints richness 摘要可看到 `table_term_alias_candidate_count`。
 
-仍未关闭的 P0 条目：
+同日后续推进了 P0 per-table 结构风险评分：
 
-- 术语候选目前只作为 retrieval hints sidecar 暴露，尚未用于 query expansion 或 APOLLO fixture
-  的自动映射消费。
-- per-table 结构风险评分和结构风险接入 retrieval hints / assistant starter 仍待实现。
+- HTML table artifact 新增 `header_depth`，并在 `retrieval_hints.json` 的 `table_artifacts`
+  中保留 `cell_count`、`rowspan_count`、`colspan_count`、`header_depth` 等结构信号。
+- `retrieval_hints.json` 的每个 HTML table artifact 会生成 review-only
+  `semantic_risk_score`、`semantic_risks`、`review_required`，必要时附带
+  `model_label_candidates`。
+- 已覆盖多级表头、rowspan/colspan、疑似列错位、大表、caption 缺失、多型号合并表头等风险；
+  HH-A / HH-B 类复杂表头 fixture 会触发 `multi_level_header_review`、
+  `merged_cells_review` 和 `multi_model_header_review`。
+- `assistant_test_plan.json` 新增 `table_structure_review` starter，用于提醒人工或 host agent
+  在问答前复核 header 层级、合并单元格对齐和表格引用。
+- `inspect-handoff` 的 retrieval-hints richness 摘要新增 `table_semantic_risk_count`。
+
+当前仍未关闭的 P0 条目：
+
+- 原私有 16 问 QA 仍需在私有侧完成脱敏填充后，才能形成更完整的 APOLLO 回归覆盖。
+
+同日继续推进了 P1 no-LLM query expansion / 跨表检索策略报告：
+
+- 新增 `ragflow_table_query_strategy_report_v1`，由 `ragflow-query table-strategy` 离线生成。
+- 输入为脱敏 `apollo_table_qa_fixture_v1` 与 rich handoff 的 `retrieval_hints.json`；可选输入已有
+  direct / multi-query / fusion saved result JSON 做离线策略对比。
+- 报告从 `table_artifacts` 的 caption、source heading、`model_label_candidates`、`semantic_risks`
+  以及 `table_term_alias_candidates` 生成 direct top-k、hint multi-query 和 RRF fusion 策略建议。
+- 报告显式标记 `offline_only=true`、`llm_calls=0`、`ragflow_calls=0`；不执行 live 检索、不调用模型、
+  不改写 Markdown。
+- 对 HH-A / HH-B 类跨型号复杂表头 fixture，会生成 `rrf_fusion` 策略；对 MPEE / `$MPE_E$`
+  类表头别名，会生成 term-alias query expansion。
+
+当前仍未关闭的 P1 条目：
+
+- 私有 16 问还需要在私有侧填入脱敏 fixture，并把 direct / multi-query / fusion saved result JSON
+  喂给 `table-strategy`，才能得到完整 16 问策略命中率报告。
+- 该报告目前只生成 query expansion 和离线对比计划；后续如需自动执行真实 RAGFlow 检索，仍需沿用
+  现有 live mutation/query gate 与显式批准。

@@ -107,6 +107,7 @@ QUERY_COVERED_COMMANDS = (
     "ragflow-query route-test",
     "ragflow-query session enrich",
     "ragflow-query session inspect",
+    "ragflow-query table-strategy",
 )
 QUERY_NOT_APPLICABLE_COMMANDS = (
     "ragflow-query ask",

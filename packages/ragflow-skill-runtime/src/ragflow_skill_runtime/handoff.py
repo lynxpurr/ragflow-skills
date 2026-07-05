@@ -1066,6 +1066,10 @@ def _html_table_contexts(
             "page": _page_for_line(page_by_line, line_start),
             "row_count": int(table.row_count),
             "column_count": int(table.column_count),
+            "cell_count": int(table.cell_count),
+            "rowspan_count": int(table.rowspan_count),
+            "colspan_count": int(table.colspan_count),
+            "header_depth": int(table.header_depth),
             "header_preview": list(table.header_preview),
             "source": "html_table",
         }
@@ -1076,8 +1080,132 @@ def _html_table_contexts(
             context["context"] = snippet
         if table.warnings:
             context["warnings"] = list(table.warnings)
+        context.update(_table_semantic_risk_fields(context))
         contexts.append(context)
     return contexts
+
+
+def _model_label_candidates(value: Any) -> list[str]:
+    if not isinstance(value, str):
+        return []
+    labels: list[str] = []
+    for match in re.findall(r"\b[A-Za-z]{1,12}[A-Za-z0-9]*-[A-Za-z0-9][A-Za-z0-9-]*\b", value):
+        labels.append(match.upper())
+    for match in re.findall(r"\b[A-Z]{1,4}-[A-Z0-9]{1,5}\b", value.upper()):
+        labels.append(match)
+    return _unique_preserve_order(labels)
+
+
+def _table_model_label_candidates(table: Mapping[str, Any]) -> list[str]:
+    labels: list[str] = []
+    header_preview = table.get("header_preview", [])
+    headers = header_preview if isinstance(header_preview, list) else []
+    for value in headers:
+        labels.extend(_model_label_candidates(value))
+    labels.extend(_model_label_candidates(table.get("caption")))
+    labels.extend(_model_label_candidates(table.get("source_heading")))
+    context = table.get("context")
+    if isinstance(context, str):
+        labels.extend(_model_label_candidates(context))
+    return _unique_preserve_order(labels)
+
+
+def _add_table_risk(
+    risks: list[dict[str, Any]],
+    *,
+    code: str,
+    severity: str,
+    message: str,
+    recommendation: str,
+    details: Mapping[str, Any] | None = None,
+) -> None:
+    risk: dict[str, Any] = {
+        "code": code,
+        "severity": severity,
+        "message": message,
+        "recommendation": recommendation,
+    }
+    if details:
+        risk["details"] = {key: value for key, value in details.items() if value is not None}
+    risks.append(risk)
+
+
+def _table_semantic_risk_fields(table: Mapping[str, Any]) -> dict[str, Any]:
+    """Return review-only semantic table risk fields for retrieval hints."""
+
+    row_count = int(table.get("row_count", 0) or 0)
+    column_count = int(table.get("column_count", 0) or 0)
+    cell_count = int(table.get("cell_count", 0) or 0)
+    rowspan_count = int(table.get("rowspan_count", 0) or 0)
+    colspan_count = int(table.get("colspan_count", 0) or 0)
+    header_depth = int(table.get("header_depth", 0) or 0)
+    warnings = table.get("warnings", []) if isinstance(table.get("warnings"), list) else []
+    model_labels = _table_model_label_candidates(table)
+    risks: list[dict[str, Any]] = []
+
+    if header_depth > 1:
+        _add_table_risk(
+            risks,
+            code="multi_level_header_review",
+            severity="warning",
+            message="table has multiple header rows; answers may need header hierarchy awareness",
+            recommendation="Review table header hierarchy before relying on single-row query terms.",
+            details={"header_depth": header_depth},
+        )
+    if rowspan_count or colspan_count:
+        _add_table_risk(
+            risks,
+            code="merged_cells_review",
+            severity="warning",
+            message="table contains rowspan or colspan cells",
+            recommendation="Review row/column alignment before using cell values as independent facts.",
+            details={"rowspan_count": rowspan_count, "colspan_count": colspan_count},
+        )
+    if "column_misalignment_suspected" in warnings:
+        _add_table_risk(
+            risks,
+            code="column_misalignment_review",
+            severity="warning",
+            message="table rows have inconsistent effective column widths",
+            recommendation="Compare parsed header and body columns before using this table for QA.",
+        )
+    if column_count >= 10 or cell_count >= 120 or row_count >= 40:
+        _add_table_risk(
+            risks,
+            code="large_table_review",
+            severity="info",
+            message="table is large enough to stress retrieval or chunking boundaries",
+            recommendation="Use table-atomic parser profiles and review chunk boundaries for this table.",
+            details={"row_count": row_count, "column_count": column_count, "cell_count": cell_count},
+        )
+    if not table.get("caption"):
+        _add_table_risk(
+            risks,
+            code="caption_missing_review",
+            severity="info",
+            message="table has no caption; nearby headings may be required for disambiguation",
+            recommendation="Use source_heading and neighboring section context when expanding queries.",
+        )
+    if len(model_labels) >= 2 and (header_depth > 1 or rowspan_count or colspan_count):
+        _add_table_risk(
+            risks,
+            code="multi_model_header_review",
+            severity="warning",
+            message="table appears to combine multiple model labels with complex header structure",
+            recommendation="Split retrieval or ask model-specific subqueries before comparing cells.",
+            details={"model_labels": model_labels[:8]},
+        )
+
+    severity_score = {"info": 1, "warning": 2, "error": 3}
+    score = sum(severity_score.get(str(risk.get("severity")), 1) for risk in risks)
+    payload: dict[str, Any] = {
+        "semantic_risk_score": score,
+        "semantic_risks": risks,
+        "review_required": bool(risks),
+    }
+    if model_labels:
+        payload["model_label_candidates"] = model_labels[:12]
+    return payload
 
 
 _SUBSCRIPT_TRANSLATION = str.maketrans(
@@ -2018,6 +2146,7 @@ def make_assistant_test_plan_payload(
     sections = retrieval_hints.get("section_boundaries", []) if isinstance(retrieval_hints.get("section_boundaries"), list) else []
     numeric = retrieval_hints.get("numeric_candidates", []) if isinstance(retrieval_hints.get("numeric_candidates"), list) else []
     images = retrieval_hints.get("image_artifacts", []) if isinstance(retrieval_hints.get("image_artifacts"), list) else []
+    tables = retrieval_hints.get("table_artifacts", []) if isinstance(retrieval_hints.get("table_artifacts"), list) else []
     cases: list[dict[str, Any]] = []
 
     if questions:
@@ -2073,6 +2202,35 @@ def make_assistant_test_plan_payload(
                 }
             )
         cases.append({key: value for key, value in case.items() if value is not None})
+    table_case_count = 0
+    for table in tables:
+        if not isinstance(table, Mapping):
+            continue
+        risks = table.get("semantic_risks", [])
+        risks = risks if isinstance(risks, list) else []
+        if not risks:
+            continue
+        table_case_count += 1
+        label = table.get("caption") or table.get("source_heading") or f"table {table_case_count}"
+        model_labels = table.get("model_label_candidates", [])
+        if not isinstance(model_labels, list):
+            model_labels = []
+        risk_codes = [risk.get("code") for risk in risks if isinstance(risk, Mapping) and risk.get("code")]
+        case = {
+            "id": f"table-structure-{table_case_count:03d}",
+            "stage": "table_structure_review",
+            "question": f"How should the complex table structure for {label} be reviewed before answering model-specific facts?",
+            "expected_behavior": "confirm header hierarchy, merged-cell alignment, and table citations before comparing values",
+            "source_document": table.get("document"),
+            "source_heading": table.get("source_heading"),
+            "source_table_caption": table.get("caption"),
+            "page": table.get("page"),
+            "semantic_risk_codes": risk_codes[:8],
+            "model_label_candidates": model_labels[:8],
+        }
+        cases.append({key: value for key, value in case.items() if value not in (None, [], "")})
+        if table_case_count >= 2:
+            break
     if len(sections) >= 2 and isinstance(sections[0], Mapping) and isinstance(sections[1], Mapping):
         cases.append(
             {
@@ -2486,6 +2644,7 @@ def _retrieval_hint_summary(retrieval_hints: Mapping[str, Any] | None) -> dict[s
             "layout_signal_count": 0,
             "asset_semantic_image_count": 0,
             "table_term_alias_candidate_count": 0,
+            "table_semantic_risk_count": 0,
         }
     asset_semantics = retrieval_hints.get("asset_semantics") if isinstance(retrieval_hints.get("asset_semantics"), Mapping) else {}
     asset_summary = asset_semantics.get("summary") if isinstance(asset_semantics.get("summary"), Mapping) else {}
@@ -2509,6 +2668,13 @@ def _retrieval_hint_summary(retrieval_hints: Mapping[str, Any] | None) -> dict[s
         else 0,
         "table_term_alias_candidate_count": len(retrieval_hints.get("table_term_alias_candidates", []))
         if isinstance(retrieval_hints.get("table_term_alias_candidates"), list)
+        else 0,
+        "table_semantic_risk_count": sum(
+            len(item.get("semantic_risks", []))
+            for item in retrieval_hints.get("table_artifacts", [])
+            if isinstance(item, Mapping) and isinstance(item.get("semantic_risks"), list)
+        )
+        if isinstance(retrieval_hints.get("table_artifacts"), list)
         else 0,
         "image_artifact_count": len(retrieval_hints.get("image_artifacts", []))
         if isinstance(retrieval_hints.get("image_artifacts"), list)

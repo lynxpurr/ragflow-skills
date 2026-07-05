@@ -38,6 +38,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     QueryIntentError,
     QueryRewriteError,
     QuerySessionError,
+    TableQueryStrategyError,
     RAGFlowClient,
     RetrievalError,
     RoutingError,
@@ -51,6 +52,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     build_runtime_partial_failure_report,
     create_agentic_answer_request,
     build_query_rewrite_plan,
+    build_table_query_strategy_report,
     build_query_output_cache_report,
     classify_query_intent,
     build_query_session_inspection,
@@ -107,6 +109,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_query_rerank_ab_markdown,
     render_query_rewrite_markdown,
     render_query_route_decision_markdown,
+    render_table_query_strategy_markdown,
     render_query_trace_markdown,
     render_route_activation_check_markdown,
     render_route_diagnose_markdown,
@@ -1221,6 +1224,65 @@ def _rewrite(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _parse_strategy_result_paths(values: list[str] | None) -> dict[str, str]:
+    results: dict[str, str] = {}
+    for value in values or []:
+        if "=" not in value:
+            raise ValueError("--strategy-result must use label=path")
+        label, path = value.split("=", 1)
+        label = label.strip()
+        path = path.strip()
+        if not label or not path:
+            raise ValueError("--strategy-result must use non-empty label=path")
+        results[label] = path
+    return results
+
+
+def _sanitize_table_query_strategy_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    strategy_result_paths: dict[str, str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [*_collect_urls(report)]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            getattr(args, "fixture", None),
+            getattr(args, "retrieval_hints", None),
+            *strategy_result_paths.values(),
+            getattr(args, "report_json", None),
+            getattr(args, "report_md", None),
+            getattr(args, "redaction_report", None),
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _table_strategy(args: argparse.Namespace) -> int:
+    try:
+        strategy_result_paths = _parse_strategy_result_paths(args.strategy_result)
+        report = build_table_query_strategy_report(
+            fixture_path=args.fixture,
+            retrieval_hints_path=args.retrieval_hints,
+            strategy_result_paths=strategy_result_paths,
+            evaluation_target=args.evaluation_target,
+            top_k=args.top_k,
+            rrf_k=args.rrf_k,
+            max_tables_per_case=args.max_tables_per_case,
+        )
+    except (TableQueryStrategyError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_table_query_strategy_report(report, args, strategy_result_paths)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_table_query_strategy_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _intent_classify(args: argparse.Namespace) -> int:
     try:
         report = classify_query_intent(
@@ -2312,6 +2374,28 @@ def build_parser() -> argparse.ArgumentParser:
     rewrite.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     rewrite.add_argument("--json", action="store_true", help="Emit JSON report")
     rewrite.set_defaults(func=_rewrite)
+
+    table_strategy = sub.add_parser(
+        "table-strategy",
+        help="Plan no-LLM table query expansion and cross-table retrieval strategies",
+        description="Plan no-LLM table query expansion and cross-table retrieval strategies",
+    )
+    table_strategy.add_argument("--fixture", required=True, help="apollo_table_qa_fixture_v1 JSON")
+    table_strategy.add_argument("--retrieval-hints", required=True, help="retrieval_hints.json")
+    table_strategy.add_argument(
+        "--strategy-result",
+        action="append",
+        help="Optional saved result as label=path for offline strategy comparison; repeatable",
+    )
+    table_strategy.add_argument("--evaluation-target", choices=["auto", "answer", "retrieval", "both"], default="retrieval")
+    table_strategy.add_argument("--top-k", type=int, default=8)
+    table_strategy.add_argument("--rrf-k", type=int, default=60)
+    table_strategy.add_argument("--max-tables-per-case", type=int, default=2)
+    table_strategy.add_argument("--report-json", help="Optional JSON report output path")
+    table_strategy.add_argument("--report-md", help="Optional Markdown report output path")
+    table_strategy.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    table_strategy.add_argument("--json", action="store_true", help="Emit JSON report")
+    table_strategy.set_defaults(func=_table_strategy)
 
     intent = sub.add_parser("intent", help="Classify and route query intent")
     intent_sub = intent.add_subparsers(dest="intent_command", required=True)

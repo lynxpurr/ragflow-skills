@@ -20,6 +20,7 @@ class HtmlTableArtifact:
     cell_count: int
     rowspan_count: int
     colspan_count: int
+    header_depth: int
     header_preview: list[str]
     caption: str | None = None
     warnings: tuple[str, ...] = ()
@@ -33,6 +34,7 @@ class HtmlTableArtifact:
             "cell_count": self.cell_count,
             "rowspan_count": self.rowspan_count,
             "colspan_count": self.colspan_count,
+            "header_depth": self.header_depth,
             "header_preview": self.header_preview,
         }
         if self.caption:
@@ -200,6 +202,7 @@ def _finalize_table(table: _TableDraft, *, line_end: int) -> HtmlTableArtifact:
     cell_count = len(cells)
     rowspan_count = sum(1 for cell in cells if cell.rowspan > 1)
     colspan_count = sum(1 for cell in cells if cell.colspan > 1)
+    header_depth = sum(1 for row in table.rows if row.in_thead or any(cell.is_header for cell in row.cells))
     header_row = next(
         (
             row
@@ -231,6 +234,7 @@ def _finalize_table(table: _TableDraft, *, line_end: int) -> HtmlTableArtifact:
         cell_count=cell_count,
         rowspan_count=rowspan_count,
         colspan_count=colspan_count,
+        header_depth=header_depth,
         header_preview=header_preview,
         caption=caption,
         warnings=tuple(warnings),

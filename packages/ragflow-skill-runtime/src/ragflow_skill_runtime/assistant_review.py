@@ -16,6 +16,7 @@ ASSISTANT_TEST_PLAN_CANONICAL_STAGES = (
     "summary",
     "exact_numeric_fact",
     "ocr_image_fact",
+    "table_structure_review",
     "logical_flow",
     "paraphrase",
     "negative_boundary",
@@ -135,6 +136,7 @@ def _hints_summary(retrieval_hints: Mapping[str, Any] | None) -> dict[str, Any]:
             "question_count": 0,
             "numeric_count": 0,
             "table_artifact_count": 0,
+            "table_semantic_risk_count": 0,
             "image_artifact_count": 0,
             "quality_risk_count": 0,
         }
@@ -154,6 +156,13 @@ def _hints_summary(retrieval_hints: Mapping[str, Any] | None) -> dict[str, Any]:
         if isinstance(retrieval_hints.get("numeric_candidates"), list)
         else 0,
         "table_artifact_count": len(retrieval_hints.get("table_artifacts", []))
+        if isinstance(retrieval_hints.get("table_artifacts"), list)
+        else 0,
+        "table_semantic_risk_count": sum(
+            len(item.get("semantic_risks", []))
+            for item in retrieval_hints.get("table_artifacts", [])
+            if isinstance(item, Mapping) and isinstance(item.get("semantic_risks"), list)
+        )
         if isinstance(retrieval_hints.get("table_artifacts"), list)
         else 0,
         "image_artifact_count": len(retrieval_hints.get("image_artifacts", []))
@@ -179,6 +188,8 @@ def _expected_test_stages_from_hints(retrieval_hints: Mapping[str, Any] | None) 
         for section in sections
     ):
         expected.add("ocr_image_fact")
+    if hints["table_semantic_risk_count"]:
+        expected.add("table_structure_review")
     if hints["section_count"] >= 2:
         expected.add("logical_flow")
     if hints["question_count"] >= 2:
@@ -191,6 +202,7 @@ def _stage_focus(stage: str) -> str:
         "summary": "confirm the assistant summarizes only retrieved evidence",
         "exact_numeric_fact": "confirm numbers are quoted or cited exactly",
         "ocr_image_fact": "confirm visual or OCR-backed facts are not guessed",
+        "table_structure_review": "confirm complex table structure is reviewed before answering",
         "logical_flow": "confirm related source sections are compared without outside assumptions",
         "paraphrase": "confirm paraphrased questions still retrieve the same source evidence",
         "negative_boundary": "confirm missing or unsafe facts trigger abstention",

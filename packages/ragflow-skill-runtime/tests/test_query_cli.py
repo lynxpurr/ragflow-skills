@@ -846,6 +846,95 @@ class QueryCliTests(unittest.TestCase):
         self.assertNotIn(fake_key, combined)
         self.assertNotIn(home_path, combined)
 
+    def test_table_strategy_command_writes_no_llm_strategy_report(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = root / "apollo_fixture.json"
+            hints = root / "retrieval_hints.json"
+            report_json = root / "table_strategy.json"
+            report_md = root / "table_strategy.md"
+            redaction_json = root / "table_strategy_redaction.json"
+            fixture.write_text(
+                json.dumps(
+                    {
+                        "schema": "apollo_table_qa_fixture_v1",
+                        "items": [
+                            {
+                                "id": "apollo-q1",
+                                "question": "HH-A 和 HH-B 的额定扭矩哪个更高？",
+                                "difficulty": "cross_table_comparison",
+                                "metadata": {"model_labels": ["HH-A", "HH-B"]},
+                                "strict_terms": ["HH-A", "HH-B", "12 N·m", "10 N·m"],
+                                "normalized_facts": [
+                                    {"id": "hh_a", "canonical": "HH-A"},
+                                    {"id": "hh_b", "canonical": "HH-B"},
+                                    {"id": "hh_a_torque", "canonical": "12 N·m", "aliases": ["12Nm"]},
+                                    {"id": "hh_b_torque", "canonical": "10 N·m", "aliases": ["10Nm"]},
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "table_artifacts": [
+                            {
+                                "kind": "table",
+                                "source": "html_table",
+                                "document": "documents/apollo.md",
+                                "caption": "HH-A / HH-B 扭矩参数",
+                                "source_heading": "HH 系列扭矩参数",
+                                "model_label_candidates": ["HH-A", "HH-B"],
+                                "semantic_risk_score": 5,
+                                "semantic_risks": [{"code": "multi_model_header_review", "severity": "warning"}],
+                                "review_required": True,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "table-strategy",
+                        "--fixture",
+                        str(fixture),
+                        "--retrieval-hints",
+                        str(hints),
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
+                        "--json",
+                    ]
+                )
+            output = stdout.getvalue()
+            payload = json.loads(output)
+            file_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            markdown = report_md.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_json.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0, output)
+        self.assertEqual(payload["schema"], "ragflow_table_query_strategy_report_v1")
+        self.assertEqual(file_payload["schema"], "ragflow_table_query_strategy_report_v1")
+        self.assertEqual(payload["llm_calls"], 0)
+        self.assertEqual(payload["ragflow_calls"], 0)
+        self.assertEqual(payload["summary"]["cross_table_case_count"], 1)
+        self.assertIn("rrf_fusion", {strategy["id"] for strategy in payload["cases"][0]["strategies"]})
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertIn("RAGFlow Table Query Strategy Report", markdown)
+
     def test_intent_commands_write_reports(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:

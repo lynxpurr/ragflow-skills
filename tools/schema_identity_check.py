@@ -338,6 +338,14 @@ EXPECTED_IDENTITIES = (
         coverage_patterns=("ragflow_query_rewrite_plan_v1", "QUERY_REWRITE_PLAN_SCHEMA"),
     ),
     SchemaIdentity(
+        key="table_query_strategy_report",
+        group="query",
+        identity="ragflow_table_query_strategy_report_v1",
+        source_patterns=("ragflow_table_query_strategy_report_v1", "TABLE_QUERY_STRATEGY_REPORT_SCHEMA"),
+        coverage_patterns=("ragflow_table_query_strategy_report_v1", "TABLE_QUERY_STRATEGY_REPORT_SCHEMA"),
+        description="No-LLM table query expansion and cross-table retrieval strategy report.",
+    ),
+    SchemaIdentity(
         key="query_intent",
         group="query",
         identity="ragflow_query_intent_v1",

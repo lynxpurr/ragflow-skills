@@ -648,6 +648,81 @@ class HandoffTests(unittest.TestCase):
             2,
         )
 
+    def test_html_table_semantic_risks_flag_complex_merged_headers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            documents.mkdir()
+            markdown = documents / "apollo-risk.md"
+            original_text = (
+                "<!-- page: 1 -->\n"
+                "# APOLLO 扭矩规格\n\n"
+                "## HH 系列扭矩参数\n\n"
+                "<table>\n"
+                "<caption>HH-A / HH-B 扭矩参数</caption>\n"
+                "<thead>\n"
+                "<tr><th rowspan=\"2\">项目</th><th colspan=\"2\">HH-A</th><th colspan=\"2\">HH-B</th></tr>\n"
+                "<tr><th>额定扭矩</th><th>峰值扭矩</th><th>额定扭矩</th><th>峰值扭矩</th></tr>\n"
+                "</thead>\n"
+                "<tbody><tr><td>输出</td><td>12 N·m</td><td>18 N·m</td><td>10 N·m</td><td>16 N·m</td></tr></tbody>\n"
+                "</table>\n"
+            )
+            markdown.write_text(original_text, encoding="utf-8")
+            (root / "doc_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [
+                            {
+                                "source_path": "apollo-risk.pdf",
+                                "markdown_path": "documents/apollo-risk.md",
+                                "title": "APOLLO 扭矩规格",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            create_rich_handoff_package(handoff_root=root)
+            retrieval_hints = json.loads((root / "retrieval_hints.json").read_text(encoding="utf-8"))
+            assistant_test_plan = json.loads((root / "assistant_test_plan.json").read_text(encoding="utf-8"))
+            assistant_profile = json.loads((root / "assistant_profile.json").read_text(encoding="utf-8"))
+            inspect_report = inspect_rich_handoff(handoff_root=root)
+            assistant_review = review_assistant_test_plan(
+                assistant_test_plan,
+                assistant_profile=assistant_profile,
+                retrieval_hints=retrieval_hints,
+            )
+            markdown_after = markdown.read_text(encoding="utf-8")
+
+        html_table = next(item for item in retrieval_hints["table_artifacts"] if item["source"] == "html_table")
+        risk_codes = {item["code"] for item in html_table["semantic_risks"]}
+        assistant_stages = {case["stage"] for case in assistant_test_plan["cases"]}
+        table_case = next(case for case in assistant_test_plan["cases"] if case["stage"] == "table_structure_review")
+
+        self.assertEqual(markdown_after, original_text)
+        self.assertEqual(html_table["header_depth"], 2)
+        self.assertEqual(html_table["rowspan_count"], 1)
+        self.assertEqual(html_table["colspan_count"], 2)
+        self.assertTrue(html_table["review_required"])
+        self.assertGreaterEqual(html_table["semantic_risk_score"], 4)
+        self.assertIn("multi_level_header_review", risk_codes)
+        self.assertIn("merged_cells_review", risk_codes)
+        self.assertIn("multi_model_header_review", risk_codes)
+        self.assertIn("HH-A", html_table["model_label_candidates"])
+        self.assertIn("HH-B", html_table["model_label_candidates"])
+        self.assertIn("table_structure_review", assistant_stages)
+        self.assertIn("multi_model_header_review", table_case["semantic_risk_codes"])
+        self.assertIn("HH-A", table_case["model_label_candidates"])
+        self.assertEqual(assistant_review["status"], "PASS")
+        self.assertEqual(
+            inspect_report["ingestion_readiness"]["checks"]["retrieval_hints_richness"]["table_semantic_risk_count"],
+            len(html_table["semantic_risks"]),
+        )
+
     def test_inspect_rich_handoff_reports_optional_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
