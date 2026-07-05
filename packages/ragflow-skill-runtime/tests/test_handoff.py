@@ -723,6 +723,66 @@ class HandoffTests(unittest.TestCase):
             len(html_table["semantic_risks"]),
         )
 
+    def test_table_parent_chunk_preflight_warns_on_small_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            documents.mkdir()
+            markdown = documents / "apollo-large-table.md"
+            header = "<tr>" + "".join(f"<th>参数{i}</th>" for i in range(1, 13)) + "</tr>"
+            body_rows = []
+            for row in range(1, 21):
+                body_rows.append(
+                    "<tr>"
+                    + "".join(f"<td>型号 HH-A 第{row}行参数{i} 的长文本说明</td>" for i in range(1, 13))
+                    + "</tr>"
+                )
+            markdown.write_text(
+                "# APOLLO 表格\n\n<table><thead>"
+                + header
+                + "</thead><tbody>"
+                + "".join(body_rows)
+                + "</tbody></table>\n",
+                encoding="utf-8",
+            )
+            (root / "doc_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [{"source_path": "apollo.pdf", "markdown_path": "documents/apollo-large-table.md"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            create_rich_handoff_package(handoff_root=root)
+            retrieval_hints = json.loads((root / "retrieval_hints.json").read_text(encoding="utf-8"))
+            profile_suggestions = json.loads((root / "profile_suggestions.json").read_text(encoding="utf-8"))
+            readiness = make_doc_ingest_readiness_payload(
+                handoff_root=root,
+                selected_profile={
+                    "id": "small-table-profile",
+                    "chunk_size": 256,
+                    "parser_config": {"chunk_token_num": 256},
+                },
+            )
+            readiness_md = render_doc_ingest_readiness_markdown(readiness)
+
+        html_table = next(item for item in retrieval_hints["table_artifacts"] if item["source"] == "html_table")
+        preflight = readiness["checks"]["table_parent_chunk_preflight"]
+        issue_codes = {issue["code"] for issue in readiness["issues"]}
+
+        self.assertGreater(html_table["estimated_parent_chunk_tokens"], 256)
+        self.assertEqual(profile_suggestions["signals"]["table_atomic_target_tokens"], 4096)
+        self.assertGreater(profile_suggestions["signals"]["max_table_estimated_parent_chunk_tokens"], 256)
+        self.assertEqual(preflight["status"], "review")
+        self.assertEqual(preflight["selected_profile_chunk_tokens"], 256)
+        self.assertIn("table_parent_chunk_profile_too_small", issue_codes)
+        self.assertIn("delimiter controls boundaries", preflight["delimiter_limitation"])
+        self.assertIn("table_parent_chunk_preflight", readiness_md)
+
     def test_inspect_rich_handoff_reports_optional_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

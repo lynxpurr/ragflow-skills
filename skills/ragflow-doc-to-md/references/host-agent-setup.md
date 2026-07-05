@@ -201,6 +201,25 @@ python ragflow-kb-build/scripts/build.py \
   --json
 ```
 
+## Complex Table Ingest Review
+
+For complex specification tables, keep the review offline until the user explicitly
+approves live RAGFlow mutation:
+
+- Convert with `ragflow-doc-to-md pipeline --table-quality high` or `--table-quality auto`,
+  `--mineru-asset-mode markdown_assets`, and `--postprocess-profile chunk-markers-dense`.
+- Review `retrieval_hints.json` for `table_artifacts`, `table_term_alias_candidates`,
+  `semantic_risks`, and `estimated_parent_chunk_tokens`.
+- Run `inspect-handoff` and require no BLOCKED quality or missing-image errors.
+- Run `asset-upload-plan`; require `missing_image_count=0` before any live build, and
+  review orphan images instead of silently uploading them.
+- Prefer a generated `table-atomic-*-4096` profile when the target deployment supports
+  that parent chunk size. If the deployment requires a smaller profile, keep the profile
+  explicit and treat `table_parent_chunk_preflight` warnings from `build.py --dry-run` as
+  manual review gates.
+- Do not set a children delimiter for table-atomic ingestion; delimiter chunk markers
+  control boundaries but cannot override a lower server-side parent chunk limit.
+
 ## Legacy Workflow Migration Gates
 
 When replacing a legacy all-in-one workflow, map responsibilities explicitly:

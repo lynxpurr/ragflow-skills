@@ -210,19 +210,19 @@ APOLLO 证据显示跨表比较问题比单表查值更脆弱。下一步应利�
 
 ## 6. 任务清单
 
-| 优先级 | 负责面 | 任务 | 产物 | 验收门 |
-| --- | --- | --- | --- | --- |
-| P0 | maintainer/tests | 将 16 问 APOLLO QA 转成脱敏 fixture schema | `apollo_table_qa_fixture_v1` fixture + tests | no-network schema/read tests |
-| P0 | maintainer/tests | 实现已有 retrieval/answer JSON 的离线评估器 | normalized contains / strict contains report | fixture tests，误判校正样例 |
-| P0 | doc-to-md runtime | 增加表格术语候选提取 sidecar | `table_term_alias_candidates` report section | 不改写 Markdown；redaction clean |
-| P0 | doc-to-md runtime | 增加 per-table 结构风险评分 | table semantic risk fields | HH-A 类 row/colspan fixture 触发 review |
-| P0 | handoff | 将术语候选和结构风险接入 retrieval hints | hint fields + assistant test starters | `inspect-handoff` 可读到摘要 |
-| P1 | kb-build | 设计 Markdown+images 上传包 dry-run | asset upload plan report | fake-client tests；live disabled |
-| P1 | kb-build | 增加表格父 chunk 风险预检 | ingest readiness warning | 小父 chunk profile fixture 触发 warning |
-| P1 | query | 为跨表问题增加 no-LLM retrieval strategy report | direct vs multi-query/fusion comparison | APOLLO fixture 离线报告 |
-| P1 | docs | 更新 host-agent 表格入库指引 | concise usage section | 不含私有路径或服务地址 |
-| P2 | optional LLM boundary | 设计外部 judge request/review | judge request/review schemas | 默认不调用模型 |
-| P2 | live gated | 代表样本 live KB 创建/查询/清理验证 | sanitized field-trial evidence | 明确批准、cleanup、redaction |
+| 状态 | 优先级 | 负责面 | 任务 | 产物 | 验收门 |
+| --- | --- | --- | --- | --- | --- |
+| 公共框架完成；私有 16 问填充 gated | P0 | maintainer/tests | 将 16 问 APOLLO QA 转成脱敏 fixture schema | `apollo_table_qa_fixture_v1` fixture + tests | no-network schema/read tests |
+| 完成 | P0 | maintainer/tests | 实现已有 retrieval/answer JSON 的离线评估器 | normalized contains / strict contains report | fixture tests，误判校正样例 |
+| 完成 | P0 | doc-to-md runtime | 增加表格术语候选提取 sidecar | `table_term_alias_candidates` report section | 不改写 Markdown；redaction clean |
+| 完成 | P0 | doc-to-md runtime | 增加 per-table 结构风险评分 | table semantic risk fields | HH-A 类 row/colspan fixture 触发 review |
+| 完成 | P0 | handoff | 将术语候选和结构风险接入 retrieval hints | hint fields + assistant test starters | `inspect-handoff` 可读到摘要 |
+| 完成 | P1 | kb-build | 设计 Markdown+images 上传包 dry-run | `ragflow_kb_asset_upload_plan_v1` | fake-client tests；live disabled |
+| 完成 | P1 | kb-build | 增加表格父 chunk 风险预检 | ingest readiness / dry-run warning | 小父 chunk profile fixture 触发 warning |
+| 完成 | P1 | query | 为跨表问题增加 no-LLM retrieval strategy report | direct vs multi-query/fusion comparison | APOLLO fixture 离线报告 |
+| 完成 | P1 | docs | 更新 host-agent 表格入库指引 | concise usage section | 不含私有路径或服务地址 |
+| 待推进；默认 no-LLM | P2 | optional LLM boundary | 设计外部 judge request/review | judge request/review schemas | 默认不调用模型 |
+| gated；未获明确 live 批准不执行 | P2 | live gated | 代表样本 live KB 创建/查询/清理验证 | sanitized field-trial evidence | 明确批准、cleanup、redaction |
 
 ## 7. 当前建议用法
 
@@ -244,11 +244,14 @@ python scripts/convert.py pipeline \
 
 ```bash
 ragflow-kb-build inspect-handoff --handoff <handoff>
+ragflow-kb-build asset-upload-plan --doc-manifest <handoff>/doc_manifest.json \
+  --report-json <run>/asset_upload_plan.json \
+  --report-md <run>/asset_upload_plan.md
 ragflow-kb-build --doc-manifest <handoff>/doc_manifest.json --profile <reviewed-profile.json> --dry-run
 ```
 
 表格 profile 应优先使用 rich handoff 生成的 `table-atomic-*-4096` 建议；如果部署不支持较大父 chunk，
-先降低为部署允许值并接受 review warning，不要设置 `children_delimiter`。
+先降低为部署允许值并接受 `table_parent_chunk_preflight` review warning，不要设置 `children_delimiter`。
 
 ## 8. 边界
 
@@ -346,3 +349,30 @@ ragflow-kb-build --doc-manifest <handoff>/doc_manifest.json --profile <reviewed-
 - 该上传包目前只完成离线计划和本地 zip 物化；如需真正让 RAGFlow live 接收 Markdown+images 包，还需要先确认
   目标 RAGFlow 上传 API 是否支持 zip/批量资产语义，并通过 fake-client 与明确 live gate 推进。
 - 父 chunk 上限与表格原子性预检、host-agent 表格入库指引仍可作为后续离线小片继续推进。
+
+同日继续推进了 P1 父 chunk 上限与表格原子性预检：
+
+- `retrieval_hints.json` 的 table artifacts 新增 `source_text_chars`、`estimated_parent_chunk_tokens`、
+  `recommended_min_parent_chunk_tokens`、`table_atomic_target_tokens`，用于解释表格原子性 profile 建议。
+- `profile_suggestions.json` 的 signals 新增 `max_table_estimated_parent_chunk_tokens` 和
+  `table_atomic_target_tokens`；`table-atomic-*-4096` 仍保持为表格文档优先建议。
+- `ingest_readiness_report.json` 新增 `table_parent_chunk_preflight` check，明确
+  `deployment_limit_assumption=unknown`，并说明 delimiter 只能控制边界，不能覆盖服务端更低的父 chunk 上限。
+- `ragflow-kb-build --dry-run` 在用户传入实际 profile 时会输出 `table_parent_chunk_preflight`；小父 chunk
+  profile 会触发 `table_parent_chunk_profile_too_small` review warning，但不执行 live mutation。
+- 该检查不假设所有 RAGFlow 部署都支持 4096；如果估算表格超过 4096，会建议拆表、调整部署上限或人工复核。
+
+当前仍未关闭的 P1 条目：
+
+- host-agent 表格入库指引需要把 `inspect-handoff`、`asset-upload-plan`、表格 profile review 和 dry-run
+  父 chunk warning 串成一段简明流程。
+
+同日完成 P1 host-agent 表格入库指引：
+
+- 三个 public skill 的共享 `references/host-agent-setup.md` 新增 `Complex Table Ingest Review` 小节。
+- 指引串联 `ragflow-doc-to-md pipeline --table-quality high|auto`、`chunk-markers-dense`、
+  `inspect-handoff`、`asset-upload-plan`、`table-atomic-*-4096` profile review 和
+  `table_parent_chunk_preflight` dry-run warning。
+- 指引明确该流程在 live approval 前保持 offline，并说明 children delimiter 不应作为表格原子性修复手段。
+
+当前 P1 公共离线任务已完成；剩余项属于私有 fixture 填充、可选外部 judge request/review 或 live-gated 验证。

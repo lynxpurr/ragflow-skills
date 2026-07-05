@@ -30,6 +30,8 @@ DOC_INGEST_READINESS_SCHEMA = "ragflow_doc_ingest_readiness_v1"
 FORMAL_HANDOFF_MANIFEST_SCHEMA = "ragflow_formal_handoff_manifest_v1"
 HANDOFF_COMPARISON_SCHEMA = "ragflow_handoff_comparison_v1"
 RAGFLOW_INGEST_PLAN_SCHEMA = "ragflow_ingest_plan_v1"
+TABLE_PARENT_CHUNK_TARGET_TOKENS = 4096
+TABLE_PARENT_CHUNK_REVIEW_FLOOR_TOKENS = 1024
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
@@ -516,6 +518,7 @@ def make_profile_suggestions_payload(
     markdown_table_count = 0
     html_table_count = 0
     has_cjk = False
+    table_parent_chunk_estimates: list[int] = []
     for document in documents:
         if not isinstance(document, Mapping):
             continue
@@ -527,7 +530,29 @@ def make_profile_suggestions_payload(
             image_count += text.count("![")
             lines = text.splitlines()
             markdown_table_count += _count_table_blocks(lines)
-            html_table_count += len(parse_html_tables(text))
+            for block in _table_blocks(lines):
+                rows = [str(row) for row in block["rows"]]
+                column_count = max((row.count("|") - 1 for row in rows if "|" in row), default=0)
+                table = {
+                    "row_count": len(rows),
+                    "column_count": column_count,
+                    "cell_count": len(rows) * column_count,
+                }
+                fields = _table_parent_chunk_estimate_fields(table, source_text="\n".join(rows))
+                table_parent_chunk_estimates.append(int(fields["estimated_parent_chunk_tokens"]))
+            html_tables = parse_html_tables(text)
+            html_table_count += len(html_tables)
+            for table in html_tables:
+                source_text = "\n".join(lines[max(int(table.line_start) - 1, 0) : int(table.line_end)])
+                fields = _table_parent_chunk_estimate_fields(
+                    {
+                        "row_count": int(table.row_count),
+                        "column_count": int(table.column_count),
+                        "cell_count": int(table.cell_count),
+                    },
+                    source_text=source_text,
+                )
+                table_parent_chunk_estimates.append(int(fields["estimated_parent_chunk_tokens"]))
             has_cjk = has_cjk or any("\u4e00" <= char <= "\u9fff" for char in text[:5000])
 
     gate = quality_report.get("gate", {}) if isinstance(quality_report, Mapping) else {}
@@ -579,6 +604,11 @@ def make_profile_suggestions_payload(
         warnings.append("image-rich Markdown detected; verify parser profile preserves image/table context as needed")
     if table_count:
         warnings.append("table-rich Markdown detected; prefer chunk-markers-dense plus delimiter-based RAGFlow parsing")
+    max_table_parent_tokens = max(table_parent_chunk_estimates, default=0)
+    if max_table_parent_tokens > TABLE_PARENT_CHUNK_TARGET_TOKENS:
+        warnings.append(
+            "at least one table may exceed the 4096-token table-atomic profile target; split or review oversized tables"
+        )
     if average_chars > 32000:
         warnings.append("large average document size detected; consider segmentation before upload")
 
@@ -594,6 +624,8 @@ def make_profile_suggestions_payload(
             "table_count": table_count,
             "markdown_table_count": markdown_table_count,
             "html_table_count": html_table_count,
+            "max_table_estimated_parent_chunk_tokens": max_table_parent_tokens,
+            "table_atomic_target_tokens": TABLE_PARENT_CHUNK_TARGET_TOKENS if table_count else None,
             "quality_status": quality_status,
         },
         "warnings": warnings,
@@ -1026,21 +1058,26 @@ def _markdown_table_contexts(
     contexts: list[dict[str, Any]] = []
     for block in _table_blocks(text.splitlines()):
         line_start = int(block["line_start"])
+        rows = [str(row) for row in block["rows"]]
+        column_count = max((row.count("|") - 1 for row in rows if "|" in row), default=0)
+        source_text = "\n".join(rows)
         section = _section_for_line(sections, line_start) or {}
-        contexts.append(
-            {
-                "kind": "table",
-                "document": markdown_rel,
-                "line_start": line_start,
-                "line_end": int(block["line_end"]),
-                "source_heading": section.get("title"),
-                "heading_level": section.get("level"),
-                "page": _page_for_line(page_by_line, line_start),
-                "row_count": len(block["rows"]),
-                "header_preview": _table_header_preview(block["rows"]),
-                "source": "markdown_table",
-            }
-        )
+        context: dict[str, Any] = {
+            "kind": "table",
+            "document": markdown_rel,
+            "line_start": line_start,
+            "line_end": int(block["line_end"]),
+            "source_heading": section.get("title"),
+            "heading_level": section.get("level"),
+            "page": _page_for_line(page_by_line, line_start),
+            "row_count": len(rows),
+            "column_count": column_count,
+            "cell_count": max(len(rows) * column_count, 0),
+            "header_preview": _table_header_preview(rows),
+            "source": "markdown_table",
+        }
+        context.update(_table_parent_chunk_estimate_fields(context, source_text=source_text))
+        contexts.append(context)
     return contexts
 
 
@@ -1056,6 +1093,7 @@ def _html_table_contexts(
     for table in parse_html_tables(text):
         line_start = int(table.line_start)
         section = _section_for_line(sections, line_start) or {}
+        source_text = "\n".join(lines[max(line_start - 1, 0) : int(table.line_end)])
         context: dict[str, Any] = {
             "kind": "table",
             "document": markdown_rel,
@@ -1081,6 +1119,7 @@ def _html_table_contexts(
         if table.warnings:
             context["warnings"] = list(table.warnings)
         context.update(_table_semantic_risk_fields(context))
+        context.update(_table_parent_chunk_estimate_fields(context, source_text=source_text))
         contexts.append(context)
     return contexts
 
@@ -1206,6 +1245,148 @@ def _table_semantic_risk_fields(table: Mapping[str, Any]) -> dict[str, Any]:
     if model_labels:
         payload["model_label_candidates"] = model_labels[:12]
     return payload
+
+
+def _cjk_char_count(value: str) -> int:
+    return sum(1 for char in value if "\u4e00" <= char <= "\u9fff")
+
+
+def _estimate_text_tokens(value: str) -> int:
+    if not value:
+        return 0
+    compact = " ".join(value.split())
+    divisor = 2 if _cjk_char_count(compact) >= max(1, len(compact) // 8) else 4
+    return max(1, (len(compact) + divisor - 1) // divisor)
+
+
+def _table_parent_chunk_estimate_fields(table: Mapping[str, Any], *, source_text: str) -> dict[str, Any]:
+    row_count = int(table.get("row_count", 0) or 0)
+    column_count = int(table.get("column_count", 0) or 0)
+    cell_count = int(table.get("cell_count", 0) or 0)
+    structural_tokens = max(cell_count * 4, row_count * max(column_count, 1) * 3)
+    text_tokens = _estimate_text_tokens(source_text)
+    estimated_tokens = max(text_tokens, structural_tokens)
+    review_target = min(
+        TABLE_PARENT_CHUNK_TARGET_TOKENS,
+        max(TABLE_PARENT_CHUNK_REVIEW_FLOOR_TOKENS, ((estimated_tokens + 511) // 512) * 512),
+    )
+    fields: dict[str, Any] = {
+        "source_text_chars": len(source_text),
+        "estimated_parent_chunk_tokens": estimated_tokens,
+        "recommended_min_parent_chunk_tokens": review_target,
+        "table_atomic_target_tokens": TABLE_PARENT_CHUNK_TARGET_TOKENS,
+    }
+    if estimated_tokens > TABLE_PARENT_CHUNK_TARGET_TOKENS:
+        fields["parent_chunk_atomicity_risk"] = "exceeds_table_atomic_target"
+    return fields
+
+
+def _profile_chunk_token_num(profile: Mapping[str, Any] | None) -> int | None:
+    if not isinstance(profile, Mapping):
+        return None
+    parser_config = profile.get("parser_config") if isinstance(profile.get("parser_config"), Mapping) else {}
+    for value in (
+        parser_config.get("chunk_token_num") if isinstance(parser_config, Mapping) else None,
+        profile.get("chunk_size"),
+        profile.get("chunk_token_num"),
+    ):
+        if value is None:
+            continue
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            return number
+    return None
+
+
+def _table_parent_chunk_preflight(
+    *,
+    retrieval_hints: Mapping[str, Any] | None,
+    selected_profile: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    tables = retrieval_hints.get("table_artifacts", []) if isinstance(retrieval_hints, Mapping) else []
+    table_records = [item for item in tables if isinstance(item, Mapping)]
+    selected_tokens = _profile_chunk_token_num(selected_profile)
+    selected_profile_id = None
+    if isinstance(selected_profile, Mapping):
+        value = selected_profile.get("id") or selected_profile.get("profile_id")
+        selected_profile_id = str(value) if value else None
+
+    table_checks: list[dict[str, Any]] = []
+    issues: list[dict[str, str]] = []
+    for index, table in enumerate(table_records, start=1):
+        estimate = int(table.get("estimated_parent_chunk_tokens", 0) or 0)
+        recommended = int(table.get("recommended_min_parent_chunk_tokens", 0) or 0)
+        target = int(table.get("table_atomic_target_tokens", TABLE_PARENT_CHUNK_TARGET_TOKENS) or TABLE_PARENT_CHUNK_TARGET_TOKENS)
+        record: dict[str, Any] = {
+            "table_index": index,
+            "document": table.get("document"),
+            "caption": table.get("caption"),
+            "source_heading": table.get("source_heading"),
+            "row_count": int(table.get("row_count", 0) or 0),
+            "column_count": int(table.get("column_count", 0) or 0),
+            "cell_count": int(table.get("cell_count", 0) or 0),
+            "estimated_parent_chunk_tokens": estimate,
+            "recommended_min_parent_chunk_tokens": recommended,
+            "table_atomic_target_tokens": target,
+        }
+        if selected_tokens is not None:
+            record["selected_profile_chunk_tokens"] = selected_tokens
+            record["selected_profile_ok"] = estimate <= selected_tokens if estimate else True
+        if estimate > target:
+            record["risk"] = "exceeds_table_atomic_target"
+        elif selected_tokens is not None and estimate > selected_tokens:
+            record["risk"] = "selected_profile_too_small"
+        else:
+            record["risk"] = "none"
+        table_checks.append(record)
+
+    max_estimate = max((int(item.get("estimated_parent_chunk_tokens", 0) or 0) for item in table_checks), default=0)
+    max_recommended = max(
+        (int(item.get("recommended_min_parent_chunk_tokens", 0) or 0) for item in table_checks),
+        default=0,
+    )
+    if selected_tokens is not None and max_estimate > selected_tokens:
+        issues.append(
+            {
+                "severity": "warning",
+                "code": "table_parent_chunk_profile_too_small",
+                "message": "selected profile chunk_token_num is smaller than at least one estimated table block",
+                "recommendation": (
+                    "Use a table-atomic profile such as 4096 when the deployment supports it, "
+                    "or split/review oversized tables before live upload."
+                ),
+            }
+        )
+    if max_estimate > TABLE_PARENT_CHUNK_TARGET_TOKENS:
+        issues.append(
+            {
+                "severity": "warning",
+                "code": "table_parent_chunk_exceeds_atomic_target",
+                "message": "at least one table may exceed the 4096-token table-atomic profile target",
+                "recommendation": (
+                    "Delimiter-based chunk markers control boundaries, but they cannot guarantee that an oversized "
+                    "table will remain atomic if the RAGFlow server applies a lower parent chunk limit."
+                ),
+            }
+        )
+    status = "review" if issues else "ready"
+    return {
+        "exists": bool(table_checks),
+        "status": status,
+        "selected_profile_id": selected_profile_id,
+        "selected_profile_chunk_tokens": selected_tokens,
+        "table_count": len(table_checks),
+        "max_estimated_parent_chunk_tokens": max_estimate,
+        "max_recommended_min_parent_chunk_tokens": max_recommended,
+        "table_atomic_target_tokens": TABLE_PARENT_CHUNK_TARGET_TOKENS,
+        "deployment_limit_assumption": "unknown",
+        "delimiter_limitation": "delimiter controls boundaries but cannot override a lower server-side parent chunk limit",
+        "tables": table_checks[:30],
+        "issues": issues,
+    }
 
 
 _SUBSCRIPT_TRANSLATION = str.maketrans(
@@ -2783,6 +2964,7 @@ def make_doc_ingest_readiness_payload(
     handoff_root: str | Path,
     doc_manifest_name: str = "doc_manifest.json",
     sidecar_names: Mapping[str, str | None] | None = None,
+    selected_profile: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create a deterministic formal-ingest readiness report for a handoff."""
 
@@ -2841,6 +3023,10 @@ def make_doc_ingest_readiness_payload(
         postprocess_report=postprocess_report,
         chunk_profile_report=chunk_profile_report,
         sidecar_exists=bool(sidecars.get("chunk_profile_report", {}).get("exists")),
+    )
+    table_parent_chunk_preflight = _table_parent_chunk_preflight(
+        retrieval_hints=retrieval_hints,
+        selected_profile=selected_profile,
     )
     ingest_plan = _ingest_plan_summary(ragflow_ingest_plan)
     if ingest_plan_error:
@@ -2965,6 +3151,21 @@ def make_doc_ingest_readiness_payload(
                 recommendation="Review Markdown headings and package sidecars before formal ingestion.",
             )
         )
+    for issue in table_parent_chunk_preflight.get("issues", []):
+        if not isinstance(issue, Mapping):
+            continue
+        issues.append(
+            _readiness_issue(
+                check="table_parent_chunk_preflight",
+                severity=str(issue.get("severity") or "warning"),
+                code=str(issue.get("code") or "table_parent_chunk_review"),
+                message=str(issue.get("message") or "table parent chunk profile needs review"),
+                recommendation=str(
+                    issue.get("recommendation")
+                    or "Review table size, delimiter behavior, and deployment parent chunk limits before live upload."
+                ),
+            )
+        )
     if quality_counts["image_count"] and retrieval_summary["image_artifact_count"] == 0:
         issues.append(
             _readiness_issue(
@@ -3060,6 +3261,7 @@ def make_doc_ingest_readiness_payload(
             "missing": sidecar_summary["missing"],
         },
         "chunk_readiness": chunk_summary,
+        "table_parent_chunk_preflight": table_parent_chunk_preflight,
         "retrieval_hints_richness": retrieval_summary,
         "artifact_coverage": {
             "quality_image_count": quality_counts["image_count"],
@@ -3095,6 +3297,10 @@ def make_doc_ingest_readiness_payload(
             "missing_image_count": image_assets["missing_image_count"],
             "retrieval_hint_section_count": retrieval_summary["section_boundary_count"],
             "chunk_marker_count": chunk_summary["marker_count"],
+            "table_parent_chunk_preflight_status": table_parent_chunk_preflight["status"],
+            "max_table_estimated_parent_chunk_tokens": table_parent_chunk_preflight[
+                "max_estimated_parent_chunk_tokens"
+            ],
         },
         "checks": checks,
         "sidecars": sidecars,
@@ -3117,6 +3323,11 @@ def render_doc_ingest_readiness_markdown(report: Mapping[str, Any]) -> str:
     assets = checks.get("local_assets") if isinstance(checks.get("local_assets"), Mapping) else {}
     hints = checks.get("retrieval_hints_richness") if isinstance(checks.get("retrieval_hints_richness"), Mapping) else {}
     chunk = checks.get("chunk_readiness") if isinstance(checks.get("chunk_readiness"), Mapping) else {}
+    table_chunk = (
+        checks.get("table_parent_chunk_preflight")
+        if isinstance(checks.get("table_parent_chunk_preflight"), Mapping)
+        else {}
+    )
     ingest_plan = checks.get("ragflow_ingest_plan") if isinstance(checks.get("ragflow_ingest_plan"), Mapping) else {}
     lines = [
         "# RAGFlow Doc Ingest Readiness",
@@ -3135,6 +3346,8 @@ def render_doc_ingest_readiness_markdown(report: Mapping[str, Any]) -> str:
         f"- pipeline_sidecars_complete: {str(bool(sidecar_check.get('pipeline_complete'))).lower()}",
         f"- missing_image_count: {assets.get('missing_image_count', 'unknown')}",
         f"- chunk_marker_count: {chunk.get('marker_count', 'unknown')}",
+        f"- table_parent_chunk_preflight: `{table_chunk.get('status', 'unknown')}`",
+        f"- max_table_estimated_parent_chunk_tokens: {table_chunk.get('max_estimated_parent_chunk_tokens', 'unknown')}",
         f"- retrieval_hint_sections: {hints.get('section_boundary_count', 'unknown')}",
         f"- image_artifacts: {hints.get('image_artifact_count', 'unknown')}",
         f"- table_artifacts: {hints.get('table_artifact_count', 'unknown')}",

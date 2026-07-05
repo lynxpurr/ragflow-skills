@@ -613,6 +613,84 @@ class KbBuildCliTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["documents"], [str(docs_dir / "sample.md")])
 
+    def test_build_dry_run_reports_table_parent_chunk_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = Path(tmp) / "handoff"
+            docs_dir = handoff / "documents"
+            docs_dir.mkdir(parents=True)
+            (docs_dir / "sample.md").write_text("# Title\n\n| A | B |\n| --- | --- |\n| C | D |\n", encoding="utf-8")
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [{"source_path": "source.pdf", "markdown_path": "documents/sample.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (handoff / "retrieval_hints.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "table_artifacts": [
+                            {
+                                "source": "html_table",
+                                "document": "documents/sample.md",
+                                "row_count": 20,
+                                "column_count": 12,
+                                "cell_count": 240,
+                                "estimated_parent_chunk_tokens": 960,
+                                "recommended_min_parent_chunk_tokens": 1024,
+                                "table_atomic_target_tokens": 4096,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            profile = Path(tmp) / "small-profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "small-table-profile",
+                        "chunk_size": 256,
+                        "chunk_overlap": 0,
+                        "parser_config": {"chunk_token_num": 256},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "--doc-manifest",
+                    str(manifest),
+                    "--kb-name",
+                    "kb:test",
+                    "--profile",
+                    str(profile),
+                    "--dry-run",
+                    "--json",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        preflight = payload["table_parent_chunk_preflight"]
+        self.assertEqual(preflight["status"], "review")
+        self.assertEqual(preflight["selected_profile_chunk_tokens"], 256)
+        self.assertEqual(preflight["max_estimated_parent_chunk_tokens"], 960)
+        self.assertEqual(preflight["issues"][0]["code"], "table_parent_chunk_profile_too_small")
+
     def test_build_blocks_doc_manifest_with_blocked_quality_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             handoff = Path(tmp) / "handoff"

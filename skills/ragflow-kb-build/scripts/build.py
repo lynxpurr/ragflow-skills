@@ -56,6 +56,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     lint_metadata_file,
     lint_tagset_file,
     make_kb_manifest_payload,
+    make_doc_ingest_readiness_payload,
     make_metadata_template_payload,
     make_tagset_template_payload,
     map_grounded_qa_evidence,
@@ -758,6 +759,27 @@ def _run(args: argparse.Namespace) -> int:
         if metadata_summary and not metadata_summary.get("ok", False):
             raise BuildError("metadata lint failed; run metadata lint for details")
         if args.dry_run:
+            table_parent_chunk_preflight = {"exists": False, "status": "not_available", "table_count": 0}
+            if args.doc_manifest:
+                try:
+                    readiness = make_doc_ingest_readiness_payload(
+                        handoff_root=Path(args.doc_manifest).parent,
+                        doc_manifest_name=Path(args.doc_manifest).name,
+                        selected_profile=profile.to_manifest_dict(),
+                    )
+                    checks = readiness.get("checks") if isinstance(readiness.get("checks"), Mapping) else {}
+                    table_parent_chunk_preflight = (
+                        checks.get("table_parent_chunk_preflight")
+                        if isinstance(checks.get("table_parent_chunk_preflight"), Mapping)
+                        else table_parent_chunk_preflight
+                    )
+                except Exception as exc:
+                    table_parent_chunk_preflight = {
+                        "exists": False,
+                        "status": "not_available",
+                        "table_count": 0,
+                        "error": str(exc),
+                    }
             _dump_json(
                 {
                     "ok": True,
@@ -766,6 +788,7 @@ def _run(args: argparse.Namespace) -> int:
                     "profile": profile.to_manifest_dict(),
                     "documents": [str(doc.path) for doc in docs],
                     "metadata_summary": metadata_summary,
+                    "table_parent_chunk_preflight": table_parent_chunk_preflight,
                 }
             )
             return 0
