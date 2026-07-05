@@ -1466,8 +1466,8 @@ breaker pilots must stay default-off, read-only, and scoped to `endpoint-report`
 Inventory implemented. `tools/report_surface_inventory.py` emits
 `ragflow_report_surface_inventory_v1`, imports the public CLI parsers offline, and fails
 the inventory when a public command lacks an explicit `covered`, `not_applicable`, or
-`needs_redaction` classification. The current verified inventory names 89 public commands:
-80 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
+`needs_redaction` classification. The current verified inventory names 97 public commands:
+88 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
 classification findings.
 
 `ragflow-kb-build parse-report` and `ragflow-kb-build health-report` now support
@@ -1653,7 +1653,7 @@ mutation/query rollout.
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene as a static Phase
 31 governance surface. It reuses the public command inventory and classifies current
 runtime-helper coverage as 21 covered commands, 0 candidate commands, 0 deferred
-commands, and 68 not-applicable commands with no stale classification findings. Covered
+commands, and 76 not-applicable commands with no stale classification findings. Covered
 commands include the endpoint-report helper pilot, query fallback partial-failure reports,
 live `ragflow-query ask` retry/partial-failure/metrics reporting, query-output cache
 reports, centroid build checkpoints, top-level live `ragflow-kb-build` stage
@@ -1671,7 +1671,7 @@ optional adapter scope.
 The final generated-Markdown audit is implemented in `tools/generated_markdown_audit.py`.
 It consumes the report-surface inventory, selects covered report surfaces with generated
 Markdown outputs, and requires each one to have explicit sanitized-rendering evidence.
-The current audit emits `ragflow_generated_markdown_audit_v1`, verifies 71 Markdown report
+The current audit emits `ragflow_generated_markdown_audit_v1`, verifies 80 Markdown report
 surfaces with 0 missing and 0 stale entries, and runs from release hygiene together with
 generated-report safety. This closes the Phase 36 report-safety audit without broadening
 the runtime helper scope.
@@ -1687,7 +1687,7 @@ hygiene.
 
 The active Phase 31 runtime-resilience inventory is closed. The runtime-resilience
 inventory is the authoritative ledger: 21 command surfaces are currently `covered`, 0 are
-`candidate`, 0 are `deferred`, and 68 are `not_applicable`.
+`candidate`, 0 are `deferred`, and 76 are `not_applicable`.
 
 Finish the remaining gated work in this order:
 
