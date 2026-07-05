@@ -1,6 +1,16 @@
 """Portable runtime primitives for public RAGFlow skills."""
 
 from .auth import AuthError, load_api_key
+from .adaptive_decision import (
+    ADAPTIVE_PIPELINE_SUMMARY_SCHEMA,
+    PIPELINE_DECISION_SCHEMA,
+    load_decision_overrides,
+    make_adaptive_pipeline_summary,
+    make_pipeline_decision,
+    pipeline_args_from_decision,
+    render_adaptive_pipeline_summary_markdown,
+    render_pipeline_decision_markdown,
+)
 from .agentic import (
     AGENTIC_ANSWER_REQUEST_SCHEMA,
     AGENTIC_ANSWER_REVIEW_REPORT_SCHEMA,
@@ -58,6 +68,11 @@ from .doc_convert import (
     sha256_file,
     text_to_markdown,
     warmup_conversion_backend,
+)
+from .doc_inspect import (
+    DOCUMENT_FEATURES_SCHEMA,
+    inspect_source_document,
+    render_document_features_markdown,
 )
 from .doc_quality import (
     BLOCKED,

@@ -1763,6 +1763,47 @@ def _run_no_network_checks(
             }
         )
 
+    adaptive_input = work_root / "adaptive-input"
+    adaptive_input.mkdir(parents=True, exist_ok=True)
+    (adaptive_input / "table.md").write_text(
+        "# Adaptive\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n",
+        encoding="utf-8",
+    )
+    adaptive_output = work_root / "adaptive-handoff"
+    adaptive_report = work_root / "adaptive_summary.json"
+    adaptive_report_md = work_root / "adaptive_summary.md"
+    adaptive_redaction = work_root / "adaptive_summary.redaction.json"
+    adaptive_result = _run_command(
+        [
+            python_executable,
+            str(convert_script),
+            "adaptive",
+            "--input",
+            str(adaptive_input),
+            "--output",
+            str(adaptive_output),
+            "--decision-only",
+            "--report-json",
+            str(adaptive_report),
+            "--report-md",
+            str(adaptive_report_md),
+            "--redaction-report",
+            str(adaptive_redaction),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "doc-to-md adaptive decision-only",
+        adaptive_result,
+        required_output='"schema": "ragflow_adaptive_pipeline_summary_v1"',
+    )
+    for adaptive_path in (adaptive_report, adaptive_report_md, adaptive_redaction):
+        if adaptive_path.exists():
+            produced.append(adaptive_path)
+
     postprocess_dir = work_root / "postprocessed-handoff"
     postprocess_redaction = work_root / "postprocess_redaction.json"
     postprocess_result = _run_command(

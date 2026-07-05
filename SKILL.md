@@ -29,7 +29,7 @@ metadata:
 ~/.hermes/skills/research/ragflow-skills/
 ├── packages/ragflow-skill-runtime/    # 核心运行时库（被 skills/ 和 dist/ 共用）
 │   ├── src/ragflow_skill_runtime/     # doc_convert, doc_postprocess, kb_build, handoff ...
-│   └── tests/                         # 510 项回归测试
+│   └── tests/                         # 515 项回归测试
 ├── skills/ragflow-doc-to-md/          # 开发版 CLI
 ├── skills/ragflow-kb-build/          # 开发版 CLI
 ├── dist/ragflow-doc-to-md/            # 发布版，带 _vendor/ 内嵌 runtime
@@ -52,7 +52,7 @@ python3 -m venv .venv
 .venv/bin/python -m pytest packages/ragflow-skill-runtime/tests -v --tb=short
 ```
 
-**基准结果**：510 passed, 6 subtests passed, 0 failed，耗时约 110–120 秒。
+**基准结果**：515 passed, 6 subtests passed, 0 failed，耗时约 120 秒。
 
 若新增 commit 或修改 runtime，跑完这轮测试后再评估是否可用。
 
@@ -70,6 +70,29 @@ python scripts/convert.py pipeline \
   --mineru-base-url https://mineru.example.internal \
   --mineru-asset-mode markdown_assets \
   --postprocess-profile chunk-markers-dense
+```
+
+自适应入口：
+
+```bash
+python scripts/convert.py adaptive \
+  --input ./raw \
+  --output ./handoff \
+  --backend mineru-fastapi \
+  --mineru-base-url https://mineru.example.internal \
+  --json
+```
+
+只生成决策、不执行转换：
+
+```bash
+python scripts/convert.py adaptive \
+  --input ./raw \
+  --output ./handoff \
+  --decision-only \
+  --report-json ./run/adaptive_summary.json \
+  --redaction-report ./run/adaptive_summary.redaction.json \
+  --json
 ```
 
 关键产物：
@@ -110,7 +133,7 @@ python scripts/build.py \
 | 定位 | 新一代可移植 handoff 管线 | 上一代本地 MinerU 预处理 | 生产级 RAGFlow 运维 |
 | 入口 | `convert.py pipeline` / `build.py` | `python -m ragflux.cli.main run` | `chunking_runner.py` / `cli.py chunk-build` |
 | MinerU backend | 多种，含 `mineru-fastapi` | `fast` (pipeline) / `accurate` (hybrid-auto) | 不解析 |
-| Blackwell 兼容 | `mineru-fastapi`/`pipeline` 可用 | ⚠️ `accurate` 在 sm_120 必崩 | 无关 |
+| Blackwell 兼容 | 优先用 `mineru-fastapi` capability probe；`pipeline` 稳定，high-accuracy 需看服务能力和 fallback | ⚠️ 旧本地 `accurate` 在 sm_120 高风险 | 无关 |
 | 产物 | handoff bundle + 契约文件 | `doc.md` + `images/` + `quality_report.json` | 直接写 RAGFlow |
 | 质量门禁 | 有 `PASS`/`PASS_WITH_REVIEW`/`BLOCKED` | 有 | 无原生 |
 | benchmark/optimize | 内建完整 | 无 | 有独立脚本 |
@@ -150,9 +173,11 @@ python scripts/build.py \
 
 `skills/` 和 `dist/` 脚本主体同步，但 `_vendor` 与 `__pycache__` 差异可能导致运行结果不同。回归测试应跑 `packages/ragflow-skill-runtime/tests`，而不是直接比较两个 CLI 的输出。
 
-### Pitfall #2: 在 Blackwell 上误用 accurate/hybrid-auto-engine
+### Pitfall #2: 把 Blackwell 与 high-accuracy 解析一刀切绑定
 
-RTX 5070 Ti / 5080 / 5090 (sm_120) 上，`ragflux` 的 `accurate` 模式与 `ragflow-skills` 的 `mineru-fastapi` 的 `hybrid-auto-engine` 后端都会崩溃。应使用 `pipeline` 或 `mineru-fastapi` 的 `pipeline` backend。
+RTX 5070 Ti / 5080 / 5090 (sm_120) 上，旧 `ragflux accurate` 本地路径高风险。`ragflow-skills`
+应优先用 `mineru-fastapi` 的 backend probe/warmup、`--table-quality auto|high` 和 fallback 报告判断，
+不要只按 GPU 型号硬禁 high-accuracy；不确定时先用 `pipeline` 或 `adaptive --decision-only` 生成 review。
 
 ### Pitfall #3: 认为 chunk marker 能阻止 RAGFlow 切表格
 

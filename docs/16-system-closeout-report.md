@@ -130,6 +130,24 @@ Periodic review cadence:
 - before implementing `serve`, a product adapter, an LLM/backend, or a private bridge;
 - before any public release candidate.
 
+## Post-Closeout Adaptive Checkpoint
+
+Checkpoint date: 2026-07-05
+
+Release-path maintenance added a deterministic adaptive formal-ingest helper without
+reopening gated product tracks:
+
+- `ragflow-doc-to-md inspect-source` emits `ragflow_document_features_v1` from lightweight
+  source sampling.
+- `ragflow-doc-to-md adaptive` emits `ragflow_pipeline_decision_v1` and
+  `ragflow_adaptive_pipeline_summary_v1`, can stop at `--decision-only`, or can reuse the
+  existing formal `pipeline`.
+- The summary includes offline review commands for `inspect-handoff`, `asset-upload-plan`,
+  and KB dry-run; it does not execute live RAGFlow mutation or script-owned LLM calls.
+- Schema identity, report surface inventory, generated Markdown audit, runtime resilience
+  inventory, consumer acceptance, and platform smoke coverage were updated for the new
+  command/report surface.
+
 ## Closeout Conclusion
 
 The project is no longer in a broad feature-construction phase. The current public suite

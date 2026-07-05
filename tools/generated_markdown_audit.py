@@ -21,10 +21,12 @@ MARKDOWN_REPORT_CATEGORIES = (
 )
 SANITIZED_MARKDOWN_VERIFIED_COMMANDS = (
     "ragflow-doc-to-md",
+    "ragflow-doc-to-md adaptive",
     "ragflow-doc-to-md backend probe",
     "ragflow-doc-to-md backend warmup",
     "ragflow-doc-to-md compare-retained-package",
     "ragflow-doc-to-md inspect",
+    "ragflow-doc-to-md inspect-source",
     "ragflow-kb-build activation-plan",
     "ragflow-kb-build benchmark delta",
     "ragflow-kb-build benchmark gate",

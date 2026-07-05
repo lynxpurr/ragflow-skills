@@ -117,10 +117,12 @@ QUERY_NOT_APPLICABLE_COMMANDS = (
 )
 DOC_COVERED_COMMANDS = (
     "ragflow-doc-to-md",
+    "ragflow-doc-to-md adaptive",
     "ragflow-doc-to-md backend probe",
     "ragflow-doc-to-md compare-retained-package",
     "ragflow-doc-to-md backend warmup",
     "ragflow-doc-to-md inspect",
+    "ragflow-doc-to-md inspect-source",
     "ragflow-doc-to-md postprocess",
     "ragflow-doc-to-md segment-plan",
     "ragflow-doc-to-md split",
@@ -314,11 +316,13 @@ def discover_public_commands(root: Path = ROOT) -> list[DiscoveredCommand]:
         parser=doc.build_parser(),
     )
     for prefix, builder in (
+        (("ragflow-doc-to-md", "inspect-source"), doc.build_inspect_source_parser),
         (("ragflow-doc-to-md", "inspect"), doc.build_inspect_parser),
         (("ragflow-doc-to-md", "segment-plan"), doc.build_segment_plan_parser),
         (("ragflow-doc-to-md", "split"), doc.build_split_parser),
         (("ragflow-doc-to-md", "package"), doc.build_package_parser),
         (("ragflow-doc-to-md", "postprocess"), doc.build_postprocess_parser),
+        (("ragflow-doc-to-md", "adaptive"), doc.build_adaptive_parser),
         (("ragflow-doc-to-md", "compare-retained-package"), doc.build_compare_retained_package_parser),
         (("ragflow-doc-to-md", "backend"), doc.build_backend_parser),
     ):

@@ -67,6 +67,8 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("doc-to-md backend probe", check_names)
         self.assertIn("doc-to-md backend probe partial failure", check_names)
         self.assertIn("doc-to-md backend warmup", check_names)
+        self.assertIn("doc-to-md adaptive decision-only", check_names)
+        self.assertIn("doc-to-md adaptive redaction", check_names)
         self.assertIn("doc-to-md split checkpoint", check_names)
         self.assertIn("doc-to-md split resume", check_names)
         self.assertIn("doc-to-md split redaction", check_names)

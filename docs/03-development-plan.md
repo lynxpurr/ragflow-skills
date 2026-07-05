@@ -49,6 +49,12 @@ Completed or closed for the current public command surface:
 - Phase 41 closes the current RAGFlux retirement field-trial gates for the representative
   PDF sample after GPU pressure was reduced, the full MinerU FastAPI pipeline passed, a
   disposable RAGFlow KB live E2E passed, and the KB was cleaned up.
+- The 2026-07-05 adaptive formal-ingest helper adds `ragflow-doc-to-md inspect-source`
+  and `ragflow-doc-to-md adaptive` as deterministic offline report surfaces. They generate
+  `ragflow_document_features_v1`, `ragflow_pipeline_decision_v1`, and
+  `ragflow_adaptive_pipeline_summary_v1`, then reuse the existing formal `pipeline` and
+  emit review commands for `inspect-handoff`, `asset-upload-plan`, and KB dry-run without
+  enabling script-owned LLM calls or live RAGFlow mutation.
 
 Partially completed and still active:
 

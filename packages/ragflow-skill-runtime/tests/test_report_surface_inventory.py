@@ -20,12 +20,12 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_report_surface_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 94)
+        self.assertEqual(report["summary"]["command_count"], 96)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
             {
-                "covered": 85,
+                "covered": 87,
                 "needs_redaction": 0,
                 "not_applicable": 9,
             },
@@ -53,6 +53,18 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
         self.assertEqual(doc_convert["status"], "covered")
         self.assertIn("runtime_report", doc_convert["output_categories"])
         self.assertIn("redaction_sidecar", doc_convert["output_categories"])
+
+        adaptive = by_command["ragflow-doc-to-md adaptive"]
+        self.assertEqual(adaptive["status"], "covered")
+        self.assertIn("json_report", adaptive["output_categories"])
+        self.assertIn("markdown_report", adaptive["output_categories"])
+        self.assertIn("redaction_sidecar", adaptive["output_categories"])
+
+        inspect_source = by_command["ragflow-doc-to-md inspect-source"]
+        self.assertEqual(inspect_source["status"], "covered")
+        self.assertIn("json_report", inspect_source["output_categories"])
+        self.assertIn("markdown_report", inspect_source["output_categories"])
+        self.assertIn("redaction_sidecar", inspect_source["output_categories"])
 
         split = by_command["ragflow-doc-to-md split"]
         self.assertEqual(split["status"], "covered")

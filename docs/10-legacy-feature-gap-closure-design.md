@@ -42,6 +42,10 @@ The current suite already implements a large part of the first roadmap:
 
 - Markdown passthrough, builtin conversion, remote conversion, MinerU Agent API,
   MinerU synchronous API, local MinerU CLI, and MinerU CLI asset handoff.
+- Adaptive source inspection and deterministic formal-ingest decisions via
+  `ragflow-doc-to-md inspect-source` and `ragflow-doc-to-md adaptive`, producing
+  JSON-first feature, decision, and summary reports while reusing the existing formal
+  pipeline and keeping LLM/live work disabled by default.
 - `doc_manifest.json`, quality gate, long-document segmentation plan/split, and local
   asset checks.
 - RAGFlow dataset creation, upload, parse polling, append, cleanup, probe, diagnose,

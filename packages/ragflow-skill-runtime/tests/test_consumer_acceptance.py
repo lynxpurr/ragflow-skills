@@ -93,6 +93,7 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertIn("doc-to-md backend warmup redaction", check_names)
         self.assertIn("doc-to-md inspect quality", check_names)
         self.assertIn("doc-to-md inspect redaction", check_names)
+        self.assertIn("doc-to-md adaptive decision-only", check_names)
         self.assertIn("doc-to-md segment plan", check_names)
         self.assertIn("doc-to-md segment plan redaction", check_names)
         self.assertIn("doc-to-md split", check_names)

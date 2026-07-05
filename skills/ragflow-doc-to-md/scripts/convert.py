@@ -33,14 +33,17 @@ def bootstrap_runtime() -> None:
 bootstrap_runtime()
 
 from ragflow_skill_runtime import (  # noqa: E402
+    ADAPTIVE_PIPELINE_SUMMARY_SCHEMA,
     ConvertedDocument,
     DEFAULT_HARD_MAX_CHARS,
     DEFAULT_MIN_SEGMENT_CHARS,
     DEFAULT_SOFT_MAX_CHARS,
+    DOCUMENT_FEATURES_SCHEMA,
     DocConvertError,
     DocQualityError,
     DocPostprocessError,
     DocSegmentError,
+    PIPELINE_DECISION_SCHEMA,
     QualityDocument,
     convert_source_to_markdown,
     create_rich_handoff_package,
@@ -48,11 +51,15 @@ from ragflow_skill_runtime import (  # noqa: E402
     discover_source_documents,
     extract_markdown_title,
     HandoffError,
+    inspect_source_document,
     load_doc_manifest_payload,
+    load_decision_overrides,
     load_skill_config,
+    make_adaptive_pipeline_summary,
     make_doc_manifest_payload,
     make_doc_runtime_report_payload,
     make_handoff_comparison_payload,
+    make_pipeline_decision,
     make_ragflow_ingest_plan_payload,
     make_quality_report_payload,
     materialize_segments,
@@ -60,11 +67,14 @@ from ragflow_skill_runtime import (  # noqa: E402
     postprocess_handoff,
     postprocess_single_markdown,
     probe_conversion_backends,
+    render_adaptive_pipeline_summary_markdown,
     quality_documents_from_manifest,
     render_backend_probe_markdown,
     render_backend_warmup_markdown,
+    render_document_features_markdown,
     render_doc_runtime_markdown,
     render_handoff_comparison_markdown,
+    render_pipeline_decision_markdown,
     render_quality_markdown,
     safe_markdown_name,
     sanitize_report_payload,
@@ -326,6 +336,16 @@ def _render_simple_yaml(value: Any, *, indent: int = 0) -> str:
 def _write_yaml_payload(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_render_simple_yaml(payload) + "\n", encoding="utf-8")
+
+
+def _write_json_payload(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _write_text_payload(path: Path, payload: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(payload, encoding="utf-8")
 
 
 def _safe_handoff_sidecar_name(value: str | None, *, label: str) -> str | None:
@@ -2406,6 +2426,231 @@ def _run_pipeline(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_inspect_source(args: argparse.Namespace) -> int:
+    try:
+        report = inspect_source_document(
+            args.input,
+            recursive=not args.no_recursive,
+            max_text_chars=args.max_text_chars,
+            max_binary_bytes=args.max_binary_bytes,
+        )
+        output_report = _sanitize_generated_report(
+            report,
+            args.redaction_report,
+            home_paths=[args.input, args.report_json, args.report_md, args.redaction_report],
+            config_paths=[args.input, args.report_json, args.report_md, args.redaction_report],
+        )
+        if args.report_json:
+            _write_json_payload(Path(args.report_json), output_report)
+        if args.report_md:
+            _write_text_payload(Path(args.report_md), render_document_features_markdown(output_report))
+        if args.json or not (args.report_json or args.report_md):
+            _dump_json(output_report)
+        return 0
+    except (DocConvertError, OSError, ValueError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
+def _capture_pipeline(args: argparse.Namespace) -> tuple[int, dict[str, Any], str]:
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        code = _run_pipeline(args)
+    raw = buffer.getvalue().strip()
+    payload: dict[str, Any] = {}
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                payload = parsed
+        except json.JSONDecodeError:
+            payload = {"ok": False, "raw_stdout": raw}
+    return code, payload, raw
+
+
+def _sanitize_adaptive_bundle(
+    *,
+    args: argparse.Namespace,
+    config: Any,
+    features: dict[str, Any],
+    decision: dict[str, Any],
+    summary: dict[str, Any] | None = None,
+    pipeline_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    bundle: dict[str, Any] = {"features": features, "decision": decision}
+    if summary is not None:
+        bundle["summary"] = summary
+    if pipeline_result is not None:
+        bundle["pipeline_result"] = pipeline_result
+    if not args.redaction_report:
+        return bundle
+    return _sanitize_generated_report(
+        bundle,
+        args.redaction_report,
+        explicit_secrets=[
+            args.remote_api_key,
+            args.mineru_api_key,
+            getattr(config.doc_to_md, "remote_api_key", None),
+            getattr(config.mineru, "api_key", None),
+        ],
+        url_candidates=[
+            args.remote_url,
+            args.mineru_base_url,
+            args.mineru_fastapi_server_url,
+            getattr(config.doc_to_md, "remote_url", None),
+            getattr(config.mineru, "base_url", None),
+            getattr(config.mineru, "fastapi_server_url", None),
+        ],
+        home_paths=[
+            args.input,
+            args.output,
+            args.config,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+            args.decision_override,
+        ],
+        config_paths=[
+            args.input,
+            args.output,
+            args.config,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+            args.features_report_name,
+            args.decision_report_name,
+            args.adaptive_summary_name,
+            args.decision_override,
+            os.environ.get("RAGFLOW_CONFIG"),
+        ],
+    )
+
+
+def _write_adaptive_reports(
+    *,
+    args: argparse.Namespace,
+    output_root: Path,
+    features: dict[str, Any],
+    decision: dict[str, Any],
+    summary: dict[str, Any],
+) -> dict[str, str | None]:
+    features_name = _safe_handoff_sidecar_name(args.features_report_name, label="--features-report-name")
+    decision_name = _safe_handoff_sidecar_name(args.decision_report_name, label="--decision-report-name")
+    summary_name = _safe_handoff_sidecar_name(args.adaptive_summary_name, label="--adaptive-summary-name")
+    features_path = output_root / (features_name or "document_features.json")
+    decision_path = output_root / (decision_name or "pipeline_decision.json")
+    summary_path = output_root / (summary_name or "adaptive_summary.json")
+    _write_json_payload(features_path, features)
+    _write_json_payload(decision_path, decision)
+    _write_json_payload(summary_path, summary)
+    if args.report_json:
+        _write_json_payload(Path(args.report_json), summary)
+    if args.report_md:
+        _write_text_payload(Path(args.report_md), render_adaptive_pipeline_summary_markdown(summary))
+    return {
+        "features_report": str(features_path),
+        "decision_report": str(decision_path),
+        "adaptive_summary": str(summary_path),
+        "report_json": args.report_json,
+        "report_md": args.report_md,
+    }
+
+
+def _run_adaptive(args: argparse.Namespace) -> int:
+    try:
+        output_root = Path(args.output).expanduser().resolve()
+        output_root.mkdir(parents=True, exist_ok=True)
+        config = load_skill_config(config_file=args.config)
+        configured_backend = _backend(args, config)
+        configured_table_quality = args.table_quality or getattr(config.doc_to_md, "table_quality", None)
+        configured_asset_mode = args.mineru_asset_mode or getattr(config.mineru, "asset_mode", None)
+        configured_fastapi_backend = (
+            args.mineru_fastapi_backend
+            or getattr(config.mineru, "fastapi_backend", None)
+            or None
+        )
+        allow_fallback = _allow_table_quality_fallback(args, config)
+        features = inspect_source_document(
+            args.input,
+            recursive=not args.no_recursive,
+            max_text_chars=args.max_text_chars,
+            max_binary_bytes=args.max_binary_bytes,
+        )
+        decision = make_pipeline_decision(
+            features,
+            requested_backend=configured_backend,
+            requested_table_quality=configured_table_quality,
+            requested_postprocess_profile=args.postprocess_profile,
+            requested_mineru_fastapi_backend=configured_fastapi_backend,
+            requested_mineru_asset_mode=configured_asset_mode,
+            policy=args.adaptive_policy,
+            backend_probe_status=args.backend_probe_status,
+            allow_table_quality_fallback=allow_fallback,
+            decision_overrides=load_decision_overrides(args.decision_override),
+        )
+        recommendation = decision.get("recommendation", {}) if isinstance(decision.get("recommendation"), dict) else {}
+        run_args = argparse.Namespace(**vars(args))
+        run_args.backend = recommendation.get("backend") or configured_backend
+        run_args.table_quality = recommendation.get("table_quality") or configured_table_quality
+        run_args.postprocess_profile = recommendation.get("postprocess_profile") or args.postprocess_profile
+        run_args.mineru_asset_mode = recommendation.get("mineru_asset_mode") or configured_asset_mode
+        run_args.mineru_fastapi_backend = recommendation.get("mineru_fastapi_backend") or configured_fastapi_backend
+        run_args.allow_table_quality_fallback = bool(recommendation.get("allow_table_quality_fallback"))
+
+        pipeline_result: dict[str, Any] = {}
+        pipeline_raw = ""
+        pipeline_code: int | None = None
+        if not args.decision_only:
+            pipeline_code, pipeline_result, pipeline_raw = _capture_pipeline(run_args)
+        summary = make_adaptive_pipeline_summary(
+            features=features,
+            decision=decision,
+            pipeline_result=pipeline_result if pipeline_result else None,
+            pipeline_exit_code=pipeline_code,
+            handoff_root=output_root,
+        )
+        sanitized = _sanitize_adaptive_bundle(
+            args=args,
+            config=config,
+            features=features,
+            decision=decision,
+            summary=summary,
+            pipeline_result=pipeline_result if pipeline_result else None,
+        )
+        features = sanitized.get("features", features)
+        decision = sanitized.get("decision", decision)
+        summary = sanitized.get("summary", summary)
+        pipeline_result = sanitized.get("pipeline_result", pipeline_result)
+        paths = _write_adaptive_reports(
+            args=args,
+            output_root=output_root,
+            features=features,
+            decision=decision,
+            summary=summary,
+        )
+        response = {
+            "ok": bool(summary.get("ok", True)) and (pipeline_code in (None, 0)),
+            "decision_only": bool(args.decision_only),
+            "schemas": {
+                "features": DOCUMENT_FEATURES_SCHEMA,
+                "decision": PIPELINE_DECISION_SCHEMA,
+                "summary": ADAPTIVE_PIPELINE_SUMMARY_SCHEMA,
+            },
+            "paths": paths,
+            "features": features,
+            "decision": decision,
+            "adaptive_summary": summary,
+        }
+        if pipeline_result:
+            response["pipeline"] = pipeline_result
+        elif pipeline_raw:
+            response["pipeline"] = {"raw_stdout": pipeline_raw}
+        if args.json or args.decision_only:
+            _dump_json(response)
+        return 0 if pipeline_code in (None, 0) else int(pipeline_code)
+    except (DocConvertError, DocPostprocessError, DocQualityError, HandoffError, OSError, ValueError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _run_inspect(args: argparse.Namespace) -> int:
     try:
         manifest = load_doc_manifest_payload(args.doc_manifest)
@@ -3059,7 +3304,7 @@ def build_backend_parser() -> argparse.ArgumentParser:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Convert documents into a Markdown handoff bundle",
-        epilog="Commands: pipeline, compare-retained-package, backend probe, backend warmup, inspect, segment-plan, split.",
+        epilog="Commands: adaptive, inspect-source, pipeline, compare-retained-package, backend probe, backend warmup, inspect, segment-plan, split.",
     )
     parser.add_argument("--input", required=True, help="Input file or directory")
     parser.add_argument("--output", required=True, help="Output handoff directory")
@@ -3099,6 +3344,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_inspect_source_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Inspect source documents before conversion")
+    parser.add_argument("--input", required=True, help="Input file or directory")
+    parser.add_argument("--no-recursive", action="store_true", help="Do not recurse into input directories")
+    parser.add_argument("--max-text-chars", type=int, default=20000, help="Maximum UTF-8 text characters sampled per builtin source")
+    parser.add_argument("--max-binary-bytes", type=int, default=2 * 1024 * 1024, help="Maximum binary bytes sampled per PDF source")
+    parser.add_argument("--report-json", help="Optional document_features JSON report path")
+    parser.add_argument("--report-md", help="Optional document_features Markdown report path")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    parser.add_argument("--json", action="store_true", help="Emit JSON")
+    return parser
+
+
 def build_pipeline_parser() -> argparse.ArgumentParser:
     parser = build_parser()
     parser.description = "Run convert -> postprocess -> rich package -> non-secret ingest plan"
@@ -3117,6 +3375,23 @@ def build_pipeline_parser() -> argparse.ArgumentParser:
     parser.add_argument("--package-readme-name", default="package_readme.md", help="Rich package README sidecar name")
     parser.add_argument("--ingest-plan-name", default="ragflow_ingest_plan.yaml", help="Non-secret RAGFlow ingest plan sidecar name")
     parser.add_argument("--ragflow-config-alias", help="Optional non-secret compatibility alias such as ragflow_config.yaml")
+    return parser
+
+
+def build_adaptive_parser() -> argparse.ArgumentParser:
+    parser = build_pipeline_parser()
+    parser.description = "Inspect sources, choose deterministic pipeline settings, and optionally run formal pipeline"
+    parser.add_argument("--adaptive-policy", choices=["formal", "fast-preview", "table-atomic"], default="formal", help="Adaptive decision policy")
+    parser.add_argument("--decision-only", action="store_true", help="Write features, decision, and summary reports without running pipeline")
+    parser.add_argument("--decision-override", help="Optional JSON object overriding adaptive backend/table/profile choices")
+    parser.add_argument("--backend-probe-status", default="not_run", help="Optional prior backend probe status such as available, timeout, missing, or not_run")
+    parser.add_argument("--max-text-chars", type=int, default=20000, help="Maximum UTF-8 text characters sampled per builtin source")
+    parser.add_argument("--max-binary-bytes", type=int, default=2 * 1024 * 1024, help="Maximum binary bytes sampled per PDF source")
+    parser.add_argument("--features-report-name", default="document_features.json", help="Adaptive source-feature sidecar name under output")
+    parser.add_argument("--decision-report-name", default="pipeline_decision.json", help="Adaptive pipeline-decision sidecar name under output")
+    parser.add_argument("--adaptive-summary-name", default="adaptive_summary.json", help="Adaptive summary sidecar name under output")
+    parser.add_argument("--report-json", help="Optional adaptive summary JSON report path")
+    parser.add_argument("--report-md", help="Optional adaptive summary Markdown report path")
     return parser
 
 
@@ -3146,6 +3421,8 @@ def main(argv: list[str] | None = None) -> int:
     if actual_argv:
         command = actual_argv[0]
         command_args = actual_argv[1:]
+        if command == "inspect-source":
+            return _run_inspect_source(build_inspect_source_parser().parse_args(command_args))
         if command == "inspect":
             return _run_inspect(build_inspect_parser().parse_args(command_args))
         if command == "segment-plan":
@@ -3156,6 +3433,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_package(build_package_parser().parse_args(command_args))
         if command == "postprocess":
             return _run_postprocess(build_postprocess_parser().parse_args(command_args))
+        if command == "adaptive":
+            return _run_adaptive(build_adaptive_parser().parse_args(command_args))
         if command == "pipeline":
             return _run_pipeline(build_pipeline_parser().parse_args(command_args))
         if command == "compare-retained-package":

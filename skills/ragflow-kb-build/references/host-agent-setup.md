@@ -149,6 +149,23 @@ For complex table documents on MinerU FastAPI, add `--table-quality high` for an
 high-accuracy pass, or `--table-quality auto` when the host should promote only formal
 PDF/Office/image candidates.
 
+When the source shape is unknown, run the deterministic adaptive entrypoint first. Use
+`--decision-only` when the user wants to review parameters before conversion:
+
+```bash
+python ragflow-doc-to-md/scripts/convert.py adaptive \
+  --input /path/to/source-docs \
+  --output /tmp/ragflow-skills-handoff \
+  --decision-only \
+  --report-json /tmp/ragflow-skills-handoff/adaptive_summary.json \
+  --redaction-report /tmp/ragflow-skills-handoff/adaptive_summary.redaction.json \
+  --json
+```
+
+Without `--decision-only`, `adaptive` reuses the formal pipeline and writes
+`document_features.json`, `pipeline_decision.json`, and `adaptive_summary.json` into the
+handoff. It does not call an LLM or execute live RAGFlow mutation.
+
 Expected result: stdout and `doc_manifest.json` contain `handoff_mode:
 formal_ingest`; the handoff contains `doc_manifest.json`, `quality_report.json`,
 `runtime_report.json` when applicable, `postprocess_report.json`,

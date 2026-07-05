@@ -2425,6 +2425,45 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "error": comparison_error,
         }
     )
+    adaptive_input = workspace / "adaptive-input"
+    adaptive_input.mkdir(parents=True, exist_ok=True)
+    (adaptive_input / "table.md").write_text(
+        "# Adaptive\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n",
+        encoding="utf-8",
+    )
+    adaptive_output = workspace / "adaptive-handoff"
+    adaptive_result = _run_command(
+        [
+            sys.executable,
+            str(convert_script),
+            "adaptive",
+            "--input",
+            str(adaptive_input),
+            "--output",
+            str(adaptive_output),
+            "--decision-only",
+            "--report-json",
+            str(artifacts_dir / "adaptive_summary.json"),
+            "--report-md",
+            str(artifacts_dir / "adaptive_summary.md"),
+            "--redaction-report",
+            str(artifacts_dir / "adaptive_summary.redaction.json"),
+            "--json",
+        ],
+        cwd=workspace,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "doc-to-md adaptive decision-only",
+        adaptive_result,
+        required_stdout='"schema": "ragflow_adaptive_pipeline_summary_v1"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "doc-to-md adaptive redaction",
+        artifacts_dir / "adaptive_summary.redaction.json",
+    )
     postprocess_dir = workspace / "postprocessed-handoff"
     postprocess_redaction = workspace / "postprocess_redaction.json"
     postprocess_result = _run_command(
