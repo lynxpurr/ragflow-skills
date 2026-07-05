@@ -72,7 +72,7 @@ python scripts/convert.py pipeline \
   --postprocess-profile chunk-markers-dense
 ```
 
-自适应入口：
+自适应入口（inspect → decide → pipeline 一键）：
 
 ```bash
 python scripts/convert.py adaptive \
@@ -80,6 +80,8 @@ python scripts/convert.py adaptive \
   --output ./handoff \
   --backend mineru-fastapi \
   --mineru-base-url https://mineru.example.internal \
+  --adaptive-policy table-atomic \
+  --postprocess-profile chunk-markers-dense \
   --json
 ```
 
@@ -88,10 +90,26 @@ python scripts/convert.py adaptive \
 ```bash
 python scripts/convert.py adaptive \
   --input ./raw \
-  --output ./handoff \
+  --output ./run \
   --decision-only \
-  --report-json ./run/adaptive_summary.json \
-  --redaction-report ./run/adaptive_summary.redaction.json \
+  --backend mineru-fastapi \
+  --adaptive-policy table-atomic \
+  --json
+```
+
+先 inspect 再单独决策：
+
+```bash
+python scripts/convert.py inspect-source \
+  --input ./raw \
+  --report-json ./run/document_features.json \
+  --report-md ./run/document_features.md
+
+python scripts/convert.py adaptive \
+  --input ./raw \
+  --output ./run \
+  --decision-only \
+  --adaptive-policy table-atomic \
   --json
 ```
 
@@ -187,6 +205,37 @@ chunk marker 是**提示性边界**，不是**硬约束**。RAGFlow 的 chunker 
 
 `chunk-build` 单次处理 ≥5 文件可能超时（约 600 秒），导致 KB 碎片。大批量应分步：RAGFlow API 逐文件上传 → 一次性触发 parse。详见 `ragflow-kb-ops` skill。
 
+### Pitfall #5: 混淆 adaptive 命令的 inspect-source / decision-only 参数
+
+`inspect-source` 不是 `--output`，而是 `--report-json` 和 `--report-md`：
+
+```bash
+python scripts/convert.py inspect-source \
+  --input ./raw \
+  --report-json ./run/document_features.json \
+  --report-md ./run/document_features.md
+```
+
+`adaptive --decision-only` 没有 `--mode decision-only`，参数就是 `--decision-only`：
+
+```bash
+python scripts/convert.py adaptive \
+  --input ./raw \
+  --output ./run \
+  --decision-only \
+  --adaptive-policy table-atomic
+```
+
+### Pitfall #6: 认为 base64 内嵌图片会被语义化重命名
+
+`semantic_rename_markdown_images` 只处理**本地不透明 hash 文件名**（如 `images/6a1b2c3d...png`）。
+**base64 内嵌图片**（`data:image/png;base64,...`）不会触发重命名，因为没有独立文件路径。
+
+### Pitfall #7: 把 adaptive pipeline 的决策报告等同于强制配置
+
+`adaptive --decision-only` 输出 `pipeline_decision.json`，但 pipeline 执行时仍受显式参数覆盖。
+要让 `adaptive` 自动执行推荐配置，用完整命令；要人工 review，用 `--decision-only` 读 `recommendation` 字段后再决定。
+
 ## 常用验证命令
 
 ```bash
@@ -216,3 +265,4 @@ print(out.count('<!-- chunk -->'))
 - Skill: `rag-systems` — RAG 系统总览
 - Reference: `references/ragflow-skills-table-atomicity.md` — chunk marker / table 原子性实测记录
 - Reference: `references/ragflow-skills-vs-ragflux-vs-kb-ops.md` — 三套管线对比表
+- Reference: `references/ragflow-skills-adaptive-pipeline-guide.md` — adaptive pipeline 端到端使用指南
