@@ -186,6 +186,13 @@ python ragflow-kb-build/scripts/build.py inspect-handoff \
   --report-json /tmp/ragflow-skills-handoff/inspection.json \
   --report-md /tmp/ragflow-skills-handoff/inspection.md
 
+python ragflow-kb-build/scripts/build.py asset-upload-plan \
+  --doc-manifest /tmp/ragflow-skills-handoff/doc_manifest.json \
+  --report-json /tmp/ragflow-skills-handoff/asset_upload_plan.json \
+  --report-md /tmp/ragflow-skills-handoff/asset_upload_plan.md \
+  --package-zip /tmp/ragflow-skills-handoff/asset_upload_package.zip \
+  --json
+
 python ragflow-kb-build/scripts/build.py \
   --doc-manifest /tmp/ragflow-skills-handoff/doc_manifest.json \
   --kb-name kb:reviewed-name \

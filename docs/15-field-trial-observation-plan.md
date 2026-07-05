@@ -338,9 +338,9 @@ Results:
 Friction:
 - Complex-table warnings remain intentionally conservative. They should drive human review
   before live KB creation, not force a fallback to the lower-quality pipeline backend.
-- KB-side upload packaging for Markdown plus local images remains a separate
-  `ragflow-kb-build` live-mutation design question; this run only validates conversion,
-  handoff inspection, and dry-run readiness.
+- KB-side upload packaging for Markdown plus local images now has an offline
+  `ragflow-kb-build asset-upload-plan` review path; live package upload remains a
+  separate mutation-gated design question.
 
 Gated trigger:
 - none for new product surface. The current CLI pipeline is sufficient for high-quality

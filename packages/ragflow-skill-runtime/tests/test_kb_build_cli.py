@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -821,6 +822,78 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["handoff"]["retrieval_hint_count"], 1)
         self.assertEqual(payload["handoff"]["assistant_test_count"], 1)
         self.assertIn("RAGFlow Handoff Inspection", report_md_text)
+
+    def test_asset_upload_plan_via_build_subcommand(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = Path(tmp) / "handoff"
+            image_dir = handoff / "documents" / "images"
+            image_dir.mkdir(parents=True)
+            (handoff / "documents" / "sample.md").write_text(
+                "# Sample\n\n![asset](images/asset.png)\n",
+                encoding="utf-8",
+            )
+            (image_dir / "asset.png").write_bytes(b"image-bytes")
+            doc_manifest = handoff / "doc_manifest.json"
+            doc_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [{"source_path": "sample.pdf", "markdown_path": "documents/sample.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (handoff / "retrieval_hints.json").write_text(
+                json.dumps({"schema": "ragflow_retrieval_hints_v1"}),
+                encoding="utf-8",
+            )
+            report_json = Path(tmp) / "asset_upload_plan.json"
+            report_md = Path(tmp) / "asset_upload_plan.md"
+            redaction_report = Path(tmp) / "asset_upload_plan.redaction.json"
+            package_zip = Path(tmp) / "asset_upload_package.zip"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "asset-upload-plan",
+                    "--doc-manifest",
+                    str(doc_manifest),
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                    "--redaction-report",
+                    str(redaction_report),
+                    "--package-zip",
+                    str(package_zip),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+            report_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            redaction_payload = json.loads(redaction_report.read_text(encoding="utf-8"))
+            md_text = report_md.read_text(encoding="utf-8")
+            with zipfile.ZipFile(package_zip) as archive:
+                names = set(archive.namelist())
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["schema"], "ragflow_kb_asset_upload_plan_v1")
+        self.assertEqual(report_payload["summary"]["planned_image_file_count"], 1)
+        self.assertEqual(report_payload["summary"]["missing_image_count"], 0)
+        self.assertFalse(report_payload["live_upload_enabled"])
+        self.assertEqual(report_payload["ragflow_calls"], 0)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertIn("# RAGFlow KB Asset Upload Plan", md_text)
+        self.assertIn("documents/sample.md", names)
+        self.assertIn("documents/images/asset.png", names)
+        self.assertIn("doc_manifest.json", names)
+        self.assertIn("retrieval_hints.json", names)
 
     def test_metadata_governance_subcommands_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

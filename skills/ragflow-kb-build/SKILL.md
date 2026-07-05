@@ -24,6 +24,7 @@ python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --metadata ./
 python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-en-768.json --allow-blocked
 python scripts/build.py model-providers probe --config /path/to/ragflow-config.local.yaml --embedding-model bge-m3 --rerank-model bge-reranker --embedding-adapter-url https://embedding.example/v1/embeddings --rerank-adapter-url https://rerank.example/rerank --report-md ./run/model_provider_probe.md --redaction-report ./run/model_provider_redaction.json --json
 python scripts/build.py inspect-handoff --handoff ./handoff --report-md ./run/handoff_inspection.md
+python scripts/build.py asset-upload-plan --doc-manifest ./handoff/doc_manifest.json --report-json ./run/asset_upload_plan.json --report-md ./run/asset_upload_plan.md --package-zip ./run/asset_upload_package.zip --json
 python scripts/build.py metadata generate-template --doc-manifest ./handoff/doc_manifest.json --output ./run/metadata.template.json
 python scripts/build.py metadata lint --metadata ./run/metadata.template.json --report-md ./run/metadata_lint.md
 python scripts/build.py metadata merge --doc-manifest ./handoff/doc_manifest.json --handoff-metadata ./handoff/metadata.json --metadata ./run/metadata.template.json --output ./run/metadata.merged.json
@@ -88,6 +89,7 @@ Notes:
 - Use `--dry-run` to validate local inputs without touching RAGFlow; dry-run prints JSON and does not write `kb_manifest.json`.
 - Use `--no-wait` only when the host platform should continue while RAGFlow parses asynchronously.
 - When `ragflow-doc-to-md pipeline` produced the handoff, review `ragflow_ingest_plan.yaml`, `profile_suggestions.json`, and `retrieval_hints.json`, then run `build.py --dry-run` against `doc_manifest.json` before any live build. Use `inspect-handoff` first to check sidecar completeness, image assets, and ingestion readiness.
+- Use `asset-upload-plan` to review a non-live Markdown plus local image package plan before upload; it reports missing images, orphan images, sidecars, package paths, and optional local zip contents without calling RAGFlow.
 - When replacing a legacy ingestion workflow, treat `ragflow_ingest_plan.yaml` as the non-secret handoff guide, not as a private RAGFlow config file. Live build still requires user-reviewed credentials, profile choice, quality gate readiness, and explicit approval.
 - Use `model-providers probe` before live builds to check read-only RAGFlow model-provider endpoints, optional expected embedding/rerank model names, explicit adapter empty-input request shapes, and optional `--redaction-report` sidecars without creating datasets.
 - Use `inspect-handoff` before upload when a `ragflow-doc-to-md package --rich` handoff includes optional sidecars.

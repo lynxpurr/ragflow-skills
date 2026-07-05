@@ -37,6 +37,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     build_runtime_metrics_summary,
     build_runtime_partial_failure_report,
     create_grounded_qa_suggestion_request,
+    create_kb_asset_upload_plan,
     create_metadata_suggestion_request,
     create_optimization_cleanup_plan,
     create_optimization_live_readiness_report,
@@ -85,6 +86,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     segment_metadata_report_file,
     render_activation_plan_markdown,
     render_apollo_table_qa_markdown,
+    render_kb_asset_upload_plan_markdown,
     render_split_plan_markdown,
     render_topology_advice_markdown,
     render_optimization_plan_markdown,
@@ -104,6 +106,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     validate_apollo_table_qa_fixture,
     validate_grounded_qa,
     wait_for_document_states,
+    write_kb_asset_upload_zip,
     run_retrieval_validation,
     sanitize_report_payload,
 )
@@ -902,6 +905,30 @@ def _run_inspect_handoff(args: argparse.Namespace) -> int:
         _dump_json({"ok": True, "handoff": report})
         return 0
     except (HandoffError, OSError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
+def _run_asset_upload_plan(args: argparse.Namespace) -> int:
+    try:
+        report = create_kb_asset_upload_plan(
+            doc_manifest_path=args.doc_manifest,
+            include_sidecars=not args.no_sidecars,
+        )
+        if args.package_zip:
+            report["package_zip"] = write_kb_asset_upload_zip(report, output_path=args.package_zip)
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[args.doc_manifest],
+                output_paths=[args.report_json, args.report_md, args.redaction_report, args.package_zip],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_kb_asset_upload_plan_markdown(report))
+        _dump_json(report)
+        return 0 if report.get("status") != "blocked" else 1
+    except (BuildError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=args.json)
 
 
@@ -2440,6 +2467,18 @@ def build_inspect_handoff_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_asset_upload_plan_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Plan a non-live Markdown plus local image upload package")
+    parser.add_argument("--doc-manifest", required=True, help="Path to doc_manifest.json")
+    parser.add_argument("--report-json", help="Optional JSON upload plan path")
+    parser.add_argument("--report-md", help="Optional Markdown upload plan path")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    parser.add_argument("--package-zip", help="Optional local zip package to materialize from the plan")
+    parser.add_argument("--no-sidecars", action="store_true", help="Do not include existing rich handoff sidecars in the package plan")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    return parser
+
+
 def build_model_providers_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Probe RAGFlow model-provider registration without mutating KBs")
     subparsers = parser.add_subparsers(dest="model_providers_command", required=True)
@@ -3099,6 +3138,8 @@ def main(argv: list[str] | None = None) -> int:
         command_args = actual_argv[1:]
         if command == "inspect-handoff":
             return _run_inspect_handoff(build_inspect_handoff_parser().parse_args(command_args))
+        if command == "asset-upload-plan":
+            return _run_asset_upload_plan(build_asset_upload_plan_parser().parse_args(command_args))
         if command == "model-providers":
             model_provider_args = build_model_providers_parser().parse_args(command_args)
             return model_provider_args.func(model_provider_args)

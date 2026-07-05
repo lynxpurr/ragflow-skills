@@ -328,3 +328,21 @@ ragflow-kb-build --doc-manifest <handoff>/doc_manifest.json --profile <reviewed-
   喂给 `table-strategy`，才能得到完整 16 问策略命中率报告。
 - 该报告目前只生成 query expansion 和离线对比计划；后续如需自动执行真实 RAGFlow 检索，仍需沿用
   现有 live mutation/query gate 与显式批准。
+
+同日继续推进了 P1 KB 侧 Markdown+images 上传包 dry-run：
+
+- 新增 `ragflow_kb_asset_upload_plan_v1`，由 `ragflow-kb-build asset-upload-plan` 离线生成。
+- 输入为 `doc_manifest.json`；报告读取 Markdown 图片引用和 doc_manifest `assets.images`，列出预计进入包的
+  Markdown、图片和 rich handoff sidecar。
+- 报告会标记 `offline_only=true`、`live_upload_enabled=false`、`llm_calls=0`、`ragflow_calls=0`，
+  不创建 KB、不上传 RAGFlow、不触发 parse。
+- dry-run 能报告缺失图片、逃逸 handoff root 的图片、远程图片引用、孤儿图片、包内相对路径和预计上传文件。
+- 可选 `--package-zip` 只在本地物化 zip 包，便于 host agent 或后续 fake-client 测试检查包内容；live 上传仍需沿用
+  现有 mutation gate、cleanup 规则和显式批准。
+- schema identity gate 已登记新增报告 schema，避免后续 release hygiene 漏检。
+
+当前仍未关闭的 P1 条目：
+
+- 该上传包目前只完成离线计划和本地 zip 物化；如需真正让 RAGFlow live 接收 Markdown+images 包，还需要先确认
+  目标 RAGFlow 上传 API 是否支持 zip/批量资产语义，并通过 fake-client 与明确 live gate 推进。
+- 父 chunk 上限与表格原子性预检、host-agent 表格入库指引仍可作为后续离线小片继续推进。

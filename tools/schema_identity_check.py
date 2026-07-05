@@ -80,6 +80,14 @@ EXPECTED_IDENTITIES = (
         description="Versioned KB handoff manifest written as kb_manifest.json.",
     ),
     SchemaIdentity(
+        key="kb_asset_upload_plan",
+        group="kb_build",
+        identity="ragflow_kb_asset_upload_plan_v1",
+        source_patterns=("ragflow_kb_asset_upload_plan_v1", "KB_ASSET_UPLOAD_PLAN_SCHEMA"),
+        coverage_patterns=("ragflow_kb_asset_upload_plan_v1", "KB_ASSET_UPLOAD_PLAN_SCHEMA"),
+        description="No-live Markdown plus local image asset upload package dry-run report.",
+    ),
+    SchemaIdentity(
         key="doc_quality_report",
         group="quality",
         identity="doc_quality_report_v1",
