@@ -518,16 +518,20 @@ python scripts/convert.py pipeline \
 - **`auto` 策略触发条件**：当前主要基于正式候选文件类型提升。后续可接入上一轮 quality warning、
   content-list `complex_table` 信号、表格密度、数字/单位密度和用户意图提示，让自动提升更精确。
 - **超大表格原子性**：`chunk-markers-dense` 和 delimiter 可以保护普通表格边界，但如果 RAGFlow 部署的
-  `chunk_token_num` 上限偏小，超大表格仍可能被服务端二次切分。需要在入库前用
-  `chunk_marker_table_atomicity`、table cell count 和 table char ratio 标记人工复核或 profile 上限风险。
+  `chunk_token_num` 上限偏小，超大表格仍可能被服务端二次切分。docs/22 后续已补充
+  `table_parent_chunk_preflight`、表格 token 估算和小父 chunk profile warning；后续风险主要是
+  live 部署实际上限与服务端二次切分行为仍需现场验证。
 - **复杂 HTML 结构语义**：rowspan/colspan、多级表头、公式符号和单位关系仍主要取决于上游 MinerU 解析。
-  后续可增加更细的 per-table 结构评分、表头层级摘要、单位列检测，以及对 row/colspan 异常的 review hints。
+  docs/22 后续已补充 per-table 结构风险评分、表头层级摘要输入、`semantic_risks` 和 review hints；
+  剩余风险是这些 hints 只能提示人工或 host agent 复核，不能无损修复错误的上游表格结构。
 - **表格问答准确率**：APOLLO 类规格表中，表头别名、型号族、单位符号和跨表对比仍可能导致检索或回答误判。
-  后续应基于人工审核的问题集维护小型 table QA regression，而不是只看 Markdown/table count。
+  docs/22 后续已补充 `apollo_table_qa_fixture_v1`、离线 evaluate、no-LLM table strategy report 和外部
+  judge request/review 边界；完整 16 问填充仍需在私有侧脱敏后执行。
 - **图片与表格联合证据**：复杂产品数据页经常需要图片、表格、caption 和页面上下文共同解释。后续可加强
   `retrieval_hints` 中 table artifact 与 image artifact 的同页/同标题关联，辅助 KB profile 和查询阶段引用。
-- **KB 侧 zip/资产上传策略**：`ragflow-doc-to-md` 已能产出 Markdown assets 和 rich handoff，但是否用 zip
-  或 API 批量携带图片资产入库仍属于 `ragflow-kb-build` 的单独 live mutation 设计问题，需要另起方案并经过批准。
+- **KB 侧 zip/资产上传策略**：`ragflow-doc-to-md` 已能产出 Markdown assets 和 rich handoff，docs/22 后续已补充
+  `ragflow_kb_asset_upload_plan_v1` 和本地 zip 物化。真正用 zip 或 API 批量携带图片资产 live 入库仍属于
+  `ragflow-kb-build` 的单独 live mutation 设计问题，需要确认 API 语义、fake-client 覆盖并经过批准。
 - **Live RAGFlow 端到端验证**：本轮只把代表样本的 high-accuracy 转换、handoff、inspect 和 dry-run 路径跑通。
   真正的 live KB 创建、解析、查询和清理仍需显式批准，并应记录为脱敏 field-trial evidence。
 - **跨文档/跨版本回归矩阵**：除代表产品数据页外，还应持续收集扫描件、财报、论文、长合同、图片密集文档和

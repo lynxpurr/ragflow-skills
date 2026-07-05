@@ -35,7 +35,8 @@ script-owned LLM 评估。
 
 - APOLLO LLM QA 失败主要已经从“是否能生成 marker”转为“表格语义是否能被检索和回答正确使用”：
   表头术语别名、row/colspan 对齐、跨表比较、多跳召回和 judge 校正仍会影响真实问答。
-- KB 侧仍只上传 Markdown 文件本身，没有自动把 Markdown 引用的本地图片资产一起打包或上传。
+- KB live build 路径仍只上传 Markdown 文件本身；当前已具备 Markdown+图片的离线上传包计划和本地 zip
+  物化，但没有默认执行 live 资产上传。
 - 当前 APOLLO 16 问评估仍是私有运行产物，没有被整理成可复用、脱敏、无 live mutation 的
   regression fixture。
 - RAGFlow 部署的父 chunk 上限如果低于表格所需长度，delimiter 只能保护边界，不能保证超大表格
@@ -53,17 +54,30 @@ script-owned LLM 评估。
   - `packages/ragflow-skill-runtime/src/ragflow_skill_runtime/doc_postprocess.py`
   - `packages/ragflow-skill-runtime/src/ragflow_skill_runtime/doc_quality.py`
   - `packages/ragflow-skill-runtime/src/ragflow_skill_runtime/handoff.py`
+  - `packages/ragflow-skill-runtime/src/ragflow_skill_runtime/apollo_qa.py`
+  - `packages/ragflow-skill-runtime/src/ragflow_skill_runtime/kb_build.py`
+  - `packages/ragflow-skill-runtime/src/ragflow_skill_runtime/query_table_strategy.py`
   - `packages/ragflow-skill-runtime/src/ragflow_skill_runtime/profiles.py`
   - `packages/ragflow-skill-runtime/src/ragflow_skill_runtime/ragflow_client.py`
   - `skills/ragflow-kb-build/scripts/build.py`
+  - `skills/ragflow-query/scripts/query.py`
+  - `tools/schema_identity_check.py`
+  - `tools/report_surface_inventory.py`
+  - `tools/generated_markdown_audit.py`
 - 相关测试：
   - `packages/ragflow-skill-runtime/tests/test_doc_convert.py`
   - `packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py`
   - `packages/ragflow-skill-runtime/tests/test_doc_postprocess.py`
   - `packages/ragflow-skill-runtime/tests/test_handoff.py`
   - `packages/ragflow-skill-runtime/tests/test_profiles.py`
+  - `packages/ragflow-skill-runtime/tests/test_apollo_qa.py`
   - `packages/ragflow-skill-runtime/tests/test_kb_build.py`
   - `packages/ragflow-skill-runtime/tests/test_kb_build_cli.py`
+  - `packages/ragflow-skill-runtime/tests/test_query_table_strategy.py`
+  - `packages/ragflow-skill-runtime/tests/test_query_cli.py`
+  - `packages/ragflow-skill-runtime/tests/test_schema_identity_check.py`
+  - `packages/ragflow-skill-runtime/tests/test_report_surface_inventory.py`
+  - `packages/ragflow-skill-runtime/tests/test_runtime_resilience_inventory.py`
 - 私有 APOLLO 评估产物名：
   - `2026-07-04-mineru-hybrid-auto-vs-pipeline-table-quality`
   - `2026-07-04-ragflow-apollo-fastapi-table-atomic`
@@ -86,8 +100,8 @@ APOLLO 问题不再应描述为“`ragflow-doc-to-md` 固定 pipeline、缺少 c
 | --- | --- | --- |
 | 上游解析 | `table-quality high/auto` 可选择 hybrid/VLM 类 backend；APOLLO 证据显示 hybrid 表头分层与温度符号更好 | 术语符号、row/colspan、多级表头仍可能对 LLM 不透明；pipeline 的表1/表2混淆不应靠下游硬修 |
 | Markdown 后处理 | OCR cleanup 已 table-safe；dense marker 会在表格边界插入 marker | 旧报告中的“直接改写表头”不宜作为通用默认，应改为可审阅别名/语义 sidecar |
-| RAGFlow 入库 | profile suggestion 已给出 delimiter、较大父 chunk 和避免 child delimiter 的建议 | KB build 仍未携带本地图片资产；部署上限较小时，超大表格仍可能被二次切分 |
-| 查询与评估 | 纯检索能证明答案常在 top chunks 中；LLM 生成式评估更暴露真实错读 | 跨表比较、术语别名、row/colspan 读取、严格字符串 judge 都会造成真实 QA 失败或误判 |
+| RAGFlow 入库 | profile suggestion 已给出 delimiter、较大父 chunk 和避免 child delimiter 的建议；KB 侧已有离线 asset upload plan/zip 物化和父 chunk 预检 | live build 仍未默认携带本地图片资产；部署上限较小时，超大表格仍可能被二次切分 |
+| 查询与评估 | 纯检索能证明答案常在 top chunks 中；已具备 no-LLM table strategy report 与外部 judge request/review 边界 | 完整 16 问仍需私有侧脱敏 fixture 和 saved result；row/colspan 读取、跨表答案合成和严格 judge 仍需人工/外部复核 |
 
 ## 4. 旧报告任务校准
 
@@ -101,10 +115,10 @@ APOLLO 问题不再应描述为“`ragflow-doc-to-md` 固定 pipeline、缺少 c
 | 表头符号标准化 | 方向合理，但不宜硬编码全局替换 | 改为“术语别名 sidecar / review hint”，由文档或领域 profile 审核后生效 |
 | pipeline 表1/表2混淆 | 证据成立，但不宜做低可信后处理重构 | 正式表格路径优先 high/auto backend；只给 pipeline 结果风险提示 |
 | row/colspan 结构不清 | 证据成立 | 增加表格结构评分、header 层级摘要、row/colspan review hints |
-| 自动打包 Markdown + images 入库 | 仍未实现 | 作为 `ragflow-kb-build` 独立方案推进，先 dry-run/fake-client，live 需批准 |
+| 自动打包 Markdown + images 入库 | 公共离线计划已实现，live 上传仍 gated | 已有 `asset-upload-plan` 和本地 zip 物化；真正 live zip/批量资产上传需确认 API 语义、fake-client 覆盖和显式批准 |
 | 提升 RAGFlow chunk 上限 | 属于部署/服务端能力 | CLI 侧只做风险提示和 profile 建议；服务端调整不纳入 public skill 默认行为 |
-| 改进 LLM judge | 方向合理，但不能启用 script-owned LLM | 先做 no-LLM normalized judge 和外部 judge request/review artifact |
-| 16 问 QA 回归 | 仍未纳入正式 regression | 整理为脱敏 fixture，先做离线 regression harness |
+| 改进 LLM judge | 外部 request/review 边界已完成，仍不能启用 script-owned LLM | 保持 no-LLM normalized judge 为基线；外部 candidate 只作为 advisory/generated artifact |
+| 16 问 QA 回归 | 公共 schema/harness 已完成，完整 16 问填充仍在私有侧 gated | 私有侧按 `apollo_table_qa_fixture_v1` 填入脱敏用例，再运行 validate/evaluate/table-strategy/judge-review |
 
 ## 5. 更新方案
 
@@ -157,13 +171,13 @@ Markdown 文件，没有把引用图片自动随文档进入 RAGFlow。需要新
 
 - 读取 doc manifest 和 Markdown image refs。
 - 生成上传包计划，明确哪些 Markdown、图片和 sidecar 会进入包。
-- fake-client 测试 zip 或批量上传路径。
+- 离线测试覆盖本地 zip/package 物化；真正批量上传 fake-client 覆盖留到确认 live API 语义后再开启。
 - live 上传必须沿用现有 mutation gate 和 cleanup 规则。
 
 验收：
 
 - dry-run 能报告缺失图片、孤儿图片、包内相对路径和预计上传文件。
-- fake-client 覆盖 Markdown+images 打包上传。
+- 单元/CLI 测试覆盖 Markdown+images 上传计划和本地 zip 包内容；live/fake-client 上传执行不在未获批准的公共默认路径内。
 - 未获批准时不执行 live mutation。
 
 ### P1：父 chunk 上限与表格原子性预检
@@ -217,7 +231,7 @@ APOLLO 证据显示跨表比较问题比单表查值更脆弱。下一步应利�
 | 完成 | P0 | doc-to-md runtime | 增加表格术语候选提取 sidecar | `table_term_alias_candidates` report section | 不改写 Markdown；redaction clean |
 | 完成 | P0 | doc-to-md runtime | 增加 per-table 结构风险评分 | table semantic risk fields | HH-A 类 row/colspan fixture 触发 review |
 | 完成 | P0 | handoff | 将术语候选和结构风险接入 retrieval hints | hint fields + assistant test starters | `inspect-handoff` 可读到摘要 |
-| 完成 | P1 | kb-build | 设计 Markdown+images 上传包 dry-run | `ragflow_kb_asset_upload_plan_v1` | fake-client tests；live disabled |
+| 完成 | P1 | kb-build | 设计 Markdown+images 上传包 dry-run | `ragflow_kb_asset_upload_plan_v1` | local package/CLI tests；live disabled |
 | 完成 | P1 | kb-build | 增加表格父 chunk 风险预检 | ingest readiness / dry-run warning | 小父 chunk profile fixture 触发 warning |
 | 完成 | P1 | query | 为跨表问题增加 no-LLM retrieval strategy report | direct vs multi-query/fusion comparison | APOLLO fixture 离线报告 |
 | 完成 | P1 | docs | 更新 host-agent 表格入库指引 | concise usage section | 不含私有路径或服务地址 |
@@ -419,3 +433,91 @@ evidence refs、隐私字面量，以及“外部 pass 不可覆盖 normalized n
   流程。
 - 代表样本 live KB 创建/查询/清理验证仍需用户在当前线程明确批准，并按 live field-trial runbook 保留私有原始产物、
   清理 disposable KB、只写入脱敏摘要。
+
+## 10. 查漏补缺审计
+
+日期：2026-07-05
+
+本次回顾重新按任务表逐项核对设计、实现、CLI、测试和 release gate，补正了以下文档漂移：
+
+- `核验依据` 增补 APOLLO fixture/evaluate/judge、KB asset upload plan、table strategy report、schema identity
+  和 report surface inventory 的实现与测试文件，避免只引用早期 doc-to-md 表格质量路径。
+- 将 KB 侧图片资产项从“fake-client 打包上传已覆盖”校准为“离线 upload plan + 本地 zip/package 物化已覆盖”；
+  真正 live zip/批量资产上传仍需确认 RAGFlow API 语义、fake-client 测试和显式 live 批准。
+- 将旧报告校准表中的 `LLM judge`、`16 问 QA 回归` 状态更新为当前 request/review/harness 已完成但私有填充仍 gated。
+- 同步 `docs/21-ragflow-doc-to-md-table-quality-design.md` 的剩余风险段，说明 per-table 结构风险评分、
+  parent chunk preflight、APOLLO QA harness、table strategy report 和 asset upload plan 已在 docs/22 后续批次补齐。
+
+审计后仍没有新增可公开、离线、可验证的未完成任务。剩余仅为私有 16 问填充和 live KB 验证，两者都需要
+外部输入或明确 live approval。
+
+## 11. 本轮优化总结与后续方向
+
+日期：2026-07-05
+
+### 已完成任务
+
+本轮围绕 APOLLO 复杂表格 QA，从早期“表格转换和 marker 是否正确”推进到“handoff 到检索、入库预检和
+评估边界是否可审计”的公共离线闭环，已完成以下任务：
+
+- **表格转换主路径校准**：确认 `--table-quality standard|high|auto`、MinerU FastAPI backend 选择、
+  `server_url` 透传、`chunk-markers-dense` formal handoff、table-safe OCR cleanup 和 `delimiter`
+  profile 白名单已经落地。
+- **APOLLO QA 离线基线**：新增 `apollo_table_qa_fixture_v1` 校验框架和
+  `apollo_table_qa_evaluation_report_v1`，支持对已有 retrieval/answer JSON 做 strict contains 与
+  normalized contains 分开统计，不访问 RAGFlow、不调用模型。
+- **表格语义 sidecar**：在 `retrieval_hints.json` 中补充 `table_term_alias_candidates`，为 `$MPE_E$`、
+  `MPE<sub>P</sub>`、大小写、下标、空格和单位变体提供可审阅别名候选，不改写 Markdown 原文。
+- **表格结构风险评分**：在 table artifacts 中补充 header depth、rowspan/colspan、cell count、
+  `semantic_risk_score`、`semantic_risks`、`review_required` 和 `model_label_candidates`，并把结构风险接入
+  retrieval hints 和 assistant test starters。
+- **跨表检索策略报告**：新增 `ragflow_table_query_strategy_report_v1` 和 `ragflow-query table-strategy`，
+  基于脱敏 fixture 与 retrieval hints 生成 direct、hint multi-query 和 RRF fusion 的 no-LLM 对比计划。
+- **KB 资产上传 dry-run**：新增 `ragflow_kb_asset_upload_plan_v1` 和 `ragflow-kb-build asset-upload-plan`，
+  可离线检查 Markdown 图片引用、缺失/孤儿/远程图片、rich sidecar 和本地 zip/package 内容；live 上传保持 gated。
+- **父 chunk 原子性预检**：在 handoff/ingest readiness 和 `ragflow-kb-build --dry-run` 中增加
+  `table_parent_chunk_preflight`，用表格字符数和 token 估算提示小父 chunk profile、服务端二次切分和超大表风险。
+- **host-agent 表格入库指引**：三个 public skill 的共享 `references/host-agent-setup.md` 已补充
+  `Complex Table Ingest Review`，串联 high/auto conversion、inspect、asset plan、table-atomic profile 和
+  dry-run warning。
+- **外部 judge request/review 边界**：新增 `apollo_table_qa_judge_request_v1` 与
+  `apollo_table_qa_judge_review_report_v1`，通过 `ragflow-kb-build qa apollo-judge-request/review` 生成和审查
+  advisory/generated 外部 judge candidate，normalized no-LLM baseline 仍是不可覆盖基线。
+- **release gate 补齐**：新增/变更的 report schema 均纳入 schema identity；新增 CLI Markdown/report surface
+  纳入 release hygiene、generated Markdown audit 和 runtime resilience inventory。
+
+### 后续需要注意和跟踪的问题
+
+- **私有 16 问仍未公共化**：当前 public repo 只包含 schema/harness 和脱敏样例测试；完整 16 问需要在私有侧脱敏后
+  填入 fixture，再运行 `apollo-validate`、`apollo-evaluate`、`table-strategy` 和 `apollo-judge-review`。
+- **live KB 验证仍需批准**：代表样本的真实 KB 创建、上传、解析、查询和清理仍属于 live mutation，必须由用户在当前线程明确批准，
+  并按 field-trial runbook 保留私有原始产物、清理 disposable KB、只写入脱敏摘要。
+- **资产上传仍是离线计划**：`asset-upload-plan` 已能物化本地 zip/package，但是否能被目标 RAGFlow API 作为 Markdown+图片包
+  正确解析，仍需要确认 API 语义、fake-client 契约和批准后的 live disposable 验证。
+- **表格结构风险只能提示不能修复**：rowspan/colspan、多级表头、跨页表和型号族错位仍主要取决于上游解析质量；
+  当前 sidecar 和 semantic risks 只能帮助复核、检索扩展和评估分桶，不能无损重建错误表格。
+- **父 chunk 上限是部署事实**：`table-atomic-*-4096` 和 delimiter 是推荐 profile，不代表所有 RAGFlow 部署都支持足够大的父 chunk；
+  如果服务端上限更低，仍需拆表、调整部署或接受人工复核。
+- **外部 judge 只能 advisory**：judge request/review 提供结构化边界，但不启用 script-owned LLM；外部模型输出必须通过
+  review gate，且不能覆盖 normalized no-LLM baseline fail。
+- **跨表策略仍需 saved results**：table strategy report 可以生成 expansion/fusion 计划；要量化 16 问 direct vs multi-query vs fusion
+  命中率，仍需私有侧保存各策略 retrieval/answer JSON 后离线对比。
+- **文档状态需要防漂移**：docs/21 是表格转换主路径设计，docs/22 是 APOLLO QA 矫正闭环；后续更新任一侧时，应同步校准另一侧的
+  “已完成/仍需跟踪”段落。
+
+### 后续升级改进方向
+
+- **私有 APOLLO 回归包**：在 public schema 不变的前提下，于私有 run root 维护完整 16 问 fixture、saved retrieval/answer results、
+  table strategy report、judge request/review 和脱敏摘要，形成可重复回归流水线。
+- **资产入库 live 适配**：确认目标 RAGFlow 是否支持 zip 或批量资产语义；先补 fake-client 契约测试，再在明确批准下做 disposable KB
+  live build/query/cleanup 验证。
+- **表格语义 profile 扩展**：允许用户提供领域 alias profile、型号族词表、单位规范和表头别名规则，由 query expansion / QA evaluation 消费，
+  但继续禁止通用 postprocess 对 Markdown 原文做不可逆替换。
+- **跨表检索自动执行器**：在现有 `table-strategy` 离线计划基础上，增加显式 gated 的 saved-query 执行模式，用 fake client 覆盖 direct、
+  multi-query 和 fusion/RRF 输出，再按 live query gate 逐步验证。
+- **结构风险到评估分桶**：把 `semantic_risks` 与 QA case difficulty、failure category 和 judge rationale 关联起来，区分召回不足、表头错读、
+  行列错位、跨表合成错误和严格字符串误判。
+- **多样本观测矩阵**：除 APOLLO 代表规格表外，继续收集扫描件、长 PDF、图片密集文档、跨页大表、Office 表格和多文档 handoff 的脱敏指标，
+  观察 `standard`、`auto`、`high` 的质量、耗时、失败率和 fallback 行为。
+- **LLM backend 仍走 Phase 38 gate**：如果后续手工外部 judge 使用频率足够高，才考虑 script-owned LLM backend；启动前必须具备显式 LLM
+  config、fake-provider fixtures、advisory 标记、citation/baseline compatibility 和 redaction gate。
