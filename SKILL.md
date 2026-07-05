@@ -1,6 +1,6 @@
 ---
 name: ragflow-skills
-description: "RAGFlow 文档→知识库 skill 套件：ragflow-doc-to-md + ragflow-kb-build 的测试、使用与对比。覆盖 regression test、handoff 契约、chunk marker/table 原子性、与 ragflux 和 ragflow-kb-ops 的取舍。"
+description: "RAGFlow 三 skill 套件：ragflow-doc-to-md + ragflow-kb-build + ragflow-query。知识库准备阶段以 doc-to-md → kb-build 为主线；覆盖 handoff 契约、regression test、chunk marker/table 原子性、以及 ragflux/ragflow-kb-ops 退役过渡对照。"
 version: 1.0.1
 author: Architect (Luca)
 _updated: '2026-07-05'
@@ -8,18 +8,19 @@ license: MIT
 metadata:
   hermes:
     tags: [ragflow, rag, document-pipeline, knowledge-base, mineru, markdown, chunking, regression-test]
-    related_skills: [ragflux, ragflow-kb-ops, ragflow-smart-query, rag-systems]
+    related_skills: [ragflow-doc-to-md, ragflow-kb-build, ragflow-query, ragflux, ragflow-kb-ops, ragflow-smart-query, rag-systems]
 ---
 
 # RAGFlow Skills — 文档入库技能套件
 
-本 skill 记录 `ragflow-skills` 套件（`ragflow-doc-to-md` + `ragflow-kb-build`）的标准用法、回归测试、与 `ragflux`/`ragflow-kb-ops` 的取舍，以及 chunk marker / table 原子性等关键行为。
+本 skill 是当前项目三 skill 套件的总入口：`ragflow-doc-to-md` 负责文档到 Markdown handoff，`ragflow-kb-build` 负责 handoff 到 RAGFlow KB 与验证，`ragflow-query` 负责检索、路由和证据验证。知识库准备阶段默认走 `doc-to-md` → `kb-build`；`ragflux` / `ragflow-kb-ops` 是退役完成前的对照和过渡工具，不作为新流程主路径。
 
 ## 触发条件
 
-- 用户提到 "ragflow-skills"、"doc-to-md"、"kb-build"
+- 用户提到 "ragflow-skills"、"doc-to-md"、"kb-build"、"ragflow-query"
+- 需要规划知识库准备路径：source document → Markdown handoff → KB build
 - 需要跑一轮 `ragflow-skills` 回归测试
-- 需要对比 `ragflow-skills` vs `ragflux` vs `ragflow-kb-ops`
+- 需要对比当前三 skill 套件 vs `ragflux` / `ragflow-kb-ops` 退役过渡路径
 - 需要确认 chunk marker 是否会在表格中间插入
 - 需要理解 handoff 产物（`doc_manifest.json`、`ragflow_ingest_plan.yaml`）如何传给下游
 
@@ -32,8 +33,10 @@ metadata:
 │   └── tests/                         # 515 项回归测试
 ├── skills/ragflow-doc-to-md/          # 开发版 CLI
 ├── skills/ragflow-kb-build/          # 开发版 CLI
+├── skills/ragflow-query/             # 开发版 CLI
 ├── dist/ragflow-doc-to-md/            # 发布版，带 _vendor/ 内嵌 runtime
-└── dist/ragflow-kb-build/             # 发布版，带 _vendor/ 内嵌 runtime
+├── dist/ragflow-kb-build/             # 发布版，带 _vendor/ 内嵌 runtime
+└── dist/ragflow-query/                # 发布版，带 _vendor/ 内嵌 runtime
 ```
 
 `skills/` 与 `dist/` 的脚本主体同步。差异：
@@ -57,6 +60,12 @@ python3 -m venv .venv
 若新增 commit 或修改 runtime，跑完这轮测试后再评估是否可用。
 
 ## 核心能力与 profile
+
+默认使用顺序：
+
+1. `ragflow-doc-to-md` 先生成 Markdown handoff 与质量报告。
+2. `ragflow-kb-build` 消费 handoff，先 dry-run，再按需执行 live build 和验证。
+3. KB 建成后再用 `ragflow-query` 做检索、路由、证据和引用验证。
 
 ### doc-to-md
 
@@ -144,21 +153,23 @@ python scripts/build.py \
 
 一定要先 `--dry-run`，再决定 live build。
 
-## 与 ragflux / ragflow-kb-ops 的取舍
+## 当前套件与 ragflux / ragflow-kb-ops 的取舍
 
-| 维度 | ragflow-skills | ragflux | ragflow-kb-ops |
+| 维度 | 当前三 skill 套件 | ragflux | ragflow-kb-ops |
 |---|---|---|---|
-| 定位 | 新一代可移植 handoff 管线 | 上一代本地 MinerU 预处理 | 生产级 RAGFlow 运维 |
-| 入口 | `convert.py pipeline` / `build.py` | `python -m ragflux.cli.main run` | `chunking_runner.py` / `cli.py chunk-build` |
+| 定位 | 新一代可移植管线：`doc-to-md` 准备文档、`kb-build` 构建/验证 KB、`query` 做检索验证 | 上一代本地 MinerU 预处理，退役候选 | 旧生产运维与 ES backfill / task 诊断，退役候选中的 ops 侧 |
+| 入口 | `convert.py pipeline` / `build.py` / `query.py` | `python -m ragflux.cli.main run` | `chunking_runner.py` / `cli.py chunk-build` |
 | MinerU backend | 多种，含 `mineru-fastapi` | `fast` (pipeline) / `accurate` (hybrid-auto) | 不解析 |
 | Blackwell 兼容 | 优先用 `mineru-fastapi` capability probe；`pipeline` 稳定，high-accuracy 需看服务能力和 fallback | ⚠️ 旧本地 `accurate` 在 sm_120 高风险 | 无关 |
-| 产物 | handoff bundle + 契约文件 | `doc.md` + `images/` + `quality_report.json` | 直接写 RAGFlow |
+| 产物 | handoff bundle + 契约文件 + KB dry-run/build/report + query evidence reports | `doc.md` + `images/` + `quality_report.json` | 直接写 RAGFlow |
 | 质量门禁 | 有 `PASS`/`PASS_WITH_REVIEW`/`BLOCKED` | 有 | 无原生 |
 | benchmark/optimize | 内建完整 | 无 | 有独立脚本 |
 | ES backfill / MySQL 直写 | 无 | 无 | 核心能力 |
-| 推荐 | ⭐ 默认首选 | 仅在旧本地 fast 模式使用 | 生产运维/补数据/诊断 |
+| 推荐 | 默认主线；知识库准备先用 `doc-to-md` → `kb-build`，查询阶段再用 `ragflow-query` | 仅做退役前 fast-path 对照或保留包比较 | 仅做退役前 cross-test、生产诊断、ES/MySQL 补救；不作为新 KB 准备主线 |
 
-**推荐组合**：`ragflow-skills` 做解析与 handoff → `ragflow-kb-ops` 做 chunk-build / ES backfill / 诊断。
+**默认组合**：`ragflow-doc-to-md` 做解析与 handoff → `ragflow-kb-build` 做 dry-run / build / validation → KB 建成后用 `ragflow-query` 做检索验证。
+
+**过渡组合**：退役完成前，`ragflux` + `ragflow-kb-ops` 可保留做历史基线。必要时也可以让 `ragflow-doc-to-md` 的 Markdown / handoff 输出与 `ragflow-kb-ops` 做交叉测试或生产诊断，但这属于退役过渡，不是新增知识库准备流程的推荐路径。
 
 ## Table 与 Chunk Marker 原子性
 
@@ -209,9 +220,9 @@ regression notes in `references/real-scanned-pdf-e2e-test-report.md`.
 
 chunk marker 是**提示性边界**，不是**硬约束**。RAGFlow 的 chunker 仍可能按 `chunk_token_num` 切超大表格。表格原子性需要结合 RAGFlow profile 和入库后验证。
 
-### Pitfall #4: 直接用 ragflow-kb-ops 的 chunk-build 处理大批量文档
+### Pitfall #4: 把 ragflow-kb-ops 当成默认 kb-build 替代品
 
-`chunk-build` 单次处理 ≥5 文件可能超时（约 600 秒），导致 KB 碎片。大批量应分步：RAGFlow API 逐文件上传 → 一次性触发 parse。详见 `ragflow-kb-ops` skill。
+`ragflow-kb-ops` 与 `ragflux` 属于退役过渡线。它可以在退役完成前配合 `ragflow-doc-to-md` 做 cross-test、生产诊断或 ES/MySQL 补救，但新增知识库准备应优先走 `ragflow-kb-build`。其 `chunk-build` 单次处理 ≥5 文件可能超时（约 600 秒），导致 KB 碎片；大批量应分步：RAGFlow API 逐文件上传 → 一次性触发 parse。
 
 ### Pitfall #5: 混淆 adaptive 命令的 inspect-source / decision-only 参数
 
@@ -267,10 +278,12 @@ print(out.count('<!-- chunk -->'))
 ## Cross-refs
 
 - Skill: `ragflux` — 本地 MinerU 快速预处理管线
-- Skill: `ragflow-kb-build` — 使用 `ragflow-skills` 的 handoff 产物构建 RAGFlow KB
-- Skill: `ragflow-kb-ops` — 生产级 RAGFlow 运维、ES backfill、task 诊断
-- Skill: `ragflow-smart-query` — 检索入口
-- Skill: `rag-systems` — RAG 系统总览
+- Skill: `ragflow-doc-to-md` — 当前主线：文档到 Markdown handoff
+- Skill: `ragflow-kb-build` — 当前主线：handoff 到 RAGFlow KB dry-run / build / validation
+- Skill: `ragflow-query` — 当前主线：KB 建成后的检索、路由和证据验证
+- Skill: `ragflow-kb-ops` — legacy/ops：与 `ragflux` 配合的生产运维、ES backfill、task 诊断；退役过渡期也可与 `doc-to-md` 做交叉测试
+- Skill: `ragflow-smart-query` — legacy：旧检索入口，能力迁移到 `ragflow-query`
+- Skill: `rag-systems` — RAG 系统背景与部署总览
 - Reference: `references/ragflow-skills-table-atomicity.md` — chunk marker / table 原子性实测记录
 - Reference: `references/real-scanned-pdf-e2e-test-report.md` — 真实扫描 PDF 端到端测试记录
 - Reference: `references/ragflow-skills-vs-ragflux-vs-kb-ops.md` — 三套管线对比表
