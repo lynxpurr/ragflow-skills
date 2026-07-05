@@ -201,3 +201,93 @@ hardware ban.
   pre- versus postprocess metrics.
 - Public docs contain no home paths, private endpoints, temporary run-root paths,
   credentials, dataset IDs, document IDs, KB names, or raw source-document paths.
+
+## Closeout Lessons And Follow-Up Signals
+
+### Lessons Learned
+
+The representative scanned-PDF run was valuable because it exercised the pipeline with
+real MinerU behavior rather than only synthetic fixtures. It also showed why field-trial
+evidence must be tied back to the exact code state under review. Hermes' successful run
+was based on local uncommitted changes, so the release-facing work had to separate proven
+runtime behavior from unmerged implementation details before accepting the conclusions.
+
+User intent needs to be treated as an explicit contract, not only as a hint. The most
+important example was `--mineru-fastapi-backend pipeline`: a high table-quality request
+must not silently override a backend explicitly chosen to avoid a known compatibility
+failure. The follow-up tests now protect that behavior in both direct conversion and
+adaptive decision-only flows.
+
+Scanned and low-text PDFs need reliability-aware inspection. A binary PDF preview can
+contain Latin-looking garbage that is long enough to fool simple language heuristics. The
+fix works by recording sample quality and language source, then preferring user and
+filename intent over unreliable binary samples. This makes low-confidence decisions
+visible instead of converting weak evidence into a confident English profile.
+
+Report surfaces should share the same source of truth when they describe postprocess
+behavior. The chunk-marker mismatch was not a table-breaking bug in the sample output,
+but it was a reviewability bug: different reports appeared to disagree about the same
+artifact. Rebuilding quality-sensitive counts from final Markdown makes the evidence
+easier for users and automated consumers to trust.
+
+Artifact hygiene is part of quality, not an administrative afterthought. Local `output/`
+copies, run roots, endpoints, and source-document paths can leak context even when code is
+correct. The fix plan therefore paired implementation work with ignore rules, sanitized
+public references, and targeted redaction scans.
+
+### Signals To Monitor
+
+Monitor `pdf_text_sample_quality`, `pdf_text_density`, `pdf_text_mojibake_ratio`, and
+`language_source_counts` across future representative runs. A rise in
+`binary_garbage`, `low_text`, or `unknown_low_confidence` should trigger review of
+language/profile decisions rather than automatic broadening of heuristics.
+
+Track profile disagreement warnings, especially `profile_language_mismatch`, between
+pre-conversion adaptive decisions and post-conversion Markdown/profile suggestions. A
+non-zero rate is acceptable for difficult scanned PDFs, but repeated mismatches for the
+same source class indicate that inspection needs better early signals.
+
+Track explicit backend preservation warnings and backend fallback events separately.
+`explicit_backend_preserved` is expected when the user intentionally chooses a backend;
+service rejections or fallback retries indicate environment compatibility or MinerU
+version drift and should be summarized by backend family and MinerU version.
+
+Keep chunk-marker and table-atomicity metrics aligned across Markdown,
+`postprocess_report.json`, `quality_report.json`, and ingest-readiness reports. The key
+indicators are marker count, markers inside HTML tables, HTML table count, and any
+postprocess warning that says a table boundary could not be preserved.
+
+Track image asset naming quality as a ratio: semantic names versus hash-safe fallback
+names. A moderate fallback rate is fine for scanned documents, but a sudden drop in
+semantic naming can reveal OCR/caption extraction drift or changed MinerU asset output.
+
+Track quality-gate status distribution for scanned PDFs. `PASS_WITH_REVIEW` can be the
+right outcome for low-text sources; the important signal is whether review reasons remain
+specific and actionable rather than becoming generic noise.
+
+Continue scanning public docs for private paths, endpoints, source paths, dataset IDs,
+document IDs, KB names, credentials, and raw retrieved text whenever field-trial evidence
+is summarized.
+
+### Next Improvement Directions
+
+Build a small, sanitized representative corpus that covers scanned Chinese PDFs, mixed
+Chinese/English reports, table-heavy PDFs, image-heavy PDFs, and normal extractable-text
+PDFs. Use it to watch trend metrics instead of relying on a single successful sample.
+
+Add a lightweight run-summary comparison helper that can compare two adaptive pipeline
+runs and highlight language-source shifts, backend-selection changes, table atomicity
+changes, image naming ratio changes, and quality-gate movement.
+
+Make backend compatibility documentation versioned by MinerU version, backend family,
+host class, and observed failure mode. The current Blackwell note should remain an
+observed compatibility pitfall and workaround, not a permanent hardware rule.
+
+Consider a stronger early language signal for scanned PDFs after the current heuristics
+prove stable. Good candidates are explicit CLI language, filename conventions, PDF
+metadata when available, and a small OCR-derived sample after conversion. Avoid adding
+script-owned LLM language detection unless a future gated task explicitly approves it.
+
+Keep public report schemas conservative. When adding new monitoring fields, prefer
+existing report structures and update schema identity, report-surface inventory, focused
+tests, and release hygiene together so downstream consumers are not surprised.
