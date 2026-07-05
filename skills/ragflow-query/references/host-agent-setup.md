@@ -228,8 +228,8 @@ approves live RAGFlow mutation:
 - Review `retrieval_hints.json` for `table_artifacts`, `table_term_alias_candidates`,
   `semantic_risks`, and `estimated_parent_chunk_tokens`.
 - Run `inspect-handoff` and require no BLOCKED quality or missing-image errors.
-- Run `asset-upload-plan`; require `missing_image_count=0` before any live build, and
-  review orphan images instead of silently uploading them.
+- Run `asset-upload-plan`; require `missing_image_asset_count=0` before any live build,
+  and review unreferenced handoff images instead of silently uploading them.
 - Prefer a generated `table-atomic-*-4096` profile when the target deployment supports
   that parent chunk size. If the deployment requires a smaller profile, keep the profile
   explicit and treat `table_parent_chunk_preflight` warnings from `build.py --dry-run` as
