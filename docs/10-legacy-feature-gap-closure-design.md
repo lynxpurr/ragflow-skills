@@ -36,6 +36,15 @@ The older skills contribute different kinds of value:
 | `ragflow-smart-query` | routing hints, route regression, hint-gap diagnosis, English hint enrichment, per-KB retrieval params, optional centroid routing, cross-language A/B tests, BM25 pollution diagnosis, simple unified query interface | Migrate into `ragflow-query` without shipping private route tables or long-lived services |
 | `agentic-rag` | query classification, planning, reflection, citation audit, cost traces, generation evaluation, context-aware query handling | Migrate as opt-in experimental query layers; keep host-assisted evidence as the safe default |
 
+Legacy-source boundary: these older skills are migration references and retirement
+comparison sources, not active maintenance targets for this public suite. If a retired
+consumer exposes SDK drift, cleanup failure, profile-application drift, or GPU/process
+contention, record it as compatibility evidence. Follow-up work should land in the
+current three-skill suite only when it improves current handoff contracts, dry-run/live
+readiness reports, effective-profile visibility, retrieval validation, or release
+evidence. Do not spend this roadmap on repairing retiring skill code unless a separate
+maintenance request explicitly targets that old repository.
+
 ## Current Baseline
 
 The current suite already implements a large part of the first roadmap:

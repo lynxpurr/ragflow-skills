@@ -269,6 +269,13 @@ Continue scanning public docs for private paths, endpoints, source paths, datase
 document IDs, KB names, credentials, and raw retrieved text whenever field-trial evidence
 is summarized.
 
+Treat retired-consumer findings as calibration evidence, not as implementation targets.
+If `ragflow-kb-ops` or another retiring skill exposes cleanup SDK drift, profile
+application drift, or GPU process contention, do not add old-skill repair work to this
+roadmap. Instead, decide whether the current three-skill suite needs clearer
+`ragflow-kb-build` requested/effective profile reporting, stronger handoff readiness
+wording, additional current-suite parse evidence, or no action.
+
 ### Next Improvement Directions
 
 Build a small, sanitized representative corpus that covers scanned Chinese PDFs, mixed

@@ -102,7 +102,7 @@ track is intentionally rejected or superseded.
 | --- | --- | --- | --- |
 | CLI sufficiency and `serve` | Slow repeated spawning, brittle artifact handoff, missing request IDs, need for health/shutdown semantics. | Per-run field-trial records plus `tools/field_trial_metrics.py`; include command count, elapsed time, failed step, and host name class. | Fake-client `ragflow-query serve` with localhost bind, health, direct query, host-assisted request, shutdown, auth boundary, and redacted logs. |
 | Handoff quality | Missing/invalid manifests, garbled Markdown, missing assets, blocked quality gates. | `convert --json`, `inspect`, quality reports, redaction sidecars, and field-trial summaries. | Focused converter or postprocessor fix with deterministic fixtures and consumer acceptance coverage. |
-| KB build stability | Dry-run failures, parse stalls, cleanup risk, repeated runtime partial failures. | Build/probe/parse/health/cleanup reports retained in explicit run roots. | Narrow resilience or profile-governance fix; live mutation remains explicitly approved and disposable. |
+| KB build stability | Dry-run failures, parse stalls, cleanup risk, repeated runtime partial failures, or current-suite requested/effective profile drift. | Build/probe/parse/health/cleanup reports retained in explicit run roots. Retired-consumer drift is transition evidence only; it should prompt current `ragflow-kb-build` visibility checks, not old-skill repair. | Narrow resilience, report-clarity, or profile-governance fix in the current suite; live mutation remains explicitly approved and disposable. |
 | Query quality | Zero results, wrong top document, unstable rankings, weak citation support, unsupported answer claims. | Saved query outputs, traces, validation reports, citation audits, answer evaluations, and benchmark deltas. | Offline routing/fusion/rewrite/profile fix first; reranker adapter only with measurable target and fallback policy. |
 | Remote conversion | Current builtin, MinerU, generic remote, or local CLI paths do not match a real converter. | Sanitized endpoint protocol, auth shape, fake request/response, error model, and fixture plan. | Fake-server client behind explicit config, with no default private endpoint. |
 | Provider abstraction | A named provider cannot fit current OpenAI-compatible or request/review paths. | Provider label, API shape, config keys, auth, timeout/error cases, and fake-provider tests. | Minimal provider adapter contract with deterministic failure fixtures. |
@@ -147,6 +147,28 @@ reopening gated product tracks:
 - Schema identity, report surface inventory, generated Markdown audit, runtime resilience
   inventory, consumer acceptance, and platform smoke coverage were updated for the new
   command/report surface.
+
+## Post-Closeout Follow-Up Calibration
+
+Calibration date: 2026-07-05
+
+The updated scanned-PDF regression supports the adaptive-pipeline fix, but it does not
+reopen legacy-skill maintenance. `ragflow-kb-ops` is now a retiring comparison source.
+Its cleanup SDK drift and requested/effective profile mismatch should be recorded as
+transition evidence only. The public roadmap should not spend implementation capacity
+repairing that old code path.
+
+Current-suite follow-up is limited to:
+
+- `ragflow-doc-to-md`: keep collecting real-sample inspection, language-source,
+  backend-selection, table-atomicity, and image-asset evidence.
+- `ragflow-kb-build`: keep dry-run, readiness, live parse, cleanup, and requested versus
+  effective parser behavior visible when current-suite evidence is collected.
+- `ragflow-query`: validate retrieval quality against KBs built through the current
+  replacement path before considering reranker, provider, service, or LLM/backend gates.
+
+No post-CLI adapter, optional script-owned LLM/backend, private bridge, or live mutation
+track is opened by the retired-consumer findings.
 
 ## Closeout Conclusion
 

@@ -351,6 +351,71 @@ Decision:
   for complex-table PDFs when a compatible MinerU FastAPI service is available. Keep live
   RAGFlow KB creation gated by explicit user approval.
 
+### 2026-07-05 run-004
+
+Workflow:
+- `ragflow-doc-to-md` / `ragflow-kb-build` / retired-consumer comparison review
+
+Input summary:
+- Source type: Chinese scanned product datasheet PDF with images and complex tables.
+- Approximate document count: one full representative PDF.
+- Private details removed: exact source path, endpoint, run-root path, dataset ids,
+  document ids, and raw chunks.
+
+Commands:
+- Unit regression tests for `ragflow-skill-runtime`.
+- `ragflow-doc-to-md inspect-source`
+- `ragflow-doc-to-md adaptive --decision-only`
+- `ragflow-doc-to-md adaptive` with explicit MinerU FastAPI `pipeline` backend,
+  Markdown assets, Chinese language intent, and dense chunk markers.
+- `ragflow-kb-build inspect-handoff`
+- Retired `ragflux` and `ragflow-kb-ops` comparison checks, used only as transition
+  evidence.
+
+Artifacts:
+- Public-safe artifact names: `document_features.json`, `pipeline_decision.json`,
+  `adaptive_summary.json`, `quality_report.json`, `postprocess_report.json`,
+  `chunk_profile_report.json`, `artifact_index.json`, `profile_suggestions.json`,
+  `handoff_inspection.json`, and retired-consumer chunk snapshot/run summaries.
+- Private artifact location retained outside public repo.
+
+Results:
+- Pass/fail: passed for the current `ragflow-skills` regression matrix.
+- Unit tests: 518 runtime tests passed.
+- Source inspection: scanned/low-text PDF handling selected `primary_language: zh`, used
+  low-confidence language evidence instead of binary PDF garbage, and reported the PDF as
+  likely scanned.
+- Adaptive decision: recommended `table-atomic-zh-4096` and preserved the explicitly
+  requested `pipeline` backend.
+- Pipeline: completed with `PASS_WITH_REVIEW`, 32 chunk markers, 6 HTML tables, no marker
+  inside table blocks, 21 image artifacts, and 15 Markdown image references.
+- Handoff inspection: `ingestion_readiness.status: ready_with_review`, rich and pipeline
+  sidecars complete, and missing image count zero.
+- Retired-consumer comparison: the old consumer could create a chunk snapshot, but its
+  run summary showed requested 4096-token table-atomic profile settings were not fully
+  applied by that old path. This proves structural consumption, not profile parity.
+
+Friction:
+- The old `ragflow-kb-ops` cleanup path showed SDK signature drift. Because that skill is
+  retiring, this is not a follow-up implementation target for the current public suite.
+- The retired consumer's requested/effective profile drift should be treated as a signal
+  to keep current `ragflow-kb-build` reports explicit about requested versus effective
+  parser settings when current-suite live or dry-run evidence is collected.
+- The old `ragflux` comparison path may start its own temporary MinerU FastAPI service in
+  CLI-oriented runs, so it remains a GPU/process-contention observation item rather than
+  a replacement-path blocker.
+
+Gated trigger:
+- none. No post-CLI adapter, optional LLM/backend, private bridge, or old-skill repair
+  track is opened by this run.
+
+Decision:
+- Keep follow-up work focused on the current three public skills. Use retired-skill
+  failures only as migration evidence; do not spend this roadmap repairing
+  `ragflow-kb-ops`. The next useful work is current-suite observation, sample-matrix
+  validation, release-path health, and current `ragflow-kb-build` visibility for
+  requested/effective parser behavior.
+
 ## Current Decision
 
 The next stage remains observation, not feature expansion. The representative PDF
