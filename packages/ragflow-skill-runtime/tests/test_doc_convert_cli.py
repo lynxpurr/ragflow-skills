@@ -354,6 +354,8 @@ class DocConvertCliTests(unittest.TestCase):
             formal_manifest = json.loads((output_dir / "formal_handoff_manifest.json").read_text(encoding="utf-8"))
             postprocess_report = json.loads((output_dir / "postprocess_report.json").read_text(encoding="utf-8"))
             chunk_profile_report = json.loads((output_dir / "chunk_profile_report.json").read_text(encoding="utf-8"))
+            quality_report = json.loads((output_dir / "quality_report.json").read_text(encoding="utf-8"))
+            runtime_report = json.loads((output_dir / "runtime_report.json").read_text(encoding="utf-8"))
             ingest_plan = (output_dir / "ragflow_ingest_plan.yaml").read_text(encoding="utf-8")
 
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -395,6 +397,9 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(postprocess_report["chunk_profile_report"]["schema"], "ragflow_chunk_profile_report_v1")
         self.assertEqual(chunk_profile_report["schema"], "ragflow_chunk_profile_report_v1")
         self.assertGreaterEqual(chunk_profile_report["summary"]["marker_count"], 1)
+        quality_atomicity = quality_report["documents"][0]["quality_signals"]["chunk_marker_table_atomicity"]
+        self.assertEqual(quality_atomicity["chunk_marker_count"], chunk_profile_report["summary"]["marker_count"])
+        self.assertEqual(runtime_report["document_quality_summary"]["table_count"], 0)
         self.assertIn('schema: "ragflow_ingest_plan_v1"', ingest_plan)
         self.assertIn('handoff_mode: "formal_ingest"', ingest_plan)
         self.assertIn('chunk_profile_report: "chunk_profile_report.json"', ingest_plan)
@@ -1447,6 +1452,104 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertTrue(context["table_quality_high_accuracy_requested"])
         self.assertFalse(context["table_quality_degraded"])
         self.assertEqual(runtime_report["remote_attempts"][0]["mineru_fastapi_backend"], "hybrid-auto-engine")
+
+    def test_table_quality_high_preserves_explicit_pipeline_backend(self) -> None:
+        captured: dict[str, object] = {"body": b""}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0"))
+                captured["body"] = self.rfile.read(length)
+                body = json.dumps({"task_id": "task-table-pipeline", "status": "pending"}).encode("utf-8")
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/tasks/task-table-pipeline":
+                    body = json.dumps({"task_id": "task-table-pipeline", "status": "completed"}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if self.path == "/tasks/task-table-pipeline/result":
+                    body = json.dumps(
+                        {"results": {"paper": {"md_content": "# Explicit Pipeline\n\n<table><tr><td>A</td></tr></table>\n"}}}
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                input_dir = root / "input"
+                output_dir = root / "handoff"
+                input_dir.mkdir()
+                (input_dir / "paper.pdf").write_bytes(b"%PDF fake explicit pipeline")
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(CONVERT_SCRIPT),
+                        "--input",
+                        str(input_dir),
+                        "--output",
+                        str(output_dir),
+                        "--backend",
+                        "mineru-fastapi",
+                        "--mineru-base-url",
+                        f"http://127.0.0.1:{server.server_port}",
+                        "--mineru-timeout",
+                        "5",
+                        "--mineru-poll-interval",
+                        "0.01",
+                        "--table-quality",
+                        "high",
+                        "--mineru-fastapi-backend",
+                        "pipeline",
+                        "--json",
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    env=_env(),
+                )
+                payload = json.loads(result.stdout)
+                runtime_report = json.loads((output_dir / "runtime_report.json").read_text(encoding="utf-8"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["table_quality"]["mode"], "high")
+        self.assertEqual(payload["table_quality"]["effective_mineru_fastapi_backend"], "pipeline")
+        self.assertFalse(payload["table_quality"]["high_accuracy_backend_requested"])
+        self.assertEqual(payload["table_quality"]["reason"], "forced_high_accuracy_explicit_backend_preserved")
+        body = captured["body"]
+        self.assertIsInstance(body, bytes)
+        self.assertIn(b'name="backend"', body)
+        self.assertIn(b"pipeline", body)
+        self.assertNotIn(b"hybrid-auto-engine", body)
+        self.assertEqual(runtime_report["remote_attempts"][0]["mineru_fastapi_backend"], "pipeline")
+        warnings = runtime_report["performance"]["slow_path_warnings"]
+        self.assertTrue(any(item["code"] == "explicit_backend_preserved" for item in warnings))
 
     def test_table_quality_high_can_fallback_to_pipeline_after_backend_unsupported(self) -> None:
         captured_bodies: list[bytes] = []

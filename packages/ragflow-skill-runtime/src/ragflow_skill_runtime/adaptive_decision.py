@@ -55,10 +55,28 @@ def _int(summary: Mapping[str, Any], key: str) -> int:
 
 def _normal_language(value: Any) -> str:
     text = str(value or "unknown").strip().lower()
-    if text in {"zh", "chinese", "cn", "zho"}:
+    if text in {"zh", "chinese", "cn", "zho", "ch"} or text.startswith("ch,"):
         return "zh"
     if text in {"en", "english", "eng"}:
         return "en"
+    return "auto"
+
+
+def _feature_language_hint(features: Mapping[str, Any]) -> str:
+    documents = features.get("documents")
+    if not isinstance(documents, list):
+        return "auto"
+    for item in documents:
+        if not isinstance(item, Mapping):
+            continue
+        sample = item.get("sample") if isinstance(item.get("sample"), Mapping) else {}
+        if str(sample.get("language_source") or "") == "filename_hint":
+            language = _normal_language(sample.get("language"))
+            if language != "auto":
+                return language
+        language_hint = _normal_language(item.get("language_hint"))
+        if language_hint != "auto":
+            return language_hint
     return "auto"
 
 
@@ -152,6 +170,7 @@ def make_pipeline_decision(
     features: Mapping[str, Any],
     *,
     requested_backend: str | None = None,
+    requested_language: str | None = None,
     requested_table_quality: str | None = None,
     requested_postprocess_profile: str | None = None,
     requested_mineru_fastapi_backend: str | None = None,
@@ -178,7 +197,8 @@ def make_pipeline_decision(
         label="postprocess_profile",
     )
     summary = features.get("summary") if isinstance(features.get("summary"), Mapping) else {}
-    language = _normal_language(summary.get("primary_language"))
+    inspected_language = _normal_language(summary.get("primary_language"))
+    user_language = _normal_language(requested_language)
     table_heavy = _bool(summary, "table_heavy")
     has_tables = _int(summary, "sample_table_count") > 0
     image_rich = _bool(summary, "image_rich")
@@ -187,6 +207,16 @@ def make_pipeline_decision(
     low_text_pdf_count = _int(summary, "scanned_or_low_text_pdf_count")
     numeric_signal_count = _int(summary, "numeric_or_unit_signal_count")
     fastapi_probe_green = backend_probe_status in {None, "", "not_run", "available"}
+    feature_hint_language = _feature_language_hint(features)
+    if low_text_pdf_count and user_language != "auto":
+        language = user_language
+        language_source = "user_hint"
+    elif low_text_pdf_count and feature_hint_language != "auto":
+        language = feature_hint_language
+        language_source = "filename_hint"
+    else:
+        language = inspected_language
+        language_source = "inspect_source"
 
     reasons: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
@@ -219,6 +249,18 @@ def make_pipeline_decision(
             table_quality = "standard"
             reasons.append({"code": "standard_table_quality", "message": "No formal table signal requires high-accuracy table extraction."})
 
+    # If the PDF is scanned/low-text, we should route to OCR-capable backend and
+    # avoid forcing a high-accuracy backend that may not be compatible.
+    if low_text_pdf_count and not requested_quality:
+        table_quality = "standard"
+        warnings.append(
+            {
+                "code": "scanned_pdf_standard_table_quality",
+                "severity": "info",
+                "message": "Scanned or low-text PDF detected; defaulting to standard table quality for broad compatibility.",
+            }
+        )
+
     if formal_candidate and backend == "auto":
         reasons.append({"code": "backend_auto_preserved", "message": "Backend auto is preserved so configured host routing remains authoritative."})
     if backend == "mineru-fastapi" and backend_probe_status and backend_probe_status not in {"available", "not_run"}:
@@ -237,6 +279,14 @@ def make_pipeline_decision(
                 "message": "At least one PDF has little extractable preview text; OCR/conversion quality needs review.",
             }
         )
+        if language_source in {"user_hint", "filename_hint"}:
+            warnings.append(
+                {
+                    "code": "low_text_pdf_language_hint",
+                    "severity": "info",
+                    "message": f"Low-text PDF language uses {language_source} because preview text is not reliable.",
+                }
+            )
     if long_document:
         warnings.append(
             {
@@ -262,12 +312,21 @@ def make_pipeline_decision(
             }
         )
 
+    # Respect user's explicit backend choice unless they requested a high-accuracy
+    # table quality mode that requires a specific backend family.
+    if requested_mineru_fastapi_backend:
+        effective_mineru_fastapi_backend = requested_mineru_fastapi_backend
+    elif table_quality == "high":
+        effective_mineru_fastapi_backend = "hybrid-auto-engine"
+    else:
+        effective_mineru_fastapi_backend = "pipeline"
+
     recommendation = {
         "backend": backend,
         "table_quality": table_quality,
         "postprocess_profile": postprocess,
         "mineru_asset_mode": asset_mode,
-        "mineru_fastapi_backend": requested_mineru_fastapi_backend or ("hybrid-auto-engine" if table_quality == "high" else "pipeline"),
+        "mineru_fastapi_backend": effective_mineru_fastapi_backend,
         "allow_table_quality_fallback": bool(allow_table_quality_fallback),
         "kb_profile": profile,
     }
@@ -280,6 +339,8 @@ def make_pipeline_decision(
         "features_schema": features.get("schema"),
         "signals": {
             "primary_language": language,
+            "inspected_primary_language": inspected_language,
+            "language_source": language_source,
             "formal_ingest_candidate": formal_candidate,
             "table_heavy": table_heavy,
             "has_tables": has_tables,
@@ -397,6 +458,39 @@ def make_adaptive_pipeline_summary(
         ],
     ]
     warnings = list(decision.get("warnings", [])) if isinstance(decision.get("warnings"), list) else []
+    decision_profile_id = str(kb_profile.get("id") or kb_profile.get("profile_id") or "")
+    post_conversion_profile_id = None
+    if isinstance(pipeline_result, Mapping):
+        package = pipeline_result.get("handoff_package")
+        if isinstance(package, Mapping):
+            profile = package.get("profile_suggestions")
+            if isinstance(profile, Mapping):
+                suggestions = profile.get("suggestions")
+                if isinstance(suggestions, list):
+                    for suggestion in suggestions:
+                        if not isinstance(suggestion, Mapping):
+                            continue
+                        suggestion_id = str(suggestion.get("id") or "")
+                        if suggestion_id.startswith("table-atomic-"):
+                            post_conversion_profile_id = suggestion_id
+                            break
+                    if post_conversion_profile_id is None and suggestions and isinstance(suggestions[0], Mapping):
+                        post_conversion_profile_id = str(suggestions[0].get("id") or "")
+    if (
+        decision_profile_id
+        and post_conversion_profile_id
+        and decision_profile_id != post_conversion_profile_id
+    ):
+        warnings.append(
+            {
+                "code": "profile_language_mismatch",
+                "severity": "review",
+                "message": (
+                    "Post-conversion profile suggestion differs from the adaptive decision; "
+                    "review the KB profile before live ingestion."
+                ),
+            }
+        )
     if pipeline_exit_code not in (None, 0):
         warnings.append(
             {
@@ -414,6 +508,7 @@ def make_adaptive_pipeline_summary(
         "decision_schema": decision.get("schema"),
         "decision_confidence": decision.get("confidence"),
         "recommended_profile_id": kb_profile.get("id") or kb_profile.get("profile_id"),
+        "post_conversion_profile_id": post_conversion_profile_id,
         "handoff_root": output_root,
         "ingest_readiness_status": readiness,
         "quality_gate_status": (

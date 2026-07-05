@@ -51,6 +51,39 @@ class AdaptivePipelineTests(unittest.TestCase):
         markdown = render_document_features_markdown(report)
         self.assertIn("RAGFlow Document Source Features", markdown)
 
+    def test_scanned_pdf_filename_hint_prevents_binary_sample_english(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "APOLLO-CN-2021-WEB.pdf"
+            garbage = bytes([0xF1, 0x9D, 0x62, 0x40, 0x21, 0x90, 0x84, 0xDE, 0x64, 0xFE, 0x20]) * 80
+            source.write_bytes(
+                b"%PDF-1.7\n"
+                b"1 0 obj << /Type /Page >> endobj\n"
+                b"2 0 obj ("
+                + garbage
+                + b") endobj\n"
+                + b"0" * 12000
+            )
+
+            report = inspect_source_document(source)
+            decision = make_pipeline_decision(
+                report,
+                requested_backend="mineru-fastapi",
+                requested_language="ch",
+                requested_table_quality="standard",
+                requested_mineru_fastapi_backend="pipeline",
+                policy="table-atomic",
+            )
+
+        document = report["documents"][0]
+        self.assertEqual(report["summary"]["primary_language"], "zh")
+        self.assertEqual(document["sample"]["language_source"], "filename_hint")
+        self.assertIn(document["pdf_text_sample_quality"], {"binary_garbage", "low_text"})
+        self.assertTrue(document["risks"]["scanned_or_low_text_pdf"])
+        self.assertEqual(decision["signals"]["language_source"], "user_hint")
+        self.assertEqual(decision["recommendation"]["kb_profile"]["id"], "table-atomic-zh-4096")
+        self.assertEqual(decision["recommendation"]["mineru_fastapi_backend"], "pipeline")
+
     def test_decision_selects_table_atomic_profile(self) -> None:
         features = {
             "schema": DOCUMENT_FEATURES_SCHEMA,
@@ -158,6 +191,52 @@ class AdaptivePipelineTests(unittest.TestCase):
         self.assertEqual(decision["recommendation"]["kb_profile"]["id"], "table-atomic-en-4096")
         self.assertEqual(summary["schema"], ADAPTIVE_PIPELINE_SUMMARY_SCHEMA)
         self.assertFalse((output / "doc_manifest.json").exists())
+
+    def test_adaptive_decision_only_preserves_explicit_pipeline_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "input"
+            output = root / "handoff"
+            source.mkdir()
+            (source / "APOLLO-CN-2021-WEB.pdf").write_bytes(
+                b"%PDF-1.7\n1 0 obj << /Type /Page >> endobj\n"
+                + b"2 0 obj (\xf1\x9db@!\x90\x84\xded\xfe " * 80
+                + b") endobj\n"
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "adaptive",
+                    "--input",
+                    str(source),
+                    "--output",
+                    str(output),
+                    "--backend",
+                    "mineru-fastapi",
+                    "--mineru-language",
+                    "ch",
+                    "--adaptive-policy",
+                    "table-atomic",
+                    "--table-quality",
+                    "high",
+                    "--mineru-fastapi-backend",
+                    "pipeline",
+                    "--decision-only",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            decision = json.loads((output / "pipeline_decision.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(decision["recommendation"]["table_quality"], "high")
+        self.assertEqual(decision["recommendation"]["mineru_fastapi_backend"], "pipeline")
+        self.assertEqual(decision["recommendation"]["kb_profile"]["id"], "table-atomic-zh-4096")
 
     def test_adaptive_cli_runs_pipeline_for_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

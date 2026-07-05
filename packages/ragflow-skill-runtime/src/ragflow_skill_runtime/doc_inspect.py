@@ -31,6 +31,7 @@ PDF_EXTENSIONS = {".pdf"}
 MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
 HTML_IMAGE_RE = re.compile(r"<img\b[^>]*?\bsrc=[\"'][^\"']+[\"']", re.IGNORECASE)
 MATH_OR_UNIT_RE = re.compile(r"[%℃°μµ]|(?:\b(?:mm|cm|kg|g|nm|um|μm|v|kw|rpm|nm)\b)", re.IGNORECASE)
+MOJIBAKE_RE = re.compile(r"[ÃÂÊËÐÑÒÓÔÕÖØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ]")
 
 
 def _utc_now() -> str:
@@ -54,9 +55,33 @@ def _binary_pdf_features(path: Path, *, max_bytes: int) -> dict[str, Any]:
     # This is intentionally conservative; real text extraction belongs to conversion.
     candidates = re.findall(r"\(([^()\x00-\x08\x0b\x0c\x0e-\x1f]{4,})\)", text)
     sample = " ".join(item.strip() for item in candidates if item.strip())[:4000]
+    # Heuristic: if the PDF is large enough to be more than a trivial text doc and
+    # extracted stream text is mostly short or non-UTF8, treat as scanned/low-text.
+    sample_bytes_len = len(sample.encode("utf-8", errors="ignore"))
+    data_len = len(data)
+    density = sample_bytes_len / max(data_len, 1)
+    printable_count = sum(1 for char in sample if char.isprintable() or char.isspace())
+    printable_ratio = printable_count / max(len(sample), 1)
+    mojibake_count = len(MOJIBAKE_RE.findall(sample))
+    mojibake_ratio = mojibake_count / max(len(sample), 1)
+    likely_scanned = (
+        data_len >= 4096
+        and (sample_bytes_len < 80 or density < 0.005)
+    )
+    if sample_bytes_len < 80:
+        sample_quality = "low_text"
+    elif density < 0.005 or printable_ratio < 0.9 or mojibake_ratio >= 0.08:
+        sample_quality = "binary_garbage"
+    else:
+        sample_quality = "extractable_text"
     return {
         "page_count_estimate": page_count or None,
         "sample_text": sample,
+        "pdf_text_density": round(density, 6),
+        "pdf_text_sample_quality": sample_quality,
+        "pdf_text_printable_ratio": round(printable_ratio, 6),
+        "pdf_text_mojibake_ratio": round(mojibake_ratio, 6),
+        "likely_scanned": bool(likely_scanned),
     }
 
 
@@ -72,18 +97,50 @@ def _count_markdown_tables(lines: list[str]) -> int:
     return count
 
 
-def _language_summary(text: str) -> dict[str, Any]:
+def _infer_language_from_filename(path: Path) -> str | None:
+    """Heuristic language detection from filename hints."""
+    name = path.stem.lower()
+    if re.search(r"(?:^|[^a-z0-9])(?:cn|zh|zho|chinese|ch)(?:[^a-z0-9]|$)", name) or "中文" in name:
+        return "zh"
+    if re.search(r"(?:^|[^a-z0-9])(?:en|eng|english)(?:[^a-z0-9]|$)", name):
+        return "en"
+    return None
+
+
+def _language_summary(
+    text: str,
+    *,
+    filename_hint: str | None = None,
+    sample_reliable: bool = True,
+) -> dict[str, Any]:
     cjk_count = sum(1 for char in text if "\u4e00" <= char <= "\u9fff")
     latin_count = sum(1 for char in text if ("a" <= char.lower() <= "z"))
     total = max(len(text), 1)
+    language_source = "sample_text"
     if cjk_count >= max(8, latin_count // 2):
         language = "zh"
-    elif latin_count:
+    elif latin_count and sample_reliable:
         language = "en"
+    elif filename_hint:
+        language = filename_hint
+        language_source = "filename_hint"
     else:
         language = "unknown"
+        language_source = "unknown_low_confidence"
+    if (
+        language in {"unknown", "en"}
+        and filename_hint
+        and (len(text.strip()) < 200 or not sample_reliable)
+    ):
+        language = filename_hint
+        language_source = "filename_hint"
+    elif language == "en" and not sample_reliable:
+        language = "unknown"
+        language_source = "unknown_low_confidence"
     return {
         "language": language,
+        "language_source": language_source,
+        "language_confidence": "high" if language_source == "sample_text" and sample_reliable else "review",
         "cjk_char_count": cjk_count,
         "latin_char_count": latin_count,
         "sample_char_count": len(text),
@@ -124,6 +181,8 @@ def _document_record(source: Any, *, max_text_chars: int, max_binary_bytes: int)
         sample_text = str(pdf.get("sample_text") or "")
         page_count = pdf.get("page_count_estimate") if isinstance(pdf.get("page_count_estimate"), int) else None
         read_warning = pdf.get("pdf_probe_error") if isinstance(pdf.get("pdf_probe_error"), str) else None
+    else:
+        pdf = {}
 
     lines = sample_text.splitlines()
     html_tables = parse_html_tables(sample_text) if sample_text else []
@@ -131,9 +190,19 @@ def _document_record(source: Any, *, max_text_chars: int, max_binary_bytes: int)
     html_table_count = len(html_tables)
     image_ref_count = len(MARKDOWN_IMAGE_RE.findall(sample_text)) + len(HTML_IMAGE_RE.findall(sample_text))
     table_count = markdown_table_count + html_table_count
-    lang = _language_summary(sample_text)
+    filename_hint = _infer_language_from_filename(path)
+    binary_pdf_features = pdf if suffix in PDF_EXTENSIONS else {}
+    sample_reliable = str(binary_pdf_features.get("pdf_text_sample_quality") or "extractable_text") == "extractable_text"
+    lang = _language_summary(sample_text, filename_hint=filename_hint, sample_reliable=sample_reliable)
     stat = path.stat()
-    scanned_risk = bool(suffix in PDF_EXTENSIONS and len(sample_text.strip()) < 80)
+    scanned_risk = bool(
+        suffix in PDF_EXTENSIONS
+        and (
+            len(sample_text.strip()) < 80
+            or binary_pdf_features.get("likely_scanned", False)
+            or binary_pdf_features.get("pdf_text_sample_quality") in {"low_text", "binary_garbage"}
+        )
+    )
     table_char_count = sum(len(line) for line in lines if line.count("|") >= 2)
     table_density = round(table_char_count / max(len(sample_text), 1), 6) if sample_text else 0.0
     numeric_unit_hits = len(MATH_OR_UNIT_RE.findall(sample_text))
@@ -158,11 +227,13 @@ def _document_record(source: Any, *, max_text_chars: int, max_binary_bytes: int)
             "table_density": table_density,
             "numeric_or_unit_signal_count": numeric_unit_hits,
         },
+        "language_hint": filename_hint,
         "risks": {
             "scanned_or_low_text_pdf": scanned_risk,
             "image_source_requires_ocr": kind == "image",
             "table_signals_from_sample_only": suffix not in BUILTIN_EXTENSIONS,
         },
+        **binary_pdf_features,
     }
     if read_warning:
         record["warnings"] = [{"code": "source_sample_read_warning", "message": read_warning}]
@@ -185,6 +256,7 @@ def _aggregate(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     max_page_count = 0
     max_table_density = 0.0
     numeric_signal_count = 0
+    language_source_counts: dict[str, int] = {}
 
     for item in items:
         suffix = str(item.get("suffix") or "")
@@ -202,6 +274,8 @@ def _aggregate(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
         sample = item.get("sample") if isinstance(item.get("sample"), dict) else {}
         language = str(sample.get("language") or "unknown")
         language_counts[language] = language_counts.get(language, 0) + 1
+        language_source = str(sample.get("language_source") or "unknown")
+        language_source_counts[language_source] = language_source_counts.get(language_source, 0) + 1
         total_tables += int(sample.get("table_count", 0) or 0)
         total_html_tables += int(sample.get("html_table_count", 0) or 0)
         total_markdown_tables += int(sample.get("markdown_table_count", 0) or 0)
@@ -225,6 +299,9 @@ def _aggregate(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     complexity_score += 1 if scanned_risk_count else 0
     complexity_score += 1 if long_document else 0
     complexity_score += 1 if numeric_signal_count >= 6 else 0
+    # Scanned/low-text PDFs usually require OCR and deserve at least medium complexity.
+    if scanned_risk_count and complexity_score < 2:
+        complexity_score = 2
     complexity = "high" if complexity_score >= 4 else "medium" if complexity_score >= 2 else "low"
 
     return {
@@ -233,6 +310,7 @@ def _aggregate(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "suffix_counts": dict(sorted(suffix_counts.items())),
         "source_kind_counts": dict(sorted(kind_counts.items())),
         "language_counts": dict(sorted(language_counts.items())),
+        "language_source_counts": dict(sorted(language_source_counts.items())),
         "primary_language": primary_language,
         "formal_ingest_candidate_count": formal_candidates,
         "has_formal_ingest_candidates": formal,

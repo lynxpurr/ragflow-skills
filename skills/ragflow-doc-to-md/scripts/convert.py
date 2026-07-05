@@ -403,16 +403,25 @@ def _mineru_asset_mode(args: argparse.Namespace, config) -> str:
     return normalized
 
 
-def _mineru_fastapi_backend(args: argparse.Namespace, config) -> str:
-    return (
-        _config_or_arg(
-            args,
-            "mineru_fastapi_backend",
-            getattr(config.mineru, "fastapi_backend", None),
-            "pipeline",
-        )
-        or "pipeline"
+def _mineru_fastapi_backend(args: argparse.Namespace, config) -> str | None:
+    """Return user-configured MinerU FastAPI backend, or None if not set.
+
+    None lets table-quality logic pick a default. An explicit value (including
+    'pipeline') is preserved so user intent is respected.
+    """
+    value = _config_or_arg(
+        args,
+        "mineru_fastapi_backend",
+        getattr(config.mineru, "fastapi_backend", None),
+        None,
     )
+    if value is None or str(value).strip() == "":
+        return None
+    normalized = str(value).strip().lower()
+    allowed = {"pipeline", "hybrid-auto-engine", "vlm-auto-engine", "hybrid-http-client", "vlm-http-client", "hybrid-engine", "vlm-engine"}
+    if normalized not in allowed:
+        raise DocConvertError(f"MINERU_FASTAPI_BACKEND must be one of: {', '.join(sorted(allowed))}")
+    return normalized
 
 
 def _candidate_table_quality_sources(sources: list[Any]) -> list[str]:
@@ -1291,6 +1300,27 @@ def _write_runtime_report_payload(
     return report_json_path, report_md_path
 
 
+def _rewrite_quality_report_payload(
+    *,
+    output_root: Path,
+    args: argparse.Namespace,
+    manifest_path: Path,
+) -> dict[str, Any] | None:
+    quality_report_path = _sidecar_path(output_root, args.quality_report_name)
+    if not quality_report_path:
+        return None
+    manifest = load_doc_manifest_payload(manifest_path)
+    quality_root, documents = quality_documents_from_manifest(manifest, manifest_path=manifest_path)
+    report = make_quality_report_payload(output_root=quality_root, documents=documents)
+    quality_report_path.parent.mkdir(parents=True, exist_ok=True)
+    quality_report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    quality_report_md_path = _sidecar_path(output_root, args.quality_report_md)
+    if quality_report_md_path:
+        quality_report_md_path.parent.mkdir(parents=True, exist_ok=True)
+        quality_report_md_path.write_text(render_quality_markdown(report), encoding="utf-8")
+    return report
+
+
 def _explicit_runtime_stage_timings(report: dict[str, Any]) -> list[dict[str, Any]]:
     performance = report.get("performance")
     if not isinstance(performance, dict):
@@ -1333,6 +1363,7 @@ def _rewrite_runtime_report_payload(
     handoff_mode: str | None = None,
     handoff_advisory: list[dict[str, Any]] | None = None,
     formal_ingest: dict[str, Any] | None = None,
+    quality_report: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     report_path = _sidecar_path(output_root, args.runtime_report_name)
     if not report_path or not report_path.is_file():
@@ -1361,9 +1392,12 @@ def _rewrite_runtime_report_payload(
         runtime_context=merged_context,
         slow_path_warnings=merged_warnings,
     )
-    for key in ("document_quality_summary",):
-        if key in report:
-            rebuilt[key] = report[key]
+    if quality_report is not None:
+        _attach_runtime_quality_summary(runtime_report=rebuilt, quality_report=quality_report)
+    else:
+        for key in ("document_quality_summary",):
+            if key in report:
+                rebuilt[key] = report[key]
     table_summary = rebuilt.get("document_quality_summary")
     summary = rebuilt.get("summary")
     if isinstance(table_summary, dict) and isinstance(summary, dict):
@@ -1509,15 +1543,19 @@ def _table_quality_decision(
     backend: str,
     sources: list[Any],
     table_quality: str,
-    mineru_fastapi_backend: str,
+    mineru_fastapi_backend: str | None,
     mineru_enable_table: bool,
     allow_fallback: bool,
 ) -> dict[str, Any]:
+    # If user did not explicitly set a backend, let table-quality logic pick the
+    # default high-accuracy backend when appropriate. Otherwise, respect their choice.
+    user_set_backend = mineru_fastapi_backend is not None
     requested_backend = (mineru_fastapi_backend or "pipeline").strip().lower() or "pipeline"
     effective_backend = requested_backend
     candidate_sources = _candidate_table_quality_sources(sources)
     applied = False
     reason = "standard_compatibility"
+    warnings: list[dict[str, str]] = []
 
     if table_quality == "standard":
         reason = "standard_compatibility"
@@ -1526,21 +1564,53 @@ def _table_quality_decision(
     elif not mineru_enable_table:
         reason = "table_parsing_disabled"
     elif table_quality == "high":
-        effective_backend = (
-            requested_backend
-            if requested_backend in TABLE_QUALITY_HIGH_FASTAPI_BACKENDS
-            else TABLE_QUALITY_HIGH_FASTAPI_BACKEND
-        )
-        applied = effective_backend != "pipeline"
-        reason = "forced_high_accuracy"
+        if user_set_backend and requested_backend not in TABLE_QUALITY_HIGH_FASTAPI_BACKENDS:
+            # User explicitly asked for a non-high-accuracy backend; respect it.
+            effective_backend = requested_backend
+            applied = effective_backend != "pipeline"
+            reason = "forced_high_accuracy_explicit_backend_preserved"
+            warnings.append(
+                {
+                    "code": "explicit_backend_preserved",
+                    "severity": "review",
+                    "message": (
+                        f"User requested mineru_fastapi_backend '{requested_backend}' with "
+                        f"table_quality 'high'. The explicit backend is preserved; high-accuracy "
+                        f"table extraction may not be available."
+                    ),
+                }
+            )
+        else:
+            effective_backend = (
+                requested_backend
+                if requested_backend in TABLE_QUALITY_HIGH_FASTAPI_BACKENDS
+                else TABLE_QUALITY_HIGH_FASTAPI_BACKEND
+            )
+            applied = effective_backend != "pipeline"
+            reason = "forced_high_accuracy"
     elif candidate_sources:
-        effective_backend = (
-            requested_backend
-            if requested_backend in TABLE_QUALITY_HIGH_FASTAPI_BACKENDS
-            else TABLE_QUALITY_HIGH_FASTAPI_BACKEND
-        )
-        applied = effective_backend != "pipeline"
-        reason = "auto_candidate_source"
+        if user_set_backend and requested_backend not in TABLE_QUALITY_HIGH_FASTAPI_BACKENDS:
+            effective_backend = requested_backend
+            applied = effective_backend != "pipeline"
+            reason = "auto_candidate_source_explicit_backend_preserved"
+            warnings.append(
+                {
+                    "code": "auto_backend_preserved",
+                    "severity": "info",
+                    "message": (
+                        f"Auto table quality would select a high-accuracy backend, but user "
+                        f"requested '{requested_backend}' which will be used instead."
+                    ),
+                }
+            )
+        else:
+            effective_backend = (
+                requested_backend
+                if requested_backend in TABLE_QUALITY_HIGH_FASTAPI_BACKENDS
+                else TABLE_QUALITY_HIGH_FASTAPI_BACKEND
+            )
+            applied = effective_backend != "pipeline"
+            reason = "auto_candidate_source"
     else:
         reason = "auto_no_candidate_source"
 
@@ -1565,6 +1635,7 @@ def _table_quality_decision(
         "fallback_count": 0,
         "table_quality_degraded": degraded,
         "reason": reason,
+        "warnings": warnings,
     }
 
 
@@ -1583,8 +1654,9 @@ def _table_quality_runtime_context(decision: dict[str, Any]) -> dict[str, Any]:
 
 
 def _table_quality_warnings(decision: dict[str, Any]) -> list[dict[str, str]]:
+    warnings = list(decision.get("warnings", [])) if isinstance(decision.get("warnings"), list) else []
     if decision["high_accuracy_backend_requested"]:
-        return [
+        warnings.append(
             {
                 "code": "table_high_accuracy_backend",
                 "severity": "info",
@@ -1593,19 +1665,19 @@ def _table_quality_warnings(decision: dict[str, Any]) -> list[dict[str, str]]:
                     "expect higher latency or resource usage than pipeline."
                 ),
             }
-        ]
+        )
     if decision["mode"] in {"high", "auto"} and decision["reason"] in {
         "requires_mineru_fastapi_backend",
         "table_parsing_disabled",
     }:
-        return [
+        warnings.append(
             {
                 "code": "table_quality_not_applied",
                 "severity": "review",
                 "message": "Table-quality strategy was requested but could not select a high-accuracy FastAPI backend.",
             }
-        ]
-    return []
+        )
+    return warnings
 
 
 def _latest_failed_fastapi_attempt(remote_attempts: list[dict[str, Any]], start_index: int) -> dict[str, Any] | None:
@@ -2128,6 +2200,7 @@ def _update_runtime_report_handoff_state(
     stage_timings: list[dict[str, Any]] | None = None,
     runtime_context: dict[str, Any] | None = None,
     slow_path_warnings: list[dict[str, str]] | None = None,
+    quality_report: dict[str, Any] | None = None,
 ) -> None:
     if not getattr(args, "runtime_report_name", None):
         return
@@ -2140,6 +2213,7 @@ def _update_runtime_report_handoff_state(
         handoff_mode=handoff_mode,
         handoff_advisory=handoff_advisory,
         formal_ingest=formal_ingest,
+        quality_report=quality_report,
     )
 
 
@@ -2199,6 +2273,16 @@ def _run_pipeline(args: argparse.Namespace) -> int:
             manifest_path,
             handoff_mode=FORMAL_INGEST_HANDOFF_MODE,
             handoff_advisory=handoff_advisory,
+        )
+        quality_report = _rewrite_quality_report_payload(
+            output_root=output_root,
+            args=args,
+            manifest_path=manifest_path,
+        )
+        _rewrite_runtime_report_payload(
+            output_root=output_root,
+            args=args,
+            quality_report=quality_report,
         )
 
         metadata_name = _safe_handoff_sidecar_name(args.metadata_name, label="--metadata-name") or "metadata.json"
@@ -2364,6 +2448,7 @@ def _run_pipeline(args: argparse.Namespace) -> int:
             formal_ingest=formal_ingest,
             stage_timings=pipeline_stage_timings,
             runtime_context={"pipeline_mode": FORMAL_INGEST_HANDOFF_MODE},
+            quality_report=quality_report,
         )
 
         response = {
@@ -2563,6 +2648,7 @@ def _run_adaptive(args: argparse.Namespace) -> int:
         configured_backend = _backend(args, config)
         configured_table_quality = args.table_quality or getattr(config.doc_to_md, "table_quality", None)
         configured_asset_mode = args.mineru_asset_mode or getattr(config.mineru, "asset_mode", None)
+        configured_language = args.mineru_language or getattr(config.mineru, "language", None)
         configured_fastapi_backend = (
             args.mineru_fastapi_backend
             or getattr(config.mineru, "fastapi_backend", None)
@@ -2578,6 +2664,7 @@ def _run_adaptive(args: argparse.Namespace) -> int:
         decision = make_pipeline_decision(
             features,
             requested_backend=configured_backend,
+            requested_language=configured_language,
             requested_table_quality=configured_table_quality,
             requested_postprocess_profile=args.postprocess_profile,
             requested_mineru_fastapi_backend=configured_fastapi_backend,

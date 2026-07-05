@@ -1,7 +1,7 @@
 ---
 name: ragflow-skills
 description: "RAGFlow 文档→知识库 skill 套件：ragflow-doc-to-md + ragflow-kb-build 的测试、使用与对比。覆盖 regression test、handoff 契约、chunk marker/table 原子性、与 ragflux 和 ragflow-kb-ops 的取舍。"
-version: 1.0.0
+version: 1.0.1
 author: Architect (Luca)
 _updated: '2026-07-05'
 license: MIT
@@ -197,6 +197,14 @@ RTX 5070 Ti / 5080 / 5090 (sm_120) 上，旧 `ragflux accurate` 本地路径高�
 应优先用 `mineru-fastapi` 的 backend probe/warmup、`--table-quality auto|high` 和 fallback 报告判断，
 不要只按 GPU 型号硬禁 high-accuracy；不确定时先用 `pipeline` 或 `adaptive --decision-only` 生成 review。
 
+Observed compatibility warning: one MinerU FastAPI 3.2.1 field trial on a
+Blackwell-class GPU failed when `hybrid-auto-engine` initialized, while the standard
+`pipeline` backend completed. When this failure class appears, explicitly pin
+`--mineru-fastapi-backend pipeline` and use backend warmup/fallback evidence before
+retrying high-accuracy backends. See
+`references/blackwell-mineru-fastapi-backend-pitfall.md` and the sanitized scanned-PDF
+regression notes in `references/real-scanned-pdf-e2e-test-report.md`.
+
 ### Pitfall #3: 认为 chunk marker 能阻止 RAGFlow 切表格
 
 chunk marker 是**提示性边界**，不是**硬约束**。RAGFlow 的 chunker 仍可能按 `chunk_token_num` 切超大表格。表格原子性需要结合 RAGFlow profile 和入库后验证。
@@ -264,5 +272,7 @@ print(out.count('<!-- chunk -->'))
 - Skill: `ragflow-smart-query` — 检索入口
 - Skill: `rag-systems` — RAG 系统总览
 - Reference: `references/ragflow-skills-table-atomicity.md` — chunk marker / table 原子性实测记录
+- Reference: `references/real-scanned-pdf-e2e-test-report.md` — 真实扫描 PDF 端到端测试记录
 - Reference: `references/ragflow-skills-vs-ragflux-vs-kb-ops.md` — 三套管线对比表
 - Reference: `references/ragflow-skills-adaptive-pipeline-guide.md` — adaptive pipeline 端到端使用指南
+- Reference: `references/blackwell-mineru-fastapi-backend-pitfall.md` — Blackwell GPU 上 MinerU high-accuracy backend 陷阱

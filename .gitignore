@@ -19,6 +19,9 @@ build/
 release-artifacts/
 *.egg-info/
 
+# Local run artifacts and source-document copies
+output/
+
 # Local config and secrets
 .ragflow/
 .local/
