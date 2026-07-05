@@ -298,7 +298,7 @@ evidence refs、隐私字面量，以及“外部 pass 不可覆盖 normalized n
   单位、温度符号等误判校正；Markdown 原文仍保持不改写。
 - schema identity gate 已登记新增 report schema，避免后续 release hygiene 漏检。
 
-尚未关闭的 P0 条目：
+当时尚未关闭的 P0 条目：
 
 - 原私有 16 问 QA 原文未进入 public repo；当前实现先提供可验证框架和脱敏样例测试。
   后续需要由 host agent 在私有侧把 16 问按 `apollo_table_qa_fixture_v1` 填入，再运行
@@ -347,7 +347,7 @@ evidence refs、隐私字面量，以及“外部 pass 不可覆盖 normalized n
 - 对 HH-A / HH-B 类跨型号复杂表头 fixture，会生成 `rrf_fusion` 策略；对 MPEE / `$MPE_E$`
   类表头别名，会生成 term-alias query expansion。
 
-当前仍未关闭的 P1 条目：
+当时仍未关闭的 P1 条目：
 
 - 私有 16 问还需要在私有侧填入脱敏 fixture，并把 direct / multi-query / fusion saved result JSON
   喂给 `table-strategy`，才能得到完整 16 问策略命中率报告。
@@ -366,7 +366,7 @@ evidence refs、隐私字面量，以及“外部 pass 不可覆盖 normalized n
   现有 mutation gate、cleanup 规则和显式批准。
 - schema identity gate 已登记新增报告 schema，避免后续 release hygiene 漏检。
 
-当前仍未关闭的 P1 条目：
+当时仍未关闭的 P1 条目：
 
 - 该上传包目前只完成离线计划和本地 zip 物化；如需真正让 RAGFlow live 接收 Markdown+images 包，还需要先确认
   目标 RAGFlow 上传 API 是否支持 zip/批量资产语义，并通过 fake-client 与明确 live gate 推进。
@@ -384,7 +384,7 @@ evidence refs、隐私字面量，以及“外部 pass 不可覆盖 normalized n
   profile 会触发 `table_parent_chunk_profile_too_small` review warning，但不执行 live mutation。
 - 该检查不假设所有 RAGFlow 部署都支持 4096；如果估算表格超过 4096，会建议拆表、调整部署上限或人工复核。
 
-当前仍未关闭的 P1 条目：
+当时仍未关闭的 P1 条目：
 
 - host-agent 表格入库指引需要把 `inspect-handoff`、`asset-upload-plan`、表格 profile review 和 dry-run
   父 chunk warning 串成一段简明流程。
