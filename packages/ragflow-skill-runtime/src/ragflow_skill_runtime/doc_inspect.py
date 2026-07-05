@@ -31,7 +31,7 @@ PDF_EXTENSIONS = {".pdf"}
 MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
 HTML_IMAGE_RE = re.compile(r"<img\b[^>]*?\bsrc=[\"'][^\"']+[\"']", re.IGNORECASE)
 MATH_OR_UNIT_RE = re.compile(r"[%℃°μµ]|(?:\b(?:mm|cm|kg|g|nm|um|μm|v|kw|rpm|nm)\b)", re.IGNORECASE)
-MOJIBAKE_RE = re.compile(r"[ÃÂÊËÐÑÒÓÔÕÖØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ]")
+MOJIBAKE_RE = re.compile(r"[\u00c2\u00c3\u00ca\u00cb\u00d0-\u00d6\u00d8-\u00ff]")
 
 
 def _utc_now() -> str:
