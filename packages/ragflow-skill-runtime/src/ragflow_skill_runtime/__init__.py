@@ -472,10 +472,15 @@ from .apollo_qa import (
     APOLLO_TABLE_QA_EVALUATION_REPORT_SCHEMA,
     APOLLO_TABLE_QA_FIXTURE_SCHEMA,
     APOLLO_TABLE_QA_FIXTURE_VALIDATION_REPORT_SCHEMA,
+    APOLLO_TABLE_QA_JUDGE_CANDIDATE_SCHEMA,
+    APOLLO_TABLE_QA_JUDGE_REQUEST_SCHEMA,
+    APOLLO_TABLE_QA_JUDGE_REVIEW_REPORT_SCHEMA,
     ApolloQaError,
+    create_apollo_table_qa_judge_request,
     evaluate_apollo_table_qa_results,
     load_apollo_table_qa_fixture,
     render_apollo_table_qa_markdown,
+    review_apollo_table_qa_judge_candidate,
     validate_apollo_table_qa_fixture,
 )
 from .retrieval import (

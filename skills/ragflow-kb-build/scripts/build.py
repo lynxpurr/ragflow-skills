@@ -37,6 +37,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     build_runtime_metrics_summary,
     build_runtime_partial_failure_report,
     create_grounded_qa_suggestion_request,
+    create_apollo_table_qa_judge_request,
     create_kb_asset_upload_plan,
     create_metadata_suggestion_request,
     create_optimization_cleanup_plan,
@@ -104,6 +105,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     evaluate_apollo_table_qa_results,
     tagset_report_file,
     generate_grounded_qa,
+    review_apollo_table_qa_judge_candidate,
     validate_apollo_table_qa_fixture,
     validate_grounded_qa,
     wait_for_document_states,
@@ -1751,6 +1753,60 @@ def _run_qa_apollo_evaluate(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_qa_apollo_judge_request(args: argparse.Namespace) -> int:
+    try:
+        report = create_apollo_table_qa_judge_request(
+            fixture_path=args.fixture,
+            results_path=args.results,
+            target=args.target,
+            evaluation_report_path=args.evaluation_report,
+            include_answer_text=not args.omit_answer_text,
+            include_retrieval_previews=not args.omit_retrieval_previews,
+            max_answer_chars=args.max_answer_chars,
+            max_retrieval_chars=args.max_retrieval_chars,
+            max_retrieval_items=args.max_retrieval_items,
+        )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.fixture, args.results, args.evaluation_report],
+                context_json_paths=[args.fixture, args.results, args.evaluation_report],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.output, report)
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_apollo_table_qa_markdown(report, title="APOLLO Table QA Judge Request"))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (ApolloQaError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
+def _run_qa_apollo_judge_review(args: argparse.Namespace) -> int:
+    try:
+        report = review_apollo_table_qa_judge_candidate(
+            request_path=args.request,
+            candidate_path=args.candidate,
+            require_advisory=not args.allow_non_advisory,
+            require_generated=not args.allow_non_generated,
+        )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_benchmark_report(
+                report,
+                args,
+                input_paths=[args.request, args.candidate],
+                context_json_paths=[args.request, args.candidate],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_apollo_table_qa_markdown(report, title="APOLLO Table QA Judge Review"))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (ApolloQaError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _run_segment_metadata_report(args: argparse.Namespace) -> int:
     try:
         report = segment_metadata_report_file(
@@ -2883,6 +2939,59 @@ def build_qa_parser() -> argparse.ArgumentParser:
     apollo_evaluate.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     apollo_evaluate.add_argument("--json", action="store_true", help="Emit JSON errors")
     apollo_evaluate.set_defaults(func=_run_qa_apollo_evaluate)
+
+    apollo_judge_request = subparsers.add_parser(
+        "apollo-judge-request",
+        help="Create a no-LLM external judge request for APOLLO table-QA results",
+    )
+    apollo_judge_request.add_argument("--fixture", required=True, help="apollo_table_qa_fixture_v1 JSON")
+    apollo_judge_request.add_argument("--results", required=True, help="Existing retrieval/answer results JSON")
+    apollo_judge_request.add_argument("--output", required=True, help="Output APOLLO judge request JSON")
+    apollo_judge_request.add_argument(
+        "--target",
+        choices=("auto", "answer", "retrieval", "both"),
+        default="auto",
+        help="Baseline evaluation target used for request context",
+    )
+    apollo_judge_request.add_argument("--evaluation-report", help="Optional existing apollo_table_qa_evaluation_report_v1 JSON")
+    apollo_judge_request.add_argument("--omit-answer-text", action="store_true", help="Omit answer previews from the request")
+    apollo_judge_request.add_argument(
+        "--omit-retrieval-previews",
+        action="store_true",
+        help="Omit retrieval chunk previews from the request",
+    )
+    apollo_judge_request.add_argument("--max-answer-chars", type=int, default=1200, help="Maximum answer preview characters")
+    apollo_judge_request.add_argument(
+        "--max-retrieval-chars",
+        type=int,
+        default=1200,
+        help="Maximum retrieval preview characters per chunk",
+    )
+    apollo_judge_request.add_argument(
+        "--max-retrieval-items",
+        type=int,
+        default=5,
+        help="Maximum retrieval evidence items per case",
+    )
+    apollo_judge_request.add_argument("--report-json", help="Optional request report JSON path")
+    apollo_judge_request.add_argument("--report-md", help="Optional request report Markdown path")
+    apollo_judge_request.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
+    apollo_judge_request.add_argument("--json", action="store_true", help="Emit JSON errors")
+    apollo_judge_request.set_defaults(func=_run_qa_apollo_judge_request)
+
+    apollo_judge_review = subparsers.add_parser(
+        "apollo-judge-review",
+        help="Review an external APOLLO table-QA judge candidate",
+    )
+    apollo_judge_review.add_argument("--request", required=True, help="apollo_table_qa_judge_request_v1 JSON")
+    apollo_judge_review.add_argument("--candidate", required=True, help="External APOLLO judge candidate JSON")
+    apollo_judge_review.add_argument("--allow-non-advisory", action="store_true", help="Allow candidates that do not set advisory=true")
+    apollo_judge_review.add_argument("--allow-non-generated", action="store_true", help="Allow candidates that do not set generated=true")
+    apollo_judge_review.add_argument("--report-json", help="Optional review report JSON path")
+    apollo_judge_review.add_argument("--report-md", help="Optional review report Markdown path")
+    apollo_judge_review.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
+    apollo_judge_review.add_argument("--json", action="store_true", help="Emit JSON errors")
+    apollo_judge_review.set_defaults(func=_run_qa_apollo_judge_review)
 
     return parser
 

@@ -9,8 +9,13 @@ from ragflow_skill_runtime.apollo_qa import (
     APOLLO_TABLE_QA_EVALUATION_REPORT_SCHEMA,
     APOLLO_TABLE_QA_FIXTURE_SCHEMA,
     APOLLO_TABLE_QA_FIXTURE_VALIDATION_REPORT_SCHEMA,
+    APOLLO_TABLE_QA_JUDGE_CANDIDATE_SCHEMA,
+    APOLLO_TABLE_QA_JUDGE_REQUEST_SCHEMA,
+    APOLLO_TABLE_QA_JUDGE_REVIEW_REPORT_SCHEMA,
+    create_apollo_table_qa_judge_request,
     evaluate_apollo_table_qa_results,
     render_apollo_table_qa_markdown,
+    review_apollo_table_qa_judge_candidate,
     validate_apollo_table_qa_fixture,
 )
 
@@ -171,3 +176,218 @@ class ApolloQaTests(unittest.TestCase):
         self.assertTrue(report["ok"], report["issues"])
         self.assertEqual(report["summary"]["answer_case_count"], 0)
         self.assertEqual(report["summary"]["normalized_retrieval_pass_count"], 1)
+
+    def test_judge_request_packages_baseline_and_no_llm_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = root / "apollo-fixture.json"
+            results = root / "apollo-results.json"
+            _write_json(
+                fixture,
+                {
+                    "schema": APOLLO_TABLE_QA_FIXTURE_SCHEMA,
+                    "items": [
+                        {
+                            "id": "apollo-q1",
+                            "question": "What is the MPEE value?",
+                            "strict_terms": ["$MPE_E$", "0.02 mm"],
+                            "normalized_facts": [
+                                {"id": "mpe_e", "canonical": "$MPE_E$", "aliases": ["MPEE"]},
+                                {"id": "value", "canonical": "0.02 mm", "aliases": ["0.02mm"]},
+                            ],
+                        }
+                    ],
+                },
+            )
+            _write_json(
+                results,
+                {
+                    "results": [
+                        {
+                            "id": "apollo-q1",
+                            "answer": "The MPEE value is 0.02mm.",
+                            "top_chunks": [{"content": "Header $MPE_E$ lists 0.02 mm."}],
+                        }
+                    ]
+                },
+            )
+
+            request = create_apollo_table_qa_judge_request(fixture_path=fixture, results_path=results, target="answer")
+            markdown = render_apollo_table_qa_markdown(request, title="APOLLO Table QA Judge Request")
+
+        self.assertEqual(request["schema"], APOLLO_TABLE_QA_JUDGE_REQUEST_SCHEMA)
+        self.assertTrue(request["ok"], request["issues"])
+        self.assertFalse(request["llm_invoked"])
+        self.assertEqual(request["summary"]["script_owned_llm_calls"], 0)
+        self.assertEqual(request["summary"]["baseline_pass_count"], 1)
+        self.assertEqual(request["cases"][0]["baseline"]["status"], "PASS")
+        self.assertIn("apollo-q1:answer", {item["id"] for item in request["cases"][0]["evidence"]})
+        self.assertIn("llm_invoked", markdown)
+
+    def test_judge_review_accepts_advisory_generated_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = root / "apollo-fixture.json"
+            results = root / "apollo-results.json"
+            request_path = root / "judge-request.json"
+            candidate_path = root / "judge-candidate.json"
+            _write_json(
+                fixture,
+                {
+                    "schema": APOLLO_TABLE_QA_FIXTURE_SCHEMA,
+                    "items": [
+                        {
+                            "id": "apollo-q1",
+                            "question": "What is the MPEE value?",
+                            "strict_terms": ["$MPE_E$", "0.02 mm"],
+                            "normalized_facts": [
+                                {"id": "mpe_e", "canonical": "$MPE_E$", "aliases": ["MPEE"]},
+                                {"id": "value", "canonical": "0.02 mm", "aliases": ["0.02mm"]},
+                            ],
+                        }
+                    ],
+                },
+            )
+            _write_json(
+                results,
+                {
+                    "results": [
+                        {
+                            "id": "apollo-q1",
+                            "answer": "The MPEE value is 0.02mm.",
+                            "top_chunks": [{"content": "Header $MPE_E$ lists 0.02 mm."}],
+                        }
+                    ]
+                },
+            )
+            request = create_apollo_table_qa_judge_request(fixture_path=fixture, results_path=results, target="answer")
+            _write_json(request_path, request)
+            _write_json(
+                candidate_path,
+                {
+                    "schema": APOLLO_TABLE_QA_JUDGE_CANDIDATE_SCHEMA,
+                    "advisory": True,
+                    "generated": True,
+                    "case_verdicts": [
+                        {
+                            "id": "apollo-q1",
+                            "verdict": "pass",
+                            "rationale": "The answer states the normalized value and request evidence cites the exact table header.",
+                            "evidence_refs": ["apollo-q1:answer", "apollo-q1:retrieval:1"],
+                        }
+                    ],
+                },
+            )
+
+            report = review_apollo_table_qa_judge_candidate(request_path=request_path, candidate_path=candidate_path)
+            markdown = render_apollo_table_qa_markdown(report, title="APOLLO Table QA Judge Review")
+
+        self.assertEqual(report["schema"], APOLLO_TABLE_QA_JUDGE_REVIEW_REPORT_SCHEMA)
+        self.assertTrue(report["ok"], report["issues"])
+        self.assertEqual(report["summary"]["pass"], 1)
+        self.assertEqual(report["summary"]["evidence_ref_count"], 2)
+        self.assertIn("candidate_case_count", markdown)
+
+    def test_judge_request_keeps_failed_baseline_as_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = root / "apollo-fixture.json"
+            results = root / "apollo-results.json"
+            _write_json(
+                fixture,
+                {
+                    "schema": APOLLO_TABLE_QA_FIXTURE_SCHEMA,
+                    "items": [
+                        {
+                            "id": "apollo-q1",
+                            "question": "What is the missing value?",
+                            "strict_terms": ["0.02 mm"],
+                            "normalized_facts": [{"id": "value", "canonical": "0.02 mm", "aliases": ["0.02mm"]}],
+                        }
+                    ],
+                },
+            )
+            _write_json(results, {"results": [{"id": "apollo-q1", "answer": "The value is not shown."}]})
+
+            request = create_apollo_table_qa_judge_request(fixture_path=fixture, results_path=results, target="answer")
+
+        self.assertTrue(request["ok"], request["issues"])
+        self.assertFalse(request["summary"]["baseline_ok"])
+        self.assertEqual(request["summary"]["baseline_fail_count"], 1)
+        self.assertEqual(request["summary"]["baseline_errors"], 1)
+
+    def test_judge_review_rejects_unmarked_and_unknown_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            request_path = root / "judge-request.json"
+            candidate_path = root / "judge-candidate.json"
+            _write_json(
+                request_path,
+                {
+                    "schema": APOLLO_TABLE_QA_JUDGE_REQUEST_SCHEMA,
+                    "llm_invoked": False,
+                    "request_hash": "hash",
+                    "cases": [
+                        {
+                            "id": "apollo-q1",
+                            "baseline": {"status": "PASS"},
+                            "evidence": [{"id": "apollo-q1:answer", "case_id": "apollo-q1", "source": "answer"}],
+                        }
+                    ],
+                },
+            )
+            _write_json(
+                candidate_path,
+                {
+                    "schema": APOLLO_TABLE_QA_JUDGE_CANDIDATE_SCHEMA,
+                    "case_verdicts": [
+                        {"id": "apollo-q2", "verdict": "pass", "evidence_refs": ["apollo-q1:answer"]}
+                    ],
+                },
+            )
+
+            report = review_apollo_table_qa_judge_candidate(request_path=request_path, candidate_path=candidate_path)
+
+        self.assertFalse(report["ok"])
+        issue_codes = {issue["code"] for issue in report["issues"]}
+        self.assertIn("apollo_table_qa_judge_not_advisory", issue_codes)
+        self.assertIn("apollo_table_qa_judge_not_generated", issue_codes)
+        self.assertIn("apollo_table_qa_judge_unknown_case", issue_codes)
+        self.assertIn("apollo_table_qa_judge_missing_case", issue_codes)
+
+    def test_judge_review_rejects_pass_over_failed_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            request_path = root / "judge-request.json"
+            candidate_path = root / "judge-candidate.json"
+            _write_json(
+                request_path,
+                {
+                    "schema": APOLLO_TABLE_QA_JUDGE_REQUEST_SCHEMA,
+                    "llm_invoked": False,
+                    "request_hash": "hash",
+                    "cases": [
+                        {
+                            "id": "apollo-q1",
+                            "baseline": {"status": "FAIL"},
+                            "evidence": [{"id": "apollo-q1:answer", "case_id": "apollo-q1", "source": "answer"}],
+                        }
+                    ],
+                },
+            )
+            _write_json(
+                candidate_path,
+                {
+                    "schema": APOLLO_TABLE_QA_JUDGE_CANDIDATE_SCHEMA,
+                    "advisory": True,
+                    "generated": True,
+                    "case_verdicts": [
+                        {"id": "apollo-q1", "verdict": "pass", "evidence_refs": ["apollo-q1:answer"]}
+                    ],
+                },
+            )
+
+            report = review_apollo_table_qa_judge_candidate(request_path=request_path, candidate_path=candidate_path)
+
+        self.assertFalse(report["ok"])
+        self.assertTrue(any(issue["code"] == "apollo_table_qa_judge_baseline_override" for issue in report["issues"]))

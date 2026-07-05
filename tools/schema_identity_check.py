@@ -255,6 +255,22 @@ EXPECTED_IDENTITIES = (
         description="No-network strict/normalized contains report for APOLLO table-QA result JSON.",
     ),
     SchemaIdentity(
+        key="apollo_table_qa_judge_request",
+        group="benchmark",
+        identity="apollo_table_qa_judge_request_v1",
+        source_patterns=("apollo_table_qa_judge_request_v1", "APOLLO_TABLE_QA_JUDGE_REQUEST_SCHEMA"),
+        coverage_patterns=("apollo_table_qa_judge_request_v1", "APOLLO_TABLE_QA_JUDGE_REQUEST_SCHEMA"),
+        description="No-LLM request artifact for external APOLLO table-QA judge review.",
+    ),
+    SchemaIdentity(
+        key="apollo_table_qa_judge_review_report",
+        group="benchmark",
+        identity="apollo_table_qa_judge_review_report_v1",
+        source_patterns=("apollo_table_qa_judge_review_report_v1", "APOLLO_TABLE_QA_JUDGE_REVIEW_REPORT_SCHEMA"),
+        coverage_patterns=("apollo_table_qa_judge_review_report_v1", "APOLLO_TABLE_QA_JUDGE_REVIEW_REPORT_SCHEMA"),
+        description="Deterministic review report for external APOLLO table-QA judge candidates.",
+    ),
+    SchemaIdentity(
         key="suppression_report",
         group="benchmark",
         identity="ragflow_suppression_report_v1",

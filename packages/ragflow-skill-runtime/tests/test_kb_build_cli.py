@@ -415,6 +415,138 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(validate_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
         self.assertEqual(evaluate_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
 
+    def test_qa_apollo_judge_request_and_review_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = root / "apollo-fixture.json"
+            results = root / "apollo-results.json"
+            request = root / "judge-request.json"
+            candidate = root / "judge-candidate.json"
+            request_report = root / "judge-request-report.json"
+            review_report = root / "judge-review-report.json"
+            request_md = root / "judge-request.md"
+            review_md = root / "judge-review.md"
+            request_redaction = root / "judge-request-redaction.json"
+            review_redaction = root / "judge-review-redaction.json"
+            fixture.write_text(
+                json.dumps(
+                    {
+                        "schema": "apollo_table_qa_fixture_v1",
+                        "items": [
+                            {
+                                "id": "apollo-q1",
+                                "question": "What is the MPEE value?",
+                                "strict_terms": ["$MPE_E$", "0.02 mm"],
+                                "normalized_facts": [
+                                    {"id": "mpe_e", "canonical": "$MPE_E$", "aliases": ["MPEE"]},
+                                    {"id": "value", "canonical": "0.02 mm", "aliases": ["0.02mm"]},
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            results.write_text(
+                json.dumps(
+                    {
+                        "results": [
+                            {
+                                "id": "apollo-q1",
+                                "answer": "The MPEE value is 0.02mm.",
+                                "top_chunks": [{"content": "Header $MPE_E$ lists 0.02 mm."}],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            request_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "qa",
+                    "apollo-judge-request",
+                    "--fixture",
+                    str(fixture),
+                    "--results",
+                    str(results),
+                    "--target",
+                    "answer",
+                    "--output",
+                    str(request),
+                    "--report-json",
+                    str(request_report),
+                    "--report-md",
+                    str(request_md),
+                    "--redaction-report",
+                    str(request_redaction),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            request_payload = json.loads(request.read_text(encoding="utf-8"))
+            candidate.write_text(
+                json.dumps(
+                    {
+                        "schema": "apollo_table_qa_judge_candidate_v1",
+                        "advisory": True,
+                        "generated": True,
+                        "case_verdicts": [
+                            {
+                                "id": "apollo-q1",
+                                "verdict": "pass",
+                                "evidence_refs": ["apollo-q1:answer", "apollo-q1:retrieval:1"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            review_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "qa",
+                    "apollo-judge-review",
+                    "--request",
+                    str(request),
+                    "--candidate",
+                    str(candidate),
+                    "--report-json",
+                    str(review_report),
+                    "--report-md",
+                    str(review_md),
+                    "--redaction-report",
+                    str(review_redaction),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+            request_report_payload = json.loads(request_report.read_text(encoding="utf-8"))
+            review_report_payload = json.loads(review_report.read_text(encoding="utf-8"))
+            request_md_text = request_md.read_text(encoding="utf-8")
+            review_md_text = review_md.read_text(encoding="utf-8")
+            request_redaction_payload = json.loads(request_redaction.read_text(encoding="utf-8"))
+            review_redaction_payload = json.loads(review_redaction.read_text(encoding="utf-8"))
+
+        self.assertEqual(request_result.returncode, 0, request_result.stderr)
+        self.assertEqual(review_result.returncode, 0, review_result.stderr)
+        self.assertEqual(request_payload["schema"], "apollo_table_qa_judge_request_v1")
+        self.assertEqual(request_report_payload["schema"], "apollo_table_qa_judge_request_v1")
+        self.assertEqual(review_report_payload["schema"], "apollo_table_qa_judge_review_report_v1")
+        self.assertEqual(review_report_payload["summary"]["pass"], 1)
+        self.assertIn("# APOLLO Table QA Judge Request", request_md_text)
+        self.assertIn("# APOLLO Table QA Judge Review", review_md_text)
+        self.assertEqual(request_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertEqual(review_redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+
     def test_inspect_handoff_reviews_ingest_readiness_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

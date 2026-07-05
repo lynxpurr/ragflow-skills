@@ -20,12 +20,12 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_report_surface_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 92)
+        self.assertEqual(report["summary"]["command_count"], 94)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
             {
-                "covered": 83,
+                "covered": 85,
                 "needs_redaction": 0,
                 "not_applicable": 9,
             },
@@ -92,6 +92,16 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
         self.assertEqual(qa_apollo_evaluate["status"], "covered")
         self.assertIn("redaction_sidecar", qa_apollo_evaluate["output_categories"])
         self.assertIn("markdown_report", qa_apollo_evaluate["output_categories"])
+
+        qa_apollo_judge_request = by_command["ragflow-kb-build qa apollo-judge-request"]
+        self.assertEqual(qa_apollo_judge_request["status"], "covered")
+        self.assertIn("redaction_sidecar", qa_apollo_judge_request["output_categories"])
+        self.assertIn("markdown_report", qa_apollo_judge_request["output_categories"])
+
+        qa_apollo_judge_review = by_command["ragflow-kb-build qa apollo-judge-review"]
+        self.assertEqual(qa_apollo_judge_review["status"], "covered")
+        self.assertIn("redaction_sidecar", qa_apollo_judge_review["output_categories"])
+        self.assertIn("markdown_report", qa_apollo_judge_review["output_categories"])
 
         table_strategy = by_command["ragflow-query table-strategy"]
         self.assertEqual(table_strategy["status"], "covered")

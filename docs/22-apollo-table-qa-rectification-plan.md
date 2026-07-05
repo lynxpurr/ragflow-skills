@@ -1,6 +1,6 @@
 # 22. APOLLO 表格 QA 矫正核验与后续优化计划
 
-状态：问题核验与后续任务建议
+状态：公共离线开发批次已完成；剩余私有/live gated 项待外部输入
 日期：2026-07-04
 范围：基于 APOLLO 表格 QA 私有评估结果，校准 `ragflow-doc-to-md` 与
 `ragflow-kb-build` 的剩余表格问答质量问题；不执行 live RAGFlow mutation，不引入
@@ -221,7 +221,7 @@ APOLLO 证据显示跨表比较问题比单表查值更脆弱。下一步应利�
 | 完成 | P1 | kb-build | 增加表格父 chunk 风险预检 | ingest readiness / dry-run warning | 小父 chunk profile fixture 触发 warning |
 | 完成 | P1 | query | 为跨表问题增加 no-LLM retrieval strategy report | direct vs multi-query/fusion comparison | APOLLO fixture 离线报告 |
 | 完成 | P1 | docs | 更新 host-agent 表格入库指引 | concise usage section | 不含私有路径或服务地址 |
-| 待推进；默认 no-LLM | P2 | optional LLM boundary | 设计外部 judge request/review | judge request/review schemas | 默认不调用模型 |
+| 完成 | P2 | optional LLM boundary | 设计外部 judge request/review | `apollo_table_qa_judge_request_v1` / `apollo_table_qa_judge_review_report_v1` | 默认不调用模型 |
 | gated；未获明确 live 批准不执行 | P2 | live gated | 代表样本 live KB 创建/查询/清理验证 | sanitized field-trial evidence | 明确批准、cleanup、redaction |
 
 ## 7. 当前建议用法
@@ -252,6 +252,28 @@ ragflow-kb-build --doc-manifest <handoff>/doc_manifest.json --profile <reviewed-
 
 表格 profile 应优先使用 rich handoff 生成的 `table-atomic-*-4096` 建议；如果部署不支持较大父 chunk，
 先降低为部署允许值并接受 `table_parent_chunk_preflight` review warning，不要设置 `children_delimiter`。
+
+如需外部 judge，只生成 request/review artifact，不由 skill 调用模型：
+
+```bash
+ragflow-kb-build qa apollo-judge-request \
+  --fixture <apollo-fixture.json> \
+  --results <saved-results.json> \
+  --target answer \
+  --output <run>/apollo_judge_request.json \
+  --report-md <run>/apollo_judge_request.md \
+  --redaction-report <run>/apollo_judge_request.redaction.json
+
+ragflow-kb-build qa apollo-judge-review \
+  --request <run>/apollo_judge_request.json \
+  --candidate <external-candidate.json> \
+  --report-json <run>/apollo_judge_review.json \
+  --report-md <run>/apollo_judge_review.md \
+  --redaction-report <run>/apollo_judge_review.redaction.json
+```
+
+外部 candidate 必须标记 `advisory=true` 与 `generated=true`；review 会校验 case id、每题 verdict、
+evidence refs、隐私字面量，以及“外部 pass 不可覆盖 normalized no-LLM baseline fail”。
 
 ## 8. 边界
 
@@ -375,4 +397,25 @@ ragflow-kb-build --doc-manifest <handoff>/doc_manifest.json --profile <reviewed-
   `table_parent_chunk_preflight` dry-run warning。
 - 指引明确该流程在 live approval 前保持 offline，并说明 children delimiter 不应作为表格原子性修复手段。
 
-当前 P1 公共离线任务已完成；剩余项属于私有 fixture 填充、可选外部 judge request/review 或 live-gated 验证。
+当前 P1 公共离线任务已完成；当时剩余项属于私有 fixture 填充、可选外部 judge request/review 或 live-gated 验证。
+
+同日继续推进并完成 P2 外部 judge request/review 边界：
+
+- 新增 `apollo_table_qa_judge_request_v1`，由 `ragflow-kb-build qa apollo-judge-request`
+  生成外部评审请求；request 包含脱敏 fixture case、已有 retrieval/answer 结果摘要、evidence refs、
+  strict/normalized no-LLM baseline 摘要和 `llm_invoked=false`。
+- 新增 `apollo_table_qa_judge_review_report_v1`，由 `ragflow-kb-build qa apollo-judge-review`
+  对外部 candidate 做 deterministic review。
+- candidate 必须显式标记 `advisory=true` 与 `generated=true`，并为 request 中每个 case 给出
+  `pass|review|fail` verdict；未知 case、遗漏 case、非法 evidence refs 和隐私字面量会被拒绝。
+- review 保持 normalized no-LLM judge 为基线：如果 baseline fail，外部 candidate 的 `pass` 不能覆盖该失败。
+- 该边界仍是 no-LLM / no-live：`script_owned_llm_calls=0`，不访问 RAGFlow，不执行 live mutation。
+- schema identity gate 已登记 judge request/review schema，CLI 和 runtime 测试覆盖 request 生成、review
+  接受、未标记 candidate 拒绝、未知 case 拒绝和 baseline override 拒绝。
+
+当前公共离线开发批次已清空；仍未关闭的内容只剩：
+
+- 私有 16 问 QA 需要在 public repo 外完成脱敏填充后，才能把完整用例喂给当前 fixture/evaluate/table-strategy/judge
+  流程。
+- 代表样本 live KB 创建/查询/清理验证仍需用户在当前线程明确批准，并按 live field-trial runbook 保留私有原始产物、
+  清理 disposable KB、只写入脱敏摘要。
