@@ -40,6 +40,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     create_grounded_qa_suggestion_request,
     create_apollo_table_qa_judge_request,
     create_kb_asset_ingestion_readiness_report,
+    create_kb_artifact_consistency_report,
     create_kb_asset_upload_plan,
     create_metadata_suggestion_request,
     create_optimization_cleanup_plan,
@@ -91,6 +92,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_activation_plan_markdown,
     render_apollo_table_qa_markdown,
     render_kb_asset_ingestion_readiness_markdown,
+    render_kb_artifact_consistency_markdown,
     render_kb_asset_upload_plan_markdown,
     render_split_plan_markdown,
     render_topology_advice_markdown,
@@ -997,6 +999,30 @@ def _run_image_ingestion_readiness(args: argparse.Namespace) -> int:
             _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
         _write_text_file(args.report_md, render_kb_asset_ingestion_readiness_markdown(report))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (BuildError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
+def _run_consistency_check(args: argparse.Namespace) -> int:
+    try:
+        report = create_kb_artifact_consistency_report(
+            retrieval_hints_path=args.retrieval_hints,
+            asset_upload_plan_path=args.asset_upload_plan,
+            chunk_profile_report_path=args.chunk_profile_report,
+            kb_manifest_path=args.kb_manifest,
+        )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[args.retrieval_hints, args.asset_upload_plan, args.chunk_profile_report, args.kb_manifest],
+                output_paths=[args.report_json, args.report_md, args.redaction_report],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_kb_artifact_consistency_markdown(report))
         _dump_json(report)
         return 0 if report["ok"] else 1
     except (BuildError, OSError, RuntimeError) as exc:
@@ -2908,6 +2934,19 @@ def build_image_ingestion_readiness_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_consistency_check_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Review consistency across handoff, build, profile, and KB artifacts")
+    parser.add_argument("--retrieval-hints", required=True, help="ragflow_retrieval_hints_v1 JSON")
+    parser.add_argument("--asset-upload-plan", required=True, help="ragflow_kb_asset_upload_plan_v2 JSON")
+    parser.add_argument("--chunk-profile-report", required=True, help="ragflow_chunk_profile_report_v1 JSON")
+    parser.add_argument("--kb-manifest", required=True, help="kb_manifest.json to compare against planned build artifacts")
+    parser.add_argument("--report-json", "--output", dest="report_json", default="kb_artifact_consistency_report.json")
+    parser.add_argument("--report-md", help="Optional artifact consistency Markdown path")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    return parser
+
+
 def build_image_ingestion_execute_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Execute gated visual-document ingestion against an existing RAGFlow dataset")
     parser.add_argument("--execute", action="store_true", help="Allow live visual-document upload after readiness review")
@@ -3646,6 +3685,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_asset_upload_plan(build_asset_upload_plan_parser().parse_args(command_args))
         if command == "image-ingestion-readiness":
             return _run_image_ingestion_readiness(build_image_ingestion_readiness_parser().parse_args(command_args))
+        if command == "consistency-check":
+            return _run_consistency_check(build_consistency_check_parser().parse_args(command_args))
         if command == "image-ingestion-execute":
             return _run_image_ingestion_execute(build_image_ingestion_execute_parser().parse_args(command_args))
         if command == "model-providers":

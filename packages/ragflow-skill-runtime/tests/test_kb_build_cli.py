@@ -1236,6 +1236,123 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertNotIn(str(profile), combined)
         self.assertIn("<redacted:config-path>", combined)
 
+    def test_consistency_check_via_build_subcommand(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            handoff = root / "handoff"
+            image_dir = handoff / "documents" / "images"
+            image_dir.mkdir(parents=True)
+            (handoff / "documents" / "sample.md").write_text(
+                "# Sample\n\n![asset](images/asset.png)\n\n| A | B |\n| --- | --- |\n| C | D |\n",
+                encoding="utf-8",
+            )
+            (image_dir / "asset.png").write_bytes(b"image-bytes")
+            retrieval_hints = handoff / "retrieval_hints.json"
+            retrieval_hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "table_artifacts": [{"document": "documents/sample.md", "caption": "Sample table"}],
+                        "image_artifacts": [
+                            {"path": "documents/images/asset.png", "caption": "Planned image"},
+                            {"path": "documents/images/missing.png", "caption": "Missing image"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            asset_plan = root / "asset_upload_plan.json"
+            asset_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_kb_asset_upload_plan_v2",
+                        "status": "ready",
+                        "summary": {"document_count": 1, "planned_visual_upload_file_count": 1},
+                        "documents": [{"markdown_path": "documents/sample.md", "package_path": "documents/sample.md"}],
+                        "planned_visual_upload_files": [
+                            {
+                                "source_path": "documents/images/asset.png",
+                                "package_path": "documents/images/asset.png",
+                                "asset_class": "markdown_referenced",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            chunk_profile = root / "chunk_profile_report.json"
+            chunk_profile.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_profile_report_v1",
+                        "summary": {
+                            "documents": 1,
+                            "marker_count": 1,
+                            "marker_type_counts": {"page": 1, "table": 0, "section": 0, "manual": 0},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            kb_manifest = root / "kb_manifest.json"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-consistency", "name": "kb:consistency"},
+                        "documents": [{"id": "doc-md", "name": "sample.md", "path": "documents/sample.md", "status": "DONE"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report_json = root / "consistency_report.json"
+            report_md = root / "consistency_report.md"
+            redaction_report = root / "consistency_report.redaction.json"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "consistency-check",
+                    "--retrieval-hints",
+                    str(retrieval_hints),
+                    "--asset-upload-plan",
+                    str(asset_plan),
+                    "--chunk-profile-report",
+                    str(chunk_profile),
+                    "--kb-manifest",
+                    str(kb_manifest),
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                    "--redaction-report",
+                    str(redaction_report),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+            file_payload = json.loads(report_json.read_text(encoding="utf-8")) if report_json.exists() else {}
+            redaction_payload = json.loads(redaction_report.read_text(encoding="utf-8")) if redaction_report.exists() else {}
+            markdown = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+            combined = json.dumps(file_payload, ensure_ascii=False) + markdown + result.stdout
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(payload["schema"], "ragflow_kb_artifact_consistency_report_v1")
+        self.assertEqual(file_payload["schema"], "ragflow_kb_artifact_consistency_report_v1")
+        self.assertEqual(file_payload["status"], "review")
+        self.assertEqual(file_payload["checks"]["retrieval_hints_vs_asset_plan"]["status"], "review")
+        self.assertIn("documents/images/missing.png", file_payload["checks"]["retrieval_hints_vs_asset_plan"]["missing_image_hints"])
+        self.assertEqual(file_payload["checks"]["retrieval_hints_vs_chunk_profile"]["status"], "review")
+        self.assertEqual(file_payload["checks"]["asset_plan_vs_kb_manifest"]["status"], "review")
+        self.assertIn("RAGFlow KB Artifact Consistency Report", markdown)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertNotIn(str(root), combined)
+
     def test_image_ingestion_execute_requires_explicit_execute_flag(self) -> None:
         module = load_build_module()
         with tempfile.TemporaryDirectory() as tmp:

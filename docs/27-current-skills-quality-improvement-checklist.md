@@ -73,6 +73,10 @@ Completed public offline work in the current implementation pass:
 - `ragflow-kb-build` dry-run readiness and `profile.py recommend` now consume
   `retrieval_hints.json`, summarize table/image/quality-risk hints, and use those hints
   to steer profile-review rationale before live ingestion.
+- `ragflow-kb-build consistency-check` now compares `retrieval_hints.json`,
+  `asset-upload-plan`, `chunk_profile_report.json`, and `kb_manifest.json` offline,
+  producing a sanitized consistency report before follow-up validation or live visual
+  ingestion.
 
 The live disposable Markdown-plus-image build remains gated. It must stay unchecked until
 the user explicitly approves live mutation and sanitized cleanup evidence is recorded.
@@ -456,7 +460,7 @@ All new live-capable features must use the same safety model:
   profile recommendation.
 - [x] Let `ragflow-query` generate deterministic validation query suggestions from table
   and image hints without LLM calls.
-- [ ] Add consistency checks between `retrieval_hints.json`, `asset-upload-plan`,
+- [x] Add consistency checks between `retrieval_hints.json`, `asset-upload-plan`,
   `chunk_profile_report.json`, and `kb_manifest.json`.
 - [x] Extend `diagnose-result` to classify no-result, wrong-modality, table-fragment,
   image-evidence, pollution, route mismatch, and low-similarity failures.
@@ -522,11 +526,11 @@ All new live-capable features must use the same safety model:
    disposable execution remains gated.
 4. Image-rich parse/health report consumption. Completed.
 5. Profile decision report with stricter benchmark thresholds. Completed.
-6. Multimodal benchmark categories and query diagnostics. Benchmark categories, qrels
-   modality/chunk extensions, result modality distribution, image/table coverage metrics,
-   `diagnose-result` class mapping, deterministic query suggestions, and retrieval-hint
-   build/profile consumption are completed; cross-artifact consistency checks remain
-   open.
+6. Multimodal benchmark categories and query diagnostics. Completed: benchmark
+   categories, qrels modality/chunk extensions, result modality distribution,
+   image/table coverage metrics, `diagnose-result` class mapping, deterministic query
+   suggestions, retrieval-hint build/profile consumption, and cross-artifact consistency
+   checks.
 7. Batch/resume and performance telemetry expansion for larger corpora. Not started.
 
 This order keeps the first slice offline and fake-client-testable, then opens live

@@ -36,6 +36,8 @@ class GeneratedMarkdownAuditTests(unittest.TestCase):
         self.assertIn("tools/consumer_acceptance.py", by_command["ragflow-query endpoint-report"]["evidence"])
         self.assertIn("ragflow-query cache-report", by_command)
         self.assertIn("markdown_report", by_command["ragflow-query cache-report"]["output_categories"])
+        self.assertIn("ragflow-kb-build consistency-check", by_command)
+        self.assertIn("markdown_report", by_command["ragflow-kb-build consistency-check"]["output_categories"])
 
     def test_generated_markdown_audit_reports_missing_and_stale_entries(self) -> None:
         report = run_generated_markdown_audit(

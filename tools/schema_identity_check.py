@@ -104,6 +104,14 @@ EXPECTED_IDENTITIES = (
         description="No-live readiness/execution report contract for gated visual document ingestion.",
     ),
     SchemaIdentity(
+        key="kb_artifact_consistency_report",
+        group="kb_build",
+        identity="ragflow_kb_artifact_consistency_report_v1",
+        source_patterns=("ragflow_kb_artifact_consistency_report_v1", "KB_ARTIFACT_CONSISTENCY_REPORT_SCHEMA"),
+        coverage_patterns=("ragflow_kb_artifact_consistency_report_v1", "KB_ARTIFACT_CONSISTENCY_REPORT_SCHEMA"),
+        description="Offline consistency report across retrieval hints, asset upload plans, chunk profiles, and KB manifests.",
+    ),
+    SchemaIdentity(
         key="document_features",
         group="doc_convert",
         identity="ragflow_document_features_v1",

@@ -18,7 +18,10 @@ from .profiles import ChunkProfile, ProfileError, load_profile
 
 KB_ASSET_UPLOAD_PLAN_SCHEMA = "ragflow_kb_asset_upload_plan_v2"
 KB_ASSET_INGESTION_REPORT_SCHEMA = "ragflow_kb_asset_ingestion_report_v1"
+KB_ARTIFACT_CONSISTENCY_REPORT_SCHEMA = "ragflow_kb_artifact_consistency_report_v1"
 MULTIMODAL_KB_MANIFEST_SCHEMA = "ragflow_multimodal_kb_manifest_v1"
+RETRIEVAL_HINTS_SCHEMA = "ragflow_retrieval_hints_v1"
+CHUNK_PROFILE_REPORT_SCHEMA = "ragflow_chunk_profile_report_v1"
 MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)]\(([^)]+)\)")
 IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".tif", ".tiff", ".webp"}
 ASSET_UPLOAD_PLAN_IMAGE_CLASSES = (
@@ -178,6 +181,91 @@ def _issue(*, severity: str, code: str, message: str, recommendation: str) -> di
         "message": message,
         "recommendation": recommendation,
     }
+
+
+def _clean_artifact_path(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip().strip("<>").replace("\\", "/")
+    if not text or _is_remote_asset_reference(text):
+        return None
+    text = text.split("#", 1)[0].split("?", 1)[0].strip()
+    while text.startswith("./"):
+        text = text[2:]
+    return text or None
+
+
+def _path_basename(value: str) -> str:
+    return Path(value.replace("\\", "/")).name
+
+
+def _path_matches(candidate: str, observed: set[str]) -> bool:
+    if candidate in observed:
+        return True
+    candidate_name = _path_basename(candidate)
+    return any(_path_basename(item) == candidate_name for item in observed)
+
+
+def _record_paths(records: Any, keys: tuple[str, ...]) -> set[str]:
+    paths: set[str] = set()
+    if not isinstance(records, list):
+        return paths
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        for key in keys:
+            cleaned = _clean_artifact_path(record.get(key))
+            if cleaned:
+                paths.add(cleaned)
+    return paths
+
+
+def _hint_image_paths(retrieval_hints: Mapping[str, Any]) -> set[str]:
+    return _record_paths(
+        retrieval_hints.get("image_artifacts"),
+        ("path", "source_path", "raw_path", "target", "asset_path", "resolved_path", "package_path"),
+    )
+
+
+def _hint_table_documents(retrieval_hints: Mapping[str, Any]) -> set[str]:
+    return _record_paths(retrieval_hints.get("table_artifacts"), ("document", "markdown_path", "source_path", "path"))
+
+
+def _asset_plan_image_paths(asset_plan: Mapping[str, Any]) -> set[str]:
+    paths: set[str] = set()
+    for key in (
+        "planned_visual_upload_files",
+        "discovered_image_artifacts",
+        "image_references",
+        "manifest_image_assets",
+        "sidecar_image_assets",
+        "residual_images",
+        "orphan_images",
+    ):
+        paths.update(
+            _record_paths(
+                asset_plan.get(key),
+                ("source_path", "package_path", "raw_path", "target", "resolved_path", "path"),
+            )
+        )
+    return paths
+
+
+def _asset_plan_markdown_paths(asset_plan: Mapping[str, Any]) -> set[str]:
+    return _record_paths(asset_plan.get("documents"), ("markdown_path", "package_path", "resolved_markdown_path", "source_path"))
+
+
+def _kb_manifest_document_paths(kb_manifest: Mapping[str, Any]) -> set[str]:
+    return _record_paths(kb_manifest.get("documents"), ("markdown_path", "source_path", "path", "name", "filename"))
+
+
+def _kb_manifest_image_paths(kb_manifest: Mapping[str, Any]) -> set[str]:
+    paths = _record_paths(kb_manifest.get("documents"), ("source_path", "markdown_path", "path", "name", "filename"))
+    return {path for path in paths if Path(path).suffix.lower() in IMAGE_SUFFIXES}
+
+
+def _status_from_missing(missing: list[str]) -> str:
+    return "review" if missing else "ready"
 
 
 def _safe_package_path_for_handoff_file(path: Path, *, handoff_root: Path, fallback_dir: str, index: int) -> str:
@@ -962,6 +1050,226 @@ def render_kb_asset_ingestion_readiness_markdown(report: Mapping[str, Any]) -> s
     ]
     if issues:
         for issue in issues[:20]:
+            if not isinstance(issue, Mapping):
+                continue
+            lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    else:
+        lines.append("- No issues found.")
+    return "\n".join(lines) + "\n"
+
+
+def create_kb_artifact_consistency_report(
+    *,
+    retrieval_hints_path: str | Path,
+    asset_upload_plan_path: str | Path,
+    chunk_profile_report_path: str | Path,
+    kb_manifest_path: str | Path,
+) -> dict[str, Any]:
+    """Check consistency across handoff, asset, profile, and KB evidence artifacts."""
+
+    retrieval_hints = _read_json_mapping(Path(retrieval_hints_path), label="retrieval_hints")
+    asset_plan = _read_json_mapping(Path(asset_upload_plan_path), label="asset_upload_plan")
+    chunk_profile = _read_json_mapping(Path(chunk_profile_report_path), label="chunk_profile_report")
+    kb_manifest = _read_json_mapping(Path(kb_manifest_path), label="kb_manifest")
+
+    issues: list[dict[str, str]] = []
+    if retrieval_hints.get("schema") != RETRIEVAL_HINTS_SCHEMA:
+        issues.append(
+            _issue(
+                severity="error",
+                code="retrieval_hints_schema_mismatch",
+                message=f"retrieval_hints schema must be {RETRIEVAL_HINTS_SCHEMA}",
+                recommendation="Regenerate retrieval_hints.json from the formal handoff before consistency review.",
+            )
+        )
+    if asset_plan.get("schema") != KB_ASSET_UPLOAD_PLAN_SCHEMA:
+        issues.append(
+            _issue(
+                severity="error",
+                code="asset_upload_plan_schema_mismatch",
+                message=f"asset upload plan schema must be {KB_ASSET_UPLOAD_PLAN_SCHEMA}",
+                recommendation="Regenerate the plan with ragflow-kb-build asset-upload-plan.",
+            )
+        )
+    if chunk_profile.get("schema") != CHUNK_PROFILE_REPORT_SCHEMA:
+        issues.append(
+            _issue(
+                severity="error",
+                code="chunk_profile_report_schema_mismatch",
+                message=f"chunk profile report schema must be {CHUNK_PROFILE_REPORT_SCHEMA}",
+                recommendation="Regenerate chunk_profile_report.json from a chunk-marker postprocess profile.",
+            )
+        )
+    if kb_manifest.get("version") != "0.1":
+        issues.append(
+            _issue(
+                severity="error",
+                code="kb_manifest_version_mismatch",
+                message="kb_manifest version must be 0.1",
+                recommendation="Provide the current kb_manifest.json from ragflow-kb-build.",
+            )
+        )
+
+    hint_images = sorted(_hint_image_paths(retrieval_hints))
+    hint_table_documents = sorted(_hint_table_documents(retrieval_hints))
+    asset_images = _asset_plan_image_paths(asset_plan)
+    asset_markdown = _asset_plan_markdown_paths(asset_plan)
+    kb_documents = _kb_manifest_document_paths(kb_manifest)
+    kb_images = _kb_manifest_image_paths(kb_manifest)
+
+    missing_image_hints = sorted(path for path in hint_images if not _path_matches(path, asset_images))
+    missing_table_documents = sorted(path for path in hint_table_documents if not _path_matches(path, asset_markdown))
+    if missing_image_hints:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="retrieval_hint_images_missing_from_asset_plan",
+                message="One or more image hints are not represented in the asset upload plan.",
+                recommendation="Regenerate asset-upload-plan from the same handoff or repair retrieval_hints image paths.",
+            )
+        )
+    if missing_table_documents:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="retrieval_hint_tables_missing_from_asset_plan",
+                message="One or more table hints reference documents not found in the asset upload plan.",
+                recommendation="Regenerate retrieval hints and asset-upload-plan from the same doc_manifest.json.",
+            )
+        )
+
+    marker_summary = chunk_profile.get("summary") if isinstance(chunk_profile.get("summary"), Mapping) else {}
+    marker_type_counts = marker_summary.get("marker_type_counts") if isinstance(marker_summary.get("marker_type_counts"), Mapping) else {}
+    table_marker_count = _as_int(marker_type_counts.get("table")) or 0
+    table_hint_count = len(retrieval_hints.get("table_artifacts", [])) if isinstance(retrieval_hints.get("table_artifacts"), list) else 0
+    table_marker_gap = table_hint_count > 0 and table_marker_count <= 0
+    if table_marker_gap:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="table_hints_without_chunk_markers",
+                message="retrieval_hints.json has table artifacts but chunk_profile_report.json has no table markers.",
+                recommendation="Review postprocess profile output before relying on table parent chunk retrieval.",
+            )
+        )
+
+    missing_kb_markdown_documents = sorted(path for path in asset_markdown if not _path_matches(path, kb_documents))
+    planned_visual_paths = _record_paths(asset_plan.get("planned_visual_upload_files"), ("source_path", "package_path", "raw_path", "path"))
+    missing_kb_visual_documents = sorted(path for path in planned_visual_paths if not _path_matches(path, kb_images))
+    if missing_kb_markdown_documents:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="asset_plan_markdown_missing_from_kb_manifest",
+                message="One or more asset-plan Markdown documents are not represented in kb_manifest.json.",
+                recommendation="Refresh kb_manifest.json after build or verify the plan and build used the same handoff.",
+            )
+        )
+    if missing_kb_visual_documents:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="planned_visual_assets_missing_from_kb_manifest",
+                message="One or more planned visual assets are not represented in kb_manifest.json.",
+                recommendation="Run the gated image-ingestion flow or keep the KB classified as Markdown-only.",
+            )
+        )
+
+    schema_issue_count = sum(1 for issue in issues if issue["severity"] == "error")
+    warning_count = sum(1 for issue in issues if issue["severity"] == "warning")
+    status = "blocked" if schema_issue_count else "review" if warning_count else "ready"
+    checks = {
+        "schema_compatibility": {
+            "status": "blocked" if schema_issue_count else "ready",
+            "error_count": schema_issue_count,
+        },
+        "retrieval_hints_vs_asset_plan": {
+            "status": "review" if missing_image_hints or missing_table_documents else "ready",
+            "hint_image_count": len(hint_images),
+            "asset_plan_image_path_count": len(asset_images),
+            "missing_image_hints": missing_image_hints,
+            "hint_table_document_count": len(hint_table_documents),
+            "asset_plan_markdown_document_count": len(asset_markdown),
+            "missing_table_documents": missing_table_documents,
+        },
+        "retrieval_hints_vs_chunk_profile": {
+            "status": "review" if table_marker_gap else "ready",
+            "table_hint_count": table_hint_count,
+            "table_marker_count": table_marker_count,
+            "marker_count": _as_int(marker_summary.get("marker_count")) or 0,
+        },
+        "asset_plan_vs_kb_manifest": {
+            "status": "review" if missing_kb_markdown_documents or missing_kb_visual_documents else "ready",
+            "asset_plan_markdown_document_count": len(asset_markdown),
+            "kb_manifest_document_path_count": len(kb_documents),
+            "missing_markdown_documents": missing_kb_markdown_documents,
+            "planned_visual_upload_file_count": len(planned_visual_paths),
+            "kb_manifest_visual_document_count": len(kb_images),
+            "missing_visual_documents": missing_kb_visual_documents,
+        },
+    }
+    return {
+        "ok": schema_issue_count == 0,
+        "schema": KB_ARTIFACT_CONSISTENCY_REPORT_SCHEMA,
+        "created_at": _now(),
+        "advisory_only": True,
+        "offline_only": True,
+        "mutation": "none",
+        "ragflow_calls": 0,
+        "llm_calls": 0,
+        "inputs": {
+            "retrieval_hints": str(retrieval_hints_path),
+            "asset_upload_plan": str(asset_upload_plan_path),
+            "chunk_profile_report": str(chunk_profile_report_path),
+            "kb_manifest": str(kb_manifest_path),
+        },
+        "status": status,
+        "summary": {
+            "check_count": len(checks),
+            "issue_count": len(issues),
+            "error_count": schema_issue_count,
+            "warning_count": warning_count,
+            "hint_image_count": len(hint_images),
+            "hint_table_count": table_hint_count,
+            "planned_visual_upload_file_count": len(planned_visual_paths),
+            "kb_manifest_document_count": len(kb_documents),
+        },
+        "checks": checks,
+        "issues": issues,
+        "next_steps": [
+            "Regenerate stale artifacts from the same formal handoff before comparing build quality.",
+            "Use image-ingestion-readiness before live visual ingestion when planned visual assets are missing from kb_manifest.json.",
+            "Use validation-suggestions and benchmark validation after the artifact chain is consistent.",
+        ],
+    }
+
+
+def render_kb_artifact_consistency_markdown(report: Mapping[str, Any]) -> str:
+    """Render a concise Markdown summary for artifact consistency review."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    checks = report.get("checks", {}) if isinstance(report.get("checks"), Mapping) else {}
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    lines = [
+        "# RAGFlow KB Artifact Consistency Report",
+        "",
+        f"- schema: `{report.get('schema', KB_ARTIFACT_CONSISTENCY_REPORT_SCHEMA)}`",
+        f"- status: `{report.get('status', 'unknown')}`",
+        f"- mutation: `{report.get('mutation', 'none')}`",
+        f"- checks: `{summary.get('check_count', 0)}`",
+        f"- warnings: `{summary.get('warning_count', 0)}`",
+        f"- errors: `{summary.get('error_count', 0)}`",
+        "",
+        "## Checks",
+        "",
+    ]
+    for name, check in checks.items():
+        if not isinstance(check, Mapping):
+            continue
+        lines.append(f"- `{name}`: `{check.get('status', 'unknown')}`")
+    lines.extend(["", "## Issues", ""])
+    if issues:
+        for issue in issues[:30]:
             if not isinstance(issue, Mapping):
                 continue
             lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")

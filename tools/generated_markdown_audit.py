@@ -37,6 +37,7 @@ SANITIZED_MARKDOWN_VERIFIED_COMMANDS = (
     "ragflow-kb-build benchmark suggest",
     "ragflow-kb-build benchmark summarize",
     "ragflow-kb-build benchmark trend",
+    "ragflow-kb-build consistency-check",
     "ragflow-kb-build diagnose",
     "ragflow-kb-build health-report",
     "ragflow-kb-build image-ingestion-readiness",

@@ -81,8 +81,8 @@ Partially completed and still active:
     backend execution remain future adapters.
 - Phase 31 runtime resilience
   - Report redaction and generated-report safety are closed for the current inventory.
-  - Runtime helper coverage currently tracks 97 public command surfaces: 21 `covered`,
-    0 `candidate`, 0 `deferred`, and 76 `not_applicable`.
+  - Runtime helper coverage currently tracks 102 public command surfaces: 22 `covered`,
+    0 `candidate`, 0 `deferred`, and 80 `not_applicable`.
   - The bounded non-live checkpoint/resume and partial-failure candidate inventory plus
     the approved live mutation/query helper rollout are closed; any future resilience
     expansion is future adapter scope.
@@ -1427,7 +1427,7 @@ Recommended next slices:
    checkpoint/resume, `inspect-kb`, `validate`, `snapshot-chunks`, `qa validate`,
    plus `qa map-evidence` now have partial-failure coverage, and approved live
    `ragflow-kb-build` plus `ragflow-query ask` now record runtime resilience blocks. The
-   Phase 31 inventory now records 21 `covered`, 0 `candidate`, 0 `deferred`, and 76
+   Phase 31 inventory now records 22 `covered`, 0 `candidate`, 0 `deferred`, and 80
    `not_applicable` public command surfaces in
    `ragflow_runtime_resilience_inventory_v1`.
 
