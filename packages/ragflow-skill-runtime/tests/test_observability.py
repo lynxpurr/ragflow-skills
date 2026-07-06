@@ -206,6 +206,52 @@ class ObservabilityTests(unittest.TestCase):
         self.assertIn("missing_expected_terms", {issue["code"] for issue in report["issues"]})
         self.assertIn("RAGFlow Query Diagnostic", markdown)
 
+    def test_diagnose_query_result_classifies_multimodal_route_and_pollution_failures(self) -> None:
+        payload = {
+            "question": "Which table screenshot shows the APOLLO limit?",
+            "mode": "auto",
+            "dataset_ids": ["ds-wrong"],
+            "chunks": [
+                {
+                    "content": "unrelated policy text",
+                    "similarity": 0.04,
+                    "document_name": "notes.md",
+                    "metadata": {"modality": "text", "tags": ["noise"]},
+                }
+            ],
+        }
+
+        report = diagnose_query_result(
+            payload,
+            expected_terms=["APOLLO limit"],
+            expected_modalities=["image", "table"],
+            expected_documents=["apollo-table.png"],
+            expected_dataset_ids=["ds-apollo"],
+            allowed_tags=["visual"],
+            min_similarity=0.2,
+            min_evidence_score=0.7,
+        )
+        classes = set(report["issue_classes"])
+        commands_by_class = {
+            item["diagnostic_class"]: " ".join(item["commands"])
+            for item in report["next_commands"]
+        }
+        markdown = render_query_diagnostic_markdown(report)
+
+        self.assertTrue(report["ok"])
+        self.assertIn("wrong_modality", classes)
+        self.assertIn("table_fragment", classes)
+        self.assertIn("image_evidence", classes)
+        self.assertIn("pollution", classes)
+        self.assertIn("route_mismatch", classes)
+        self.assertIn("low_similarity", classes)
+        self.assertIn("snapshot-chunks", commands_by_class["table_fragment"])
+        self.assertIn("table-strategy", commands_by_class["table_fragment"])
+        self.assertIn("asset-upload-plan", commands_by_class["image_evidence"])
+        self.assertIn("route-diagnose", commands_by_class["route_mismatch"])
+        self.assertIn("pollution-report", commands_by_class["pollution"])
+        self.assertIn("Next Commands", markdown)
+
     def test_query_pollution_report_flags_expansion_only_matches(self) -> None:
         payload = {
             "question": "how to use runtime",

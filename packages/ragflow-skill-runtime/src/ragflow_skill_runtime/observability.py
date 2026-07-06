@@ -20,6 +20,35 @@ QUERY_RERANK_AB_REPORT_SCHEMA = "ragflow_query_rerank_ab_report_v1"
 QUERY_CROSS_LANGUAGE_AB_REPORT_SCHEMA = "ragflow_cross_language_ab_report_v1"
 FUSION_REPORT_SCHEMA = "ragflow_fusion_report_v1"
 FUSION_TEST_REPORT_SCHEMA = "ragflow_fusion_test_report_v1"
+QUERY_DIAGNOSTIC_NEXT_COMMANDS = {
+    "no_result": [
+        "ragflow-kb-build parse-report --kb-manifest <kb_manifest.json>",
+        "ragflow-kb-build snapshot-chunks --dataset-id <dataset_id> --output <chunk_snapshot.json>",
+    ],
+    "wrong_modality": [
+        "ragflow-kb-build health-report --multimodal-manifest <multimodal_kb_manifest.json>",
+        "ragflow-kb-build validate --level benchmark --qrels <qrels.json>",
+    ],
+    "table_fragment": [
+        "ragflow-kb-build snapshot-chunks --dataset-id <dataset_id> --output <chunk_snapshot.json>",
+        "ragflow-query table-strategy --retrieval-hints <retrieval_hints.json>",
+    ],
+    "image_evidence": [
+        "ragflow-kb-build asset-upload-plan --handoff-dir <handoff_dir>",
+        "ragflow-kb-build image-ingestion-readiness --asset-upload-plan <asset_upload_plan.json>",
+    ],
+    "pollution": [
+        "ragflow-query pollution-report --query-output <query.json> --expanded-term <term>",
+    ],
+    "route_mismatch": [
+        "ragflow-query route-diagnose --routing <routing.json> --queries <route-test-queries.json>",
+    ],
+    "low_similarity": [
+        "ragflow-kb-build validate --level benchmark --queries <queries.json> --qrels <qrels.json>",
+        "ragflow-kb-build profile decision --reports <validation_reports...>",
+    ],
+}
+QUERY_DIAGNOSTIC_CLASS_ORDER = tuple(QUERY_DIAGNOSTIC_NEXT_COMMANDS)
 
 _STOPWORDS = {
     "a",
@@ -822,10 +851,16 @@ def _append_issue(
     code: str,
     message: str,
     detail: Mapping[str, Any] | None = None,
+    diagnostic_class: str | None = None,
+    next_commands: Sequence[str] | None = None,
 ) -> None:
     item = {"severity": severity, "code": code, "message": message}
     if detail:
         item["detail"] = dict(detail)
+    if diagnostic_class:
+        item["diagnostic_class"] = diagnostic_class
+    if next_commands:
+        item["next_commands"] = list(next_commands)
     issues.append(item)
 
 
@@ -2671,12 +2706,175 @@ def render_query_rerank_ab_markdown(report: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _normalized_query_label(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return re.sub(r"[^a-z0-9]+", "_", value.strip().casefold()).strip("_") or None
+
+
+def _normalized_query_labels(values: Sequence[str] | None) -> set[str]:
+    labels: set[str] = set()
+    for value in values or []:
+        label = _normalized_query_label(value)
+        if label:
+            labels.add(label)
+    return labels
+
+
+def _modality_label(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().casefold()
+    normalized = _normalized_query_label(text) or ""
+    if "mixed" in normalized or "multimodal" in normalized:
+        return "mixed"
+    if text.startswith("image/") or any(token in normalized for token in ("image", "visual", "figure", "diagram", "screenshot")):
+        return "image"
+    if "table" in normalized:
+        return "table"
+    if text.startswith("text/") or normalized in {"text", "markdown", "md", "txt", "document"}:
+        return "text"
+    return normalized if normalized in {"image", "table", "text", "mixed"} else None
+
+
+def _expected_modality_labels(values: Sequence[str] | None) -> set[str]:
+    labels: set[str] = set()
+    for value in values or []:
+        modality = _modality_label(value)
+        if modality == "mixed":
+            labels.update({"mixed", "table", "image"})
+        elif modality:
+            labels.add(modality)
+    return labels
+
+
+def _chunk_mapping_values(chunk: Mapping[str, Any], keys: Sequence[str]) -> list[Any]:
+    values = [chunk[key] for key in keys if key in chunk]
+    raw = chunk.get("raw")
+    if isinstance(raw, Mapping):
+        values.extend(raw[key] for key in keys if key in raw)
+    metadata = chunk.get("metadata")
+    if isinstance(metadata, Mapping):
+        values.extend(metadata[key] for key in keys if key in metadata)
+    if isinstance(raw, Mapping):
+        raw_metadata = raw.get("metadata")
+        if isinstance(raw_metadata, Mapping):
+            values.extend(raw_metadata[key] for key in keys if key in raw_metadata)
+    return values
+
+
+def _diagnostic_chunk_modality(chunk: Mapping[str, Any]) -> str:
+    for value in _chunk_mapping_values(
+        chunk,
+        (
+            "modality",
+            "chunk_modality",
+            "document_modality",
+            "media_type",
+            "asset_type",
+            "document_type",
+            "doc_type",
+            "mime_type",
+            "content_type",
+            "type",
+        ),
+    ):
+        modality = _modality_label(value)
+        if modality:
+            return modality
+    document_name = str(chunk.get("document_name") or chunk.get("docnm_kwd") or "").casefold()
+    if document_name.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff")):
+        return "image"
+    if "<table" in str(chunk.get("content") or chunk.get("text") or "").casefold():
+        return "table"
+    if document_name.endswith((".md", ".markdown", ".txt")):
+        return "text"
+    return "unknown"
+
+
+def _diagnostic_modality_distribution(chunks: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for chunk in chunks:
+        modality = _diagnostic_chunk_modality(chunk)
+        counts[modality] = counts.get(modality, 0) + 1
+    return {key: counts[key] for key in sorted(counts)}
+
+
+def _diagnostic_chunk_tags(chunk: Mapping[str, Any]) -> set[str]:
+    tags: set[str] = set()
+    for value in _chunk_mapping_values(chunk, ("tags", "tag", "tag_names", "tag_name", "tag_ids", "tag_id")):
+        if isinstance(value, str):
+            label = _normalized_query_label(value)
+            if label:
+                tags.add(label)
+        elif isinstance(value, Mapping):
+            for key in ("name", "label", "value", "id"):
+                label = _normalized_query_label(value.get(key))
+                if label:
+                    tags.add(label)
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            for item in value:
+                if isinstance(item, str):
+                    label = _normalized_query_label(item)
+                    if label:
+                        tags.add(label)
+                elif isinstance(item, Mapping):
+                    for key in ("name", "label", "value", "id"):
+                        label = _normalized_query_label(item.get(key))
+                        if label:
+                            tags.add(label)
+    return tags
+
+
+def _document_matches(chunks: Sequence[Mapping[str, Any]], expected_documents: Sequence[str] | None) -> tuple[set[str], set[str]]:
+    expected = {str(item).strip().casefold() for item in expected_documents or [] if str(item).strip()}
+    if not expected:
+        return set(), set()
+    document_values = {
+        str(chunk.get(key)).strip().casefold()
+        for chunk in chunks
+        for key in ("document_name", "document_id", "docnm_kwd", "doc_id")
+        if isinstance(chunk.get(key), str) and str(chunk.get(key)).strip()
+    }
+    matched = {
+        expected_document
+        for expected_document in expected
+        if any(expected_document == value or expected_document in value for value in document_values)
+    }
+    return matched, expected - matched
+
+
+def _diagnostic_issue_classes(issues: Sequence[Mapping[str, Any]]) -> list[str]:
+    classes = {
+        str(issue.get("diagnostic_class"))
+        for issue in issues
+        if isinstance(issue.get("diagnostic_class"), str) and issue.get("diagnostic_class")
+    }
+    return [item for item in QUERY_DIAGNOSTIC_CLASS_ORDER if item in classes] + sorted(
+        classes - set(QUERY_DIAGNOSTIC_CLASS_ORDER)
+    )
+
+
+def _diagnostic_next_commands(classes: Sequence[str]) -> list[dict[str, Any]]:
+    items = []
+    for diagnostic_class in classes:
+        commands = QUERY_DIAGNOSTIC_NEXT_COMMANDS.get(diagnostic_class)
+        if commands:
+            items.append({"diagnostic_class": diagnostic_class, "commands": list(commands)})
+    return items
+
+
 def diagnose_query_result(
     query_payload: Mapping[str, Any],
     *,
     trace: Mapping[str, Any] | None = None,
     citation_audit: Mapping[str, Any] | None = None,
     expected_terms: Sequence[str] | None = None,
+    expected_modalities: Sequence[str] | None = None,
+    expected_documents: Sequence[str] | None = None,
+    expected_dataset_ids: Sequence[str] | None = None,
+    expected_tags: Sequence[str] | None = None,
+    allowed_tags: Sequence[str] | None = None,
     min_similarity: float = 0.15,
     min_evidence_score: float = 0.2,
 ) -> dict[str, Any]:
@@ -2684,6 +2882,7 @@ def diagnose_query_result(
 
     chunks = [item for item in query_payload.get("chunks", []) if isinstance(item, Mapping)]
     evidence = evidence_from_query_payload(query_payload)
+    expected_modality_set = _expected_modality_labels(expected_modalities)
     issues: list[dict[str, Any]] = []
     if not chunks:
         _append_issue(
@@ -2691,6 +2890,8 @@ def diagnose_query_result(
             severity="error",
             code="zero_chunks",
             message="query returned zero chunks",
+            diagnostic_class="no_result",
+            next_commands=QUERY_DIAGNOSTIC_NEXT_COMMANDS["no_result"],
         )
     if not evidence and chunks:
         _append_issue(
@@ -2708,6 +2909,8 @@ def diagnose_query_result(
             code="low_top_similarity",
             message="top retrieval similarity is below threshold",
             detail={"top_similarity": top_similarity, "min_similarity": min_similarity},
+            diagnostic_class="low_similarity",
+            next_commands=QUERY_DIAGNOSTIC_NEXT_COMMANDS["low_similarity"],
         )
 
     top_evidence_score = _as_float(evidence[0].get("score")) if evidence else None
@@ -2718,6 +2921,8 @@ def diagnose_query_result(
             code="low_evidence_score",
             message="top evidence score is below threshold",
             detail={"top_evidence_score": top_evidence_score, "min_evidence_score": min_evidence_score},
+            diagnostic_class="low_similarity",
+            next_commands=QUERY_DIAGNOSTIC_NEXT_COMMANDS["low_similarity"],
         )
 
     expected = [term for term in (expected_terms or []) if str(term).strip()]
@@ -2725,12 +2930,99 @@ def diagnose_query_result(
         combined = "\n".join(str(chunk.get("content") or "") for chunk in chunks).lower()
         missing = [term for term in expected if term.lower() not in combined]
         if missing:
+            diagnostic_class = "table_fragment" if "table" in expected_modality_set else None
             _append_issue(
                 issues,
                 severity="warning",
                 code="missing_expected_terms",
                 message="retrieved chunks do not contain all expected terms",
                 detail={"missing_terms": missing},
+                diagnostic_class=diagnostic_class,
+                next_commands=QUERY_DIAGNOSTIC_NEXT_COMMANDS.get(diagnostic_class or "", ()),
+            )
+
+    if chunks and expected_modality_set:
+        modality_distribution = _diagnostic_modality_distribution(chunks)
+        retrieved_modalities = set(modality_distribution)
+        expected_without_mixed = expected_modality_set - {"mixed"}
+        if expected_without_mixed and not (retrieved_modalities & expected_without_mixed):
+            _append_issue(
+                issues,
+                severity="warning",
+                code="wrong_modality",
+                message="retrieved chunks do not include the expected evidence modality",
+                detail={
+                    "expected_modalities": sorted(expected_modality_set),
+                    "retrieved_modalities": modality_distribution,
+                },
+                diagnostic_class="wrong_modality",
+                next_commands=QUERY_DIAGNOSTIC_NEXT_COMMANDS["wrong_modality"],
+            )
+        if "image" in expected_modality_set and modality_distribution.get("image", 0) == 0:
+            _append_issue(
+                issues,
+                severity="warning",
+                code="missing_image_evidence",
+                message="expected visual evidence but retrieved chunks contain no image modality",
+                detail={"retrieved_modalities": modality_distribution},
+                diagnostic_class="image_evidence",
+                next_commands=QUERY_DIAGNOSTIC_NEXT_COMMANDS["image_evidence"],
+            )
+
+    matched_documents, missing_documents = _document_matches(chunks, expected_documents)
+    if missing_documents:
+        diagnostic_class = "image_evidence" if "image" in expected_modality_set else "table_fragment" if "table" in expected_modality_set else None
+        _append_issue(
+            issues,
+            severity="warning",
+            code="missing_expected_documents",
+            message="retrieved chunks do not include all expected documents",
+            detail={
+                "matched_documents": sorted(matched_documents),
+                "missing_documents": sorted(missing_documents),
+            },
+            diagnostic_class=diagnostic_class,
+            next_commands=QUERY_DIAGNOSTIC_NEXT_COMMANDS.get(diagnostic_class or "", ()),
+        )
+
+    expected_dataset_set = {str(item).strip() for item in expected_dataset_ids or [] if str(item).strip()}
+    payload_dataset_set = {
+        str(item).strip()
+        for item in query_payload.get("dataset_ids", [])
+        if str(item).strip()
+    } if isinstance(query_payload.get("dataset_ids", []), list) else set()
+    if expected_dataset_set and not (payload_dataset_set & expected_dataset_set):
+        _append_issue(
+            issues,
+            severity="warning",
+            code="route_mismatch",
+            message="query output dataset IDs do not include the expected route dataset",
+            detail={
+                "expected_dataset_ids": sorted(expected_dataset_set),
+                "actual_dataset_ids": sorted(payload_dataset_set),
+            },
+            diagnostic_class="route_mismatch",
+            next_commands=QUERY_DIAGNOSTIC_NEXT_COMMANDS["route_mismatch"],
+        )
+
+    allowed_tag_set = _normalized_query_labels(allowed_tags)
+    expected_tag_set = _normalized_query_labels(expected_tags)
+    allowed_tag_set.update(expected_tag_set)
+    if chunks and allowed_tag_set:
+        retrieved_tags = set().union(*[_diagnostic_chunk_tags(chunk) for chunk in chunks])
+        unexpected_tags = retrieved_tags - allowed_tag_set
+        if unexpected_tags:
+            _append_issue(
+                issues,
+                severity="warning",
+                code="retrieval_pollution",
+                message="retrieved chunks include tags outside the expected or allowed scope",
+                detail={
+                    "allowed_tags": sorted(allowed_tag_set),
+                    "unexpected_tags": sorted(unexpected_tags),
+                },
+                diagnostic_class="pollution",
+                next_commands=QUERY_DIAGNOSTIC_NEXT_COMMANDS["pollution"],
             )
 
     if trace:
@@ -2752,6 +3044,8 @@ def diagnose_query_result(
                     code="route_default_used",
                     message="auto routing used the default KB instead of a hint match",
                     detail={"kb": selected.get("name"), "dataset_id": selected.get("dataset_id")},
+                    diagnostic_class="route_mismatch",
+                    next_commands=QUERY_DIAGNOSTIC_NEXT_COMMANDS["route_mismatch"],
                 )
 
     if citation_audit:
@@ -2788,6 +3082,8 @@ def diagnose_query_result(
             detail={"documents": duplicate_documents},
         )
 
+    issue_classes = _diagnostic_issue_classes(issues)
+    next_commands = _diagnostic_next_commands(issue_classes)
     status = _severity_status(issues)
     return {
         "ok": status != "FAIL",
@@ -2802,6 +3098,7 @@ def diagnose_query_result(
             "errors": sum(1 for issue in issues if issue["severity"] == "error"),
             "warnings": sum(1 for issue in issues if issue["severity"] == "warning"),
             "infos": sum(1 for issue in issues if issue["severity"] == "info"),
+            "diagnostic_class_count": len(issue_classes),
         },
         "question": query_payload.get("question"),
         "mode": query_payload.get("mode"),
@@ -2810,6 +3107,8 @@ def diagnose_query_result(
             "min_similarity": min_similarity,
             "min_evidence_score": min_evidence_score,
         },
+        "issue_classes": issue_classes,
+        "next_commands": next_commands,
         "issues": issues,
     }
 
@@ -2838,5 +3137,22 @@ def render_query_diagnostic_markdown(report: Mapping[str, Any]) -> str:
         for issue in issues:
             if not isinstance(issue, Mapping):
                 continue
-            lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+            diagnostic_class = issue.get("diagnostic_class")
+            class_text = f" `{diagnostic_class}`" if diagnostic_class else ""
+            lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`{class_text}: {issue.get('message')}")
+    next_commands = report.get("next_commands", [])
+    if isinstance(next_commands, list):
+        lines.extend(["", "## Next Commands", ""])
+        if not next_commands:
+            lines.append("- None")
+        else:
+            for item in next_commands:
+                if not isinstance(item, Mapping):
+                    continue
+                diagnostic_class = item.get("diagnostic_class", "")
+                commands = item.get("commands", [])
+                if not isinstance(commands, list):
+                    continue
+                for command in commands:
+                    lines.append(f"- `{diagnostic_class}`: `{command}`")
     return "\n".join(lines) + "\n"

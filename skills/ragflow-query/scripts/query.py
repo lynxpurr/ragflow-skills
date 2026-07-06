@@ -1802,6 +1802,11 @@ def _diagnose_result(args: argparse.Namespace) -> int:
             trace=trace,
             citation_audit=citation_audit,
             expected_terms=args.expected_term,
+            expected_modalities=args.expected_modality,
+            expected_documents=args.expected_document,
+            expected_dataset_ids=args.expected_dataset_id,
+            expected_tags=args.expected_tag,
+            allowed_tags=args.allowed_tag,
             min_similarity=args.min_similarity,
             min_evidence_score=args.min_evidence_score,
         )
@@ -2611,6 +2616,11 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose.add_argument("--trace-json", help="Optional query trace JSON from --trace-json")
     diagnose.add_argument("--citation-audit", help="Optional citation audit JSON")
     diagnose.add_argument("--expected-term", action="append", default=[], help="Expected term; repeatable")
+    diagnose.add_argument("--expected-modality", action="append", default=[], help="Expected modality such as text, table, image, or mixed; repeatable")
+    diagnose.add_argument("--expected-document", action="append", default=[], help="Expected document name or ID; repeatable")
+    diagnose.add_argument("--expected-dataset-id", action="append", default=[], help="Expected routed dataset ID; repeatable")
+    diagnose.add_argument("--expected-tag", action="append", default=[], help="Expected tag scope; repeatable")
+    diagnose.add_argument("--allowed-tag", action="append", default=[], help="Allowed tag scope for pollution checks; repeatable")
     diagnose.add_argument("--min-similarity", type=float, default=0.15)
     diagnose.add_argument("--min-evidence-score", type=float, default=0.2)
     diagnose.add_argument("--report-json", help="Optional JSON report output path")

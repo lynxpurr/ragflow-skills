@@ -63,6 +63,10 @@ Completed public offline work in the current implementation pass:
   `expected_modality`, `benchmark_category`, and `expected_chunks` extensions, reports
   result modality distributions, and adds image precision, image recall, visual coverage,
   and table recall metrics for multimodal query sets.
+- `ragflow-query diagnose-result` now accepts expected modality, document, dataset, and
+  tag scope hints, classifies no-result, wrong-modality, table-fragment, image-evidence,
+  pollution, route-mismatch, and low-similarity symptoms, and maps each class to concrete
+  follow-up commands in JSON and Markdown reports.
 
 The live disposable Markdown-plus-image build remains gated. It must stay unchecked until
 the user explicitly approves live mutation and sanitized cleanup evidence is recorded.
@@ -448,9 +452,9 @@ All new live-capable features must use the same safety model:
   and image hints without LLM calls.
 - [ ] Add consistency checks between `retrieval_hints.json`, `asset-upload-plan`,
   `chunk_profile_report.json`, and `kb_manifest.json`.
-- [ ] Extend `diagnose-result` to classify no-result, wrong-modality, table-fragment,
+- [x] Extend `diagnose-result` to classify no-result, wrong-modality, table-fragment,
   image-evidence, pollution, route mismatch, and low-similarity failures.
-- [ ] Map each diagnostic class to concrete next commands.
+- [x] Map each diagnostic class to concrete next commands.
 
 ### P1: Improve Production Readiness And Refresh
 
@@ -514,8 +518,8 @@ All new live-capable features must use the same safety model:
 5. Profile decision report with stricter benchmark thresholds. Completed.
 6. Multimodal benchmark categories and query diagnostics. Benchmark categories, qrels
    modality/chunk extensions, result modality distribution, and image/table coverage
-   metrics are completed; deterministic query suggestions, consistency checks, and
-   `diagnose-result` class mapping remain open.
+   metrics plus `diagnose-result` class mapping are completed; deterministic query
+   suggestions and consistency checks remain open.
 7. Batch/resume and performance telemetry expansion for larger corpora. Not started.
 
 This order keeps the first slice offline and fake-client-testable, then opens live

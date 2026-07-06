@@ -582,6 +582,84 @@ class QueryCliTests(unittest.TestCase):
         self.assertNotIn(home_path, combined)
         self.assertNotIn(str(trace_json), combined)
 
+    def test_diagnose_result_classifies_expected_modality_and_next_commands(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            query_output = root / "query.json"
+            report_json = root / "diagnostic.json"
+            report_md = root / "diagnostic.md"
+            redaction_json = root / "diagnostic_redaction.json"
+            query_output.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "question": "Which APOLLO table image shows the limit?",
+                        "mode": "auto",
+                        "dataset_ids": ["ds-wrong"],
+                        "chunks": [
+                            {
+                                "chunk_id": "chunk-1",
+                                "content": "unrelated text chunk",
+                                "similarity": 0.04,
+                                "document_name": "notes.md",
+                                "metadata": {"modality": "text", "tags": ["noise"]},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "diagnose-result",
+                        "--query-output",
+                        str(query_output),
+                        "--expected-term",
+                        "APOLLO limit",
+                        "--expected-modality",
+                        "image",
+                        "--expected-modality",
+                        "table",
+                        "--expected-document",
+                        "apollo-table.png",
+                        "--expected-dataset-id",
+                        "ds-apollo",
+                        "--allowed-tag",
+                        "visual",
+                        "--min-similarity",
+                        "0.2",
+                        "--min-evidence-score",
+                        "0.7",
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            file_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            markdown = report_md.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_json.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["schema"], "ragflow_query_diagnostic_report_v1")
+        self.assertEqual(file_payload["issue_classes"], payload["issue_classes"])
+        self.assertIn("wrong_modality", payload["issue_classes"])
+        self.assertIn("image_evidence", payload["issue_classes"])
+        self.assertIn("table_fragment", payload["issue_classes"])
+        self.assertIn("route_mismatch", payload["issue_classes"])
+        self.assertIn("pollution", payload["issue_classes"])
+        self.assertIn("low_similarity", payload["issue_classes"])
+        self.assertIn("Next Commands", markdown)
+        self.assertIn("ragflow-query pollution-report", markdown)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+
     def test_kb_manifest_can_supply_dataset_id_before_network(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:
