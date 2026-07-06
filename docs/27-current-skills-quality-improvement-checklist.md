@@ -1,7 +1,8 @@
 # Current Skills Quality Improvement Checklist
 
-Status: proposed quality-improvement backlog
+Status: in progress; P0 multimodal ingestion foundation is partially complete
 Date: 2026-07-06
+Last reviewed: 2026-07-06
 
 ## Objective
 
@@ -29,6 +30,32 @@ The plan keeps the existing public-suite boundaries:
   in public docs;
 - deterministic offline reports before any live action;
 - explicit confirmation and cleanup evidence for every mutating RAGFlow operation.
+
+## Current Development Progress
+
+Completed public offline work in the current implementation pass:
+
+- `bcd4bb5` added `ragflow_kb_asset_upload_plan_v2`, explicit referenced/residual/missing
+  asset classes, planned visual upload separation, APOLLO-style 15-referenced plus
+  6-residual fixture coverage, residual review warnings, and schema identity coverage.
+- `9ec1d4a` added `ragflow_multimodal_kb_manifest_v1`, fake read-only document-list
+  coverage for Markdown and visual documents, thumbnails, chunk counts, parse states, and
+  malformed response shapes, plus schema identity coverage.
+- `5b028b6` taught `parse-report` and `health-report` to consume multimodal manifest
+  fields so visual, thumbnail, and VLM state can flow into downstream KB evidence.
+- `a5acf41` added `ragflow_kb_asset_ingestion_report_v1` in readiness mode, the
+  non-mutating `image-ingestion-readiness` command, generated Markdown/report-surface
+  inventory coverage, runtime resilience inventory updates, CLI tests, and schema
+  identity coverage.
+
+The next P0 slice is still open. Current local work has red-test scaffolding for an
+`image-ingestion-execute` command and fake visual ingestion client behavior, but the
+mutating execution command, confirmation checks, parse wait reporting, partial failure
+handling, and cleanup-readiness execution report are not implemented yet.
+
+The live disposable Markdown-plus-image build remains gated. It must stay unchecked until
+fake-client execution coverage passes, cleanup readiness is generated, the user explicitly
+approves live mutation, and sanitized cleanup evidence is recorded.
 
 ## Part 1: Problem Description
 
@@ -469,13 +496,14 @@ All new live-capable features must use the same safety model:
 
 ## Suggested Implementation Order
 
-1. Asset classification cleanup in `asset-upload-plan`.
-2. Multimodal manifest schema and fake read-only document-list fixtures.
-3. Gated image asset ingestion readiness and fake execution path.
-4. Image-rich parse/health report consumption.
-5. Profile decision report with stricter benchmark thresholds.
-6. Multimodal benchmark categories and query diagnostics.
-7. Batch/resume and performance telemetry expansion for larger corpora.
+1. Asset classification cleanup in `asset-upload-plan`. Completed.
+2. Multimodal manifest schema and fake read-only document-list fixtures. Completed.
+3. Gated image asset ingestion readiness and fake execution path. Readiness is complete;
+   fake execution remains open.
+4. Image-rich parse/health report consumption. Completed.
+5. Profile decision report with stricter benchmark thresholds. Not started.
+6. Multimodal benchmark categories and query diagnostics. Not started.
+7. Batch/resume and performance telemetry expansion for larger corpora. Not started.
 
 This order keeps the first slice offline and fake-client-testable, then opens live
 mutation only after the review surfaces and cleanup guarantees are ready.
