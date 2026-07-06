@@ -159,6 +159,7 @@ KB_COVERED_COMMANDS = (
     "ragflow-kb-build parse-report",
     "ragflow-kb-build probe",
     "ragflow-kb-build profile compare",
+    "ragflow-kb-build profile decision",
     "ragflow-kb-build profile experiment",
     "ragflow-kb-build profile explain",
     "ragflow-kb-build profile lint",

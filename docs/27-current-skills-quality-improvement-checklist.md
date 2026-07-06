@@ -56,6 +56,9 @@ Completed public offline work in the current implementation pass:
   `chunk_token_num` warnings, and dense chunk-marker HTML table integrity evidence.
 - APOLLO table-QA validation now summarizes strict-recall coverage categories for numeric
   rows, units, model names, and cross-column lookup fixtures.
+- `ragflow_profile_decision_report_v1` now ranks profile candidates with retrieval,
+  strict recall, table/image recall, empty-result, latency, chunk-count, and context
+  warning evidence, while blocking default changes when sample thresholds are too small.
 
 The live disposable Markdown-plus-image build remains gated. It must stay unchecked until
 the user explicitly approves live mutation and sanitized cleanup evidence is recorded.
@@ -420,12 +423,12 @@ All new live-capable features must use the same safety model:
 - [x] Record when dense chunk markers avoid inserting boundaries inside HTML tables.
 - [x] Add table strict-recall benchmark fixtures for numeric rows, units, model names, and
   cross-column lookup.
-- [ ] Define `ragflow_profile_decision_report_v1`.
-- [ ] Combine retrieval metrics, expected-chunk recall, table recall, image recall,
+- [x] Define `ragflow_profile_decision_report_v1`.
+- [x] Combine retrieval metrics, expected-chunk recall, table recall, image recall,
   empty-result rate, latency, chunk count, and context warnings in the profile decision.
-- [ ] Add minimum sample/query thresholds before a profile report can recommend a default
+- [x] Add minimum sample/query thresholds before a profile report can recommend a default
   change.
-- [ ] Classify current APOLLO 1024-vs-2048 evidence as
+- [x] Classify current APOLLO 1024-vs-2048 evidence as
   `insufficient_sample_for_default_change`.
 
 ### P1: Add Multimodal Validation And Query Diagnostics

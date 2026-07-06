@@ -252,6 +252,14 @@ EXPECTED_IDENTITIES = (
         coverage_patterns=("ragflow_chunk_snapshot_report_v1", "CHUNK_SNAPSHOT_REPORT_SCHEMA"),
     ),
     SchemaIdentity(
+        key="profile_decision_report",
+        group="benchmark",
+        identity="ragflow_profile_decision_report_v1",
+        source_patterns=("ragflow_profile_decision_report_v1", "PROFILE_DECISION_REPORT_SCHEMA"),
+        coverage_patterns=("ragflow_profile_decision_report_v1", "decide_profile_from_reports"),
+        description="Offline profile decision report with sample thresholds before default-profile changes.",
+    ),
+    SchemaIdentity(
         key="grounded_qa_generate_report",
         group="benchmark",
         identity="ragflow_grounded_qa_generate_report_v1",

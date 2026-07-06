@@ -20,12 +20,12 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_report_surface_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 99)
+        self.assertEqual(report["summary"]["command_count"], 100)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
             {
-                "covered": 90,
+                "covered": 91,
                 "needs_redaction": 0,
                 "not_applicable": 9,
             },
@@ -175,6 +175,11 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
         profile_lint = by_command["ragflow-kb-build profile lint"]
         self.assertEqual(profile_lint["status"], "covered")
         self.assertIn("redaction_sidecar", profile_lint["output_categories"])
+
+        profile_decision = by_command["ragflow-kb-build profile decision"]
+        self.assertEqual(profile_decision["status"], "covered")
+        self.assertIn("redaction_sidecar", profile_decision["output_categories"])
+        self.assertIn("markdown_report", profile_decision["output_categories"])
 
         snapshot_chunks = by_command["ragflow-kb-build snapshot-chunks"]
         self.assertEqual(snapshot_chunks["status"], "covered")

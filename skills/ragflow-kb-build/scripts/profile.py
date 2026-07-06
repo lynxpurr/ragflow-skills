@@ -34,6 +34,7 @@ bootstrap_runtime()
 from ragflow_skill_runtime import (  # noqa: E402
     ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA,
     compare_validation_reports,
+    decide_profile_from_reports,
     explain_profile,
     lint_profile,
     load_enrichment_experiment_matrix,
@@ -42,6 +43,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     recommend_profile,
     render_enrichment_experiment_markdown,
     render_profile_compare_markdown,
+    render_profile_decision_markdown,
     render_profile_lint_markdown,
 )
 from ragflow_skill_runtime.profiles import ProfileError  # noqa: E402
@@ -501,6 +503,26 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_decision(args: argparse.Namespace) -> int:
+    payload = decide_profile_from_reports(
+        args.report,
+        minimum_query_count=args.minimum_query_count,
+        minimum_profile_count=args.minimum_profile_count,
+        minimum_score_delta=args.minimum_score_delta,
+    )
+    payload = _sanitize_profile_report(
+        payload,
+        args,
+        input_paths=list(args.report),
+        output_paths=[args.report_json, args.report_md, args.redaction_report],
+        context_json_paths=list(args.report),
+    )
+    _write_json(args.report_json, payload)
+    _write_text(args.report_md, render_profile_decision_markdown(payload))
+    _dump_json(payload)
+    return 0
+
+
 def _parse_cli_value(value: str) -> Any:
     try:
         return json.loads(value)
@@ -625,6 +647,16 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--report-md", help="Optional Markdown report output path")
     compare.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     compare.set_defaults(func=_cmd_compare)
+
+    decision = subparsers.add_parser("decision", help="Decide whether profile evidence is strong enough for a default change")
+    decision.add_argument("--report", action="append", required=True, help="Validation report JSON path")
+    decision.add_argument("--minimum-query-count", type=int, default=20, help="Minimum query count before recommending a default change")
+    decision.add_argument("--minimum-profile-count", type=int, default=2, help="Minimum compared profile count")
+    decision.add_argument("--minimum-score-delta", type=float, default=0.03, help="Minimum decision-score delta")
+    decision.add_argument("--report-json", help="Optional JSON decision report output path")
+    decision.add_argument("--report-md", help="Optional Markdown decision report output path")
+    decision.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    decision.set_defaults(func=_cmd_decision)
 
     experiment = subparsers.add_parser("experiment", help="Plan offline enrichment experiment profiles")
     experiment.add_argument("--base-profile", required=True, help="Base profile JSON/YAML path")

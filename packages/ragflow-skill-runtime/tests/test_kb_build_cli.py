@@ -6715,6 +6715,74 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["winner"]["path"], str(second))
         self.assertIn("Profile Compare", compare_report_text)
 
+    def test_profile_decision_via_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "apollo-1024.json"
+            second = root / "apollo-2048.json"
+            report_json = root / "decision.json"
+            report_md = root / "decision.md"
+            redaction_report = root / "decision.redaction.json"
+            for path, chunk_tokens, score in (
+                (first, 1024, 0.83),
+                (second, 2048, 0.86),
+            ):
+                path.write_text(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "profile": {"id": f"apollo-{chunk_tokens}", "parser_config": {"chunk_token_num": chunk_tokens}},
+                            "metrics": {"pass_rate": score, "total": 6, "average_chunks": 4.5},
+                            "benchmark": {
+                                "metrics": {
+                                    "hit_rate": score,
+                                    "mrr": score - 0.05,
+                                    "ndcg_at_k": score - 0.02,
+                                    "strict_chunk_recall_at_k": 1.0,
+                                    "expected_chunk_hit_rate": 1.0,
+                                    "table_recall": 1.0,
+                                    "image_recall": 0.0,
+                                    "empty_result_rate": 0.0,
+                                }
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROFILE_SCRIPT),
+                    "decision",
+                    "--report",
+                    str(first),
+                    "--report",
+                    str(second),
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                    "--redaction-report",
+                    str(redaction_report),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(report_json.read_text(encoding="utf-8")) if report_json.exists() else {}
+            markdown = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+            redaction = json.loads(redaction_report.read_text(encoding="utf-8")) if redaction_report.exists() else {}
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(payload["schema"], "ragflow_profile_decision_report_v1")
+        self.assertEqual(payload["decision"]["status"], "insufficient_sample_for_default_change")
+        self.assertIn("RAGFlow Profile Decision Report", markdown)
+        self.assertEqual(redaction["schema"], "ragflow_report_redaction_report_v1")
+        combined = json.dumps(payload, ensure_ascii=False) + markdown + result.stdout
+        self.assertNotIn(str(first), combined)
+        self.assertIn("<redacted:config-path>", combined)
+
     def test_profile_experiment_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

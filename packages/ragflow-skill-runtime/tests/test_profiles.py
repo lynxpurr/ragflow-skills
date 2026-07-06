@@ -11,6 +11,7 @@ from ragflow_skill_runtime.profiles import (
     ENRICHMENT_EXPERIMENT_REPORT_SCHEMA,
     ProfileError,
     compare_validation_reports,
+    decide_profile_from_reports,
     explain_profile,
     lint_profile,
     plan_enrichment_experiments,
@@ -18,6 +19,7 @@ from ragflow_skill_runtime.profiles import (
     recommend_profile,
     render_enrichment_experiment_markdown,
     render_profile_compare_markdown,
+    render_profile_decision_markdown,
     render_profile_lint_markdown,
 )
 
@@ -199,6 +201,110 @@ class ProfileTests(unittest.TestCase):
         rendered = render_profile_compare_markdown(report)
         self.assertIn("Profile Compare", rendered)
         self.assertIn("latency_ms", rendered)
+
+    def test_profile_decision_classifies_apollo_evidence_as_insufficient_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            profile_1024 = root / "apollo-1024.json"
+            profile_2048 = root / "apollo-2048.json"
+            for path, chunk_tokens, score in (
+                (profile_1024, 1024, 0.83),
+                (profile_2048, 2048, 0.86),
+            ):
+                path.write_text(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "profile": {"id": f"apollo-{chunk_tokens}", "parser_config": {"chunk_token_num": chunk_tokens}},
+                            "metrics": {
+                                "pass_rate": score,
+                                "total": 6,
+                                "average_chunks": 4.5,
+                                "query_latency_ms": 120.0 + (chunk_tokens / 100),
+                            },
+                            "benchmark": {
+                                "metrics": {
+                                    "hit_rate": score,
+                                    "mrr": score - 0.05,
+                                    "ndcg_at_k": score - 0.02,
+                                    "strict_chunk_recall_at_k": 1.0,
+                                    "expected_chunk_hit_rate": 1.0,
+                                    "table_recall": 1.0,
+                                    "image_recall": 0.0,
+                                    "empty_result_rate": 0.0,
+                                }
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            report = decide_profile_from_reports([profile_1024, profile_2048])
+            markdown = render_profile_decision_markdown(report)
+
+        self.assertEqual(report["schema"], "ragflow_profile_decision_report_v1")
+        self.assertEqual(report["decision"]["status"], "insufficient_sample_for_default_change")
+        self.assertFalse(report["decision"]["default_change_allowed"])
+        self.assertEqual(report["summary"]["max_query_count"], 6)
+        self.assertIn("minimum_query_count_not_met", {issue["code"] for issue in report["issues"]})
+        self.assertIn("insufficient_sample_for_default_change", markdown)
+
+    def test_profile_decision_recommends_default_only_after_thresholds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline = root / "baseline.json"
+            candidate = root / "candidate.json"
+            baseline.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "profile": {"id": "baseline-1024", "parser_config": {"chunk_token_num": 1024}},
+                        "metrics": {"pass_rate": 0.72, "total": 36, "average_chunks": 8.0, "query_latency_ms": 160.0},
+                        "benchmark": {
+                            "metrics": {
+                                "hit_rate": 0.74,
+                                "mrr": 0.70,
+                                "ndcg_at_k": 0.72,
+                                "strict_chunk_recall_at_k": 0.91,
+                                "expected_chunk_hit_rate": 0.90,
+                                "table_recall": 0.85,
+                                "image_recall": 0.50,
+                                "empty_result_rate": 0.05,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            candidate.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "profile": {"id": "candidate-2048", "parser_config": {"chunk_token_num": 2048}},
+                        "metrics": {"pass_rate": 0.92, "total": 36, "average_chunks": 6.0, "query_latency_ms": 140.0},
+                        "benchmark": {
+                            "metrics": {
+                                "hit_rate": 0.94,
+                                "mrr": 0.90,
+                                "ndcg_at_k": 0.91,
+                                "strict_chunk_recall_at_k": 1.0,
+                                "expected_chunk_hit_rate": 1.0,
+                                "table_recall": 0.95,
+                                "image_recall": 0.75,
+                                "empty_result_rate": 0.0,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = decide_profile_from_reports([baseline, candidate])
+
+        self.assertEqual(report["decision"]["status"], "recommend_default_change")
+        self.assertTrue(report["decision"]["default_change_allowed"])
+        self.assertEqual(report["decision"]["recommended_profile_id"], "candidate-2048")
+        self.assertGreaterEqual(report["summary"]["score_delta"], report["thresholds"]["minimum_score_delta"])
 
     def test_plan_enrichment_experiments_expands_matrix(self) -> None:
         base = ChunkProfile.from_dict(

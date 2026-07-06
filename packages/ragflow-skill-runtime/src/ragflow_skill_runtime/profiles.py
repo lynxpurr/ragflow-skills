@@ -27,6 +27,7 @@ SUPPORTED_PARSER_KEYS = {
 ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA = "ragflow_enrichment_experiment_matrix_v1"
 ENRICHMENT_EXPERIMENT_REPORT_SCHEMA = "ragflow_enrichment_experiment_report_v1"
 CANDIDATE_PROFILE_SET_SCHEMA = "ragflow_candidate_profile_set_v1"
+PROFILE_DECISION_REPORT_SCHEMA = "ragflow_profile_decision_report_v1"
 
 DOC_TYPES = {"general", "book", "manual", "paper", "notes", "mixed"}
 LANGUAGE_ALIASES = {
@@ -536,6 +537,179 @@ def compare_validation_reports(paths: list[str | Path]) -> dict[str, Any]:
     }
 
 
+def _profile_id_from_report(report: Mapping[str, Any], *, fallback: str) -> str:
+    for container_key in ("profile", "chunk_profile", "candidate_profile"):
+        container = report.get(container_key)
+        if isinstance(container, Mapping):
+            value = container.get("id") or container.get("profile_id")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    for key in ("profile_id", "candidate_id"):
+        value = report.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return fallback
+
+
+def _query_count_from_report(report: Mapping[str, Any]) -> int:
+    metrics = report.get("metrics") if isinstance(report.get("metrics"), Mapping) else {}
+    summary = report.get("summary") if isinstance(report.get("summary"), Mapping) else {}
+    benchmark = report.get("benchmark") if isinstance(report.get("benchmark"), Mapping) else {}
+    benchmark_summary = benchmark.get("summary") if isinstance(benchmark.get("summary"), Mapping) else {}
+    value = _first_number(
+        [metrics, summary, benchmark_summary],
+        "total",
+        "query_count",
+        "case_count",
+        "item_count",
+        "sample_count",
+    )
+    return int(value or 0)
+
+
+def _warning_count_from_report(report: Mapping[str, Any]) -> int:
+    summary = report.get("summary") if isinstance(report.get("summary"), Mapping) else {}
+    summary_count = _number_from(summary, "warning_count", "warnings")
+    issues = report.get("issues") if isinstance(report.get("issues"), list) else []
+    issue_count = sum(1 for issue in issues if isinstance(issue, Mapping) and issue.get("severity") == "warning")
+    return int(summary_count or issue_count or 0)
+
+
+def _decision_metrics(report: Mapping[str, Any]) -> tuple[float, dict[str, Any]]:
+    score, metrics = _report_score(report)
+    benchmark = report.get("benchmark") if isinstance(report.get("benchmark"), Mapping) else {}
+    benchmark_metrics = benchmark.get("metrics") if isinstance(benchmark.get("metrics"), Mapping) else {}
+    strict_chunk_recall = _number_from(benchmark_metrics, "strict_chunk_recall_at_k", "strict_recall_at_k")
+    expected_chunk_hit_rate = _number_from(benchmark_metrics, "expected_chunk_hit_rate", "expected_evidence_hit_rate")
+    table_recall = _number_from(benchmark_metrics, "table_recall", "table_strict_recall", "table_recall_at_k")
+    image_recall = _number_from(benchmark_metrics, "image_recall", "visual_recall", "image_recall_at_k")
+    metrics.update(
+        {
+            "query_count": _query_count_from_report(report),
+            "strict_chunk_recall_at_k": 1.0 if strict_chunk_recall is None else strict_chunk_recall,
+            "expected_chunk_hit_rate": 1.0 if expected_chunk_hit_rate is None else expected_chunk_hit_rate,
+            "table_recall": table_recall,
+            "image_recall": image_recall,
+            "context_warning_count": _warning_count_from_report(report),
+        }
+    )
+    recall_components = [
+        metrics["strict_chunk_recall_at_k"],
+        metrics["expected_chunk_hit_rate"],
+        *(value for value in (table_recall, image_recall) if value is not None),
+    ]
+    recall_score = sum(float(value) for value in recall_components) / len(recall_components) if recall_components else 1.0
+    latency_penalty = min(float(metrics.get("query_latency_ms", 0.0) or 0.0) / 10000.0, 0.05)
+    warning_penalty = min(float(metrics["context_warning_count"]) * 0.005, 0.03)
+    decision_score = (score * 0.75) + (recall_score * 0.25) - latency_penalty - warning_penalty
+    metrics["recall_completeness_score"] = recall_score
+    metrics["decision_score"] = decision_score
+    return decision_score, metrics
+
+
+def decide_profile_from_reports(
+    paths: list[str | Path],
+    *,
+    minimum_query_count: int = 20,
+    minimum_profile_count: int = 2,
+    minimum_score_delta: float = 0.03,
+) -> dict[str, Any]:
+    """Create a conservative profile decision report from validation artifacts."""
+
+    if len(paths) < 2:
+        raise ProfileError("profile decision requires at least two validation reports")
+    candidates: list[dict[str, Any]] = []
+    for path_value in paths:
+        path = Path(path_value)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise ProfileError(f"validation report not found: {path}") from exc
+        except json.JSONDecodeError as exc:
+            raise ProfileError(f"validation report is not valid JSON: {path}") from exc
+        if not isinstance(data, Mapping):
+            raise ProfileError(f"validation report must be an object: {path}")
+        score, metrics = _decision_metrics(data)
+        candidates.append(
+            {
+                "path": str(path),
+                "profile_id": _profile_id_from_report(data, fallback=path.stem),
+                "ok": bool(data.get("ok", True)),
+                "metrics": metrics,
+                "score": score,
+            }
+        )
+
+    ranked = sorted(candidates, key=lambda item: item["score"], reverse=True)
+    winner = ranked[0]
+    runner_up = ranked[1] if len(ranked) > 1 else None
+    score_delta = float(winner["score"]) - float(runner_up["score"] if runner_up else 0.0)
+    max_query_count = max(int(candidate["metrics"].get("query_count", 0) or 0) for candidate in ranked)
+    issues: list[dict[str, Any]] = []
+    if len(ranked) < minimum_profile_count:
+        issues.append(
+            {
+                "severity": "warning",
+                "code": "minimum_profile_count_not_met",
+                "message": "not enough profile candidates were compared to recommend a default change",
+            }
+        )
+    if max_query_count < minimum_query_count:
+        issues.append(
+            {
+                "severity": "warning",
+                "code": "minimum_query_count_not_met",
+                "message": "profile comparison has too few validation queries to recommend a default change",
+                "evidence": {"max_query_count": max_query_count, "minimum_query_count": minimum_query_count},
+            }
+        )
+    if score_delta < minimum_score_delta:
+        issues.append(
+            {
+                "severity": "warning",
+                "code": "score_delta_below_threshold",
+                "message": "top profile score delta is too small to recommend a default change",
+                "evidence": {"score_delta": round(score_delta, 6), "minimum_score_delta": minimum_score_delta},
+            }
+        )
+
+    threshold_blocking = any(issue["code"] in {"minimum_profile_count_not_met", "minimum_query_count_not_met"} for issue in issues)
+    if threshold_blocking:
+        status = "insufficient_sample_for_default_change"
+    elif any(issue["code"] == "score_delta_below_threshold" for issue in issues):
+        status = "tie_or_no_default_change"
+    else:
+        status = "recommend_default_change"
+    return {
+        "ok": True,
+        "schema": PROFILE_DECISION_REPORT_SCHEMA,
+        "created_at": _now(),
+        "decision": {
+            "status": status,
+            "default_change_allowed": status == "recommend_default_change",
+            "recommended_profile_id": winner["profile_id"] if status == "recommend_default_change" else None,
+            "winner_profile_id": winner["profile_id"],
+            "reason_codes": [str(issue["code"]) for issue in issues],
+        },
+        "summary": {
+            "candidate_count": len(ranked),
+            "max_query_count": max_query_count,
+            "minimum_query_count": minimum_query_count,
+            "minimum_profile_count": minimum_profile_count,
+            "score_delta": round(score_delta, 6),
+            "winner_profile_id": winner["profile_id"],
+        },
+        "thresholds": {
+            "minimum_query_count": minimum_query_count,
+            "minimum_profile_count": minimum_profile_count,
+            "minimum_score_delta": minimum_score_delta,
+        },
+        "winner": winner,
+        "candidates": ranked,
+        "issues": issues,
+    }
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -901,5 +1075,52 @@ def render_profile_compare_markdown(report: Mapping[str, Any]) -> str:
             f"{metrics.get('empty_result_rate', 0):.4f} | {metrics.get('query_latency_ms', 0):.1f} | "
             f"{metrics.get('parse_time_ms', 0):.1f} |"
         )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_profile_decision_markdown(report: Mapping[str, Any]) -> str:
+    decision = report.get("decision", {}) if isinstance(report.get("decision"), Mapping) else {}
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Profile Decision Report",
+        "",
+        f"- schema: `{report.get('schema', PROFILE_DECISION_REPORT_SCHEMA)}`",
+        f"- status: `{decision.get('status', 'unknown')}`",
+        f"- default_change_allowed: `{str(bool(decision.get('default_change_allowed'))).lower()}`",
+        f"- winner_profile_id: `{decision.get('winner_profile_id', '')}`",
+        f"- recommended_profile_id: `{decision.get('recommended_profile_id') or ''}`",
+        f"- candidate_count: `{summary.get('candidate_count', 0)}`",
+        f"- max_query_count: `{summary.get('max_query_count', 0)}`",
+        f"- score_delta: `{summary.get('score_delta', 0)}`",
+        "",
+        "| rank | profile | decision_score | pass_rate | strict_recall | expected_hit | table_recall | image_recall | empty_rate | latency_ms | chunks |",
+        "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for index, item in enumerate(report.get("candidates", []), start=1):
+        if not isinstance(item, Mapping):
+            continue
+        metrics = item.get("metrics", {}) if isinstance(item.get("metrics"), Mapping) else {}
+        table_recall = "" if metrics.get("table_recall") is None else f"{float(metrics.get('table_recall') or 0.0):.4f}"
+        image_recall = "" if metrics.get("image_recall") is None else f"{float(metrics.get('image_recall') or 0.0):.4f}"
+        lines.append(
+            f"| {index} | `{item.get('profile_id', '')}` | {float(item.get('score', 0.0) or 0.0):.4f} | "
+            f"{float(metrics.get('pass_rate', 0.0) or 0.0):.4f} | "
+            f"{float(metrics.get('strict_chunk_recall_at_k', 0.0) or 0.0):.4f} | "
+            f"{float(metrics.get('expected_chunk_hit_rate', 0.0) or 0.0):.4f} | "
+            f"{table_recall} | "
+            f"{image_recall} | "
+            f"{float(metrics.get('empty_result_rate', 0.0) or 0.0):.4f} | "
+            f"{float(metrics.get('query_latency_ms', 0.0) or 0.0):.1f} | "
+            f"{float(metrics.get('average_chunks', 0.0) or 0.0):.1f} |"
+        )
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    lines.extend(["", "## Issues", ""])
+    if not issues:
+        lines.append("- None")
+    else:
+        for issue in issues:
+            if isinstance(issue, Mapping):
+                lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
     lines.append("")
     return "\n".join(lines)
