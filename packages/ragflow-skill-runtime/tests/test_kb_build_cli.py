@@ -1093,7 +1093,7 @@ class KbBuildCliTests(unittest.TestCase):
                 names = set(archive.namelist())
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(payload["schema"], "ragflow_kb_asset_upload_plan_v1")
+        self.assertEqual(payload["schema"], "ragflow_kb_asset_upload_plan_v2")
         self.assertEqual(report_payload["summary"]["planned_image_file_count"], 1)
         self.assertEqual(report_payload["summary"]["markdown_image_reference_count"], 1)
         self.assertEqual(report_payload["summary"]["missing_image_asset_count"], 0)

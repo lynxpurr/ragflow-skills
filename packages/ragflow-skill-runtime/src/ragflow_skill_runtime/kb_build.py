@@ -16,9 +16,20 @@ import zipfile
 from .manifests import DocManifest, KbDocumentEntry
 from .profiles import ChunkProfile
 
-KB_ASSET_UPLOAD_PLAN_SCHEMA = "ragflow_kb_asset_upload_plan_v1"
+KB_ASSET_UPLOAD_PLAN_SCHEMA = "ragflow_kb_asset_upload_plan_v2"
 MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)]\(([^)]+)\)")
 IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".tif", ".tiff", ".webp"}
+ASSET_UPLOAD_PLAN_IMAGE_CLASSES = (
+    "markdown_referenced",
+    "manifest_listed",
+    "sidecar_referenced",
+    "residual_unreferenced",
+    "outside_handoff",
+    "missing",
+)
+HASH_NAMED_IMAGE_RE = re.compile(r"^[0-9a-fA-F]{16,}$")
+RESIDUAL_IMAGE_LARGE_BYTES = 5 * 1024 * 1024
+RESIDUAL_IMAGE_NUMEROUS_THRESHOLD = 5
 DEFAULT_UPLOAD_PLAN_SIDECARS = (
     ("doc_manifest", "doc_manifest.json"),
     ("quality_report", "quality_report.json"),
@@ -173,6 +184,134 @@ def _add_projected_file(files: list[dict[str, Any]], seen: set[str], record: dic
     files.append(record)
 
 
+def _image_artifact_key(path: Path) -> str:
+    return str(path.resolve(strict=False))
+
+
+def _is_image_path_value(value: str) -> bool:
+    if _is_remote_asset_reference(value):
+        return False
+    return Path(_image_reference_path(value)).suffix.lower() in IMAGE_SUFFIXES
+
+
+def _iter_image_path_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [_image_reference_path(value)] if _is_image_path_value(value) else []
+    if isinstance(value, Mapping):
+        found: list[str] = []
+        for nested in value.values():
+            found.extend(_iter_image_path_values(nested))
+        return found
+    if isinstance(value, list):
+        found = []
+        for nested in value:
+            found.extend(_iter_image_path_values(nested))
+        return found
+    return []
+
+
+def _image_artifact_record(
+    *,
+    asset_class: str,
+    source: str,
+    raw_path: str,
+    resolved: Path,
+    handoff_root: Path,
+    document_index: int | None = None,
+    document: str | None = None,
+    planned_for_visual_upload: bool = False,
+) -> dict[str, Any]:
+    exists = resolved.is_file()
+    inside_handoff = _is_relative_to(resolved, handoff_root)
+    record: dict[str, Any] = {
+        "asset_class": asset_class,
+        "role": "image_asset",
+        "source": source,
+        "raw_path": raw_path,
+        "source_path": _relative_to_root(resolved, handoff_root),
+        "package_path": _relative_to_root(resolved, handoff_root) if inside_handoff else None,
+        "exists": exists,
+        "inside_handoff": inside_handoff,
+        "planned_for_visual_upload": planned_for_visual_upload,
+        "planned_for_package": planned_for_visual_upload,
+    }
+    if document_index is not None:
+        record["document_index"] = document_index
+    if document:
+        record["document"] = document
+    if exists:
+        record["size_bytes"] = resolved.stat().st_size
+        record["sha256"] = _sha256_file(resolved)
+        mime_type, _encoding = mimetypes.guess_type(resolved.name)
+        if mime_type:
+            record["mime_type"] = mime_type
+    return record
+
+
+def _add_image_artifact(
+    *,
+    artifacts: list[dict[str, Any]],
+    by_key: dict[str, dict[str, Any]],
+    asset_class: str,
+    source: str,
+    raw_path: str,
+    resolved: Path,
+    handoff_root: Path,
+    document_index: int | None = None,
+    document: str | None = None,
+    planned_for_visual_upload: bool = False,
+) -> dict[str, Any]:
+    key = _image_artifact_key(resolved)
+    source_record = {"source": source, "raw_path": raw_path}
+    if document_index is not None:
+        source_record["document_index"] = document_index
+    existing = by_key.get(key)
+    if existing is not None:
+        existing.setdefault("sources", []).append(source_record)
+        existing["planned_for_visual_upload"] = bool(existing.get("planned_for_visual_upload")) or planned_for_visual_upload
+        existing["planned_for_package"] = bool(existing.get("planned_for_package")) or planned_for_visual_upload
+        return existing
+    record = _image_artifact_record(
+        asset_class=asset_class,
+        source=source,
+        raw_path=raw_path,
+        resolved=resolved,
+        handoff_root=handoff_root,
+        document_index=document_index,
+        document=document,
+        planned_for_visual_upload=planned_for_visual_upload,
+    )
+    record["sources"] = [source_record]
+    by_key[key] = record
+    artifacts.append(record)
+    return record
+
+
+def _collect_sidecar_image_references(*, handoff_root: Path) -> list[tuple[str, str, Path]]:
+    references: list[tuple[str, str, Path]] = []
+    for role, sidecar_name in DEFAULT_UPLOAD_PLAN_SIDECARS:
+        if role == "doc_manifest":
+            continue
+        path = handoff_root / sidecar_name
+        if not path.is_file() or path.suffix.lower() not in {".json", ".yaml", ".yml"}:
+            continue
+        if path.suffix.lower() != ".json":
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        seen: set[str] = set()
+        for raw in _iter_image_path_values(payload):
+            if raw in seen:
+                continue
+            seen.add(raw)
+            candidate = Path(raw)
+            resolved = candidate if candidate.is_absolute() else handoff_root / candidate
+            references.append((sidecar_name, raw, resolved))
+    return references
+
+
 def _collect_sidecar_records(
     *,
     manifest_payload: Mapping[str, Any],
@@ -224,11 +363,12 @@ def _scan_orphan_images(*, handoff_root: Path, referenced_paths: set[Path]) -> l
         if path in normalized_referenced:
             continue
         records.append(
-            _file_record(
-                role="orphan_image",
-                source_path=path,
+            _image_artifact_record(
+                asset_class="residual_unreferenced",
+                source="handoff_image_scan",
+                raw_path=_relative_to_root(path, handoff_root),
+                resolved=path,
                 handoff_root=handoff_root,
-                package_path=_relative_to_root(path, handoff_root),
             )
         )
     return records
@@ -253,13 +393,13 @@ def create_kb_asset_upload_plan(
     documents: list[dict[str, Any]] = []
     image_references: list[dict[str, Any]] = []
     manifest_image_assets: list[dict[str, Any]] = []
+    discovered_image_artifacts: list[dict[str, Any]] = []
+    discovered_image_artifacts_by_key: dict[str, dict[str, Any]] = {}
     projected_files: list[dict[str, Any]] = []
     seen_projected: set[str] = set()
-    referenced_image_paths: set[Path] = set()
+    known_handoff_image_paths: set[Path] = set()
     remote_image_count = 0
     local_image_reference_count = 0
-    missing_image_count = 0
-    outside_handoff_count = 0
 
     for index, item in enumerate(raw_documents, start=1):
         if not isinstance(item, Mapping):
@@ -358,12 +498,11 @@ def create_kb_asset_upload_plan(
                 resolved = target_path if target_path.is_absolute() else markdown_path.parent / target_path
                 inside_handoff = _is_relative_to(resolved, handoff_root)
                 exists = resolved.is_file()
-                if not inside_handoff:
-                    outside_handoff_count += 1
-                if not exists:
-                    missing_image_count += 1
+                asset_class = "missing" if not exists else "outside_handoff" if not inside_handoff else "markdown_referenced"
+                planned_for_visual_upload = asset_class == "markdown_referenced"
                 record = {
                     "source": "markdown_image_reference",
+                    "asset_class": asset_class,
                     "document_index": index,
                     "document": raw_markdown,
                     "target": raw_target,
@@ -372,33 +511,34 @@ def create_kb_asset_upload_plan(
                     "exists": exists,
                     "inside_handoff": inside_handoff,
                     "remote": False,
-                    "planned_for_package": exists and inside_handoff,
+                    "planned_for_visual_upload": planned_for_visual_upload,
+                    "planned_for_package": planned_for_visual_upload,
                 }
                 image_references.append(record)
-                if exists and inside_handoff:
-                    referenced_image_paths.add(resolved)
-                    _add_projected_file(
-                        projected_files,
-                        seen_projected,
-                        _file_record(
-                            role="image_asset",
-                            source_path=resolved,
-                            handoff_root=handoff_root,
-                            package_path=_relative_to_root(resolved, handoff_root),
-                        ),
-                    )
+                artifact = _add_image_artifact(
+                    artifacts=discovered_image_artifacts,
+                    by_key=discovered_image_artifacts_by_key,
+                    asset_class=asset_class,
+                    source="markdown_image_reference",
+                    raw_path=raw_target,
+                    resolved=resolved,
+                    handoff_root=handoff_root,
+                    document_index=index,
+                    document=raw_markdown,
+                    planned_for_visual_upload=planned_for_visual_upload,
+                )
+                if artifact.get("exists") and artifact.get("inside_handoff"):
+                    known_handoff_image_paths.add(resolved)
         for raw_asset_path in _document_asset_paths(item):
             document_record["manifest_image_asset_count"] += 1
             asset_path = Path(raw_asset_path)
             resolved = asset_path if asset_path.is_absolute() else handoff_root / asset_path
             inside_handoff = _is_relative_to(resolved, handoff_root)
             exists = resolved.is_file()
-            if not inside_handoff:
-                outside_handoff_count += 1
-            if not exists:
-                missing_image_count += 1
+            asset_class = "missing" if not exists else "outside_handoff" if not inside_handoff else "manifest_listed"
             record = {
                 "source": "manifest_image_asset",
+                "asset_class": asset_class,
                 "document_index": index,
                 "document": raw_markdown,
                 "path": raw_asset_path,
@@ -406,53 +546,133 @@ def create_kb_asset_upload_plan(
                 "package_path": _relative_to_root(resolved, handoff_root) if inside_handoff else None,
                 "exists": exists,
                 "inside_handoff": inside_handoff,
-                "planned_for_package": exists and inside_handoff,
+                "planned_for_visual_upload": False,
+                "planned_for_package": False,
             }
             manifest_image_assets.append(record)
-            if exists and inside_handoff:
-                referenced_image_paths.add(resolved)
-                _add_projected_file(
-                    projected_files,
-                    seen_projected,
-                    _file_record(
-                        role="image_asset",
-                        source_path=resolved,
-                        handoff_root=handoff_root,
-                        package_path=_relative_to_root(resolved, handoff_root),
-                    ),
-                )
+            artifact = _add_image_artifact(
+                artifacts=discovered_image_artifacts,
+                by_key=discovered_image_artifacts_by_key,
+                asset_class=asset_class,
+                source="manifest_image_asset",
+                raw_path=raw_asset_path,
+                resolved=resolved,
+                handoff_root=handoff_root,
+                document_index=index,
+                document=raw_markdown,
+                planned_for_visual_upload=False,
+            )
+            if artifact.get("exists") and artifact.get("inside_handoff"):
+                known_handoff_image_paths.add(resolved)
         documents.append(document_record)
 
-    for ref in [*image_references, *manifest_image_assets]:
-        if ref.get("remote"):
-            continue
-        if not ref.get("inside_handoff"):
+    sidecar_image_assets: list[dict[str, Any]] = []
+    for sidecar_name, raw_path, resolved in _collect_sidecar_image_references(handoff_root=handoff_root):
+        inside_handoff = _is_relative_to(resolved, handoff_root)
+        exists = resolved.is_file()
+        asset_class = "missing" if not exists else "outside_handoff" if not inside_handoff else "sidecar_referenced"
+        artifact = _add_image_artifact(
+            artifacts=discovered_image_artifacts,
+            by_key=discovered_image_artifacts_by_key,
+            asset_class=asset_class,
+            source=f"sidecar:{sidecar_name}",
+            raw_path=raw_path,
+            resolved=resolved,
+            handoff_root=handoff_root,
+            planned_for_visual_upload=False,
+        )
+        sidecar_image_assets.append(artifact)
+        if artifact.get("exists") and artifact.get("inside_handoff"):
+            known_handoff_image_paths.add(resolved)
+
+    orphan_images = _scan_orphan_images(handoff_root=handoff_root, referenced_paths=known_handoff_image_paths)
+    for orphan in orphan_images:
+        key = _image_artifact_key(handoff_root / str(orphan["source_path"]))
+        if key not in discovered_image_artifacts_by_key:
+            discovered_image_artifacts_by_key[key] = orphan
+            discovered_image_artifacts.append(orphan)
+
+    for artifact in discovered_image_artifacts:
+        asset_class = artifact.get("asset_class")
+        if asset_class == "outside_handoff":
             issues.append(
                 _issue(
                     severity="error",
                     code="image_outside_handoff",
-                    message=f"Local image reference is outside the handoff root: {ref.get('target') or ref.get('path')}",
+                    message=f"Local image reference is outside the handoff root: {artifact.get('raw_path')}",
                     recommendation="Copy image assets into the handoff and update Markdown references before upload.",
                 )
             )
-        elif not ref.get("exists"):
+        elif asset_class == "missing":
             issues.append(
                 _issue(
                     severity="error",
                     code="image_missing",
-                    message=f"Local image asset is missing: {ref.get('target') or ref.get('path')}",
+                    message=f"Local image asset is missing: {artifact.get('raw_path')}",
                     recommendation="Regenerate the handoff with asset landing enabled or repair image paths.",
                 )
             )
 
-    orphan_images = _scan_orphan_images(handoff_root=handoff_root, referenced_paths=referenced_image_paths)
-    if orphan_images:
+    residual_images = [item for item in discovered_image_artifacts if item.get("asset_class") == "residual_unreferenced"]
+    if residual_images:
         issues.append(
             _issue(
                 severity="warning",
                 code="orphan_images_detected",
                 message="One or more handoff-local image files are not referenced by Markdown or doc_manifest assets.",
                 recommendation="Review whether orphan images should be referenced, removed, or kept outside the upload package.",
+            )
+        )
+        issues.append(
+            _issue(
+                severity="warning",
+                code="residual_images_detected",
+                message="One or more handoff-local image files are residual and not part of the default visual upload set.",
+                recommendation="Upload only markdown_referenced images by default; review residual files before broadening the asset policy.",
+            )
+        )
+    if len(residual_images) >= RESIDUAL_IMAGE_NUMEROUS_THRESHOLD:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="residual_images_numerous",
+                message="Residual handoff images are numerous enough to require review before upload.",
+                recommendation="Check whether these files are parser leftovers or intentional visual documents.",
+            )
+        )
+    if any(int(item.get("size_bytes", 0) or 0) >= RESIDUAL_IMAGE_LARGE_BYTES for item in residual_images):
+        issues.append(
+            _issue(
+                severity="warning",
+                code="residual_images_large",
+                message="At least one residual handoff image is large.",
+                recommendation="Avoid uploading large residual images unless they are intentionally selected as visual documents.",
+            )
+        )
+    if any(HASH_NAMED_IMAGE_RE.match(Path(str(item.get("source_path") or "")).stem) for item in residual_images):
+        issues.append(
+            _issue(
+                severity="warning",
+                code="residual_images_likely_hash_named",
+                message="At least one residual image has a hash-like filename.",
+                recommendation="Treat hash-named residual files as parser leftovers unless handoff evidence says otherwise.",
+            )
+        )
+    planned_visual_upload_files = [
+        item
+        for item in discovered_image_artifacts
+        if item.get("asset_class") == "markdown_referenced"
+        and item.get("exists") is True
+        and item.get("inside_handoff") is True
+    ]
+    planned_hashes = {item.get("sha256") for item in planned_visual_upload_files if item.get("sha256")}
+    if planned_hashes and any(item.get("sha256") in planned_hashes for item in residual_images):
+        issues.append(
+            _issue(
+                severity="warning",
+                code="residual_images_likely_duplicates",
+                message="At least one residual image has the same content hash as a planned Markdown-referenced image.",
+                recommendation="Do not upload duplicate residual files as separate visual documents.",
             )
         )
     if remote_image_count:
@@ -475,6 +695,30 @@ def create_kb_asset_upload_plan(
         for record in sidecars:
             _add_projected_file(projected_files, seen_projected, record)
 
+    for item in planned_visual_upload_files:
+        source_path = item.get("source_path")
+        package_path = item.get("package_path")
+        if not isinstance(source_path, str) or not source_path:
+            continue
+        source = Path(source_path)
+        if not source.is_absolute():
+            source = handoff_root / source
+        _add_projected_file(
+            projected_files,
+            seen_projected,
+            _file_record(
+                role="image_asset",
+                source_path=source,
+                handoff_root=handoff_root,
+                package_path=str(package_path or source_path),
+                exists=item.get("exists") is True,
+            ),
+        )
+
+    asset_class_counts = {
+        asset_class: sum(1 for item in discovered_image_artifacts if item.get("asset_class") == asset_class)
+        for asset_class in ASSET_UPLOAD_PLAN_IMAGE_CLASSES
+    }
     package_size_bytes = sum(int(item.get("size_bytes", 0) or 0) for item in projected_files if item.get("exists"))
     error_count = sum(1 for item in issues if item["severity"] == "error")
     warning_count = sum(1 for item in issues if item["severity"] == "warning")
@@ -496,13 +740,18 @@ def create_kb_asset_upload_plan(
             "markdown_image_reference_count": local_image_reference_count,
             "remote_image_reference_count": remote_image_count,
             "manifest_image_asset_count": len(manifest_image_assets),
-            "discovered_image_artifact_count": len(manifest_image_assets),
-            "planned_image_file_count": len([item for item in projected_files if item.get("role") == "image_asset"]),
-            "missing_image_count": missing_image_count,
-            "missing_image_asset_count": missing_image_count,
-            "outside_handoff_image_count": outside_handoff_count,
-            "orphan_image_count": len(orphan_images),
-            "unreferenced_handoff_image_count": len(orphan_images),
+            "markdown_referenced_image_count": asset_class_counts["markdown_referenced"],
+            "manifest_listed_image_count": asset_class_counts["manifest_listed"],
+            "sidecar_referenced_image_count": asset_class_counts["sidecar_referenced"],
+            "residual_unreferenced_image_count": asset_class_counts["residual_unreferenced"],
+            "discovered_image_artifact_count": len(discovered_image_artifacts),
+            "planned_visual_upload_file_count": len(planned_visual_upload_files),
+            "planned_image_file_count": len(planned_visual_upload_files),
+            "missing_image_count": asset_class_counts["missing"],
+            "missing_image_asset_count": asset_class_counts["missing"],
+            "outside_handoff_image_count": asset_class_counts["outside_handoff"],
+            "orphan_image_count": len(residual_images),
+            "unreferenced_handoff_image_count": len(residual_images),
             "sidecar_file_count": len(sidecars),
             "projected_upload_file_count": len(projected_files),
             "package_size_bytes": package_size_bytes,
@@ -513,17 +762,25 @@ def create_kb_asset_upload_plan(
         "documents": documents,
         "image_references": image_references,
         "manifest_image_assets": manifest_image_assets,
-        "orphan_images": orphan_images[:50],
+        "sidecar_image_assets": sidecar_image_assets[:50],
+        "orphan_images": residual_images[:50],
+        "residual_images": residual_images[:50],
+        "discovered_image_artifacts": discovered_image_artifacts[:200],
+        "planned_visual_upload_files": planned_visual_upload_files,
+        "asset_class_counts": asset_class_counts,
         "sidecars": sidecars,
         "projected_upload_files": projected_files,
         "issues": issues,
         "upload_policy": {
             "current_live_upload_path": "markdown_only",
+            "default_visual_upload_class": "markdown_referenced",
             "planned_package_mode": "zip",
             "live_mutation_requires_existing_build_gate": True,
             "notes": [
                 "This report does not call RAGFlow.",
-                "Only handoff-local existing Markdown, image, and sidecar files are projected into the package.",
+                "Only markdown_referenced image assets enter the default visual upload plan.",
+                "Manifest-listed, sidecar-referenced, and residual images are discovered for review but excluded from the default visual upload set.",
+                "Only handoff-local existing Markdown, planned image, and sidecar files are projected into the local package.",
                 "Live upload of the package remains disabled until an explicit mutation gate approves it.",
             ],
         },
@@ -566,7 +823,7 @@ def write_kb_asset_upload_zip(report: Mapping[str, Any], *, output_path: str | P
 
 
 def render_kb_asset_upload_plan_markdown(report: Mapping[str, Any]) -> str:
-    """Render a concise Markdown summary for ragflow_kb_asset_upload_plan_v1."""
+    """Render a concise Markdown summary for ragflow_kb_asset_upload_plan_v2."""
 
     summary = report.get("summary") if isinstance(report.get("summary"), Mapping) else {}
     lines = [
@@ -580,7 +837,11 @@ def render_kb_asset_upload_plan_markdown(report: Mapping[str, Any]) -> str:
         f"- projected_upload_files: `{summary.get('projected_upload_file_count', 0)}`",
         f"- discovered image artifacts: `{summary.get('discovered_image_artifact_count', summary.get('manifest_image_asset_count', 0))}`",
         f"- Markdown image references: `{summary.get('markdown_image_reference_count', summary.get('local_image_reference_count', 0))}`",
-        f"- planned image files: `{summary.get('planned_image_file_count', 0)}`",
+        f"- markdown_referenced images: `{summary.get('markdown_referenced_image_count', 0)}`",
+        f"- manifest_listed images: `{summary.get('manifest_listed_image_count', 0)}`",
+        f"- sidecar_referenced images: `{summary.get('sidecar_referenced_image_count', 0)}`",
+        f"- residual_unreferenced images: `{summary.get('residual_unreferenced_image_count', summary.get('unreferenced_handoff_image_count', 0))}`",
+        f"- planned visual upload files: `{summary.get('planned_visual_upload_file_count', summary.get('planned_image_file_count', 0))}`",
         f"- missing image assets: `{summary.get('missing_image_asset_count', summary.get('missing_image_count', 0))}`",
         f"- unreferenced handoff images: `{summary.get('unreferenced_handoff_image_count', summary.get('orphan_image_count', 0))}`",
         f"- sidecars: `{summary.get('sidecar_file_count', 0)}`",

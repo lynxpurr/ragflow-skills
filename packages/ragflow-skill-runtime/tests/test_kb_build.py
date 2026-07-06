@@ -124,7 +124,7 @@ class KbBuildTests(unittest.TestCase):
         self.assertEqual(plan["ragflow_calls"], 0)
         self.assertEqual(plan["summary"]["planned_image_file_count"], 1)
         self.assertEqual(plan["summary"]["markdown_image_reference_count"], 2)
-        self.assertEqual(plan["summary"]["discovered_image_artifact_count"], 1)
+        self.assertEqual(plan["summary"]["discovered_image_artifact_count"], 3)
         self.assertEqual(plan["summary"]["missing_image_count"], 1)
         self.assertEqual(plan["summary"]["missing_image_asset_count"], 1)
         self.assertEqual(plan["summary"]["orphan_image_count"], 1)
@@ -133,6 +133,128 @@ class KbBuildTests(unittest.TestCase):
         self.assertGreaterEqual(plan["summary"]["sidecar_file_count"], 2)
         self.assertIn("image_missing", {issue["code"] for issue in plan["issues"]})
         self.assertIn("orphan_images_detected", {issue["code"] for issue in plan["issues"]})
+
+    def test_asset_upload_plan_v2_separates_discovered_images_from_planned_upload_set(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = Path(tmp) / "handoff"
+            image_dir = handoff / "documents" / "images"
+            sidecar_dir = handoff / "artifacts" / "images"
+            residual_dir = handoff / "images"
+            outside_dir = Path(tmp) / "outside"
+            image_dir.mkdir(parents=True)
+            sidecar_dir.mkdir(parents=True)
+            residual_dir.mkdir(parents=True)
+            outside_dir.mkdir()
+            markdown = handoff / "documents" / "sample.md"
+            markdown.write_text(
+                "# Sample\n\n"
+                "![referenced](images/ref.png)\n"
+                "![missing](images/missing.png)\n"
+                "![outside](../../outside/outside.png)\n",
+                encoding="utf-8",
+            )
+            (image_dir / "ref.png").write_bytes(b"referenced")
+            (image_dir / "manifest-only.png").write_bytes(b"manifest")
+            (sidecar_dir / "sidecar.png").write_bytes(b"sidecar")
+            (residual_dir / "residual.png").write_bytes(b"residual")
+            (outside_dir / "outside.png").write_bytes(b"outside")
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [
+                            {
+                                "source_path": "sample.pdf",
+                                "markdown_path": "documents/sample.md",
+                                "assets": {"images": [{"path": "documents/images/manifest-only.png"}]},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (handoff / "artifact_index.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_artifact_index_v1",
+                        "artifacts": [{"path": "artifacts/images/sidecar.png", "type": "image"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            plan = create_kb_asset_upload_plan(doc_manifest_path=manifest)
+
+        self.assertEqual(plan["schema"], "ragflow_kb_asset_upload_plan_v2")
+        self.assertEqual(plan["summary"]["markdown_referenced_image_count"], 1)
+        self.assertEqual(plan["summary"]["manifest_listed_image_count"], 1)
+        self.assertEqual(plan["summary"]["sidecar_referenced_image_count"], 1)
+        self.assertEqual(plan["summary"]["residual_unreferenced_image_count"], 1)
+        self.assertEqual(plan["summary"]["outside_handoff_image_count"], 1)
+        self.assertEqual(plan["summary"]["missing_image_count"], 1)
+        self.assertEqual(plan["summary"]["discovered_image_artifact_count"], 6)
+        self.assertEqual(plan["summary"]["planned_visual_upload_file_count"], 1)
+        self.assertEqual(
+            {item["asset_class"] for item in plan["discovered_image_artifacts"]},
+            {
+                "markdown_referenced",
+                "manifest_listed",
+                "sidecar_referenced",
+                "residual_unreferenced",
+                "outside_handoff",
+                "missing",
+            },
+        )
+        self.assertEqual(
+            [item["source_path"] for item in plan["planned_visual_upload_files"]],
+            ["documents/images/ref.png"],
+        )
+        self.assertNotIn(
+            "documents/images/manifest-only.png",
+            {item["source_path"] for item in plan["planned_visual_upload_files"]},
+        )
+
+    def test_asset_upload_plan_classifies_apollo_style_referenced_and_residual_images(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = Path(tmp) / "handoff"
+            image_dir = handoff / "documents" / "images"
+            residual_dir = handoff / "artifacts" / "images"
+            image_dir.mkdir(parents=True)
+            residual_dir.mkdir(parents=True)
+            refs = []
+            for index in range(15):
+                name = f"page-{index:02d}.png"
+                refs.append(name)
+                (image_dir / name).write_bytes(f"referenced-{index}".encode("utf-8"))
+            for index in range(6):
+                (residual_dir / f"{index:064x}.png").write_bytes(f"residual-{index}".encode("utf-8"))
+            markdown = handoff / "documents" / "sample.md"
+            markdown.write_text(
+                "# APOLLO\n\n" + "\n".join(f"![page {index}](images/{name})" for index, name in enumerate(refs)),
+                encoding="utf-8",
+            )
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [{"source_path": "apollo.pdf", "markdown_path": "documents/sample.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            plan = create_kb_asset_upload_plan(doc_manifest_path=manifest)
+
+        self.assertEqual(plan["status"], "ready_with_review")
+        self.assertEqual(plan["summary"]["markdown_referenced_image_count"], 15)
+        self.assertEqual(plan["summary"]["residual_unreferenced_image_count"], 6)
+        self.assertEqual(plan["summary"]["planned_visual_upload_file_count"], 15)
+        self.assertIn("residual_images_detected", {issue["code"] for issue in plan["issues"]})
+        self.assertIn("residual_images_likely_hash_named", {issue["code"] for issue in plan["issues"]})
 
     def test_write_kb_asset_upload_zip_contains_projected_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -82,9 +82,9 @@ EXPECTED_IDENTITIES = (
     SchemaIdentity(
         key="kb_asset_upload_plan",
         group="kb_build",
-        identity="ragflow_kb_asset_upload_plan_v1",
-        source_patterns=("ragflow_kb_asset_upload_plan_v1", "KB_ASSET_UPLOAD_PLAN_SCHEMA"),
-        coverage_patterns=("ragflow_kb_asset_upload_plan_v1", "KB_ASSET_UPLOAD_PLAN_SCHEMA"),
+        identity="ragflow_kb_asset_upload_plan_v2",
+        source_patterns=("ragflow_kb_asset_upload_plan_v2", "KB_ASSET_UPLOAD_PLAN_SCHEMA"),
+        coverage_patterns=("ragflow_kb_asset_upload_plan_v2", "KB_ASSET_UPLOAD_PLAN_SCHEMA"),
         description="No-live Markdown plus local image asset upload package dry-run report.",
     ),
     SchemaIdentity(
