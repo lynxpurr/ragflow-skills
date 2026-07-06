@@ -55,8 +55,8 @@ Completed or closed for the current public command surface:
   `ragflow_adaptive_pipeline_summary_v1`, then reuse the existing formal `pipeline` and
   emit review commands for `inspect-handoff`, `asset-upload-plan`, and KB dry-run without
   enabling script-owned LLM calls or live RAGFlow mutation.
-- The 2026-07-06 MinerU v4 platform backend adds explicit `mineru-v4` /
-  `mineru-platform` support for the public MinerU precision API. The backend uses the
+- The 2026-07-06 MinerU v4 platform-compatible backend adds explicit `mineru-v4` /
+  `mineru-platform` support for the v4 precision parsing protocol. The backend uses the
   v4 local-file batch upload, signed object upload, batch polling, `full_zip_url`
   extraction, safe asset materialization, redacted runtime telemetry, backend probe, and
   release-path fake-server validation without making live MinerU calls by default.
@@ -117,13 +117,13 @@ Completion priorities:
 
 Progress assessment:
 
-- Roadmap checklist status is 579 completed items out of 594 tracked items, about 97%.
+- Roadmap checklist status is 586 completed items out of 601 tracked items, about 98%.
 - The portable public CLI suite is complete for the planned portable archive
   release path: core commands, release packaging, redaction, report inventories, runtime
   helper pilots, contract gates, installed archive smoke, and primary manifest JSON Schema
   checks are all closed.
-- The 15 remaining open checklist items are not ordinary implementation gaps. They are
-  optional script-owned LLM/backend work, Phase 37 post-CLI adapter
+- The 15 remaining open checklist items are intentionally gated items: optional
+  script-owned LLM/backend work, Phase 37 post-CLI adapter
   decisions/implementation, or private dedao bridge work outside the public release
   boundary.
 - The next stage is field-trial observation: use real workflows to collect sanitized
@@ -133,8 +133,9 @@ Progress assessment:
 
 Review date: 2026-07-02
 
-The remaining open checkboxes are intentionally gated. They should not be pulled into a
-normal offline continuation unless their gate is satisfied.
+The 15 gated open checkboxes are intentionally gated. They should not be pulled into a
+normal offline continuation unless their gate is satisfied. Phase 42 protocol-bound
+MinerU v4 wording follow-up is closed.
 
 | Category | Open items | Owning tasks | Gate before work starts | Next action |
 | --- | ---: | --- | --- | --- |
@@ -2000,15 +2001,16 @@ Exit criteria:
 
 ## Phase 42: MinerU v4 Platform Backend Release-Path Maintenance
 
-Goal: add a first-class public MinerU v4 platform backend without overloading the
+Goal: add a first-class MinerU v4 platform-compatible backend without overloading the
 self-hosted FastAPI, Agent API, synchronous multipart, or local CLI adapters.
 
 Design source: `docs/26-mineru-v4-platform-backend-design.md`.
 
-Status note: Phase 42 is implemented and release-validated with fake-server coverage. It
-does not run live MinerU v4 calls by default, does not infer paid platform routing merely
-from a configured token, and does not open any remaining post-CLI, provider, reranker,
-LLM/backend, or private-bridge gated tracks.
+Status note: Phase 42 backend implementation and protocol-binding docs/help follow-up
+are release-validated with fake-server coverage. The backend does not run live MinerU v4
+calls by default, does not infer paid platform routing merely from a configured token,
+and does not open any remaining post-CLI, provider, reranker, LLM/backend, or
+private-bridge gated tracks.
 
 Tasks:
 
@@ -2031,6 +2033,22 @@ Tasks:
   table-quality notes, and comparison references.
 - [x] Run the release-facing validation chain and keep live MinerU v4 validation as a
   future explicit, credentialed, sanitized field-trial task.
+- [x] Update CLI help and runtime docstrings so `mineru-v4` is described as a
+  v4 platform-compatible protocol backend, with `mineru.net` shown only as an official
+  example endpoint.
+- [x] Update `skills/ragflow-doc-to-md/SKILL.md` examples and wording to say compatible
+  v4 endpoints may replace `https://mineru.net`.
+- [x] Update shared `skills/*/references/host-agent-setup.md` guidance and keep the three
+  public copies byte-identical after the wording change.
+- [x] Update shared `skills/*/references/user-onboarding-prompt.md` guidance and keep the
+  three public copies byte-identical after the wording change.
+- [x] Update shared `skills/*/templates/ragflow-config.example.yaml` comments so
+  `https://mineru.net` is clearly labeled as an example, not the only supported domain.
+- [x] Update architecture, CLI-agent integration, adaptive/table-quality, and comparison
+  references to say "MinerU v4 platform-compatible protocol" where the support model is
+  protocol-bound rather than domain-bound.
+- [x] Run docs-only validation, shared-reference/template drift checks, and release
+  hygiene before closing this follow-up.
 
 Implementation record, 2026-07-06:
 
@@ -2045,7 +2063,7 @@ Implementation record, 2026-07-06:
 
 Exit criteria:
 
-- `docs/26` has no unchecked implementation items.
+- `docs/26` has no unchecked implementation or protocol-binding follow-up items.
 - Public CLI/config/docs distinguish `mineru-fastapi` `/tasks` from MinerU v4
   `/api/v4/file-urls/batch` and `/api/v4/extract-results/batch/{batch_id}`.
 - Fake-server runtime and CLI tests prove success, failure, redaction, and zip-safety

@@ -35,12 +35,13 @@ Do not pin `--mineru-fastapi-backend pipeline` when the goal is better table ext
 that preserves the standard backend and prevents `--table-quality high` from improving
 table structure.
 
-For the public MinerU v4 platform API, use `--backend mineru-v4` or the alias
-`--backend mineru-platform`. The same `--table-quality high` setting maps to
-`--mineru-v4-model-version vlm`; an explicit `MinerU-HTML` model is preserved for
-HTML-centric workflows. The v4 backend uses `/api/v4/file-urls/batch`, uploads to the
-returned pre-signed URLs without the bearer token, polls
-`/api/v4/extract-results/batch/{batch_id}`, and extracts Markdown from the returned zip.
+For MinerU v4 platform-compatible APIs, including the public `mineru.net` API, use
+`--backend mineru-v4` or the alias `--backend mineru-platform`. The same
+`--table-quality high` setting maps to `--mineru-v4-model-version vlm`; an explicit
+`MinerU-HTML` model is preserved for HTML-centric workflows. The v4 backend uses
+`/api/v4/file-urls/batch`, uploads to the returned pre-signed URLs without the bearer
+token, polls `/api/v4/extract-results/batch/{batch_id}`, and extracts Markdown from the
+returned zip.
 
 `adaptive` is the recommended first-pass command when the document is not yet understood.
 If source inspection finds table signals in conversion-required inputs such as PDF,
@@ -53,7 +54,7 @@ Inputs:
 
 - Existing Markdown via `--mode passthrough`.
 - Plain text and simple HTML via the built-in converter.
-- Office/PDF/EPUB-like formats through `--backend mineru-cli` for an installed local MinerU binary, `--backend mineru` for MinerU Agent API, `--backend mineru-fastapi` for a self-hosted MinerU `mineru-api` service, `--backend mineru-v4` for the public MinerU v4 platform API, `--backend mineru-sync` for synchronous multipart `/parse`, `--backend pandoc` when pandoc is installed, or `--backend remote --remote-url ...`.
+- Office/PDF/EPUB-like formats through `--backend mineru-cli` for an installed local MinerU binary, `--backend mineru` for MinerU Agent API, `--backend mineru-fastapi` for a self-hosted MinerU `mineru-api` service, `--backend mineru-v4` for a MinerU v4 platform-compatible API, `--backend mineru-sync` for synchronous multipart `/parse`, `--backend pandoc` when pandoc is installed, or `--backend remote --remote-url ...`.
 
 Command examples:
 
@@ -81,6 +82,11 @@ python scripts/convert.py compare-retained-package --retained-package ./legacy-r
 python scripts/convert.py compare-adaptive-summaries --baseline ./run/baseline-handoff --candidate ./run/candidate-handoff --report-json ./run/adaptive_comparison.json --report-md ./run/adaptive_comparison.md --redaction-report ./run/adaptive_comparison.redaction.json --json
 python scripts/convert.py postprocess --doc-manifest ./handoff/doc_manifest.json --profile safe --output ./handoff-clean
 ```
+
+In the `mineru-v4` example, `https://mineru.net` is the official public endpoint example.
+Replace it with any endpoint that implements the same `/api/v4/file-urls/batch`,
+pre-signed upload, `/api/v4/extract-results/batch/{batch_id}`, and `full_zip_url`
+contract.
 
 When a host agent should prepare config, run smoke checks, or perform end-to-end validation for the user, read `references/host-agent-setup.md` first. When an end user needs a copy-paste prompt to give their own host agent, use `references/user-onboarding-prompt.md`.
 
@@ -142,7 +148,7 @@ MINERU_TIMEOUT=1800
 MINERU_POLL_INTERVAL=3
 ```
 
-Public MinerU v4 platform precision API calls use `mineru-v4`:
+MinerU v4 platform-compatible precision API calls use `mineru-v4`:
 
 ```bash
 DOC_TO_MD_BACKEND=mineru-v4
@@ -197,6 +203,6 @@ Notes:
 - The `mineru-cli` backend runs a local MinerU executable as `mineru -b <backend> -p <source> -o <temp-output>` and reads the Markdown file it produces. Set the path with `MINERU_CLI_PATH`, `mineru.cli_path`, or `--mineru-cli-path`; default CLI backend is `pipeline`.
 - The `mineru` and `mineru-agent` backends use the Agent parsing API shape: create parse task at `/parse/file`, upload to signed URL, poll `/parse/{task_id}`, then download Markdown.
 - The `mineru-fastapi` backend uses MinerU 3.2+ protocol version 2: submit multipart files to `/tasks`, poll `/tasks/{task_id}`, then read Markdown from `/tasks/{task_id}/result`.
-- The `mineru-v4` and `mineru-platform` backends use the public MinerU v4 platform protocol: request upload URLs at `/api/v4/file-urls/batch`, upload local files with `PUT`, poll `/api/v4/extract-results/batch/{batch_id}`, then extract Markdown and optional safe assets from `full_zip_url`.
+- The `mineru-v4` and `mineru-platform` backends use the MinerU v4 platform-compatible protocol: request upload URLs at `/api/v4/file-urls/batch`, upload local files with `PUT`, poll `/api/v4/extract-results/batch/{batch_id}`, then extract Markdown and optional safe assets from `full_zip_url`. The public `https://mineru.net` service is the official example endpoint, not the only supported domain.
 - The `mineru-sync` and `mineru-local` backends are legacy compatibility paths for synchronous multipart `/parse` services. They expect Markdown text or JSON containing `markdown`, `content`, `text`, `result`, or `markdown_url`.
 - The remote backend expects JSON with `filename` and base64 `content_base64`, and returns `markdown` or `content`.

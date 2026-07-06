@@ -53,7 +53,7 @@ class MinerUFastAPIError(DocConvertError):
 
 
 class MinerUV4Error(DocConvertError):
-    """Raised for categorized MinerU v4 platform protocol failures."""
+    """Raised for categorized MinerU v4 platform-compatible protocol failures."""
 
     def __init__(
         self,
@@ -2468,7 +2468,7 @@ def mineru_v4_convert(
     data_id_prefix: str | None = None,
     remote_attempts: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Convert one file through the public MinerU v4 platform batch API."""
+    """Convert one file through the MinerU v4 platform-compatible batch protocol."""
 
     if timeout <= 0:
         raise DocConvertError("MinerU v4 timeout must be greater than zero")

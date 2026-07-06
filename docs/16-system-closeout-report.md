@@ -43,7 +43,7 @@ current CLI/archive path, collect sanitized field-trial records, and keep valida
 | --- | --- | --- | --- |
 | Public suite boundary | Ship three portable public skills without private workflow dependencies. | Public skills live under `skills/`; private maintainer workflow remains outside public artifacts. | Closed for current release path. |
 | Runtime foundation | Share config, auth, HTTP, manifests, RAGFlow client, report safety, and workflow helpers. | `ragflow_skill_runtime` contains shared modules for conversion, KB build, retrieval, routing, resilience, sanitization, manifests, and validation. | Closed for current CLI scope; expand only with focused adapters. |
-| Document conversion and handoff | Produce Markdown handoff directories with stable `doc_manifest.json`, quality reports, image preservation, split/package support, and backend readiness checks. | `ragflow-doc-to-md` supports passthrough, builtin conversion, MinerU Agent API, self-hosted MinerU FastAPI, public MinerU v4 platform, MinerU sync/local multipart, local CLI, generic remote paths, inspect, split, package, postprocess, backend probe, and warmup. | Closed for current converters; live MinerU v4 validation remains explicitly gated. |
+| Document conversion and handoff | Produce Markdown handoff directories with stable `doc_manifest.json`, quality reports, image preservation, split/package support, and backend readiness checks. | `ragflow-doc-to-md` supports passthrough, builtin conversion, MinerU Agent API, self-hosted MinerU FastAPI, MinerU v4 platform-compatible APIs, MinerU sync/local multipart, local CLI, generic remote paths, inspect, split, package, postprocess, backend probe, and warmup. | Closed for current converters; live MinerU v4 validation remains explicitly gated. |
 | KB build and governance | Build and validate KBs from handoffs while keeping mutation gated and reviewable. | `ragflow-kb-build` covers dry-run/live build gates, profile/metadata/tagset governance, benchmark lifecycle, grounded QA validation, evidence maps, optimization plans, cleanup readiness, topology advice, parse reports, and health reports. | Closed for planned public CLI behavior; future live mutation remains approval-gated. |
 | Query and orchestration | Support direct retrieval, routing, diagnostics, fusion/rewrite, host-assisted agentic flows, citation audit, and evaluation without default script-owned synthesis. | `ragflow-query` covers direct/auto/host-assisted ask, routing, route tests, assistant profiles, rewrite, session, fusion, diagnostics, rerank comparison, citation audit, answer evaluation, agentic planning, and request/review boundaries. | Closed for evidence-first CLI use; script-owned answers remain deferred. |
 | Runtime resilience and report safety | Make failures observable and sanitized without hidden retries or private leaks. | Current runtime inventory is 21 covered, 0 candidate, 0 deferred, and 76 not-applicable command surfaces after read-only comparison/report commands, including retained-package and adaptive-summary comparison, were classified outside runtime-helper scope. Redaction, generated-report safety, generated Markdown audit, endpoint reports, cache, metrics, rate-limit, circuit-breaker, partial-failure reports, and `ragflow-doc-to-md` runtime performance telemetry are covered for the current inventory. | Closed for current public surfaces; reopen only when new command/report surfaces appear. |
@@ -82,9 +82,9 @@ The concentrated development round completed the following capability bands:
 
 ## Task List Audit
 
-After post-closeout maintenance through the 2026-07-06 MinerU v4 platform backend batch,
-the roadmap has 579 completed items out of 594 tracked items. The 15 open items remain
-intentionally gated:
+After post-closeout maintenance through the 2026-07-06 MinerU v4 platform-compatible
+backend batch and the protocol-binding wording follow-up, the roadmap has 586 completed
+items out of 601 tracked items. The 15 open items below remain intentionally gated:
 
 | Category | Open items | Why still open | Trigger before work starts |
 | --- | ---: | --- | --- |
@@ -179,7 +179,7 @@ Release-path maintenance added an explicit MinerU v4 platform backend without re
 the remaining gated product tracks:
 
 - `ragflow-doc-to-md` now accepts `mineru-v4` and the `mineru-platform` alias for the
-  public platform precision API.
+  MinerU v4 platform-compatible precision protocol.
 - The backend uses the v4 local-file batch flow: submit upload URLs, upload local files
   to signed object URLs without the MinerU bearer token, poll batch results, download
   `full_zip_url`, and extract Markdown plus safe optional assets.
@@ -196,9 +196,11 @@ the remaining gated product tracks:
   coverage were updated. The implementation is fake-server/release validated; no live
   MinerU v4 call was run by default.
 
-This checkpoint closes the public offline v4 backend work. A live MinerU v4 validation
-run remains a future field-trial task that requires an explicit user request, credentials,
-a throwaway fixture, and sanitized evidence capture.
+This checkpoint closes the public offline v4 backend work and the protocol-binding
+docs/help follow-up. A live MinerU v4 validation run remains a future field-trial task
+that requires an explicit user request, credentials, a throwaway fixture, and sanitized
+evidence capture. The support model is explicit: `mineru-v4` is bound to the v4
+platform-compatible protocol, not exclusively to the `mineru.net` domain.
 
 ## Closeout Conclusion
 

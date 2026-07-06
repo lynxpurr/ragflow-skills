@@ -221,7 +221,7 @@ ragflow:
 doc_to_md:
   # Keep auto unless a specific converter is required.
   # Auto uses local mineru-cli first when available, then other configured backends.
-  # Use mineru/mineru-agent for Agent API; mineru-v4 for the public platform API;
+  # Use mineru/mineru-agent for Agent API; mineru-v4 for the v4 platform-compatible protocol;
   # use mineru-sync/mineru-local for sync multipart /parse.
   backend: auto
 
@@ -230,7 +230,7 @@ mineru:
   cli_path: ${MINERU_CLI_PATH}
   cli_backend: pipeline
   # Agent API example: https://mineru.net/api/v1/agent
-  # v4 platform example: https://mineru.net or https://mineru.net/api/v4
+  # v4 platform-compatible example: https://mineru.net or https://mineru.net/api/v4
   # Sync multipart example: http://mineru.internal:8777/api/v1
   base_url: https://mineru.net/api/v1/agent
   api_key: ${MINERU_API_KEY}
@@ -274,7 +274,7 @@ Core environment variables:
 | `MINERU_IS_OCR` | MinerU OCR boolean. |
 | `MINERU_ENABLE_FORMULA` | MinerU formula parsing boolean. |
 | `MINERU_ASSET_MODE` | MinerU asset mode: `markdown_only` for preview or `markdown_assets` for formal handoff assets. |
-| `MINERU_V4_MODEL_VERSION` | MinerU v4 platform `model_version`: `pipeline`, `vlm`, or `MinerU-HTML`. |
+| `MINERU_V4_MODEL_VERSION` | MinerU v4 platform-compatible `model_version`: `pipeline`, `vlm`, or `MinerU-HTML`. |
 | `MINERU_V4_RESULT_MODE` | MinerU v4 result mode. The current supported value is `full_zip`. |
 | `MINERU_V4_DATA_ID_PREFIX` | Optional stable prefix for generated MinerU v4 `data_id` values. |
 

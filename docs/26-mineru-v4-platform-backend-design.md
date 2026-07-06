@@ -6,14 +6,17 @@ Date: 2026-07-06
 ## Objective
 
 Add an independent `mineru-v4` or `mineru-platform` backend to `ragflow-doc-to-md`
-for the public MinerU precision parsing API documented at
-`https://mineru.net/apiManage/docs`.
+for the MinerU v4 platform-compatible precision parsing protocol. The implementation was
+validated against the public MinerU API document at `https://mineru.net/apiManage/docs`,
+but the backend is not intended to be bound to the `mineru.net` domain. Any endpoint that
+implements the same v4 upload, polling, and `full_zip_url` result contract may be used by
+setting `MINERU_BASE_URL` / `--mineru-base-url`.
 
 This backend must not overload the existing `mineru`, `mineru-agent`,
-`mineru-fastapi`, or `mineru-sync` implementations. The public MinerU v4 API has a
-different endpoint shape, upload flow, result contract, model selector, file/page
+`mineru-fastapi`, or `mineru-sync` implementations. The v4 platform-compatible protocol
+has a different endpoint shape, upload flow, result contract, model selector, file/page
 limits, and output format. Treating it as another base URL for `mineru-fastapi` would
-make the CLI call `/tasks`, which is not part of the v4 platform protocol.
+make the CLI call `/tasks`, which is not part of that protocol.
 
 ## Background
 
@@ -25,7 +28,7 @@ The current code supports three MinerU service families:
 | `mineru-fastapi` | Self-hosted MinerU 3.2+ FastAPI protocol v2 | `POST /tasks`, poll `/tasks/{task_id}`, fetch `/tasks/{task_id}/result` |
 | `mineru-sync` / `mineru-local` | Legacy synchronous multipart service | `POST /parse` |
 
-The MinerU API management document describes a separate precision API:
+The MinerU API management document describes a separate precision API protocol:
 
 - token-authenticated;
 - endpoint family `/api/v4/extract/task` and `/api/v4/file-urls/batch`;
@@ -34,8 +37,9 @@ The MinerU API management document describes a separate precision API:
 - asynchronous polling through `/api/v4/extract-results/batch/{batch_id}`;
 - zip result outputs containing Markdown and JSON artifacts.
 
-Therefore the feature should introduce a first-class platform backend instead of
-reusing the self-hosted FastAPI adapter.
+Therefore the feature should introduce a first-class platform-protocol backend instead of
+reusing the self-hosted FastAPI adapter. `https://mineru.net` is the official documented
+example endpoint, not a hardcoded routing rule.
 
 ## Implementation Notes
 
@@ -70,8 +74,10 @@ credentials, a throwaway public fixture, and sanitized evidence capture.
   - `mineru` and `mineru-agent` continue to target `/api/v1/agent`.
   - `mineru-fastapi` continues to target self-hosted `/tasks`.
   - `mineru-sync` continues to target `/parse`.
-- Do not infer v4 behavior solely from `MINERU_BASE_URL=https://mineru.net/api/v4`;
-  users must select the v4 backend explicitly or via adaptive recommendation.
+- Do not infer v4 behavior solely from a URL such as
+  `MINERU_BASE_URL=https://mineru.net/api/v4`; users must select the v4 backend
+  explicitly or via adaptive recommendation. The backend choice is protocol-bound, not
+  domain-bound.
 - Do not run live MinerU v4 calls in tests. Use fake HTTP servers and fixture zip files.
 
 ### Configuration
@@ -131,8 +137,11 @@ Implement local-file batch parsing through the v4 upload-url flow.
 
 Submission:
 
-- Normalize base URL so both `https://mineru.net` and `https://mineru.net/api/v4`
-  can be supported without producing duplicate `/api/v4/api/v4` paths.
+- Normalize base URL so both a v4-compatible service root and a root that already ends in
+  `/api/v4` can be supported without producing duplicate `/api/v4/api/v4` paths. Official
+  examples include `https://mineru.net` and `https://mineru.net/api/v4`, but compatible
+  third-party, gateway, or hosted endpoints should work when they implement the same
+  protocol.
 - `POST /api/v4/file-urls/batch`
 - Auth: `Authorization: Bearer {token}`
 - JSON body should include one or more file entries and v4 parse options:
@@ -333,6 +342,29 @@ throwaway small fixture, a real `MINERU_API_KEY`, and sanitized evidence capture
 - [x] Run focused tests and Python compilation.
 - [x] Run release-facing validation gates.
 - [x] Record implementation completion status and residual risks in this document.
+
+## Protocol-Binding Follow-Up Patch Checklist
+
+This documentation/help calibration is closed. It did not change the v4 request contract
+or switch backend behavior away from the protocol-bound implementation.
+
+- [x] Update CLI help and runtime docstrings so `mineru-v4` is described as a
+      v4 platform-compatible protocol backend, with `mineru.net` shown only as an
+      official example endpoint.
+- [x] Update `skills/ragflow-doc-to-md/SKILL.md` examples and wording to say compatible
+      v4 endpoints may replace `https://mineru.net`.
+- [x] Update shared `skills/*/references/host-agent-setup.md` guidance and keep the three
+      public copies byte-identical after the wording change.
+- [x] Update shared `skills/*/references/user-onboarding-prompt.md` guidance and keep the
+      three public copies byte-identical after the wording change.
+- [x] Update shared `skills/*/templates/ragflow-config.example.yaml` comments so
+      `https://mineru.net` is clearly labeled as an example, not the only supported
+      domain.
+- [x] Update architecture, CLI-agent integration, adaptive/table-quality, and comparison
+      references to say "MinerU v4 platform-compatible protocol" where the support model
+      is protocol-bound rather than domain-bound.
+- [x] Run docs-only validation, shared-reference/template drift checks, and release
+      hygiene before closing this follow-up.
 
 ## Residual Risks And Follow-Up Questions
 
