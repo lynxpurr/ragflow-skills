@@ -47,15 +47,13 @@ Completed public offline work in the current implementation pass:
   non-mutating `image-ingestion-readiness` command, generated Markdown/report-surface
   inventory coverage, runtime resilience inventory updates, CLI tests, and schema
   identity coverage.
-
-The next P0 slice is still open. Current local work has red-test scaffolding for an
-`image-ingestion-execute` command and fake visual ingestion client behavior, but the
-mutating execution command, confirmation checks, parse wait reporting, partial failure
-handling, and cleanup-readiness execution report are not implemented yet.
+- The current slice adds gated `image-ingestion-execute` behavior with `--execute`, exact
+  dataset/count confirmations, fake-client visual upload, parse trigger, document-state
+  polling, partial-failure reporting, cleanup-readiness evidence, and report/runtime
+  inventory coverage.
 
 The live disposable Markdown-plus-image build remains gated. It must stay unchecked until
-fake-client execution coverage passes, cleanup readiness is generated, the user explicitly
-approves live mutation, and sanitized cleanup evidence is recorded.
+the user explicitly approves live mutation and sanitized cleanup evidence is recorded.
 
 ## Part 1: Problem Description
 
@@ -401,9 +399,9 @@ All new live-capable features must use the same safety model:
   execution.
 - [x] Add a non-mutating image-ingestion readiness command that consumes
   `asset-upload-plan` and build profile evidence.
-- [ ] Add explicit live execution flags and confirmation checks for visual-document
+- [x] Add explicit live execution flags and confirmation checks for visual-document
   ingestion.
-- [ ] Implement fake-client visual upload, parse trigger, wait, partial failure, and
+- [x] Implement fake-client visual upload, parse trigger, wait, partial failure, and
   cleanup-readiness tests.
 - [ ] Run one user-approved disposable Markdown-plus-image live build only after fake
   coverage and cleanup readiness pass.
@@ -498,8 +496,8 @@ All new live-capable features must use the same safety model:
 
 1. Asset classification cleanup in `asset-upload-plan`. Completed.
 2. Multimodal manifest schema and fake read-only document-list fixtures. Completed.
-3. Gated image asset ingestion readiness and fake execution path. Readiness is complete;
-   fake execution remains open.
+3. Gated image asset ingestion readiness and fake execution path. Completed; live
+   disposable execution remains gated.
 4. Image-rich parse/health report consumption. Completed.
 5. Profile decision report with stricter benchmark thresholds. Not started.
 6. Multimodal benchmark categories and query diagnostics. Not started.

@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sys
+import time
 from typing import Any, Mapping
 
 
@@ -118,7 +119,15 @@ from ragflow_skill_runtime import (  # noqa: E402
 from ragflow_skill_runtime.benchmark_governance import BenchmarkGovernanceError  # noqa: E402
 from ragflow_skill_runtime.config import ConfigError  # noqa: E402
 from ragflow_skill_runtime.health_report import HealthReportError  # noqa: E402
-from ragflow_skill_runtime.kb_build import extract_dataset_id, extract_uploaded_document_id  # noqa: E402
+from ragflow_skill_runtime.kb_build import (  # noqa: E402
+    KB_ASSET_INGESTION_REPORT_SCHEMA,
+    KB_ASSET_UPLOAD_PLAN_SCHEMA,
+    extract_dataset_id,
+    extract_document_states,
+    extract_uploaded_document_id,
+    parse_state_failed,
+    parse_state_succeeded,
+)
 from ragflow_skill_runtime.manifests import ManifestError  # noqa: E402
 from ragflow_skill_runtime.metadata_governance import MetadataGovernanceError  # noqa: E402
 from ragflow_skill_runtime.parse_report import ParseReportError  # noqa: E402
@@ -978,6 +987,297 @@ def _run_image_ingestion_readiness(args: argparse.Namespace) -> int:
         _dump_json(report)
         return 0 if report["ok"] else 1
     except (BuildError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
+def _planned_visual_assets(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
+    raw_assets = plan.get("planned_visual_upload_files")
+    if not isinstance(raw_assets, list):
+        return []
+    assets: list[dict[str, Any]] = []
+    for item in raw_assets:
+        if not isinstance(item, Mapping):
+            continue
+        source_path = item.get("source_path")
+        if not isinstance(source_path, str) or not source_path:
+            continue
+        assets.append(
+            {
+                "source_path": source_path,
+                "asset_class": item.get("asset_class") if isinstance(item.get("asset_class"), str) else None,
+                "sha256": item.get("sha256") if isinstance(item.get("sha256"), str) else None,
+                "mime_type": item.get("mime_type") if isinstance(item.get("mime_type"), str) else None,
+            }
+        )
+    return assets
+
+
+def _resolve_asset_source_path(*, source_path: str, asset_plan_path: str | Path, asset_plan: Mapping[str, Any]) -> Path:
+    source = Path(source_path)
+    if source.is_absolute():
+        return source
+    handoff_root = asset_plan.get("handoff_root")
+    base = Path(str(handoff_root)) if isinstance(handoff_root, str) and handoff_root else Path(asset_plan_path).parent
+    return base / source
+
+
+def _state_label_for_uploaded_visual(state: Mapping[str, Any] | None) -> str:
+    if not state:
+        return "missing"
+    if parse_state_failed(state):
+        return "failed"
+    if parse_state_succeeded(state):
+        return "parsed"
+    return "pending"
+
+
+def _poll_uploaded_visual_states(
+    client: Any,
+    *,
+    dataset_id: str,
+    document_ids: list[str],
+    timeout: float,
+    poll_interval: float,
+) -> tuple[dict[str, dict[str, Any]], Any, int]:
+    deadline = time.monotonic() + max(0.0, timeout)
+    latest: dict[str, dict[str, Any]] = {}
+    latest_response: Any = None
+    poll_count = 0
+    while True:
+        latest_response = client.list_documents(dataset_id)
+        poll_count += 1
+        latest = extract_document_states(latest_response, document_ids=document_ids)
+        states = [latest.get(document_id) for document_id in document_ids]
+        if states and all(state and _state_label_for_uploaded_visual(state) in {"parsed", "failed"} for state in states):
+            return latest, latest_response, poll_count
+        if timeout <= 0 or time.monotonic() >= deadline:
+            return latest, latest_response, poll_count
+        time.sleep(max(0.0, poll_interval))
+
+
+def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
+    try:
+        if not args.execute:
+            return _error(
+                "image-ingestion-execute requires --execute after reviewing image-ingestion-readiness",
+                json_output=args.json,
+            )
+
+        asset_plan = _read_json_file(args.asset_upload_plan, label="asset_upload_plan")
+        if not isinstance(asset_plan, Mapping):
+            raise BuildError("asset_upload_plan must be a JSON object")
+        if asset_plan.get("schema") != KB_ASSET_UPLOAD_PLAN_SCHEMA:
+            raise BuildError(f"asset upload plan schema must be {KB_ASSET_UPLOAD_PLAN_SCHEMA}")
+
+        planned_assets = _planned_visual_assets(asset_plan)
+        planned_count = len(planned_assets)
+        confirmation_errors: list[str] = []
+        if args.confirm_dataset_id != args.dataset_id:
+            confirmation_errors.append("--confirm-dataset-id must exactly match --dataset-id")
+        if args.confirm_planned_count != planned_count:
+            confirmation_errors.append(
+                f"--confirm-planned-count must equal planned_visual_upload_files count ({planned_count})"
+            )
+        if confirmation_errors:
+            return _error("; ".join(confirmation_errors), json_output=args.json)
+        if planned_count <= 0:
+            return _error("asset upload plan has no planned_visual_upload_files to execute", json_output=args.json)
+
+        resolved_assets: list[dict[str, Any]] = []
+        for asset in planned_assets:
+            resolved_path = _resolve_asset_source_path(
+                source_path=str(asset["source_path"]),
+                asset_plan_path=args.asset_upload_plan,
+                asset_plan=asset_plan,
+            )
+            if not resolved_path.exists() or not resolved_path.is_file():
+                raise BuildError(f"planned visual asset not found: {asset['source_path']}")
+            resolved_assets.append({**asset, "resolved_path": resolved_path})
+
+        config = _load_config(args)
+        client = RAGFlowClient(config)
+        ragflow_calls = 0
+        upload_records: list[dict[str, Any]] = []
+        uploaded_document_ids: list[str] = []
+
+        for asset in resolved_assets:
+            source_path = str(asset["source_path"])
+            resolved_path = asset["resolved_path"]
+            try:
+                ragflow_calls += 1
+                upload_response = client.upload_document(args.dataset_id, resolved_path)
+                document_id = extract_uploaded_document_id(upload_response)
+                uploaded_document_ids.append(document_id)
+                upload_records.append(
+                    {
+                        "source_path": source_path,
+                        "name": Path(source_path).name,
+                        "asset_class": asset.get("asset_class"),
+                        "sha256": asset.get("sha256"),
+                        "mime_type": asset.get("mime_type"),
+                        "document_id": document_id,
+                        "upload_status": "uploaded",
+                    }
+                )
+            except Exception as exc:  # pragma: no cover - covered through CLI behavior with fake clients as needed
+                upload_records.append(
+                    {
+                        "source_path": source_path,
+                        "name": Path(source_path).name,
+                        "asset_class": asset.get("asset_class"),
+                        "sha256": asset.get("sha256"),
+                        "mime_type": asset.get("mime_type"),
+                        "document_id": None,
+                        "upload_status": "upload_failed",
+                        "error": str(exc),
+                    }
+                )
+
+        parse_response: Any = None
+        parse_error: str | None = None
+        parse_triggered = False
+        if uploaded_document_ids and not args.no_parse:
+            try:
+                ragflow_calls += 1
+                parse_response = client.trigger_parse(args.dataset_id, uploaded_document_ids)
+                parse_triggered = True
+            except Exception as exc:  # pragma: no cover - retained to preserve cleanup evidence after live uploads
+                parse_error = str(exc)
+
+        observed_states: dict[str, dict[str, Any]] = {}
+        document_list_response: Any = None
+        poll_count = 0
+        wait_error: str | None = None
+        wait_performed = False
+        if uploaded_document_ids and parse_error is None and not args.no_wait:
+            try:
+                observed_states, document_list_response, poll_count = _poll_uploaded_visual_states(
+                    client,
+                    dataset_id=args.dataset_id,
+                    document_ids=uploaded_document_ids,
+                    timeout=float(args.parse_timeout),
+                    poll_interval=float(args.poll_interval),
+                )
+                ragflow_calls += poll_count
+                wait_performed = True
+            except Exception as exc:  # pragma: no cover - retained to preserve cleanup evidence after live uploads
+                wait_error = str(exc)
+
+        runtime_items: list[dict[str, Any]] = []
+        observed_documents: list[dict[str, Any]] = []
+        for record in upload_records:
+            document_id = record.get("document_id")
+            if record.get("upload_status") != "uploaded":
+                status = "upload_failed"
+                state: Mapping[str, Any] | None = None
+            elif parse_error:
+                status = "parse_trigger_failed"
+                state = None
+            elif args.no_parse:
+                status = "not_parsed"
+                state = None
+            elif args.no_wait:
+                status = "not_checked"
+                state = None
+            elif wait_error:
+                status = "wait_failed"
+                state = observed_states.get(str(document_id)) if document_id else None
+            else:
+                state = observed_states.get(str(document_id)) if document_id else None
+                status = _state_label_for_uploaded_visual(state)
+            runtime_items.append({"label": record.get("name"), "status": status, "document_id": document_id})
+            observed_documents.append(
+                {
+                    "document_id": document_id,
+                    "name": record.get("name"),
+                    "source_path": record.get("source_path"),
+                    "status": status,
+                    "chunk_count": state.get("chunk_count") if isinstance(state, Mapping) else None,
+                    "progress": state.get("progress") if isinstance(state, Mapping) else None,
+                    "progress_msg": state.get("progress_msg") if isinstance(state, Mapping) else None,
+                }
+            )
+
+        runtime_partial_failure = build_runtime_partial_failure_report(
+            "image_ingestion_execute",
+            runtime_items,
+            success_statuses=("parsed", "not_checked", "not_parsed"),
+            failure_statuses=("failed", "missing", "pending", "upload_failed", "parse_trigger_failed", "wait_failed"),
+            skipped_statuses=(),
+            warning_statuses=(),
+        )
+        status_counts = runtime_partial_failure["status_counts"]
+        failed_count = sum(
+            int(status_counts.get(status, 0) or 0)
+            for status in ("failed", "missing", "pending", "upload_failed", "parse_trigger_failed", "wait_failed")
+        )
+        parsed_count = int(status_counts.get("parsed", 0) or 0)
+        ok = failed_count == 0
+        report = {
+            "ok": ok,
+            "schema": KB_ASSET_INGESTION_REPORT_SCHEMA,
+            "created_at": _utc_now(),
+            "mode": "execute",
+            "advisory_only": False,
+            "offline_only": False,
+            "mutation": "visual_document_upload",
+            "mutation_allowed": True,
+            "live_upload_enabled": True,
+            "status": "completed" if ok else "partial_failure",
+            "inputs": {
+                "asset_upload_plan": str(args.asset_upload_plan),
+                "dataset_id": args.dataset_id,
+            },
+            "execution": {
+                "status": "completed" if ok else "partial_failure",
+                "ragflow_calls": ragflow_calls,
+                "upload_call_count": len(upload_records),
+                "parse_triggered": parse_triggered,
+                "wait_performed": wait_performed,
+                "document_list_poll_count": poll_count,
+                "db_calls": 0,
+                "redis_calls": 0,
+                "docker_calls": 0,
+                "system_service_calls": 0,
+                "parse_error": parse_error,
+                "wait_error": wait_error,
+            },
+            "summary": {
+                "planned_visual_upload_file_count": planned_count,
+                "uploaded_visual_document_count": len(uploaded_document_ids),
+                "parsed_visual_document_count": parsed_count,
+                "failed_visual_document_count": failed_count,
+                "pending_visual_document_count": int(status_counts.get("pending", 0) or 0),
+                "missing_visual_document_count": int(status_counts.get("missing", 0) or 0),
+                "runtime_partial_failure_status": runtime_partial_failure["summary"]["status"],
+            },
+            "uploaded_visual_documents": upload_records,
+            "observed_visual_documents": observed_documents,
+            "document_list_response_observed": document_list_response is not None,
+            "parse_response": parse_response,
+            "runtime_partial_failure": runtime_partial_failure,
+            "cleanup_readiness": {
+                "required": bool(upload_records),
+                "dataset_id": args.dataset_id,
+                "uploaded_document_ids": uploaded_document_ids,
+                "upload_attempt_count": len(upload_records),
+                "document_ids_complete": len(uploaded_document_ids) == len(upload_records),
+                "reason": "visual document ingestion mutates an existing RAGFlow dataset",
+            },
+        }
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[args.asset_upload_plan, args.config],
+                output_paths=[args.report_json, args.redaction_report],
+                extra_secret_literals=[args.api_key] if args.api_key else None,
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.report_json, report)
+        _dump_json(report)
+        return 0 if ok else 1
+    except (BuildError, ConfigError, OSError, RuntimeError, ProfileError) as exc:
         return _error(str(exc), json_output=args.json)
 
 
@@ -2595,6 +2895,26 @@ def build_image_ingestion_readiness_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_image_ingestion_execute_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Execute gated visual-document ingestion against an existing RAGFlow dataset")
+    parser.add_argument("--execute", action="store_true", help="Allow live visual-document upload after readiness review")
+    parser.add_argument("--asset-upload-plan", required=True, help="ragflow_kb_asset_upload_plan_v2 JSON")
+    parser.add_argument("--dataset-id", required=True, help="Existing RAGFlow dataset ID to mutate")
+    parser.add_argument("--confirm-dataset-id", required=True, help="Must exactly match --dataset-id")
+    parser.add_argument("--confirm-planned-count", required=True, type=int, help="Must equal planned_visual_upload_files count")
+    parser.add_argument("--config", help="Runtime config file")
+    parser.add_argument("--base-url", help="RAGFlow base URL")
+    parser.add_argument("--api-key", help="RAGFlow API key")
+    parser.add_argument("--report-json", "--output", dest="report_json", default="image_ingestion_execute.json")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    parser.add_argument("--no-parse", action="store_true", help="Upload visual documents but do not trigger parsing")
+    parser.add_argument("--no-wait", action="store_true", help="Do not read document states after triggering parse")
+    parser.add_argument("--parse-timeout", type=float, default=300.0, help="Maximum seconds to wait for parsed or failed visual states")
+    parser.add_argument("--poll-interval", type=float, default=2.0, help="Seconds between document-list polls")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    return parser
+
+
 def build_model_providers_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Probe RAGFlow model-provider registration without mutating KBs")
     subparsers = parser.add_subparsers(dest="model_providers_command", required=True)
@@ -3312,6 +3632,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_asset_upload_plan(build_asset_upload_plan_parser().parse_args(command_args))
         if command == "image-ingestion-readiness":
             return _run_image_ingestion_readiness(build_image_ingestion_readiness_parser().parse_args(command_args))
+        if command == "image-ingestion-execute":
+            return _run_image_ingestion_execute(build_image_ingestion_execute_parser().parse_args(command_args))
         if command == "model-providers":
             model_provider_args = build_model_providers_parser().parse_args(command_args)
             return model_provider_args.func(model_provider_args)

@@ -151,6 +151,34 @@ class FakePartialValidationClient(FakeValidationClient):
         return super().retrieve(question=question, dataset_ids=dataset_ids, top_k=top_k)
 
 
+class FakeVisualIngestionClient:
+    instances: list["FakeVisualIngestionClient"] = []
+
+    def __init__(self, config):
+        self.config = config
+        self.uploads: list[tuple[str, str]] = []
+        self.parsed: list[tuple[str, list[str]]] = []
+        self.documents: dict[str, list[dict[str, object]]] = {}
+        FakeVisualIngestionClient.instances.append(self)
+
+    def upload_document(self, dataset_id, file_path):
+        document_id = f"visual-{len(self.uploads) + 1}"
+        name = Path(file_path).name
+        self.uploads.append((str(dataset_id), str(file_path)))
+        status = "FAILED" if "fail" in name else "DONE"
+        self.documents.setdefault(str(dataset_id), []).append(
+            {"id": document_id, "name": name, "run": status, "chunk_count": 0 if status == "FAILED" else 2}
+        )
+        return {"data": [{"id": document_id}]}
+
+    def trigger_parse(self, dataset_id, document_ids):
+        self.parsed.append((str(dataset_id), list(document_ids)))
+        return {"data": {"document_ids": list(document_ids)}}
+
+    def list_documents(self, dataset_id, *, page=1, page_size=200):
+        return {"data": {"docs": self.documents.get(str(dataset_id), [])}}
+
+
 class ModelProviderHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/api/v1/llm/factories":
@@ -1189,6 +1217,172 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("RAGFlow Image Ingestion Readiness", report_md_text)
         combined = json.dumps(payload, ensure_ascii=False) + report_md_text + result.stdout
         self.assertNotIn(str(profile), combined)
+        self.assertIn("<redacted:config-path>", combined)
+
+    def test_image_ingestion_execute_requires_explicit_execute_flag(self) -> None:
+        module = load_build_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            asset_plan = root / "asset_upload_plan.json"
+            output = root / "image_ingestion_execute.json"
+            asset_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_kb_asset_upload_plan_v2",
+                        "handoff_root": str(root),
+                        "summary": {"planned_visual_upload_file_count": 1},
+                        "planned_visual_upload_files": [{"source_path": "a.png"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "image-ingestion-execute",
+                        "--asset-upload-plan",
+                        str(asset_plan),
+                        "--dataset-id",
+                        "ds-visual",
+                        "--confirm-dataset-id",
+                        "ds-visual",
+                        "--confirm-planned-count",
+                        "1",
+                        "--report-json",
+                        str(output),
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(code, 2, stdout.getvalue())
+        self.assertIn("--execute", json.loads(stdout.getvalue())["error"])
+        self.assertFalse(output.exists())
+
+    def test_image_ingestion_execute_requires_exact_confirmations(self) -> None:
+        module = load_build_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            asset_plan = root / "asset_upload_plan.json"
+            output = root / "image_ingestion_execute.json"
+            asset_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_kb_asset_upload_plan_v2",
+                        "handoff_root": str(root),
+                        "summary": {"planned_visual_upload_file_count": 2},
+                        "planned_visual_upload_files": [
+                            {"source_path": "ok.png", "asset_class": "markdown_referenced"},
+                            {"source_path": "other.png", "asset_class": "markdown_referenced"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "image-ingestion-execute",
+                        "--execute",
+                        "--asset-upload-plan",
+                        str(asset_plan),
+                        "--dataset-id",
+                        "ds-visual",
+                        "--confirm-dataset-id",
+                        "wrong-dataset",
+                        "--confirm-planned-count",
+                        "1",
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "fake-key",
+                        "--report-json",
+                        str(output),
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(code, 2, stdout.getvalue())
+        error = json.loads(stdout.getvalue())["error"]
+        self.assertIn("--confirm-dataset-id", error)
+        self.assertIn("--confirm-planned-count", error)
+        self.assertFalse(output.exists())
+
+    def test_image_ingestion_execute_uses_fake_client_and_reports_partial_failure(self) -> None:
+        module = load_build_module()
+        FakeVisualIngestionClient.instances = []
+        module.RAGFlowClient = FakeVisualIngestionClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "ok.png").write_bytes(b"ok")
+            (root / "fail.png").write_bytes(b"fail")
+            asset_plan = root / "asset_upload_plan.json"
+            output = root / "image_ingestion_execute.json"
+            redaction_report = root / "image_ingestion_execute.redaction.json"
+            asset_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_kb_asset_upload_plan_v2",
+                        "handoff_root": str(root),
+                        "summary": {
+                            "planned_visual_upload_file_count": 2,
+                            "missing_image_asset_count": 0,
+                            "outside_handoff_image_count": 0,
+                        },
+                        "planned_visual_upload_files": [
+                            {"source_path": "ok.png", "asset_class": "markdown_referenced"},
+                            {"source_path": "fail.png", "asset_class": "markdown_referenced"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "image-ingestion-execute",
+                        "--execute",
+                        "--asset-upload-plan",
+                        str(asset_plan),
+                        "--dataset-id",
+                        "ds-visual",
+                        "--confirm-dataset-id",
+                        "ds-visual",
+                        "--confirm-planned-count",
+                        "2",
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "fake-key",
+                        "--report-json",
+                        str(output),
+                        "--redaction-report",
+                        str(redaction_report),
+                        "--poll-interval",
+                        "0",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            redaction_payload = json.loads(redaction_report.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 1, stdout.getvalue())
+        self.assertEqual(payload["schema"], "ragflow_kb_asset_ingestion_report_v1")
+        self.assertEqual(payload["mode"], "execute")
+        self.assertTrue(payload["mutation_allowed"])
+        self.assertEqual(payload["summary"]["uploaded_visual_document_count"], 2)
+        self.assertEqual(payload["summary"]["failed_visual_document_count"], 1)
+        self.assertEqual(payload["runtime_partial_failure"]["status_counts"]["parsed"], 1)
+        self.assertEqual(payload["runtime_partial_failure"]["status_counts"]["failed"], 1)
+        self.assertTrue(payload["cleanup_readiness"]["required"])
+        self.assertEqual(payload["cleanup_readiness"]["dataset_id"], "ds-visual")
+        self.assertEqual(len(FakeVisualIngestionClient.instances[0].uploads), 2)
+        self.assertEqual(len(FakeVisualIngestionClient.instances[0].parsed), 1)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        combined = json.dumps(payload, ensure_ascii=False) + stdout.getvalue()
+        self.assertNotIn(str(asset_plan), combined)
         self.assertIn("<redacted:config-path>", combined)
 
     def test_metadata_governance_subcommands_via_build_script(self) -> None:

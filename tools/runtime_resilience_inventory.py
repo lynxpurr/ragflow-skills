@@ -122,6 +122,12 @@ _COVERED = {
         rationale="Live KB build records create/upload/parse/wait stage outcomes and metrics while leaving mutating retries disabled to avoid duplicate side effects.",
         next_action="Keep live build validation behind disposable KBs, exact cleanup confirmation, and post-cleanup read-back verification.",
     ),
+    "ragflow-kb-build image-ingestion-execute": RuntimeClassification(
+        status="covered",
+        features=("partial_failure",),
+        rationale="Gated visual-document ingestion records uploaded, parsed, failed, pending, missing, and cleanup-readiness outcomes without hiding partial live mutations.",
+        next_action="Keep execution behind --execute, exact confirmations, fake-client tests, and disposable-KB approval.",
+    ),
     "ragflow-query cache-report": RuntimeClassification(
         status="covered",
         features=("query_output_cache",),
