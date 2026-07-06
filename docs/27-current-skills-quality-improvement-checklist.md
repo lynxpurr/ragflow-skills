@@ -51,6 +51,9 @@ Completed public offline work in the current implementation pass:
   dataset/count confirmations, fake-client visual upload, parse trigger, document-state
   polling, partial-failure reporting, cleanup-readiness evidence, and report/runtime
   inventory coverage.
+- Existing formal-ingest readiness and retrieval-hint code already cover table parent
+  chunk preflight, table token estimates, row/column/header complexity signals, selected
+  `chunk_token_num` warnings, and dense chunk-marker HTML table integrity evidence.
 
 The live disposable Markdown-plus-image build remains gated. It must stay unchecked until
 the user explicitly approves live mutation and sanitized cleanup evidence is recorded.
@@ -408,11 +411,11 @@ All new live-capable features must use the same safety model:
 
 ### P0: Strengthen Table And Profile Quality
 
-- [ ] Promote table-parent chunk preflight into a clear build-readiness status.
-- [ ] Estimate table token cost, row/column count, header complexity, and parent chunk
+- [x] Promote table-parent chunk preflight into a clear build-readiness status.
+- [x] Estimate table token cost, row/column count, header complexity, and parent chunk
   boundary risk.
-- [ ] Warn when selected `chunk_token_num` is likely too small for a table parent chunk.
-- [ ] Record when dense chunk markers avoid inserting boundaries inside HTML tables.
+- [x] Warn when selected `chunk_token_num` is likely too small for a table parent chunk.
+- [x] Record when dense chunk markers avoid inserting boundaries inside HTML tables.
 - [ ] Add table strict-recall benchmark fixtures for numeric rows, units, model names, and
   cross-column lookup.
 - [ ] Define `ragflow_profile_decision_report_v1`.
