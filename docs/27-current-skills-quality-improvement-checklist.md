@@ -54,6 +54,8 @@ Completed public offline work in the current implementation pass:
 - Existing formal-ingest readiness and retrieval-hint code already cover table parent
   chunk preflight, table token estimates, row/column/header complexity signals, selected
   `chunk_token_num` warnings, and dense chunk-marker HTML table integrity evidence.
+- APOLLO table-QA validation now summarizes strict-recall coverage categories for numeric
+  rows, units, model names, and cross-column lookup fixtures.
 
 The live disposable Markdown-plus-image build remains gated. It must stay unchecked until
 the user explicitly approves live mutation and sanitized cleanup evidence is recorded.
@@ -416,7 +418,7 @@ All new live-capable features must use the same safety model:
   boundary risk.
 - [x] Warn when selected `chunk_token_num` is likely too small for a table parent chunk.
 - [x] Record when dense chunk markers avoid inserting boundaries inside HTML tables.
-- [ ] Add table strict-recall benchmark fixtures for numeric rows, units, model names, and
+- [x] Add table strict-recall benchmark fixtures for numeric rows, units, model names, and
   cross-column lookup.
 - [ ] Define `ragflow_profile_decision_report_v1`.
 - [ ] Combine retrieval metrics, expected-chunk recall, table recall, image recall,

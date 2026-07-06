@@ -48,6 +48,7 @@ class _FixtureCase:
     normalized_facts: tuple[_Fact, ...]
     table_source: str | None
     difficulty: str | None
+    coverage_categories: tuple[str, ...]
     metadata: Mapping[str, Any]
 
 
@@ -242,6 +243,25 @@ def _strict_terms_from_item(item: Mapping[str, Any]) -> tuple[str, ...]:
     return _unique_strings(terms)
 
 
+def _safe_category(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().casefold()).strip("_")
+    return normalized[:64]
+
+
+def _coverage_categories_from_item(item: Mapping[str, Any]) -> tuple[str, ...]:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
+    raw_categories = (
+        item.get("coverage_categories")
+        or item.get("coverage")
+        or item.get("categories")
+        or metadata.get("coverage_categories")
+        or metadata.get("coverage")
+        or metadata.get("categories")
+    )
+    categories = [_safe_category(value) for value in _string_list(raw_categories)]
+    return tuple(category for category in _unique_strings(categories) if category)
+
+
 def _parse_fixture(payload: Mapping[str, Any]) -> tuple[list[_FixtureCase], list[dict[str, Any]]]:
     issues = _private_literal_issues(payload, artifact_label="fixture")
     if payload.get("schema") != APOLLO_TABLE_QA_FIXTURE_SCHEMA:
@@ -324,6 +344,7 @@ def _parse_fixture(payload: Mapping[str, Any]) -> tuple[list[_FixtureCase], list
                 normalized_facts=normalized_facts,
                 table_source=_clean_string(raw_item.get("table_source") or raw_item.get("source_table")),
                 difficulty=_clean_string(raw_item.get("difficulty")),
+                coverage_categories=_coverage_categories_from_item(raw_item),
                 metadata=dict(metadata),
             )
         )
@@ -347,6 +368,14 @@ def validate_apollo_table_qa_fixture(fixture_path: str | Path) -> dict[str, Any]
     counts = _issue_counts(issues)
     strict_count = sum(len(case.strict_terms) for case in cases)
     normalized_count = sum(len(case.normalized_facts) for case in cases)
+    coverage_category_counts: dict[str, int] = {}
+    difficulty_counts: dict[str, int] = {}
+    for case in cases:
+        if case.difficulty:
+            difficulty_counts[case.difficulty] = difficulty_counts.get(case.difficulty, 0) + 1
+        for category in case.coverage_categories:
+            coverage_category_counts[category] = coverage_category_counts.get(category, 0) + 1
+    recommended_categories = ("numeric_row", "unit", "model_name", "cross_column_lookup")
     return {
         "schema": APOLLO_TABLE_QA_FIXTURE_VALIDATION_REPORT_SCHEMA,
         "ok": counts["errors"] == 0,
@@ -359,7 +388,15 @@ def validate_apollo_table_qa_fixture(fixture_path: str | Path) -> dict[str, Any]
             "item_count": len(cases),
             "strict_term_count": strict_count,
             "normalized_fact_count": normalized_count,
+            "coverage_category_count": len(coverage_category_counts),
+            "difficulty_count": len(difficulty_counts),
             **counts,
+        },
+        "coverage": {
+            "recommended_categories": list(recommended_categories),
+            "category_counts": dict(sorted(coverage_category_counts.items())),
+            "difficulty_counts": dict(sorted(difficulty_counts.items())),
+            "missing_recommended_categories": sorted(set(recommended_categories) - set(coverage_category_counts)),
         },
         "issues": issues,
         "recommendations": [
@@ -584,6 +621,7 @@ def evaluate_apollo_table_qa_results(
                 "status": status,
                 "table_source": case.table_source,
                 "difficulty": case.difficulty,
+                "coverage_categories": list(case.coverage_categories),
                 "answer": answer_eval,
                 "retrieval": retrieval_eval,
             }
@@ -778,6 +816,7 @@ def create_apollo_table_qa_judge_request(
                 "question": case.question,
                 "table_source": case.table_source,
                 "difficulty": case.difficulty,
+                "coverage_categories": list(case.coverage_categories),
                 "expected": {
                     "strict_terms": list(case.strict_terms),
                     "normalized_facts": [
@@ -1297,6 +1336,15 @@ def render_apollo_table_qa_markdown(report: Mapping[str, Any], *, title: str = "
                 f"- missing_case_count: `{summary.get('missing_case_count', 0)}`",
                 f"- unknown_case_count: `{summary.get('unknown_case_count', 0)}`",
                 f"- script_owned_llm_calls: `{summary.get('script_owned_llm_calls', 0)}`",
+            ]
+        )
+    if report.get("schema") == APOLLO_TABLE_QA_FIXTURE_VALIDATION_REPORT_SCHEMA:
+        coverage = report.get("coverage", {}) if isinstance(report.get("coverage"), Mapping) else {}
+        missing = coverage.get("missing_recommended_categories") if isinstance(coverage.get("missing_recommended_categories"), list) else []
+        lines.extend(
+            [
+                f"- coverage_category_count: `{summary.get('coverage_category_count', 0)}`",
+                f"- missing_recommended_category_count: `{len(missing)}`",
             ]
         )
     if "normalized_answer_pass_count" in summary:

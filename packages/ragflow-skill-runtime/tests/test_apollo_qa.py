@@ -57,6 +57,65 @@ class ApolloQaTests(unittest.TestCase):
         self.assertEqual(report["summary"]["strict_term_count"], 2)
         self.assertEqual(report["summary"]["normalized_fact_count"], 2)
 
+    def test_validate_fixture_summarizes_strict_recall_coverage_categories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp) / "apollo-fixture.json"
+            _write_json(
+                fixture,
+                {
+                    "schema": APOLLO_TABLE_QA_FIXTURE_SCHEMA,
+                    "metadata": {"name": "sanitized-apollo-strict-table-coverage"},
+                    "items": [
+                        {
+                            "id": "apollo-numeric-row",
+                            "question": "What value appears in row 7?",
+                            "difficulty": "numeric_row",
+                            "coverage_categories": ["numeric_row"],
+                            "strict_terms": ["row 7", "0.02 mm"],
+                        },
+                        {
+                            "id": "apollo-units",
+                            "question": "What torque is listed?",
+                            "difficulty": "unit_value",
+                            "coverage_categories": ["unit"],
+                            "strict_terms": ["12 N·m"],
+                        },
+                        {
+                            "id": "apollo-model-name",
+                            "question": "Which models are compared?",
+                            "difficulty": "model_name",
+                            "coverage_categories": ["model_name"],
+                            "strict_terms": ["HH-A", "HH-B"],
+                        },
+                        {
+                            "id": "apollo-cross-column",
+                            "question": "What is the MPEE value for HH-A?",
+                            "difficulty": "cross_column_lookup",
+                            "coverage_categories": ["cross_column_lookup"],
+                            "strict_terms": ["HH-A", "$MPE_E$", "0.02 mm"],
+                        },
+                    ],
+                },
+            )
+
+            report = validate_apollo_table_qa_fixture(fixture)
+            markdown = render_apollo_table_qa_markdown(report, title="APOLLO Table QA Fixture Validation")
+
+        self.assertTrue(report["ok"], report["issues"])
+        self.assertEqual(report["summary"]["item_count"], 4)
+        self.assertEqual(report["summary"]["coverage_category_count"], 4)
+        self.assertEqual(
+            report["coverage"]["category_counts"],
+            {
+                "cross_column_lookup": 1,
+                "model_name": 1,
+                "numeric_row": 1,
+                "unit": 1,
+            },
+        )
+        self.assertEqual(report["coverage"]["missing_recommended_categories"], [])
+        self.assertIn("coverage_category_count", markdown)
+
     def test_validate_fixture_rejects_private_literals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp) / "apollo-fixture.json"
