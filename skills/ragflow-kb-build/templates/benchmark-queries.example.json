@@ -13,7 +13,18 @@
       "question": "Which document contains the known sample topic?",
       "min_chunks": 1,
       "metadata": {
-        "type": "fact"
+        "type": "fact",
+        "benchmark_category": "text_fact"
+      }
+    },
+    {
+      "id": "q-visual-evidence",
+      "question": "Which sample image provides the visual evidence?",
+      "min_chunks": 1,
+      "metadata": {
+        "type": "visual_identification",
+        "benchmark_category": "visual_identification",
+        "expected_modality": "image"
       }
     }
   ]

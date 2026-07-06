@@ -1,8 +1,8 @@
 # Current Skills Quality Improvement Checklist
 
-Status: in progress; P0 multimodal ingestion foundation is partially complete
+Status: in progress; P0 live build remains gated and P1 multimodal validation is partially complete
 Date: 2026-07-06
-Last reviewed: 2026-07-06
+Last reviewed: 2026-07-07
 
 ## Objective
 
@@ -59,6 +59,10 @@ Completed public offline work in the current implementation pass:
 - `ragflow_profile_decision_report_v1` now ranks profile candidates with retrieval,
   strict recall, table/image recall, empty-result, latency, chunk-count, and context
   warning evidence, while blocking default changes when sample thresholds are too small.
+- Benchmark validation now embeds `ragflow_multimodal_benchmark_v1`, preserves qrels
+  `expected_modality`, `benchmark_category`, and `expected_chunks` extensions, reports
+  result modality distributions, and adds image precision, image recall, visual coverage,
+  and table recall metrics for multimodal query sets.
 
 The live disposable Markdown-plus-image build remains gated. It must stay unchecked until
 the user explicitly approves live mutation and sanitized cleanup evidence is recorded.
@@ -433,11 +437,11 @@ All new live-capable features must use the same safety model:
 
 ### P1: Add Multimodal Validation And Query Diagnostics
 
-- [ ] Define multimodal benchmark categories: text fact, table value, visual
+- [x] Define multimodal benchmark categories: text fact, table value, visual
   identification, diagram/software screenshot, caption/context, and mixed table-plus-image.
-- [ ] Extend qrels to mark expected modality and expected chunks.
-- [ ] Record result modality distribution when document or chunk metadata is available.
-- [ ] Add image-specific precision/recall and visual coverage metrics.
+- [x] Extend qrels to mark expected modality and expected chunks.
+- [x] Record result modality distribution when document or chunk metadata is available.
+- [x] Add image-specific precision/recall and visual coverage metrics.
 - [ ] Let `ragflow-kb-build` consume `retrieval_hints.json` during dry-run readiness and
   profile recommendation.
 - [ ] Let `ragflow-query` generate deterministic validation query suggestions from table
@@ -507,8 +511,11 @@ All new live-capable features must use the same safety model:
 3. Gated image asset ingestion readiness and fake execution path. Completed; live
    disposable execution remains gated.
 4. Image-rich parse/health report consumption. Completed.
-5. Profile decision report with stricter benchmark thresholds. Not started.
-6. Multimodal benchmark categories and query diagnostics. Not started.
+5. Profile decision report with stricter benchmark thresholds. Completed.
+6. Multimodal benchmark categories and query diagnostics. Benchmark categories, qrels
+   modality/chunk extensions, result modality distribution, and image/table coverage
+   metrics are completed; deterministic query suggestions, consistency checks, and
+   `diagnose-result` class mapping remain open.
 7. Batch/resume and performance telemetry expansion for larger corpora. Not started.
 
 This order keeps the first slice offline and fake-client-testable, then opens live

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import math
+import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -37,8 +39,26 @@ POLLUTION_METRIC_KEYS = (
     "expected_tag_hit_rate",
     "unexpected_tag_hit_rate",
 )
-BENCHMARK_METRIC_KEYS = METRIC_KEYS + STRICT_CHUNK_METRIC_KEYS + POLLUTION_METRIC_KEYS
+MULTIMODAL_METRIC_KEYS = (
+    "image_precision_at_k",
+    "image_recall_at_k",
+    "image_recall",
+    "visual_coverage_rate",
+    "table_recall_at_k",
+    "table_recall",
+)
+BENCHMARK_METRIC_KEYS = METRIC_KEYS + STRICT_CHUNK_METRIC_KEYS + POLLUTION_METRIC_KEYS + MULTIMODAL_METRIC_KEYS
 CHUNK_SNAPSHOT_SCHEMA = "ragflow_chunk_snapshot_v1"
+MULTIMODAL_BENCHMARK_SCHEMA = "ragflow_multimodal_benchmark_v1"
+MULTIMODAL_BENCHMARK_CATEGORIES = (
+    "text_fact",
+    "table_value",
+    "visual_identification",
+    "diagram_software_screenshot",
+    "caption_context",
+    "mixed_table_plus_image",
+)
+MULTIMODAL_EXPECTED_MODALITIES = ("text", "table", "image", "mixed")
 VALIDATION_RUNTIME_SUCCESS_STATUSES = ("passed",)
 VALIDATION_RUNTIME_WARNING_STATUSES = ("failed",)
 VALIDATION_RUNTIME_FAILURE_STATUSES = ("error", "timeout")
@@ -280,6 +300,7 @@ class BenchmarkEvaluation:
     metrics: dict[str, float | int]
     per_query: list[dict[str, Any]]
     query_type_breakdown: dict[str, dict[str, float | int]] = field(default_factory=dict)
+    multimodal: dict[str, Any] | None = None
     gate: dict[str, Any] | None = None
     baseline: dict[str, Any] | None = None
 
@@ -295,6 +316,8 @@ class BenchmarkEvaluation:
             "per_query": self.per_query,
             "query_type_breakdown": self.query_type_breakdown,
         }
+        if self.multimodal is not None:
+            payload["multimodal"] = self.multimodal
         if self.gate is not None:
             payload["gate"] = self.gate
         if self.baseline is not None:
@@ -438,10 +461,13 @@ def _expand_qrel_item(item: Mapping[str, Any], *, index: int) -> list[Mapping[st
     metadata = item.get("metadata", {})
     if not isinstance(metadata, Mapping):
         metadata = {}
+    metadata = _qrel_metadata_with_multimodal_extensions(item, metadata)
     relevance = item.get("relevance", 1.0)
 
     if any(key in item for key in ("target", "document", "document_name", "doc", "doc_name", "chunk_id", "document_id")):
-        expanded.append(item)
+        direct_item = dict(item)
+        direct_item["metadata"] = dict(metadata)
+        expanded.append(direct_item)
 
     for document in _string_list(item.get("expected_documents"), field_name=f"qrel[{index}].expected_documents"):
         expanded.append(
@@ -798,6 +824,187 @@ def _query_type(query: ValidationQuery) -> str:
     return str(value) if str(value).strip() else "default"
 
 
+def _qrel_metadata_with_multimodal_extensions(
+    item: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    enriched = dict(metadata)
+    for key in ("expected_modality", "expected_modalities", "modality"):
+        if key in item and key not in enriched:
+            enriched[key] = item[key]
+    for key in ("benchmark_category", "category", "modality_category", "query_category"):
+        if key in item and "benchmark_category" not in enriched:
+            enriched["benchmark_category"] = item[key]
+            break
+    return enriched
+
+
+def _metadata_values(metadata: Mapping[str, Any], keys: tuple[str, ...]) -> list[Any]:
+    values: list[Any] = []
+    for key in keys:
+        if key in metadata:
+            values.append(metadata[key])
+    return values
+
+
+def _normalize_multimodal_category(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().casefold()).strip("_")
+    aliases = {
+        "fact": "text_fact",
+        "text": "text_fact",
+        "textual": "text_fact",
+        "text_fact": "text_fact",
+        "table": "table_value",
+        "table_value": "table_value",
+        "table_row": "table_value",
+        "numeric_row": "table_value",
+        "visual": "visual_identification",
+        "image": "visual_identification",
+        "visual_identification": "visual_identification",
+        "diagram": "diagram_software_screenshot",
+        "screenshot": "diagram_software_screenshot",
+        "software_screenshot": "diagram_software_screenshot",
+        "diagram_software_screenshot": "diagram_software_screenshot",
+        "caption": "caption_context",
+        "context": "caption_context",
+        "caption_context": "caption_context",
+        "mixed": "mixed_table_plus_image",
+        "mixed_modality": "mixed_table_plus_image",
+        "mixed_table_image": "mixed_table_plus_image",
+        "mixed_table_plus_image": "mixed_table_plus_image",
+    }
+    return aliases.get(normalized)
+
+
+def _category_implied_modalities(category: str | None) -> set[str]:
+    if category == "table_value":
+        return {"table"}
+    if category in {"visual_identification", "diagram_software_screenshot"}:
+        return {"image"}
+    if category == "mixed_table_plus_image":
+        return {"mixed", "table", "image"}
+    if category in {"text_fact", "caption_context"}:
+        return {"text"}
+    return set()
+
+
+def _query_multimodal_category(query: ValidationQuery, qrels: list[BenchmarkQrel]) -> str | None:
+    for value in _metadata_values(
+        query.metadata,
+        ("benchmark_category", "category", "modality_category", "type", "query_type"),
+    ):
+        category = _normalize_multimodal_category(value)
+        if category:
+            return category
+    for qrel in qrels:
+        for value in _metadata_values(
+            qrel.metadata,
+            ("benchmark_category", "category", "modality_category", "type", "query_type"),
+        ):
+            category = _normalize_multimodal_category(value)
+            if category:
+                return category
+    return None
+
+
+def _normalize_modality(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().casefold()
+    normalized = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+    if "mixed" in normalized or "multimodal" in normalized:
+        return "mixed"
+    if text.startswith("image/") or any(token in normalized for token in ("image", "visual", "figure", "diagram", "screenshot")):
+        return "image"
+    if "table" in normalized:
+        return "table"
+    if text.startswith("text/") or normalized in {"text", "markdown", "md", "txt", "document"}:
+        return "text"
+    if normalized in MULTIMODAL_EXPECTED_MODALITIES:
+        return normalized
+    return None
+
+
+def _modalities_from_value(value: Any) -> set[str]:
+    if isinstance(value, str):
+        modality = _normalize_modality(value)
+        if modality == "mixed":
+            return {"mixed", "table", "image"}
+        return {modality} if modality else set()
+    if isinstance(value, (list, tuple, set)):
+        modalities: set[str] = set()
+        for item in value:
+            modalities.update(_modalities_from_value(item))
+        return modalities
+    return set()
+
+
+def _metadata_expected_modalities(metadata: Mapping[str, Any]) -> set[str]:
+    modalities: set[str] = set()
+    for value in _metadata_values(metadata, ("expected_modality", "expected_modalities", "modality", "modalities")):
+        modalities.update(_modalities_from_value(value))
+    if not modalities:
+        for value in _metadata_values(metadata, ("benchmark_category", "category", "modality_category", "type", "query_type")):
+            modalities.update(_category_implied_modalities(_normalize_multimodal_category(value)))
+    return modalities
+
+
+def _query_expected_modalities(query: ValidationQuery, qrels: list[BenchmarkQrel]) -> set[str]:
+    modalities = _metadata_expected_modalities(query.metadata)
+    for qrel in qrels:
+        modalities.update(_metadata_expected_modalities(qrel.metadata))
+    if not modalities:
+        modalities.update(_category_implied_modalities(_query_multimodal_category(query, qrels)))
+    return modalities
+
+
+def _mapping_modality(mapping: Mapping[str, Any]) -> str | None:
+    for key in (
+        "modality",
+        "chunk_modality",
+        "document_modality",
+        "expected_modality",
+        "media_type",
+        "asset_type",
+        "document_type",
+        "doc_type",
+        "mime_type",
+        "content_type",
+        "type",
+    ):
+        modality = _normalize_modality(mapping.get(key))
+        if modality:
+            return modality
+    return None
+
+
+def _chunk_modality(chunk: NormalizedChunk) -> str:
+    raw = chunk.raw if isinstance(chunk.raw, Mapping) else {}
+    modality = _mapping_modality(raw)
+    if modality:
+        return modality
+    metadata = raw.get("metadata")
+    if isinstance(metadata, Mapping):
+        modality = _mapping_modality(metadata)
+        if modality:
+            return modality
+    document_name = (chunk.document_name or "").casefold()
+    if document_name.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff")):
+        return "image"
+    if document_name.endswith((".md", ".markdown", ".txt")):
+        return "text"
+    if "<table" in (chunk.content or "").casefold():
+        return "table"
+    return "unknown"
+
+
+def _modality_distribution(chunks: list[NormalizedChunk]) -> dict[str, int]:
+    counts = Counter(_chunk_modality(chunk) for chunk in chunks)
+    return {key: counts[key] for key in sorted(counts) if counts[key]}
+
+
 def _iter_string_values(value: Any) -> list[str]:
     if isinstance(value, str):
         stripped = value.strip()
@@ -968,6 +1175,9 @@ def _query_benchmark_metrics(
         raise ValidationError(f"query {case.query.id!r} has no positive qrels")
 
     ranked_chunks = case.chunks[:cutoff]
+    result_modality_distribution = _modality_distribution(ranked_chunks)
+    expected_modalities = _query_expected_modalities(case.query, positive_qrels)
+    multimodal_category = _query_multimodal_category(case.query, positive_qrels)
     rel_by_rank: list[float] = []
     matched_targets: list[str | None] = []
     for chunk in ranked_chunks:
@@ -1021,10 +1231,21 @@ def _query_benchmark_metrics(
         }
     document_metrics = _document_pollution_metrics(case, positive_qrels, ranked_chunks)
     tag_metrics = _tag_pollution_metrics(case, positive_qrels, ranked_chunks)
+    multimodal_metrics = _query_multimodal_metrics(
+        expected_modalities=expected_modalities,
+        qrels=ranking_qrels,
+        ranked_chunks=ranked_chunks,
+        matched_targets=matched_targets,
+        result_modality_distribution=result_modality_distribution,
+        cutoff=cutoff,
+    )
 
     return {
         "id": case.query.id,
         "query_type": _query_type(case.query),
+        "multimodal_category": multimodal_category or "uncategorized",
+        "expected_modalities": sorted(expected_modalities),
+        "result_modality_distribution": result_modality_distribution,
         "hit_rate": 1.0 if first_relevant_rank else 0.0,
         "mrr": 1.0 / first_relevant_rank if first_relevant_rank else 0.0,
         "precision_at_k": relevant_retrieved / cutoff,
@@ -1039,7 +1260,90 @@ def _query_benchmark_metrics(
         **strict_metrics,
         **document_metrics,
         **tag_metrics,
+        **multimodal_metrics,
     }
+
+
+def _modality_relevant_keys(qrels: list[BenchmarkQrel], modality: str) -> set[str]:
+    keys = {
+        qrel.key
+        for qrel in qrels
+        if qrel.relevance > 0 and modality in _metadata_expected_modalities(qrel.metadata)
+    }
+    return keys
+
+
+def _query_modality_recall(
+    *,
+    modality: str,
+    expected_modalities: set[str],
+    qrels: list[BenchmarkQrel],
+    ranked_chunks: list[NormalizedChunk],
+    matched_targets: list[str | None],
+) -> tuple[float | None, int, int]:
+    if modality not in expected_modalities:
+        return None, 0, 0
+    relevant_keys = _modality_relevant_keys(qrels, modality) or {qrel.key for qrel in qrels if qrel.relevance > 0}
+    matched_keys = {
+        target
+        for chunk, target in zip(ranked_chunks, matched_targets)
+        if target in relevant_keys and _chunk_modality(chunk) == modality
+    }
+    return (
+        len(matched_keys) / len(relevant_keys) if relevant_keys else 0.0,
+        len(matched_keys),
+        len(relevant_keys),
+    )
+
+
+def _query_multimodal_metrics(
+    *,
+    expected_modalities: set[str],
+    qrels: list[BenchmarkQrel],
+    ranked_chunks: list[NormalizedChunk],
+    matched_targets: list[str | None],
+    result_modality_distribution: Mapping[str, int],
+    cutoff: int,
+) -> dict[str, float | int]:
+    metrics: dict[str, float | int] = {}
+    image_recall, matched_image_targets, image_relevant_targets = _query_modality_recall(
+        modality="image",
+        expected_modalities=expected_modalities,
+        qrels=qrels,
+        ranked_chunks=ranked_chunks,
+        matched_targets=matched_targets,
+    )
+    if image_recall is not None:
+        metrics.update(
+            {
+                "image_precision_at_k": matched_image_targets / cutoff,
+                "image_recall_at_k": image_recall,
+                "image_recall": image_recall,
+                "visual_coverage": 1.0 if result_modality_distribution.get("image", 0) else 0.0,
+                "image_result_count": int(result_modality_distribution.get("image", 0)),
+                "image_relevant_targets": image_relevant_targets,
+                "matched_image_targets": matched_image_targets,
+            }
+        )
+
+    table_recall, matched_table_targets, table_relevant_targets = _query_modality_recall(
+        modality="table",
+        expected_modalities=expected_modalities,
+        qrels=qrels,
+        ranked_chunks=ranked_chunks,
+        matched_targets=matched_targets,
+    )
+    if table_recall is not None:
+        metrics.update(
+            {
+                "table_recall_at_k": table_recall,
+                "table_recall": table_recall,
+                "table_result_count": int(result_modality_distribution.get("table", 0)),
+                "table_relevant_targets": table_relevant_targets,
+                "matched_table_targets": matched_table_targets,
+            }
+        )
+    return metrics
 
 
 def _aggregate_query_metrics(per_query: list[dict[str, Any]]) -> dict[str, float | int]:
@@ -1056,6 +1360,28 @@ def _aggregate_query_metrics(per_query: list[dict[str, Any]]) -> dict[str, float
                 metrics["tag_scope_query_count"] = len(values)
             elif key == "expected_tag_hit_rate":
                 metrics["expected_tag_query_count"] = len(values)
+    image_values = [float(item["image_precision_at_k"]) for item in per_query if isinstance(item.get("image_precision_at_k"), (int, float))]
+    if image_values:
+        metrics["image_scope_query_count"] = len(image_values)
+        metrics["image_precision_at_k"] = _average(image_values)
+        image_recall_values = [
+            float(item["image_recall_at_k"])
+            for item in per_query
+            if isinstance(item.get("image_recall_at_k"), (int, float))
+        ]
+        visual_coverage_values = [
+            float(item["visual_coverage"])
+            for item in per_query
+            if isinstance(item.get("visual_coverage"), (int, float))
+        ]
+        metrics["image_recall_at_k"] = _average(image_recall_values)
+        metrics["image_recall"] = metrics["image_recall_at_k"]
+        metrics["visual_coverage_rate"] = _average(visual_coverage_values)
+    table_values = [float(item["table_recall_at_k"]) for item in per_query if isinstance(item.get("table_recall_at_k"), (int, float))]
+    if table_values:
+        metrics["table_scope_query_count"] = len(table_values)
+        metrics["table_recall_at_k"] = _average(table_values)
+        metrics["table_recall"] = metrics["table_recall_at_k"]
     expected_chunk_counts = [
         int(item["expected_chunk_count"])
         for item in per_query
@@ -1077,11 +1403,62 @@ def _aggregate_query_metrics(per_query: list[dict[str, Any]]) -> dict[str, float
         "tagged_chunk_count",
         "polluted_tagged_chunk_count",
         "unexpected_tag_count",
+        "image_result_count",
+        "image_relevant_targets",
+        "matched_image_targets",
+        "table_result_count",
+        "table_relevant_targets",
+        "matched_table_targets",
     ):
         values = [int(item[key]) for item in per_query if isinstance(item.get(key), int)]
         if values:
             metrics[key] = sum(values)
     return metrics
+
+
+def _multimodal_summary(per_query: list[dict[str, Any]]) -> dict[str, Any]:
+    category_counts: Counter[str] = Counter()
+    expected_modality_counts: Counter[str] = Counter()
+    result_counts: Counter[str] = Counter()
+    categorized_query_count = 0
+    expected_modality_query_count = 0
+
+    for item in per_query:
+        category = item.get("multimodal_category")
+        if isinstance(category, str) and category != "uncategorized":
+            category_counts[category] += 1
+            categorized_query_count += 1
+        expected_modalities = item.get("expected_modalities")
+        if isinstance(expected_modalities, list) and expected_modalities:
+            expected_modality_query_count += 1
+            for modality in expected_modalities:
+                if isinstance(modality, str):
+                    expected_modality_counts[modality] += 1
+        distribution = item.get("result_modality_distribution")
+        if isinstance(distribution, Mapping):
+            for modality, count in distribution.items():
+                if isinstance(modality, str) and isinstance(count, int):
+                    result_counts[modality] += count
+
+    return {
+        "schema": MULTIMODAL_BENCHMARK_SCHEMA,
+        "allowed_categories": list(MULTIMODAL_BENCHMARK_CATEGORIES),
+        "allowed_modalities": list(MULTIMODAL_EXPECTED_MODALITIES),
+        "query_count": len(per_query),
+        "categorized_query_count": categorized_query_count,
+        "expected_modality_query_count": expected_modality_query_count,
+        "category_counts": {key: category_counts[key] for key in sorted(category_counts) if category_counts[key]},
+        "expected_modality_counts": {
+            key: expected_modality_counts[key]
+            for key in sorted(expected_modality_counts)
+            if expected_modality_counts[key]
+        },
+        "result_modality_distribution": {
+            key: result_counts[key]
+            for key in sorted(result_counts)
+            if result_counts[key]
+        },
+    }
 
 
 def _breakdown_by_query_type(per_query: list[dict[str, Any]]) -> dict[str, dict[str, float | int]]:
@@ -1273,6 +1650,7 @@ def attach_benchmark_evaluation(
         metrics=metrics,
         per_query=per_query,
         query_type_breakdown=_breakdown_by_query_type(per_query),
+        multimodal=_multimodal_summary(per_query),
         gate=evaluate_benchmark_gate(metrics, gate=gate, baseline_delta=baseline_delta),
         baseline=baseline,
     )
@@ -1376,6 +1754,12 @@ def render_markdown_report(report: ValidationReport) -> str:
             lines.append(f"- Expected tag hit rate: `{float(benchmark.metrics['expected_tag_hit_rate']):.2%}`")
         if "unexpected_tag_hit_rate" in benchmark.metrics:
             lines.append(f"- Unexpected tag hit rate: `{float(benchmark.metrics['unexpected_tag_hit_rate']):.2%}`")
+        if "image_recall_at_k" in benchmark.metrics:
+            lines.append(f"- Image precision@k: `{float(benchmark.metrics['image_precision_at_k']):.4f}`")
+            lines.append(f"- Image recall@k: `{float(benchmark.metrics['image_recall_at_k']):.4f}`")
+            lines.append(f"- Visual coverage rate: `{float(benchmark.metrics['visual_coverage_rate']):.2%}`")
+        if "table_recall_at_k" in benchmark.metrics:
+            lines.append(f"- Table recall@k: `{float(benchmark.metrics['table_recall_at_k']):.4f}`")
         if "strict_chunk_recall_at_k" in benchmark.metrics:
             lines.extend(
                 [
@@ -1397,6 +1781,25 @@ def render_markdown_report(report: ValidationReport) -> str:
                 "{precision_at_k:.4f} | {recall_at_k:.4f} | {ndcg_at_k:.4f} | {map_at_k:.4f} |".format(
                     **item
                 )
+            )
+        if benchmark.multimodal:
+            result_modalities = ", ".join(
+                f"{key}={value}"
+                for key, value in benchmark.multimodal.get("result_modality_distribution", {}).items()
+            ) or "-"
+            category_counts = ", ".join(
+                f"{key}={value}"
+                for key, value in benchmark.multimodal.get("category_counts", {}).items()
+            ) or "-"
+            lines.extend(
+                [
+                    "",
+                    "## Multimodal",
+                    "",
+                    f"- Schema: `{benchmark.multimodal.get('schema', MULTIMODAL_BENCHMARK_SCHEMA)}`",
+                    f"- Categories: `{category_counts}`",
+                    f"- Result modality distribution: `{result_modalities}`",
+                ]
             )
         if benchmark.gate:
             lines.extend(["", "## Gate", ""])

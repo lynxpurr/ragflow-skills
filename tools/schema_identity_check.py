@@ -182,6 +182,14 @@ EXPECTED_IDENTITIES = (
         coverage_patterns=("ragflow_benchmark_report_v1",),
     ),
     SchemaIdentity(
+        key="multimodal_benchmark",
+        group="benchmark",
+        identity="ragflow_multimodal_benchmark_v1",
+        source_patterns=("ragflow_multimodal_benchmark_v1", "MULTIMODAL_BENCHMARK_SCHEMA"),
+        coverage_patterns=("ragflow_multimodal_benchmark_v1", "MULTIMODAL_BENCHMARK_SCHEMA"),
+        description="Embedded multimodal benchmark block inside ragflow_benchmark_report_v1.",
+    ),
+    SchemaIdentity(
         key="benchmark_import_report",
         group="benchmark",
         identity="ragflow_benchmark_import_report_v1",

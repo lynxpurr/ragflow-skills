@@ -8,6 +8,8 @@ from pathlib import Path
 from ragflow_skill_runtime.validation import (
     BenchmarkGate,
     CHUNK_SNAPSHOT_SCHEMA,
+    MULTIMODAL_BENCHMARK_CATEGORIES,
+    MULTIMODAL_BENCHMARK_SCHEMA,
     ValidationCaseResult,
     ValidationQuery,
     ValidationReport,
@@ -235,6 +237,31 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual([qrel.field for qrel in qrels["q1"]], ["document", "expected_chunk"])
         self.assertEqual(qrels["q1"][1].target, "sha256:abc")
 
+    def test_load_benchmark_qrels_preserves_multimodal_metadata_extensions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "qrels.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "qrels": [
+                            {
+                                "query_id": "q-image",
+                                "expected_documents": ["diagram.png"],
+                                "expected_chunks": ["sha256:abc"],
+                                "expected_modality": "image",
+                                "benchmark_category": "visual_identification",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            qrels = load_benchmark_qrels(path)
+
+        self.assertEqual([qrel.field for qrel in qrels["q-image"]], ["document", "expected_chunk"])
+        self.assertEqual(qrels["q-image"][0].metadata["expected_modality"], "image")
+        self.assertEqual(qrels["q-image"][1].metadata["benchmark_category"], "visual_identification")
+
     def test_load_benchmark_qrels_from_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "qrels.json"
@@ -419,6 +446,136 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("Wrong-document rate", markdown)
         self.assertIn("Tag pollution rate", markdown)
 
+    def test_benchmark_reports_multimodal_categories_and_image_metrics(self) -> None:
+        image_chunks = normalize_retrieval_response(
+            {
+                "data": {
+                    "chunks": [
+                        {
+                            "content": "visual evidence",
+                            "document_name": "diagram.png",
+                            "mime_type": "image/png",
+                            "metadata": {"modality": "image"},
+                        },
+                        {
+                            "content": "nearby caption text",
+                            "document_name": "source.md",
+                            "metadata": {"modality": "text"},
+                        },
+                    ]
+                }
+            }
+        )
+        table_chunks = normalize_retrieval_response(
+            {
+                "data": {
+                    "chunks": [
+                        {
+                            "content": "<table><tr><td>42</td></tr></table>",
+                            "document_name": "source.md",
+                            "metadata": {"modality": "table"},
+                        }
+                    ]
+                }
+            }
+        )
+        text_chunks = normalize_retrieval_response(
+            {
+                "data": {
+                    "chunks": [
+                        {
+                            "content": "Known answer with text evidence",
+                            "document_name": "source.md",
+                            "metadata": {"modality": "text"},
+                        }
+                    ]
+                }
+            }
+        )
+        report = ValidationReport(
+            level="benchmark",
+            dataset_id="ds-1",
+            dataset_name="kb:test",
+            cases=[
+                ValidationCaseResult(
+                    query=ValidationQuery(id="q-image", question="Which diagram?", metadata={"type": "visual_identification"}),
+                    passed=True,
+                    chunk_count=len(image_chunks),
+                    chunks=image_chunks,
+                ),
+                ValidationCaseResult(
+                    query=ValidationQuery(id="q-table", question="Which value?", metadata={"benchmark_category": "table_value"}),
+                    passed=True,
+                    chunk_count=len(table_chunks),
+                    chunks=table_chunks,
+                ),
+                ValidationCaseResult(
+                    query=ValidationQuery(id="q-text", question="Which fact?", metadata={"benchmark_category": "text_fact"}),
+                    passed=True,
+                    chunk_count=len(text_chunks),
+                    chunks=text_chunks,
+                ),
+            ],
+        )
+        benchmarked = attach_benchmark_evaluation(
+            report,
+            qrels={
+                "q-image": load_benchmark_qrels_inline(
+                    [
+                        {
+                            "query_id": "q-image",
+                            "document": "diagram.png",
+                            "expected_modality": "image",
+                            "benchmark_category": "visual_identification",
+                        }
+                    ]
+                )["q-image"],
+                "q-table": load_benchmark_qrels_inline(
+                    [
+                        {
+                            "query_id": "q-table",
+                            "document": "source.md",
+                            "expected_modality": "table",
+                            "benchmark_category": "table_value",
+                        }
+                    ]
+                )["q-table"],
+                "q-text": load_benchmark_qrels_inline(
+                    [
+                        {
+                            "query_id": "q-text",
+                            "document": "source.md",
+                            "expected_modality": "text",
+                            "benchmark_category": "text_fact",
+                        }
+                    ]
+                )["q-text"],
+            },
+            cutoff=2,
+        )
+        benchmark = benchmarked.to_dict()["benchmark"]
+        metrics = benchmark["metrics"]
+        multimodal = benchmark["multimodal"]
+        markdown = render_markdown_report(benchmarked)
+
+        self.assertEqual(multimodal["schema"], MULTIMODAL_BENCHMARK_SCHEMA)
+        self.assertEqual(multimodal["allowed_categories"], list(MULTIMODAL_BENCHMARK_CATEGORIES))
+        self.assertEqual(multimodal["category_counts"]["visual_identification"], 1)
+        self.assertEqual(multimodal["category_counts"]["table_value"], 1)
+        self.assertEqual(multimodal["category_counts"]["text_fact"], 1)
+        self.assertEqual(multimodal["expected_modality_counts"], {"image": 1, "table": 1, "text": 1})
+        self.assertEqual(multimodal["result_modality_distribution"]["image"], 1)
+        self.assertEqual(multimodal["result_modality_distribution"]["table"], 1)
+        self.assertEqual(multimodal["result_modality_distribution"]["text"], 2)
+        self.assertEqual(metrics["image_scope_query_count"], 1)
+        self.assertEqual(metrics["image_precision_at_k"], 0.5)
+        self.assertEqual(metrics["image_recall_at_k"], 1.0)
+        self.assertEqual(metrics["image_recall"], 1.0)
+        self.assertEqual(metrics["visual_coverage_rate"], 1.0)
+        self.assertEqual(benchmark["per_query"][0]["result_modality_distribution"], {"image": 1, "text": 1})
+        self.assertIn("Multimodal", markdown)
+        self.assertIn("Image recall@k", markdown)
+
     def test_benchmark_gate_failure_marks_report_failed(self) -> None:
         report = run_retrieval_validation(
             FakeValidationClient(),
@@ -462,6 +619,13 @@ def load_benchmark_qrels_dict_item(target: str, *, field: str = "document"):
                 encoding="utf-8",
             )
         return load_benchmark_qrels(path)["q1"]
+
+
+def load_benchmark_qrels_inline(items):
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "qrels.json"
+        path.write_text(json.dumps({"qrels": items}), encoding="utf-8")
+        return load_benchmark_qrels(path)
 
 
 if __name__ == "__main__":

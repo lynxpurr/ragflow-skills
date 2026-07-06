@@ -8,6 +8,18 @@
     {
       "query_id": "q-known-topic",
       "document": "source.md",
+      "benchmark_category": "text_fact",
+      "expected_modality": "text",
+      "relevance": 2
+    },
+    {
+      "query_id": "q-visual-evidence",
+      "document": "sample-image.png",
+      "benchmark_category": "visual_identification",
+      "expected_modality": "image",
+      "expected_chunks": [
+        "sha256:replace-with-stable-chunk-hash"
+      ],
       "relevance": 2
     }
   ]
