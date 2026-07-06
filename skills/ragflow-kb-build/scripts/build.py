@@ -2421,6 +2421,7 @@ def _sanitize_parse_report(report: dict[str, Any], args: argparse.Namespace) -> 
         config_paths=[
             args.kb_manifest,
             args.documents_json,
+            args.multimodal_kb_manifest,
             *args.parse_log,
             args.profile,
             args.parser_config,
@@ -2437,6 +2438,7 @@ def _run_parse_report(args: argparse.Namespace) -> int:
         report = create_parse_report(
             kb_manifest_path=args.kb_manifest,
             documents_json_path=args.documents_json,
+            multimodal_kb_manifest_path=args.multimodal_kb_manifest,
             parse_log_paths=args.parse_log,
             profile_path=args.profile,
             parser_config_path=args.parser_config,
@@ -3198,6 +3200,7 @@ def build_parse_report_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Create an offline parser performance and parse-state report")
     parser.add_argument("--kb-manifest", required=True, help="Local kb_manifest.json for the built KB")
     parser.add_argument("--documents-json", help="Optional user-supplied RAGFlow document list/status JSON")
+    parser.add_argument("--multimodal-kb-manifest", help="Optional ragflow_multimodal_kb_manifest_v1 JSON")
     parser.add_argument("--parse-log", action="append", default=[], help="Optional parser progress log; may be repeated")
     parser.add_argument("--profile", help="Optional chunk profile JSON/YAML to review parser settings")
     parser.add_argument("--parser-config", help="Optional parser_config JSON sidecar; overrides profile parser_config in this report")

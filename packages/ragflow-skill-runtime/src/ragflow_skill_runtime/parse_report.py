@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .kb_build import (
+    MULTIMODAL_KB_MANIFEST_SCHEMA,
     extract_document_id,
     extract_document_items,
     extract_document_name,
@@ -75,6 +76,14 @@ def _read_json_mapping(path: str | Path) -> dict[str, Any]:
     payload = _read_json(path)
     if not isinstance(payload, dict):
         raise ParseReportError(f"file must contain a JSON object: {Path(path)}")
+    return payload
+
+
+def _load_multimodal_manifest(path: str | Path) -> dict[str, Any]:
+    payload = _read_json_mapping(path)
+    if payload.get("schema") != MULTIMODAL_KB_MANIFEST_SCHEMA:
+        raise ParseReportError(f"multimodal KB manifest schema must be {MULTIMODAL_KB_MANIFEST_SCHEMA}: {path}")
+    payload["_source_path"] = str(path)
     return payload
 
 
@@ -265,6 +274,63 @@ def _extract_detail_counts(payload: Any) -> dict[str, int | None]:
         "document_count": document_count,
         "chunk_count": _detail_count_from_mapping(payload, DETAIL_CHUNK_COUNT_KEYS),
     }
+
+
+def _multimodal_manifest_summary(
+    multimodal_manifest: Mapping[str, Any] | None,
+    *,
+    kb_manifest: KbManifest,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if not multimodal_manifest:
+        return {
+            "available": False,
+            "source": None,
+            "markdown_document_count": len(kb_manifest.documents),
+            "visual_document_count": 0,
+            "thumbnail_document_count": 0,
+            "vlm_observed_document_count": 0,
+            "visual_chunk_count": 0,
+        }, []
+
+    summary = multimodal_manifest.get("summary", {}) if isinstance(multimodal_manifest.get("summary"), Mapping) else {}
+    visual_documents = multimodal_manifest.get("visual_documents")
+    if not isinstance(visual_documents, list):
+        visual_documents = []
+    visual_chunk_count = sum(_as_int(item.get("chunk_count")) or 0 for item in visual_documents if isinstance(item, Mapping))
+    thumbnail_count = sum(
+        1
+        for item in visual_documents
+        if isinstance(item, Mapping)
+        and isinstance(item.get("thumbnail"), Mapping)
+        and bool(item["thumbnail"].get("url"))
+    )
+    vlm_count = sum(1 for item in visual_documents if isinstance(item, Mapping) and item.get("vlm_status"))
+    manifest_dataset = multimodal_manifest.get("dataset", {}) if isinstance(multimodal_manifest.get("dataset"), Mapping) else {}
+    issues: list[dict[str, Any]] = []
+    if manifest_dataset.get("id") and manifest_dataset.get("id") != kb_manifest.dataset.id:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="multimodal_manifest_dataset_mismatch",
+                field="multimodal_manifest.dataset.id",
+                message="Multimodal KB manifest dataset ID differs from kb_manifest dataset ID.",
+                recommendation="Regenerate the multimodal manifest from the same dataset before trusting visual parse evidence.",
+            )
+        )
+
+    def summary_count(key: str, fallback: int) -> int:
+        value = _as_int(summary.get(key))
+        return fallback if value is None else value
+
+    return {
+        "available": True,
+        "source": multimodal_manifest.get("_source_path"),
+        "markdown_document_count": summary_count("markdown_document_count", len(kb_manifest.documents)),
+        "visual_document_count": summary_count("visual_document_count", len(visual_documents)),
+        "thumbnail_document_count": summary_count("thumbnail_document_count", thumbnail_count),
+        "vlm_observed_document_count": summary_count("vlm_observed_document_count", vlm_count),
+        "visual_chunk_count": visual_chunk_count,
+    }, issues
 
 
 def _state_label(state: Mapping[str, Any]) -> str:
@@ -933,6 +999,7 @@ def create_parse_report(
     *,
     kb_manifest_path: str | Path,
     documents_json_path: str | Path | None = None,
+    multimodal_kb_manifest_path: str | Path | None = None,
     parse_log_paths: Iterable[str | Path] | None = None,
     profile_path: str | Path | None = None,
     parser_config_path: str | Path | None = None,
@@ -947,11 +1014,13 @@ def create_parse_report(
     inputs = {
         "kb_manifest": str(kb_manifest_path),
         "documents_json": str(documents_json_path) if documents_json_path else None,
+        "multimodal_kb_manifest": str(multimodal_kb_manifest_path) if multimodal_kb_manifest_path else None,
         "parse_logs": [str(path) for path in (parse_log_paths or [])],
         "profile": str(profile_path) if profile_path else None,
         "parser_config": str(parser_config_path) if parser_config_path else None,
     }
 
+    multimodal_manifest = _load_multimodal_manifest(multimodal_kb_manifest_path) if multimodal_kb_manifest_path else None
     documents_payload: Any = None
     document_status_index = None
     detail_counts = {"document_count": None, "chunk_count": None}
@@ -991,6 +1060,10 @@ def create_parse_report(
         document_status_index=document_status_index,
         documents_json_supplied=bool(documents_json_path),
     )
+    multimodal_summary, multimodal_issues = _multimodal_manifest_summary(
+        multimodal_manifest,
+        kb_manifest=kb_manifest,
+    )
     chunk_consistency, chunk_issues = _chunk_consistency_report(
         document_summary=document_summary,
         detail_counts=detail_counts,
@@ -1016,6 +1089,7 @@ def create_parse_report(
             )
         )
     issues.extend(document_issues)
+    issues.extend(multimodal_issues)
     issues.extend(chunk_issues)
     issues.extend(parser_settings["issues"])
     issues.extend(profile_visibility_issues)
@@ -1049,9 +1123,14 @@ def create_parse_report(
         },
         "summary": {
             **document_summary,
+            "visual_document_count": multimodal_summary["visual_document_count"],
+            "thumbnail_document_count": multimodal_summary["thumbnail_document_count"],
+            "vlm_observed_document_count": multimodal_summary["vlm_observed_document_count"],
+            "visual_chunk_count": multimodal_summary["visual_chunk_count"],
             "issue_counts": dict(sorted(issue_counts.items())),
         },
         "document_states": document_states,
+        "multimodal_manifest": multimodal_summary,
         "chunk_consistency": chunk_consistency,
         "parser_settings": parser_settings,
         "profile_visibility": profile_visibility,
@@ -1095,6 +1174,10 @@ def render_parse_report_markdown(report: Mapping[str, Any]) -> str:
         f"- Pending/unknown documents: {summary.get('pending_document_count', 0)}",
         f"- Zero-chunk documents: {summary.get('zero_chunk_document_count', 0)}",
         f"- Effective chunks: {summary.get('effective_chunk_total', 0)}",
+        f"- Visual documents: {summary.get('visual_document_count', 0)}",
+        f"- Visual chunks: {summary.get('visual_chunk_count', 0)}",
+        f"- Visual thumbnails: {summary.get('thumbnail_document_count', 0)}",
+        f"- VLM-observed documents: {summary.get('vlm_observed_document_count', 0)}",
         f"- Chunk consistency: `{chunk_consistency.get('status', 'PASS')}`",
         "",
         "## Document States",

@@ -4037,6 +4037,7 @@ class KbBuildCliTests(unittest.TestCase):
             root = Path(tmp)
             kb_manifest = root / "kb_manifest.json"
             documents_json = root / "documents.json"
+            multimodal_manifest = root / "multimodal_kb_manifest.json"
             parse_log = root / "parse.log"
             profile = root / "profile.json"
             parser_config_dir = root / "private-home" / ".ragflow"
@@ -4087,6 +4088,32 @@ class KbBuildCliTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            multimodal_manifest.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_multimodal_kb_manifest_v1",
+                        "dataset": {"id": "ds-parse-cli", "name": "visual-fixture"},
+                        "summary": {
+                            "markdown_document_count": 1,
+                            "visual_document_count": 1,
+                            "thumbnail_document_count": 1,
+                            "vlm_observed_document_count": 1,
+                            "chunk_count": 3,
+                        },
+                        "visual_documents": [
+                            {
+                                "document_id": "doc-visual-cli",
+                                "name": "figure.png",
+                                "status": "done",
+                                "chunk_count": 2,
+                                "thumbnail": {"url": "thumbs/figure.png", "observed": True},
+                                "vlm_status": "completed",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
             parse_log.write_text("parse phase completed in 1.2s\nchunk phase completed in 80ms\n", encoding="utf-8")
             profile.write_text(
                 json.dumps(
@@ -4127,6 +4154,8 @@ class KbBuildCliTests(unittest.TestCase):
                     str(kb_manifest),
                     "--documents-json",
                     str(documents_json),
+                    "--multimodal-kb-manifest",
+                    str(multimodal_manifest),
                     "--parse-log",
                     str(parse_log),
                     "--profile",
@@ -4159,8 +4188,12 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["mutation"], "none")
         self.assertEqual(payload["execution"]["ragflow_calls"], 0)
         self.assertEqual(payload["summary"]["failed_document_count"], 0)
+        self.assertEqual(payload["summary"]["visual_document_count"], 1)
+        self.assertEqual(payload["multimodal_manifest"]["thumbnail_document_count"], 1)
+        self.assertEqual(payload["multimodal_manifest"]["vlm_observed_document_count"], 1)
         self.assertEqual(payload["parse_log_summary"]["slowest_phase"]["phase"], "parse")
         self.assertIn("RAGFlow Parse Report", report_md_text)
+        self.assertIn("Visual documents", report_md_text)
         combined = json.dumps(payload, ensure_ascii=False) + report_md_text + result.stdout
         self.assertNotIn(fake_host, combined)
         self.assertNotIn(fake_secret, combined)
@@ -4212,6 +4245,15 @@ class KbBuildCliTests(unittest.TestCase):
                             "pending_document_count": 0,
                             "zero_chunk_document_count": 0,
                             "chunk_mismatch_count": 0,
+                            "visual_document_count": 1,
+                            "thumbnail_document_count": 1,
+                            "vlm_observed_document_count": 1,
+                        },
+                        "multimodal_manifest": {
+                            "available": True,
+                            "visual_document_count": 1,
+                            "thumbnail_document_count": 1,
+                            "vlm_observed_document_count": 1,
                         },
                         "chunk_consistency": {"mismatch_count": 0, "status": "PASS"},
                         "parser_settings": {"expensive_setting_count": 0},
@@ -4276,10 +4318,13 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["mutation"], "none")
         self.assertEqual(payload["execution"]["ragflow_calls"], 0)
         self.assertEqual(payload["summary"]["embedding_model_count"], 1)
+        self.assertEqual(payload["summary"]["visual_document_count"], 1)
+        self.assertEqual(payload["knowledge_bases"][0]["parse"]["visual_document_count"], 1)
         self.assertEqual(payload["summary"]["embedding_model_rebuild_required_kb_count"], 0)
         self.assertEqual(payload["inputs"]["expected_embedding_models"], ["bge-m3"])
         self.assertEqual(payload["summary"]["route_activation"]["ready"], 1)
         self.assertIn("RAGFlow KB Health Report", report_md_text)
+        self.assertIn("Visual documents", report_md_text)
         combined = json.dumps(payload, ensure_ascii=False) + report_md_text + result.stdout
         self.assertNotIn(fake_host, combined)
         self.assertNotIn(fake_secret, combined)

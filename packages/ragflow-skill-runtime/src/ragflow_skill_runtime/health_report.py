@@ -190,6 +190,11 @@ def _parse_summary(parse_report: Mapping[str, Any] | None, kb_manifest: KbManife
             "chunk_mismatch_count": 0,
             "expensive_setting_count": 0,
             "parse_log_error_count": 0,
+            "visual_document_count": 0,
+            "thumbnail_document_count": 0,
+            "vlm_observed_document_count": 0,
+            "visual_chunk_count": 0,
+            "multimodal_manifest": None,
             "source": None,
         }
 
@@ -213,6 +218,13 @@ def _parse_summary(parse_report: Mapping[str, Any] | None, kb_manifest: KbManife
         "chunk_consistency_mismatch_count": _as_int(chunk_consistency.get("mismatch_count")) or 0,
         "expensive_setting_count": _as_int(parser_settings.get("expensive_setting_count")) or 0,
         "parse_log_error_count": _as_int(parse_logs.get("error_count")) or 0,
+        "visual_document_count": _as_int(summary.get("visual_document_count")) or 0,
+        "thumbnail_document_count": _as_int(summary.get("thumbnail_document_count")) or 0,
+        "vlm_observed_document_count": _as_int(summary.get("vlm_observed_document_count")) or 0,
+        "visual_chunk_count": _as_int(summary.get("visual_chunk_count")) or 0,
+        "multimodal_manifest": parse_report.get("multimodal_manifest")
+        if isinstance(parse_report.get("multimodal_manifest"), Mapping)
+        else None,
         "source": parse_report.get("_source_path"),
     }
 
@@ -533,6 +545,14 @@ def create_kb_health_report(
             "kb_count": len(kb_items),
             "document_count": sum(_as_int(item.get("document_count")) or 0 for item in kb_items),
             "declared_chunk_count": sum(_as_int(item.get("declared_chunk_count")) or 0 for item in kb_items),
+            "visual_document_count": sum(_as_int(item.get("parse", {}).get("visual_document_count")) or 0 for item in kb_items),
+            "visual_chunk_count": sum(_as_int(item.get("parse", {}).get("visual_chunk_count")) or 0 for item in kb_items),
+            "thumbnail_document_count": sum(
+                _as_int(item.get("parse", {}).get("thumbnail_document_count")) or 0 for item in kb_items
+            ),
+            "vlm_observed_document_count": sum(
+                _as_int(item.get("parse", {}).get("vlm_observed_document_count")) or 0 for item in kb_items
+            ),
             "zero_document_kb_count": sum(1 for item in kb_items if (_as_int(item.get("document_count")) or 0) == 0),
             "zero_chunk_kb_count": sum(1 for item in kb_items if (_as_int(item.get("declared_chunk_count")) or 0) == 0),
             "stale_parse_kb_count": sum(
@@ -582,6 +602,10 @@ def render_kb_health_report_markdown(report: Mapping[str, Any]) -> str:
         f"- KBs: {summary.get('kb_count', 0)}",
         f"- Documents: {summary.get('document_count', 0)}",
         f"- Declared chunks: {summary.get('declared_chunk_count', 0)}",
+        f"- Visual documents: {summary.get('visual_document_count', 0)}",
+        f"- Visual chunks: {summary.get('visual_chunk_count', 0)}",
+        f"- Visual thumbnails: {summary.get('thumbnail_document_count', 0)}",
+        f"- VLM-observed documents: {summary.get('vlm_observed_document_count', 0)}",
         f"- Mutation: `{report.get('mutation', 'none')}`",
         "",
         "## Knowledge Bases",
