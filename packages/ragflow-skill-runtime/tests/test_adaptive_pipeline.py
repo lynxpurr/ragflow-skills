@@ -145,6 +145,81 @@ class AdaptivePipelineTests(unittest.TestCase):
         self.assertEqual(decision["script_owned_llm_calls"], 0)
         self.assertFalse(decision["live_mutation_enabled"])
 
+    def test_pdf_table_signal_promotes_auto_backend_to_high_quality_fastapi(self) -> None:
+        features = {
+            "schema": DOCUMENT_FEATURES_SCHEMA,
+            "summary": {
+                "primary_language": "zh",
+                "source_kind_counts": {"pdf": 1},
+                "table_heavy": False,
+                "sample_table_count": 1,
+                "has_formal_ingest_candidates": True,
+                "image_rich": False,
+                "long_document": False,
+                "scanned_or_low_text_pdf_count": 0,
+                "numeric_or_unit_signal_count": 0,
+            },
+        }
+
+        decision = make_pipeline_decision(features, requested_backend="auto")
+
+        self.assertEqual(decision["recommendation"]["backend"], "mineru-fastapi")
+        self.assertEqual(decision["recommendation"]["table_quality"], "high")
+        self.assertEqual(decision["recommendation"]["mineru_fastapi_backend"], "hybrid-auto-engine")
+        reason_codes = {item["code"] for item in decision["reasons"]}
+        self.assertIn("table_signal_mineru_fastapi_backend", reason_codes)
+        self.assertIn("source_table_high_accuracy", reason_codes)
+
+    def test_low_text_pdf_table_signal_still_uses_high_quality_table_extraction(self) -> None:
+        features = {
+            "schema": DOCUMENT_FEATURES_SCHEMA,
+            "summary": {
+                "primary_language": "zh",
+                "source_kind_counts": {"pdf": 1},
+                "table_heavy": False,
+                "sample_table_count": 1,
+                "has_formal_ingest_candidates": True,
+                "image_rich": False,
+                "long_document": False,
+                "scanned_or_low_text_pdf_count": 1,
+                "numeric_or_unit_signal_count": 0,
+            },
+        }
+
+        decision = make_pipeline_decision(features, requested_backend="auto")
+
+        self.assertEqual(decision["recommendation"]["backend"], "mineru-fastapi")
+        self.assertEqual(decision["recommendation"]["table_quality"], "high")
+        warning_codes = {item["code"] for item in decision["warnings"]}
+        self.assertNotIn("scanned_pdf_standard_table_quality", warning_codes)
+
+    def test_pdf_table_signal_does_not_force_fastapi_when_probe_is_not_green(self) -> None:
+        features = {
+            "schema": DOCUMENT_FEATURES_SCHEMA,
+            "summary": {
+                "primary_language": "zh",
+                "source_kind_counts": {"pdf": 1},
+                "table_heavy": False,
+                "sample_table_count": 1,
+                "has_formal_ingest_candidates": True,
+                "image_rich": False,
+                "long_document": False,
+                "scanned_or_low_text_pdf_count": 0,
+                "numeric_or_unit_signal_count": 0,
+            },
+        }
+
+        decision = make_pipeline_decision(
+            features,
+            requested_backend="auto",
+            backend_probe_status="missing",
+        )
+
+        self.assertEqual(decision["recommendation"]["backend"], "auto")
+        self.assertEqual(decision["recommendation"]["table_quality"], "auto")
+        warning_codes = {item["code"] for item in decision["warnings"]}
+        self.assertIn("table_signal_fastapi_probe_not_green", warning_codes)
+
     def test_inspect_source_cli_emits_reports_and_redaction(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -224,6 +299,42 @@ class AdaptivePipelineTests(unittest.TestCase):
         self.assertEqual(decision["recommendation"]["kb_profile"]["id"], "table-atomic-en-4096")
         self.assertEqual(summary["schema"], ADAPTIVE_PIPELINE_SUMMARY_SCHEMA)
         self.assertFalse((output / "doc_manifest.json").exists())
+
+    def test_adaptive_decision_only_cli_promotes_pdf_table_signal_to_high_quality(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "input"
+            output = root / "handoff"
+            source.mkdir()
+            (source / "spec.pdf").write_bytes(
+                b"%PDF-1.7\n"
+                b"1 0 obj << /Type /Page >> endobj\n"
+                b"2 0 obj (| Model | Accuracy |\\n| --- | --- |\\n| APOLLO-H | 0.02 mm |) endobj\n"
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "adaptive",
+                    "--input",
+                    str(source),
+                    "--output",
+                    str(output),
+                    "--decision-only",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            decision = json.loads((output / "pipeline_decision.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(decision["recommendation"]["backend"], "mineru-fastapi")
+        self.assertEqual(decision["recommendation"]["table_quality"], "high")
+        self.assertEqual(decision["recommendation"]["mineru_fastapi_backend"], "hybrid-auto-engine")
 
     def test_adaptive_decision_only_preserves_explicit_pipeline_backend(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

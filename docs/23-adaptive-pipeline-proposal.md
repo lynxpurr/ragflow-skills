@@ -18,6 +18,10 @@ _created: 2026-07-05
 - 新增 `ragflow_document_features_v1`，由 `ragflow-doc-to-md inspect-source` 生成轻量源文档特征。
 - 新增 `ragflow_pipeline_decision_v1`，由确定性规则选择 `backend`、`table_quality`、
   `postprocess_profile`、`mineru_asset_mode` 和推荐 KB profile。
+- 当首轮 source inspection 在 PDF、Office、图片等需要转换的输入中发现表格信号时，规则会自动选择
+  `mineru-fastapi`、`table_quality: high`、`mineru_fastapi_backend: hybrid-auto-engine`、
+  `markdown_assets` 和 `chunk-markers-dense`，从源头启用高质量 table 提取；已有 Markdown/HTML
+  表格不强制重走 MinerU。
 - 新增 `ragflow_adaptive_pipeline_summary_v1`，由 `ragflow-doc-to-md adaptive` 输出执行摘要和
   后续 `inspect-handoff`、`asset-upload-plan`、`dry-run` 离线 review 命令。
 - `adaptive --decision-only` 可只生成 features/decision/summary，不执行转换。
@@ -232,7 +236,7 @@ python scripts/convert.py adaptive \
 | 完成 | 新增 `doc_inspect.py` | `inspect_source_document()` 输出 `ragflow_document_features_v1`；支持 builtin 文本/HTML/Markdown 采样、PDF 轻量二进制页数/文本探测、图片/Office/PDF/formal candidate 信号。 |
 | 完成 | 新增 `adaptive_decision.py` | `make_pipeline_decision()` 输出 `ragflow_pipeline_decision_v1`；默认规则选择 dense marker、table-atomic profile、table quality、asset mode，并显式记录 `script_owned_llm_calls=0`。 |
 | 完成 | 新增 `inspect-source` CLI | `ragflow-doc-to-md inspect-source --report-json --report-md --redaction-report` 生成源文档特征报告。 |
-| 完成 | 新增 `adaptive` CLI | `ragflow-doc-to-md adaptive` 串起 inspect → decide → pipeline；`--decision-only` 只生成报告；`--decision-override` 支持人工覆盖。 |
+| 完成 | 新增 `adaptive` CLI | `ragflow-doc-to-md adaptive` 串起 inspect → decide → pipeline；`--decision-only` 只生成报告；`--decision-override` 支持人工覆盖；PDF/Office/图片输入一旦在首轮试探中检测到表格信号，会自动启用 high-quality table 提取路径。 |
 | 完成 | 新增 adaptive summary | `ragflow_adaptive_pipeline_summary_v1` 输出后续 `inspect-handoff`、`asset-upload-plan` 和 KB dry-run review 命令，不执行 live mutation。 |
 | 完成 | 测试与 release governance | 新增 focused tests；schema identity、report surface inventory、generated Markdown audit、runtime resilience inventory 已同步。 |
 | 后续 gated | LLM 决策适配器 | 当前仅保留 request/review 方向，不启用 script-owned LLM。 |

@@ -118,6 +118,19 @@ def _default_profile(language: str) -> dict[str, Any]:
     }
 
 
+def _source_kind_counts(summary: Mapping[str, Any]) -> dict[str, int]:
+    raw = summary.get("source_kind_counts")
+    if not isinstance(raw, Mapping):
+        return {}
+    counts: dict[str, int] = {}
+    for key, value in raw.items():
+        try:
+            counts[str(key)] = int(value or 0)
+        except (TypeError, ValueError):
+            counts[str(key)] = 0
+    return counts
+
+
 def _validated_choice(value: str | None, *, allowed: set[str], label: str) -> str | None:
     if value is None or value == "":
         return None
@@ -201,6 +214,12 @@ def make_pipeline_decision(
     user_language = _normal_language(requested_language)
     table_heavy = _bool(summary, "table_heavy")
     has_tables = _int(summary, "sample_table_count") > 0
+    source_kind_counts = _source_kind_counts(summary)
+    conversion_table_candidate = any(
+        source_kind_counts.get(kind, 0) > 0
+        for kind in {"pdf", "office", "image", "structured_document"}
+    )
+    source_table_signal = (has_tables or table_heavy) and conversion_table_candidate
     image_rich = _bool(summary, "image_rich")
     long_document = _bool(summary, "long_document")
     formal_candidate = _bool(summary, "has_formal_ingest_candidates")
@@ -228,6 +247,28 @@ def make_pipeline_decision(
         profile = _default_profile(language)
         reasons.append({"code": "fast_preview_policy", "message": "Fast preview keeps low-cost defaults."})
     else:
+        if source_table_signal and backend == "auto" and fastapi_probe_green:
+            backend = "mineru-fastapi"
+            reasons.append(
+                {
+                    "code": "table_signal_mineru_fastapi_backend",
+                    "message": (
+                        "Source inspection found table signals in conversion-required input; "
+                        "MinerU FastAPI is selected so high-quality table extraction can run."
+                    ),
+                }
+            )
+        elif source_table_signal and backend == "auto" and not fastapi_probe_green:
+            warnings.append(
+                {
+                    "code": "table_signal_fastapi_probe_not_green",
+                    "severity": "review",
+                    "message": (
+                        "Source inspection found table signals, but MinerU FastAPI probe is not green; "
+                        "review backend health before enabling high-quality table extraction."
+                    ),
+                }
+            )
         postprocess = requested_postprocess or "chunk-markers-dense"
         asset_mode = requested_mineru_asset_mode or "markdown_assets"
         if has_tables or table_heavy or normalized_policy == "table-atomic":
@@ -239,6 +280,17 @@ def make_pipeline_decision(
         if requested_quality:
             table_quality = requested_quality
             reasons.append({"code": "requested_table_quality", "message": "User-requested table quality is preserved."})
+        elif backend == "mineru-fastapi" and source_table_signal and fastapi_probe_green:
+            table_quality = "high"
+            reasons.append(
+                {
+                    "code": "source_table_high_accuracy",
+                    "message": (
+                        "Source inspection detected table signals before conversion; "
+                        "high-quality table extraction is enabled with a high-accuracy MinerU backend."
+                    ),
+                }
+            )
         elif backend == "mineru-fastapi" and (table_heavy or numeric_signal_count >= 6) and fastapi_probe_green:
             table_quality = "high"
             reasons.append({"code": "high_accuracy_table_signal", "message": "Table-heavy or numeric formal content selects high table quality when FastAPI capability is not known bad."})
@@ -249,9 +301,9 @@ def make_pipeline_decision(
             table_quality = "standard"
             reasons.append({"code": "standard_table_quality", "message": "No formal table signal requires high-accuracy table extraction."})
 
-    # If the PDF is scanned/low-text, we should route to OCR-capable backend and
-    # avoid forcing a high-accuracy backend that may not be compatible.
-    if low_text_pdf_count and not requested_quality:
+    # If a scanned/low-text PDF has no table evidence, stay compatible. A real
+    # table signal should still prefer the high-quality table backend.
+    if low_text_pdf_count and not requested_quality and not source_table_signal:
         table_quality = "standard"
         warnings.append(
             {

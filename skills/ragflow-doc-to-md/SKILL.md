@@ -13,6 +13,35 @@ output, rich sidecars, retrieval hints, and a non-secret ingest plan. Use ordina
 `convert` when the user only needs a quick Markdown preview; it writes `handoff_mode:
 thin_preview` and an advisory that formal ingestion should use `pipeline`.
 
+## High-Quality Tables
+
+For PDF, Office, and image inputs where table structure matters, the high-quality path is:
+
+```bash
+python scripts/convert.py pipeline \
+  --input ./raw \
+  --output ./handoff \
+  --backend mineru-fastapi \
+  --mineru-base-url https://mineru.example.internal \
+  --table-quality high \
+  --mineru-asset-mode markdown_assets \
+  --postprocess-profile chunk-markers-dense \
+  --json
+```
+
+This must actually use a high-accuracy MinerU FastAPI backend such as
+`hybrid-auto-engine`, `vlm-auto-engine`, `hybrid-http-client`, or `vlm-http-client`.
+Do not pin `--mineru-fastapi-backend pipeline` when the goal is better table extraction;
+that preserves the standard backend and prevents `--table-quality high` from improving
+table structure.
+
+`adaptive` is the recommended first-pass command when the document is not yet understood.
+If source inspection finds table signals in conversion-required inputs such as PDF,
+Office, or images, `adaptive` now selects `mineru-fastapi`, `table_quality: high`,
+`mineru_fastapi_backend: hybrid-auto-engine`, `markdown_assets`, and
+`chunk-markers-dense` unless the user explicitly overrides those choices or a backend
+probe is known bad. Existing Markdown/HTML tables are not forced through MinerU.
+
 Inputs:
 
 - Existing Markdown via `--mode passthrough`.
@@ -29,6 +58,7 @@ python scripts/convert.py --input ./raw --output ./handoff --backend mineru
 python scripts/convert.py --input ./raw --output ./handoff --backend mineru-fastapi --mineru-base-url https://mineru.example.internal
 python scripts/convert.py pipeline --input ./raw --output ./handoff --backend mineru-fastapi --mineru-base-url https://mineru.example.internal --mineru-asset-mode markdown_assets --postprocess-profile chunk-markers-dense
 python scripts/convert.py pipeline --input ./raw --output ./handoff --backend mineru-fastapi --mineru-base-url https://mineru.example.internal --table-quality high --mineru-asset-mode markdown_assets --postprocess-profile chunk-markers-dense
+python scripts/convert.py adaptive --input ./raw --output ./handoff --backend auto --json
 python scripts/convert.py --input ./raw --output ./handoff --backend remote --remote-url https://converter.example/api/convert
 python scripts/convert.py backend probe --backend auto --report-json ./run/backend_probe.json --report-md ./run/backend_probe.md --redaction-report ./run/backend_probe_redaction.json --json
 python scripts/convert.py --config /path/to/ragflow-config.local.yaml --input ./raw --output ./handoff --json

@@ -6,6 +6,33 @@
 
 在当前 Blackwell + MinerU 3.2.1 FastAPI + `pipeline` 后端环境下，**通过调整 ragflow-doc-to-md 调用参数来显著改善扫描 PDF 表格质量的空间很有限**。表格质量的上限主要由 MinerU 后端模型决定，而非 doc-to-md 包装层参数。
 
+## 高质量表格首选方法
+
+正式处理 PDF、Office 或图片类输入，且表格结构重要时，首选命令形态是：
+
+```bash
+python scripts/convert.py pipeline \
+  --input ./raw \
+  --output ./handoff \
+  --backend mineru-fastapi \
+  --mineru-base-url https://mineru.example.internal \
+  --table-quality high \
+  --mineru-asset-mode markdown_assets \
+  --postprocess-profile chunk-markers-dense \
+  --json
+```
+
+有效前提：运行报告里的 `mineru_fastapi_backend` 必须实际是 `hybrid-auto-engine`、
+`vlm-auto-engine`、`hybrid-http-client` 或 `vlm-http-client` 等高精度 backend。
+如果显式指定 `--mineru-fastapi-backend pipeline`，则会保留标准 backend，不能指望
+`--table-quality high` 改善表格结构。
+
+`adaptive` 首轮试探规则：当 `inspect-source` 在 PDF、Office、图片等需要转换的输入中检测到
+表格信号时，自动推荐 `mineru-fastapi` + `table_quality: high` +
+`mineru_fastapi_backend: hybrid-auto-engine` + `markdown_assets` +
+`chunk-markers-dense`。已有 Markdown/HTML 表格不强制送 MinerU；它们只需要 table-safe
+postprocess 和 table-atomic KB profile。
+
 ## 参数影响分层
 
 | 层级 | 参数 | 是否改善表格质量 | 说明 |
