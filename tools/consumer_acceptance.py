@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -15,6 +16,7 @@ import tarfile
 import tempfile
 import threading
 import uuid
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -1547,6 +1549,242 @@ def _run_no_network_checks(
             "ok": fastapi_redaction_ok,
             "path": str(fastapi_probe_redaction),
             "error": "" if fastapi_redaction_ok else "mineru-fastapi output leaked fake endpoint or API key",
+        }
+    )
+
+    mineru_v4_input = work_root / "mineru-v4-input"
+    mineru_v4_input.mkdir(parents=True, exist_ok=True)
+    (mineru_v4_input / "sample.pdf").write_bytes(b"%PDF fake mineru v4 acceptance")
+    mineru_v4_output = work_root / "mineru-v4-handoff"
+    mineru_v4_redaction = work_root / "convert_v4_redaction.json"
+    v4_probe_json = work_root / "backend_probe_v4.json"
+    v4_probe_md = work_root / "backend_probe_v4.md"
+    v4_probe_redaction = work_root / "backend_probe_v4_redaction.json"
+    v4_zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(v4_zip_buffer, "w") as archive:
+        archive.writestr("full.md", "# MinerU v4 Acceptance\n\nConverted by fake platform API.\n")
+        archive.writestr("content_list.json", "[]")
+    v4_zip_payload = v4_zip_buffer.getvalue()
+    v4_captured: dict[str, Any] = {
+        "auth": [],
+        "paths": [],
+        "upload_auth": None,
+        "upload_calls": 0,
+        "poll_calls": 0,
+        "submit_body": {},
+    }
+
+    class MinerUV4Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0"))).decode("utf-8")
+            v4_captured["paths"].append(self.path)
+            v4_captured["auth"].append(self.headers.get("Authorization"))
+            if self.path == "/api/v4/file-urls/batch":
+                v4_captured["submit_body"] = json.loads(body)
+                raw = json.dumps(
+                    {
+                        "code": 0,
+                        "data": {
+                            "batch_id": "acceptance-v4-batch",
+                            "file_urls": [
+                                f"http://127.0.0.1:{self.server.server_port}/upload/sample.pdf?token=object-secret"
+                            ],
+                        },
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            self.send_response(404)
+            self.end_headers()
+
+        def do_PUT(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            v4_captured["paths"].append(self.path)
+            v4_captured["upload_auth"] = self.headers.get("Authorization")
+            v4_captured["upload_calls"] += 1
+            self.send_response(200)
+            self.end_headers()
+
+        def do_GET(self) -> None:  # noqa: N802
+            v4_captured["paths"].append(self.path)
+            if self.path == "/api/v4/extract-results/batch/acceptance-v4-batch":
+                v4_captured["auth"].append(self.headers.get("Authorization"))
+                v4_captured["poll_calls"] += 1
+                raw = json.dumps(
+                    {
+                        "code": 0,
+                        "data": {
+                            "extract_result": [
+                                {
+                                    "file_name": "sample.pdf",
+                                    "state": "done",
+                                    "full_zip_url": f"http://127.0.0.1:{self.server.server_port}/result/v4.zip?download=secret",
+                                }
+                            ]
+                        },
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            if self.path == "/result/v4.zip?download=secret":
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Length", str(len(v4_zip_payload)))
+                self.end_headers()
+                self.wfile.write(v4_zip_payload)
+                return
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, _format: str, *args: object) -> None:
+            return
+
+    v4_server = ThreadingHTTPServer(("127.0.0.1", 0), MinerUV4Handler)
+    v4_thread = threading.Thread(target=v4_server.serve_forever, daemon=True)
+    v4_thread.start()
+    try:
+        v4_base_url = f"http://127.0.0.1:{v4_server.server_port}"
+        v4_env = _minimal_env(
+            {
+                **env,
+                "DOC_TO_MD_BACKEND": "mineru-v4",
+                "MINERU_BASE_URL": v4_base_url,
+                "MINERU_API_KEY": "v4-secret",
+                "MINERU_TIMEOUT": "5",
+                "MINERU_POLL_INTERVAL": "0.1",
+                "MINERU_V4_MODEL_VERSION": "vlm",
+                "MINERU_V4_DATA_ID_PREFIX": "acceptance",
+            }
+        )
+        mineru_v4_result = _run_command(
+            [
+                python_executable,
+                str(convert_script),
+                "--input",
+                str(mineru_v4_input),
+                "--output",
+                str(mineru_v4_output),
+                "--redaction-report",
+                str(mineru_v4_redaction),
+                "--json",
+            ],
+            cwd=work_root,
+            env=v4_env,
+        )
+        v4_probe_result = _run_command(
+            [
+                python_executable,
+                str(convert_script),
+                "backend",
+                "probe",
+                "--backend",
+                "mineru-v4",
+                "--mineru-base-url",
+                f"{v4_base_url}/api/v4",
+                "--mineru-api-key",
+                "v4-secret",
+                "--network-check",
+                "--report-json",
+                str(v4_probe_json),
+                "--report-md",
+                str(v4_probe_md),
+                "--redaction-report",
+                str(v4_probe_redaction),
+                "--json",
+                "--fail-on-unavailable",
+            ],
+            cwd=work_root,
+            env=env,
+        )
+    finally:
+        v4_server.shutdown()
+        v4_server.server_close()
+        v4_thread.join(timeout=2)
+
+    _record_command_check(checks, "doc-to-md mineru-v4 async", mineru_v4_result, required_output='"ok": true')
+    _record_command_check(
+        checks,
+        "doc-to-md mineru-v4 backend probe",
+        v4_probe_result,
+        required_output='"selected_backend": "mineru-v4"',
+    )
+    v4_manifest = mineru_v4_output / "doc_manifest.json"
+    v4_markdown = mineru_v4_output / "documents" / "sample.md"
+    v4_quality = mineru_v4_output / "quality_report.json"
+    v4_runtime = mineru_v4_output / "runtime_report.json"
+    _record_file_check(checks, "mineru-v4 doc_manifest produced", v4_manifest)
+    _record_file_check(checks, "mineru-v4 markdown produced", v4_markdown)
+    _record_file_check(checks, "mineru-v4 quality_report produced", v4_quality)
+    _record_file_check(checks, "mineru-v4 runtime_report produced", v4_runtime)
+    for path in (v4_manifest, v4_markdown, v4_quality, v4_runtime, mineru_v4_redaction, v4_probe_json, v4_probe_md, v4_probe_redaction):
+        if path.exists():
+            produced.append(path)
+    if v4_markdown.exists():
+        markdown_text = v4_markdown.read_text(encoding="utf-8")
+        checks.append(
+            {
+                "name": "mineru-v4 markdown content",
+                "ok": "MinerU v4 Acceptance" in markdown_text,
+                "path": str(v4_markdown),
+                "error": "" if "MinerU v4 Acceptance" in markdown_text else "missing expected markdown",
+            }
+        )
+    v4_submit_body = v4_captured["submit_body"] if isinstance(v4_captured["submit_body"], dict) else {}
+    v4_files = v4_submit_body.get("files") if isinstance(v4_submit_body, dict) else []
+    v4_file_entry = v4_files[0] if isinstance(v4_files, list) and v4_files else {}
+    v4_protocol_ok = (
+        "/api/v4/file-urls/batch" in v4_captured["paths"]
+        and "/api/v4/extract-results/batch/acceptance-v4-batch" in v4_captured["paths"]
+        and "/result/v4.zip?download=secret" in v4_captured["paths"]
+        and v4_captured["upload_calls"] == 1
+        and v4_captured["upload_auth"] is None
+        and set(v4_captured["auth"]) == {"Bearer v4-secret"}
+        and v4_submit_body.get("model_version") == "vlm"
+        and "is_ocr" not in v4_submit_body
+        and isinstance(v4_file_entry, dict)
+        and v4_file_entry.get("is_ocr") is False
+    )
+    checks.append(
+        {
+            "name": "mineru-v4 async protocol exercised",
+            "ok": v4_protocol_ok,
+            "path": str(v4_manifest),
+            "error": "" if v4_protocol_ok else f"unexpected protocol trace: {v4_captured}",
+        }
+    )
+    v4_outputs = [
+        mineru_v4_result.get("stdout", ""),
+        v4_probe_result.get("stdout", ""),
+        v4_manifest.read_text(encoding="utf-8") if v4_manifest.exists() else "",
+        v4_markdown.read_text(encoding="utf-8") if v4_markdown.exists() else "",
+        v4_quality.read_text(encoding="utf-8") if v4_quality.exists() else "",
+        v4_runtime.read_text(encoding="utf-8") if v4_runtime.exists() else "",
+        mineru_v4_redaction.read_text(encoding="utf-8") if mineru_v4_redaction.exists() else "",
+        v4_probe_json.read_text(encoding="utf-8") if v4_probe_json.exists() else "",
+        v4_probe_md.read_text(encoding="utf-8") if v4_probe_md.exists() else "",
+        v4_probe_redaction.read_text(encoding="utf-8") if v4_probe_redaction.exists() else "",
+    ]
+    v4_combined_outputs = "\n".join(v4_outputs)
+    v4_redaction_ok = (
+        "v4-secret" not in v4_combined_outputs
+        and "object-secret" not in v4_combined_outputs
+        and "download=secret" not in v4_combined_outputs
+        and v4_base_url not in v4_combined_outputs
+    )
+    checks.append(
+        {
+            "name": "mineru-v4 reports omit endpoint and signed URLs",
+            "ok": v4_redaction_ok,
+            "path": str(v4_probe_redaction),
+            "error": "" if v4_redaction_ok else "mineru-v4 output leaked fake endpoint, API key, or signed URL",
         }
     )
 

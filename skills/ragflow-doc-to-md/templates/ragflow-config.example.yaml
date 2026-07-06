@@ -15,6 +15,7 @@ ragflow:
 doc_to_md:
   # Remote Hermes-agent deployments should pin the intended converter.
   # Use mineru-fastapi for MinerU 3.2+ protocol-v2 async services.
+  # Use mineru-v4 for the public MinerU v4 platform precision API.
   # Use auto only when local CLI discovery is intentionally allowed.
   backend: mineru-fastapi
 
@@ -23,6 +24,7 @@ mineru:
   cli_path: ${MINERU_CLI_PATH}
   cli_backend: pipeline
   # FastAPI v2 async example: https://mineru.example.internal
+  # MinerU v4 platform example: https://mineru.net or https://mineru.net/api/v4
   # Agent API example: https://mineru.net/api/v1/agent
   # Legacy sync multipart example: http://mineru.example.internal:8777/api/v1
   base_url: https://mineru.example.internal
@@ -32,6 +34,10 @@ mineru:
   verify_ssl: true
   # Use markdown_only for fast preview; use markdown_assets before formal KB ingestion.
   asset_mode: markdown_assets
+  # v4 platform model_version: pipeline, vlm, or MinerU-HTML.
+  v4_model_version: pipeline
+  v4_result_mode: full_zip
+  v4_data_id_prefix:
   language: ch
   page_range:
   enable_table: true

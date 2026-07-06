@@ -35,6 +35,13 @@ Do not pin `--mineru-fastapi-backend pipeline` when the goal is better table ext
 that preserves the standard backend and prevents `--table-quality high` from improving
 table structure.
 
+For the public MinerU v4 platform API, use `--backend mineru-v4` or the alias
+`--backend mineru-platform`. The same `--table-quality high` setting maps to
+`--mineru-v4-model-version vlm`; an explicit `MinerU-HTML` model is preserved for
+HTML-centric workflows. The v4 backend uses `/api/v4/file-urls/batch`, uploads to the
+returned pre-signed URLs without the bearer token, polls
+`/api/v4/extract-results/batch/{batch_id}`, and extracts Markdown from the returned zip.
+
 `adaptive` is the recommended first-pass command when the document is not yet understood.
 If source inspection finds table signals in conversion-required inputs such as PDF,
 Office, or images, `adaptive` now selects `mineru-fastapi`, `table_quality: high`,
@@ -46,7 +53,7 @@ Inputs:
 
 - Existing Markdown via `--mode passthrough`.
 - Plain text and simple HTML via the built-in converter.
-- Office/PDF/EPUB-like formats through `--backend mineru-cli` for an installed local MinerU binary, `--backend mineru` for MinerU Agent API, `--backend mineru-fastapi` for a self-hosted MinerU `mineru-api` service, `--backend mineru-sync` for synchronous multipart `/parse`, `--backend pandoc` when pandoc is installed, or `--backend remote --remote-url ...`.
+- Office/PDF/EPUB-like formats through `--backend mineru-cli` for an installed local MinerU binary, `--backend mineru` for MinerU Agent API, `--backend mineru-fastapi` for a self-hosted MinerU `mineru-api` service, `--backend mineru-v4` for the public MinerU v4 platform API, `--backend mineru-sync` for synchronous multipart `/parse`, `--backend pandoc` when pandoc is installed, or `--backend remote --remote-url ...`.
 
 Command examples:
 
@@ -56,6 +63,7 @@ python scripts/convert.py --input ./raw --output ./handoff --backend builtin
 python scripts/convert.py --input ./raw --output ./handoff --backend mineru-cli --mineru-cli-path /opt/mineru/bin/mineru
 python scripts/convert.py --input ./raw --output ./handoff --backend mineru
 python scripts/convert.py --input ./raw --output ./handoff --backend mineru-fastapi --mineru-base-url https://mineru.example.internal
+python scripts/convert.py pipeline --input ./raw --output ./handoff --backend mineru-v4 --mineru-base-url https://mineru.net --mineru-api-key "$MINERU_API_KEY" --mineru-v4-model-version vlm --mineru-asset-mode markdown_assets --postprocess-profile chunk-markers-dense --json
 python scripts/convert.py pipeline --input ./raw --output ./handoff --backend mineru-fastapi --mineru-base-url https://mineru.example.internal --mineru-asset-mode markdown_assets --postprocess-profile chunk-markers-dense
 python scripts/convert.py pipeline --input ./raw --output ./handoff --backend mineru-fastapi --mineru-base-url https://mineru.example.internal --table-quality high --mineru-asset-mode markdown_assets --postprocess-profile chunk-markers-dense
 python scripts/convert.py adaptive --input ./raw --output ./handoff --backend auto --json
@@ -89,9 +97,12 @@ mineru:
   poll_interval: 3
   verify_ssl: true
   asset_mode: markdown_assets
+  v4_model_version: pipeline
+  v4_result_mode: full_zip
+  v4_data_id_prefix:
 ```
 
-Config precedence for MinerU FastAPI settings is: `--mineru-base-url` overrides `MINERU_BASE_URL`, which overrides `mineru.base_url`; `--mineru-asset-mode` overrides `MINERU_ASSET_MODE`, which overrides `mineru.asset_mode`.
+Config precedence for MinerU settings is: `--mineru-base-url` overrides `MINERU_BASE_URL`, which overrides `mineru.base_url`; `--mineru-asset-mode` overrides `MINERU_ASSET_MODE`, which overrides `mineru.asset_mode`. v4 model options follow the same order with `--mineru-v4-model-version`, `MINERU_V4_MODEL_VERSION`, and `mineru.v4_model_version`.
 
 Local MinerU CLI conversion can be configured through the host agent environment. `auto` uses this first for PDF/Office/image files when a CLI is available:
 
@@ -131,6 +142,19 @@ MINERU_TIMEOUT=1800
 MINERU_POLL_INTERVAL=3
 ```
 
+Public MinerU v4 platform precision API calls use `mineru-v4`:
+
+```bash
+DOC_TO_MD_BACKEND=mineru-v4
+MINERU_BASE_URL=https://mineru.net
+MINERU_API_KEY=...
+MINERU_TIMEOUT=1800
+MINERU_POLL_INTERVAL=3
+MINERU_V4_MODEL_VERSION=pipeline
+MINERU_V4_RESULT_MODE=full_zip
+MINERU_V4_DATA_ID_PREFIX=case
+```
+
 For remote Hermes-agent deployments backed by a MinerU FastAPI service, set
 `DOC_TO_MD_BACKEND=mineru-fastapi` explicitly. Do not rely on `auto` in that topology:
 `auto` may intentionally prefer a local `mineru-cli` or another configured converter.
@@ -155,7 +179,7 @@ Notes:
 - Local image assets with hash-like or opaque filenames are renamed before manifest generation using deterministic nearby Markdown semantics, while existing readable names are preserved. Content hashes remain in `doc_manifest.json`, `artifact_index.json`, and `formal_handoff_manifest.json` for audit.
 - `artifact_index.json` embeds `ragflow_asset_semantics_v1` for local image assets when available: page, caption, nearby heading/context, semantic kind, bytes, hash, and semantic alias evidence.
 - When replacing a legacy preprocessor workflow, use `pipeline` for formal handoff generation, then review `ingest_readiness_report.json` and pass `doc_manifest.json`, `retrieval_hints.json`, and `ragflow_ingest_plan.yaml` to `ragflow-kb-build inspect-handoff` and dry-run before any live build.
-- For documents with complex tables, use `--backend mineru-fastapi --table-quality high` or `--table-quality auto`, plus `--postprocess-profile chunk-markers-dense`. `standard` keeps the compatible pipeline path; `--allow-table-quality-fallback` permits a degraded pipeline retry after high-accuracy resource or timeout failures.
+- For documents with complex tables, use `--backend mineru-fastapi --table-quality high` or `--backend mineru-v4 --table-quality high`, plus `--postprocess-profile chunk-markers-dense`. FastAPI high quality selects a high-accuracy backend; v4 high quality selects `model_version=vlm` unless `MinerU-HTML` was explicitly configured. `standard` keeps the compatible pipeline path; `--allow-table-quality-fallback` permits a degraded FastAPI pipeline retry after high-accuracy resource or timeout failures.
 - Use `compare-retained-package` when a host agent needs a read-only `ragflow_handoff_comparison_v1` report between a legacy retained ingestion package and a `pipeline` handoff. The command excludes obvious retained intermediate/raw/layout/span directories, normalizes chunk markers, blank lines, and image path differences for text similarity, and marks strict paired live A/B as `not_run` unless separate live evidence is supplied. It does not create or mutate RAGFlow KBs.
 - Use `compare-adaptive-summaries` to compare two existing adaptive run roots or `adaptive_summary.json` files without conversion, MinerU calls, RAGFlow mutation, or script-owned LLM calls. It emits `ragflow_adaptive_summary_comparison_v1` for language-source, backend, quality-gate, table-atomicity, warning-code, and image-naming review.
 - Use `postprocess` with profiles `none`, `safe`, `ocr`, `chunk-markers`, `chunk-markers-conservative`, `chunk-markers-dense`, or `chunk-markers-ragflux-like` when Markdown needs deterministic cleanup before ingestion. `chunk-markers` remains the conservative compatibility alias; `chunk-markers-dense` adds page/table/image boundaries, and `chunk-markers-ragflux-like` also adds list boundaries for migration comparison. Use `--output` for non-destructive writes; `--write` is required for in-place rewrites.
@@ -173,5 +197,6 @@ Notes:
 - The `mineru-cli` backend runs a local MinerU executable as `mineru -b <backend> -p <source> -o <temp-output>` and reads the Markdown file it produces. Set the path with `MINERU_CLI_PATH`, `mineru.cli_path`, or `--mineru-cli-path`; default CLI backend is `pipeline`.
 - The `mineru` and `mineru-agent` backends use the Agent parsing API shape: create parse task at `/parse/file`, upload to signed URL, poll `/parse/{task_id}`, then download Markdown.
 - The `mineru-fastapi` backend uses MinerU 3.2+ protocol version 2: submit multipart files to `/tasks`, poll `/tasks/{task_id}`, then read Markdown from `/tasks/{task_id}/result`.
+- The `mineru-v4` and `mineru-platform` backends use the public MinerU v4 platform protocol: request upload URLs at `/api/v4/file-urls/batch`, upload local files with `PUT`, poll `/api/v4/extract-results/batch/{batch_id}`, then extract Markdown and optional safe assets from `full_zip_url`.
 - The `mineru-sync` and `mineru-local` backends are legacy compatibility paths for synchronous multipart `/parse` services. They expect Markdown text or JSON containing `markdown`, `content`, `text`, `result`, or `markdown_url`.
 - The remote backend expects JSON with `filename` and base64 `content_base64`, and returns `markdown` or `content`.

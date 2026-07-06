@@ -64,6 +64,8 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("mineru service markdown produced", check_names)
         self.assertIn("doc-to-md mineru-sync env backend", check_names)
         self.assertIn("mineru-sync service markdown produced", check_names)
+        self.assertIn("doc-to-md mineru-v4 env backend", check_names)
+        self.assertIn("mineru-v4 service markdown produced", check_names)
         self.assertIn("doc-to-md backend probe", check_names)
         self.assertIn("doc-to-md backend probe partial failure", check_names)
         self.assertIn("doc-to-md backend warmup", check_names)

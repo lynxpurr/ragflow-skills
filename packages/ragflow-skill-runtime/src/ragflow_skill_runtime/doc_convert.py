@@ -52,6 +52,25 @@ class MinerUFastAPIError(DocConvertError):
         self.retryable = retryable
 
 
+class MinerUV4Error(DocConvertError):
+    """Raised for categorized MinerU v4 platform protocol failures."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str,
+        stage: str | None = None,
+        http_status: int | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(message)
+        self.category = category
+        self.stage = stage
+        self.http_status = http_status
+        self.retryable = retryable
+
+
 MARKDOWN_EXTENSIONS = {".md", ".markdown", ".mdown", ".mkd"}
 TEXT_EXTENSIONS = {".txt", ".text"}
 HTML_EXTENSIONS = {".html", ".htm"}
@@ -101,6 +120,8 @@ CONVERSION_BACKENDS = (
     "mineru",
     "mineru-agent",
     "mineru-fastapi",
+    "mineru-v4",
+    "mineru-platform",
     "mineru-sync",
     "mineru-local",
 )
@@ -124,6 +145,22 @@ MINERU_FASTAPI_BACKENDS = {
 MINERU_FASTAPI_BACKEND_ALIASES = {
     "hybrid-engine": "hybrid-auto-engine",
     "vlm-engine": "vlm-auto-engine",
+}
+MINERU_V4_MODEL_VERSIONS = {"pipeline", "vlm", "MinerU-HTML"}
+MINERU_V4_RESULT_MODES = {"full_zip"}
+MINERU_V4_DONE_STATES = {"done", "completed", "success", "succeeded"}
+MINERU_V4_FAILED_STATES = {"failed", "fail", "error"}
+MINERU_V4_PENDING_STATES = {
+    "waiting",
+    "waiting-file",
+    "waiting_file",
+    "uploading",
+    "pending",
+    "running",
+    "processing",
+    "queued",
+    "extracting",
+    "converting",
 }
 MINERU_FASTAPI_MAX_IMAGE_BYTES = 512 * 1024 * 1024
 MARKDOWN_IMAGE_RE = re.compile(r"(!\[[^\]]*]\()([^)]+)(\))")
@@ -1718,6 +1755,516 @@ def _mineru_fastapi_error_message(data: Mapping[str, Any]) -> str:
     return "unknown error"
 
 
+def _normalize_mineru_v4_model_version(value: str | None) -> tuple[str, str]:
+    requested = str(value or "pipeline").strip() or "pipeline"
+    canonical_by_lower = {item.lower(): item for item in MINERU_V4_MODEL_VERSIONS}
+    canonical = canonical_by_lower.get(requested.lower())
+    if canonical is None:
+        allowed = ", ".join(sorted(MINERU_V4_MODEL_VERSIONS))
+        raise DocConvertError(f"MinerU v4 model_version must be one of: {allowed}")
+    return requested, canonical
+
+
+def _normalize_mineru_v4_result_mode(value: str | None) -> str:
+    mode = str(value or "full_zip").strip().lower().replace("-", "_") or "full_zip"
+    if mode not in MINERU_V4_RESULT_MODES:
+        allowed = ", ".join(sorted(MINERU_V4_RESULT_MODES))
+        raise DocConvertError(f"MinerU v4 result mode must be one of: {allowed}")
+    return mode
+
+
+def _mineru_v4_api_root(base_url: str) -> str:
+    root = str(base_url or "").strip().rstrip("/")
+    if not root:
+        raise DocConvertError("mineru-v4 backend requires --mineru-base-url or MINERU_BASE_URL")
+    parsed = urlparse(root)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise DocConvertError("MinerU v4 base URL must use http or https")
+    if parsed.path.rstrip("/") == "/api/v4":
+        return root
+    if parsed.path.rstrip("/").endswith("/api/v4"):
+        return root
+    return f"{root}/api/v4"
+
+
+def _mineru_v4_file_urls_url(base_url: str) -> str:
+    return f"{_mineru_v4_api_root(base_url)}/file-urls/batch"
+
+
+def _mineru_v4_results_url(base_url: str, batch_id: str) -> str:
+    return f"{_mineru_v4_api_root(base_url)}/extract-results/batch/{batch_id}"
+
+
+def _mineru_v4_http_category(code: int, *, stage: str) -> str:
+    if code in {401, 403}:
+        return "auth_failed"
+    if code == 404:
+        return "wrong_endpoint_shape"
+    if code in {408, 504}:
+        return "request_timeout"
+    if stage == "upload":
+        return "failed_upload"
+    if stage == "poll":
+        return "failed_polling"
+    return "protocol_error"
+
+
+def _mineru_v4_request_json_once(
+    url: str,
+    *,
+    method: str = "GET",
+    payload: Mapping[str, Any] | None = None,
+    api_key: str | None = None,
+    timeout: float = 120.0,
+    verify_ssl: bool = True,
+    stage: str,
+) -> Mapping[str, Any]:
+    headers = {"Accept": "application/json"}
+    body = None
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except error.HTTPError as exc:
+        detail = _trim_remote_detail(exc.read().decode("utf-8", errors="replace"))
+        category = _mineru_v4_http_category(exc.code, stage=stage)
+        raise MinerUV4Error(
+            f"MinerU v4 {stage} failed with HTTP {exc.code}: {detail}",
+            category=category,
+            stage=stage,
+            http_status=exc.code,
+            retryable=exc.code in MINERU_FASTAPI_RETRY_HTTP_CODES,
+        ) from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise MinerUV4Error(
+            f"MinerU v4 {stage} timed out after {timeout:g}s",
+            category="request_timeout",
+            stage=stage,
+            retryable=True,
+        ) from exc
+    except error.URLError as exc:
+        reason = exc.reason
+        category = "request_timeout" if isinstance(reason, (TimeoutError, socket.timeout)) else "transient_remote_error"
+        if stage == "upload":
+            category = "failed_upload"
+        if stage == "poll":
+            category = "failed_polling"
+        raise MinerUV4Error(
+            f"MinerU v4 {stage} request failed: {reason}",
+            category=category,
+            stage=stage,
+            retryable=category in {"request_timeout", "transient_remote_error", "failed_polling"},
+        ) from exc
+    except OSError as exc:
+        raise MinerUV4Error(
+            f"MinerU v4 {stage} request failed: {exc}",
+            category="transient_remote_error",
+            stage=stage,
+            retryable=True,
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise MinerUV4Error(
+            f"MinerU v4 {stage} response is not valid JSON",
+            category="protocol_error",
+            stage=stage,
+        ) from exc
+    if not isinstance(data, Mapping):
+        raise MinerUV4Error(
+            f"MinerU v4 {stage} response must be a JSON object",
+            category="protocol_error",
+            stage=stage,
+        )
+    code = data.get("code")
+    if code not in (None, 0, "0", 200, "200"):
+        message = data.get("msg") or data.get("message") or data.get("error") or "unknown MinerU v4 error"
+        raise MinerUV4Error(
+            f"MinerU v4 {stage} response returned code {code}: {message}",
+            category="protocol_error",
+            stage=stage,
+        )
+    return data
+
+
+def _extract_mineru_v4_data(data: Mapping[str, Any]) -> Mapping[str, Any]:
+    nested = data.get("data")
+    if isinstance(nested, Mapping):
+        return nested
+    return data
+
+
+def _extract_mineru_v4_batch_id(data: Mapping[str, Any]) -> str:
+    payload = _extract_mineru_v4_data(data)
+    batch_id = payload.get("batch_id")
+    if isinstance(batch_id, str) and batch_id:
+        return batch_id
+    raise MinerUV4Error(
+        "MinerU v4 submit response missing batch_id",
+        category="missing_batch_id",
+        stage="submit",
+    )
+
+
+def _extract_mineru_v4_upload_urls(data: Mapping[str, Any], *, file_count: int) -> list[str]:
+    payload = _extract_mineru_v4_data(data)
+    raw_urls = payload.get("file_urls") or payload.get("upload_urls") or payload.get("urls")
+    if not isinstance(raw_urls, list) or len(raw_urls) < file_count:
+        raise MinerUV4Error(
+            "MinerU v4 submit response missing upload URLs",
+            category="missing_upload_urls",
+            stage="submit",
+        )
+    urls: list[str] = []
+    for item in raw_urls[:file_count]:
+        if isinstance(item, str) and item:
+            urls.append(item)
+        elif isinstance(item, Mapping):
+            value = item.get("url") or item.get("file_url") or item.get("upload_url")
+            if isinstance(value, str) and value:
+                urls.append(value)
+    if len(urls) < file_count:
+        raise MinerUV4Error(
+            "MinerU v4 submit response missing upload URLs",
+            category="missing_upload_urls",
+            stage="submit",
+        )
+    return urls
+
+
+def _mineru_v4_data_id(source: SourceDocument, prefix: str | None) -> str:
+    stem = _safe_asset_stem(source)
+    if prefix and str(prefix).strip():
+        safe_prefix = re.sub(r"[^A-Za-z0-9._-]+", "-", str(prefix).strip()).strip(".-") or "document"
+        return f"{safe_prefix}-{stem}"
+    return f"{stem}-{uuid.uuid4().hex[:12]}"
+
+
+def _mineru_v4_upload_file(upload_url: str, source: SourceDocument, *, timeout: float, verify_ssl: bool) -> None:
+    req = request.Request(upload_url, data=source.path.read_bytes(), method="PUT")
+    try:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
+            if resp.status not in (200, 201, 204):
+                raise MinerUV4Error(
+                    f"MinerU v4 upload failed with HTTP {resp.status}",
+                    category="failed_upload",
+                    stage="upload",
+                    http_status=resp.status,
+                )
+    except error.HTTPError as exc:
+        detail = _trim_remote_detail(exc.read().decode("utf-8", errors="replace"))
+        raise MinerUV4Error(
+            f"MinerU v4 upload failed with HTTP {exc.code}: {detail}",
+            category="failed_upload",
+            stage="upload",
+            http_status=exc.code,
+            retryable=exc.code in MINERU_FASTAPI_RETRY_HTTP_CODES,
+        ) from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise MinerUV4Error(
+            f"MinerU v4 upload timed out after {timeout:g}s",
+            category="failed_upload",
+            stage="upload",
+            retryable=True,
+        ) from exc
+    except error.URLError as exc:
+        raise MinerUV4Error(
+            f"MinerU v4 upload failed: {exc.reason}",
+            category="failed_upload",
+            stage="upload",
+            retryable=True,
+        ) from exc
+
+
+def _mineru_v4_result_items(data: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    payload = _extract_mineru_v4_data(data)
+    for key in ("extract_result", "extract_results", "results", "files", "data"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, Mapping)]
+    if any(key in payload for key in ("state", "status", "full_zip_url", "file_name")):
+        return [payload]
+    return []
+
+
+def _mineru_v4_result_state(item: Mapping[str, Any]) -> str:
+    state = item.get("state") or item.get("status")
+    if not isinstance(state, str) or not state:
+        return "unknown"
+    return state
+
+
+def _mineru_v4_result_error(item: Mapping[str, Any]) -> str:
+    for key in ("err_msg", "error", "message", "detail", "msg"):
+        value = item.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return "unknown error"
+
+
+def _mineru_v4_zip_url(item: Mapping[str, Any]) -> str:
+    for key in ("full_zip_url", "full_zip", "zip_url", "result_zip_url", "download_url", "url"):
+        value = item.get(key)
+        if isinstance(value, str) and value:
+            return value
+    raise MinerUV4Error(
+        "MinerU v4 completed result missing full_zip_url",
+        category="missing_zip_url",
+        stage="result",
+    )
+
+
+def _mineru_v4_download_zip(url: str, *, timeout: float, verify_ssl: bool) -> bytes:
+    req = request.Request(url, headers={"Accept": "application/zip,application/octet-stream,*/*"})
+    try:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
+            return resp.read()
+    except error.HTTPError as exc:
+        detail = _trim_remote_detail(exc.read().decode("utf-8", errors="replace"))
+        raise MinerUV4Error(
+            f"MinerU v4 zip download failed with HTTP {exc.code}: {detail}",
+            category="bad_zip",
+            stage="result",
+            http_status=exc.code,
+        ) from exc
+    except error.URLError as exc:
+        raise MinerUV4Error(
+            f"MinerU v4 zip download failed: {exc.reason}",
+            category="bad_zip",
+            stage="result",
+        ) from exc
+
+
+def _safe_mineru_v4_zip_name(name: str) -> PurePosixPath:
+    raw = str(name or "").replace("\\", "/")
+    if not raw or re.match(r"^[A-Za-z]:", raw):
+        raise MinerUV4Error(
+            f"MinerU v4 result zip contains unsafe zip entry: {name}",
+            category="bad_zip",
+            stage="result",
+        )
+    pure = PurePosixPath(raw)
+    if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
+        raise MinerUV4Error(
+            f"MinerU v4 result zip contains unsafe zip entry: {name}",
+            category="bad_zip",
+            stage="result",
+        )
+    return pure
+
+
+def _mineru_v4_markdown_entry(names: list[str]) -> str | None:
+    safe_names = [_safe_mineru_v4_zip_name(name).as_posix() for name in names]
+    for target in ("full.md", "auto/full.md"):
+        if target in safe_names:
+            return target
+    for name in safe_names:
+        if name.endswith("/full.md"):
+            return name
+    markdown_entries = [name for name in safe_names if Path(name).suffix.lower() in MARKDOWN_EXTENSIONS]
+    return sorted(markdown_entries)[0] if markdown_entries else None
+
+
+def _write_mineru_v4_zip_assets(
+    archive: zipfile.ZipFile,
+    *,
+    source: SourceDocument,
+    asset_output_dir: str | Path,
+    asset_document_stem: str | None,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    output_root = Path(asset_output_dir)
+    document_stem = _safe_asset_document_stem(asset_document_stem, source=source)
+    image_dir = output_root / "images" / document_stem
+    artifact_dir = output_root / "artifacts" / document_stem
+    staging_image_dir = output_root / "images" / f".{document_stem}.tmp-{uuid.uuid4().hex}"
+    staging_artifact_dir = output_root / "artifacts" / f".{document_stem}.tmp-{uuid.uuid4().hex}"
+    saved_images: list[dict[str, str]] = []
+    saved_artifacts: list[dict[str, str]] = []
+    used_image_names: set[str] = set()
+    used_artifact_names: set[str] = set()
+
+    def unique_name(raw_name: str, *, default: str, used: set[str]) -> str:
+        base = _safe_asset_filename(raw_name, default=default) if Path(raw_name).suffix.lower() in IMAGE_EXTENSIONS else _safe_json_artifact_filename(raw_name, default=default)
+        candidate = base
+        counter = 2
+        while candidate in used:
+            path = Path(base)
+            candidate = f"{path.stem}-{counter}{path.suffix}"
+            counter += 1
+        used.add(candidate)
+        return candidate
+
+    try:
+        for index, name in enumerate(archive.namelist(), start=1):
+            safe_name = _safe_mineru_v4_zip_name(name).as_posix()
+            suffix = Path(safe_name).suffix.lower()
+            if suffix in IMAGE_EXTENSIONS:
+                content = archive.read(name)
+                filename = unique_name(safe_name, default=f"image-{index}{suffix}", used=used_image_names)
+                staging_image_dir.mkdir(parents=True, exist_ok=True)
+                destination = staging_image_dir / filename
+                destination.write_bytes(content)
+                relative = (Path("images") / document_stem / filename).as_posix()
+                saved_images.append(
+                    {
+                        "source_key": safe_name,
+                        "path": relative,
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                        "bytes": str(len(content)),
+                    }
+                )
+            elif suffix == ".json":
+                content = archive.read(name)
+                filename = unique_name(safe_name, default=f"artifact-{index}.json", used=used_artifact_names)
+                staging_artifact_dir.mkdir(parents=True, exist_ok=True)
+                destination = staging_artifact_dir / filename
+                destination.write_bytes(content)
+                relative = (Path("artifacts") / document_stem / filename).as_posix()
+                saved_artifacts.append(
+                    {
+                        "source_key": safe_name,
+                        "path": relative,
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                        "bytes": str(len(content)),
+                    }
+                )
+        if saved_images:
+            image_dir.parent.mkdir(parents=True, exist_ok=True)
+            if image_dir.exists():
+                shutil.rmtree(image_dir)
+            staging_image_dir.rename(image_dir)
+        elif staging_image_dir.exists():
+            shutil.rmtree(staging_image_dir)
+        if saved_artifacts:
+            artifact_dir.parent.mkdir(parents=True, exist_ok=True)
+            if artifact_dir.exists():
+                shutil.rmtree(artifact_dir)
+            staging_artifact_dir.rename(artifact_dir)
+        elif staging_artifact_dir.exists():
+            shutil.rmtree(staging_artifact_dir)
+    except Exception:
+        if staging_image_dir.exists():
+            shutil.rmtree(staging_image_dir)
+        if staging_artifact_dir.exists():
+            shutil.rmtree(staging_artifact_dir)
+        raise
+    return saved_images, saved_artifacts
+
+
+def _safe_json_artifact_filename(value: str, *, default: str) -> str:
+    name = PurePosixPath(str(value or default).replace("\\", "/")).name or default
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip(".-") or default
+    if Path(safe).suffix.lower() != ".json":
+        safe = f"{Path(safe).stem or 'artifact'}.json"
+    return safe
+
+
+def _mineru_v4_asset_policy(
+    *,
+    asset_mode: str,
+    saved_images: list[dict[str, str]] | None = None,
+    saved_artifacts: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    images = list(saved_images or [])
+    artifacts = list(saved_artifacts or [])
+    sidecar_status = "not_requested" if asset_mode == "markdown_only" else "saved"
+    if asset_mode != "markdown_only" and not images and not artifacts:
+        sidecar_status = "requested_empty"
+    return {
+        "mode": asset_mode,
+        "sidecar_status": sidecar_status,
+        "requested": {
+            "full_zip": True,
+            "save_images": asset_mode == "markdown_assets",
+            "save_json_artifacts": asset_mode == "markdown_assets",
+        },
+        "saved": {
+            "images": bool(images),
+            "image_count": len(images),
+            "image_paths": [item["path"] for item in images[:50]],
+            "image_assets": [_public_image_asset_record(item) for item in images[:50]],
+            "json_artifacts": bool(artifacts),
+            "json_artifact_count": len(artifacts),
+            "json_artifact_paths": [item["path"] for item in artifacts[:50]],
+        },
+        "manifest_assets": bool(images),
+        "reason": (
+            "Markdown-only release path; MinerU v4 zip assets were not materialized."
+            if asset_mode == "markdown_only"
+            else "Markdown asset mode extracted safe image and JSON artifacts from the MinerU v4 result zip."
+        ),
+    }
+
+
+def _extract_mineru_v4_zip_markdown(
+    payload: bytes,
+    *,
+    source: SourceDocument,
+    asset_mode: str,
+    asset_output_dir: str | Path | None,
+    asset_document_stem: str | None,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            names = archive.namelist()
+            safe_names = [_safe_mineru_v4_zip_name(name).as_posix() for name in names]
+            markdown_entry = _mineru_v4_markdown_entry(names)
+            if markdown_entry is None:
+                raise MinerUV4Error(
+                    "MinerU v4 result zip does not contain Markdown",
+                    category="missing_markdown",
+                    stage="result",
+                )
+            markdown = archive.read(markdown_entry).decode("utf-8")
+            if not markdown.strip():
+                raise MinerUV4Error(
+                    "MinerU v4 result zip Markdown is empty",
+                    category="missing_markdown",
+                    stage="result",
+                )
+            saved_images: list[dict[str, str]] = []
+            saved_artifacts: list[dict[str, str]] = []
+            if asset_mode == "markdown_assets":
+                if asset_output_dir is None:
+                    raise DocConvertError("MinerU v4 markdown_assets mode requires an asset output directory")
+                saved_images, saved_artifacts = _write_mineru_v4_zip_assets(
+                    archive,
+                    source=source,
+                    asset_output_dir=asset_output_dir,
+                    asset_document_stem=asset_document_stem,
+                )
+                markdown = _rewrite_mineru_fastapi_asset_references(markdown, saved_images)
+            artifact_summary = {
+                "entry_count": len(safe_names),
+                "markdown_entry": markdown_entry,
+                "image_entry_count": sum(1 for name in safe_names if Path(name).suffix.lower() in IMAGE_EXTENSIONS),
+                "json_entry_count": sum(1 for name in safe_names if Path(name).suffix.lower() == ".json"),
+                "saved_json_artifact_count": len(saved_artifacts),
+            }
+            return markdown, artifact_summary, _mineru_v4_asset_policy(
+                asset_mode=asset_mode,
+                saved_images=saved_images,
+                saved_artifacts=saved_artifacts,
+            )
+    except MinerUV4Error:
+        raise
+    except zipfile.BadZipFile as exc:
+        raise MinerUV4Error(
+            "MinerU v4 result zip is invalid",
+            category="bad_zip",
+            stage="result",
+        ) from exc
+    except UnicodeDecodeError as exc:
+        raise MinerUV4Error(
+            "MinerU v4 result Markdown is not valid UTF-8",
+            category="missing_markdown",
+            stage="result",
+        ) from exc
+
+
 def _probe_mineru_fastapi_backend(
     *,
     backend: str,
@@ -1847,6 +2394,268 @@ def _probe_mineru_fastapi_backend(
         [str(message)],
         checks,
     )
+
+
+def _probe_mineru_v4_backend(
+    *,
+    backend: str,
+    base_url: str | None,
+    api_key: str | None,
+    network_check: bool,
+    timeout: float,
+    verify_ssl: bool = True,
+) -> dict[str, Any]:
+    checks = [
+        {"name": "url_configured", "ok": bool(base_url)},
+        {"name": "api_key_configured", "ok": bool(api_key)},
+    ]
+    if not base_url or not api_key:
+        reasons = []
+        if not base_url:
+            reasons.append("MinerU v4 endpoint URL is not configured")
+        if not api_key:
+            reasons.append("MinerU v4 API key is not configured")
+        return _backend_probe_entry(backend, "not_configured", reasons, checks)
+    valid, reason = _valid_http_url(base_url)
+    checks.append({"name": "http_url", "ok": valid})
+    if not valid:
+        return _backend_probe_entry(backend, "wrong_protocol", [reason], checks)
+    try:
+        root = _mineru_v4_api_root(base_url)
+    except DocConvertError as exc:
+        checks.append({"name": "v4_url_shape", "ok": False})
+        return _backend_probe_entry(backend, "wrong_protocol", [str(exc)], checks)
+    checks.append({"name": "v4_url_shape", "ok": root.rstrip("/").endswith("/api/v4")})
+    checks.append({"name": "verify_ssl", "ok": bool(verify_ssl)})
+    if network_check:
+        checks.append({"name": "network_check", "ok": None, "skipped": True})
+        return _backend_probe_entry(
+            backend,
+            "available",
+            [
+                "MinerU v4 has no stable lightweight health endpoint in the public contract; "
+                "network probe is protocol-limited, run backend warmup for end-to-end validation"
+            ],
+            checks,
+        )
+    checks.append({"name": "network_check", "ok": None, "skipped": True})
+    return _backend_probe_entry(
+        backend,
+        "available",
+        [f"MinerU v4 endpoint shape accepted at {_redacted_endpoint(root)}; network check disabled"],
+        checks,
+    )
+
+
+def mineru_v4_convert(
+    source: SourceDocument,
+    *,
+    base_url: str,
+    api_key: str | None = None,
+    timeout: float = 300.0,
+    poll_interval: float = 3.0,
+    verify_ssl: bool = True,
+    language: str = "ch",
+    page_range: str | None = None,
+    enable_table: bool = True,
+    is_ocr: bool = False,
+    enable_formula: bool = True,
+    asset_mode: str = "markdown_only",
+    asset_output_dir: str | Path | None = None,
+    asset_document_stem: str | None = None,
+    model_version: str | None = None,
+    result_mode: str | None = "full_zip",
+    data_id_prefix: str | None = None,
+    remote_attempts: list[dict[str, Any]] | None = None,
+) -> str:
+    """Convert one file through the public MinerU v4 platform batch API."""
+
+    if timeout <= 0:
+        raise DocConvertError("MinerU v4 timeout must be greater than zero")
+    if poll_interval <= 0:
+        raise DocConvertError("MinerU v4 poll interval must be greater than zero")
+    if not api_key:
+        raise DocConvertError("mineru-v4 backend requires --mineru-api-key or MINERU_API_KEY")
+    normalized_asset_mode = _normalize_mineru_fastapi_asset_mode(asset_mode)
+    if normalized_asset_mode != "markdown_only" and asset_output_dir is None:
+        raise DocConvertError("MinerU v4 markdown_assets mode requires an asset output directory")
+    requested_model, effective_model = _normalize_mineru_v4_model_version(model_version)
+    normalized_result_mode = _normalize_mineru_v4_result_mode(result_mode)
+    root = _mineru_v4_api_root(base_url)
+    data_id = _mineru_v4_data_id(source, data_id_prefix)
+    file_entry: dict[str, Any] = {
+        "name": source.path.name,
+        "data_id": data_id,
+        "is_ocr": bool(is_ocr),
+    }
+    if page_range:
+        file_entry["page_ranges"] = page_range
+    payload: dict[str, Any] = {
+        "files": [file_entry],
+        "model_version": effective_model,
+        "enable_formula": bool(enable_formula),
+        "enable_table": bool(enable_table),
+        "language": language,
+    }
+
+    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    attempt: dict[str, Any] = {
+        "source_path": source.source_path,
+        "backend": "mineru-v4",
+        "endpoint": _redacted_endpoint(root),
+        "requested_mineru_v4_model_version": requested_model,
+        "effective_mineru_v4_model_version": effective_model,
+        "mineru_v4_result_mode": normalized_result_mode,
+        "data_id": data_id,
+        "status": "failed",
+        "task_id": None,
+        "batch_id": None,
+        "poll_count": 0,
+        "status_history": [],
+        "final_status": None,
+        "submit_duration_ms": None,
+        "upload_duration_ms": None,
+        "result_fetch_duration_ms": None,
+        "asset_download_duration_ms": None,
+        "total_duration_ms": None,
+        "timeout_seconds": timeout,
+        "poll_interval_seconds": poll_interval,
+        "http_attempts": 0,
+        "retry_count": 0,
+        "verify_ssl": bool(verify_ssl),
+        "upload": {"count": 0, "status": "not_started"},
+        "zip_download": {"status": "not_started"},
+        "artifact_summary": {},
+        "asset_policy": _mineru_v4_asset_policy(asset_mode=normalized_asset_mode),
+        "error_category": None,
+        "error": None,
+        "failed_stage": None,
+    }
+    stage = "submit"
+
+    def remaining_timeout() -> float:
+        return min(max(deadline - time.monotonic(), 0.1), 120.0)
+
+    try:
+        submit_started = time.monotonic()
+        attempt["http_attempts"] = int(attempt["http_attempts"]) + 1
+        create = _mineru_v4_request_json_once(
+            _mineru_v4_file_urls_url(root),
+            method="POST",
+            payload=payload,
+            api_key=api_key,
+            timeout=remaining_timeout(),
+            verify_ssl=verify_ssl,
+            stage="submit",
+        )
+        attempt["submit_duration_ms"] = round((time.monotonic() - submit_started) * 1000, 3)
+        batch_id = _extract_mineru_v4_batch_id(create)
+        upload_urls = _extract_mineru_v4_upload_urls(create, file_count=1)
+        attempt["batch_id"] = batch_id
+        attempt["task_id"] = batch_id
+
+        stage = "upload"
+        upload_started = time.monotonic()
+        attempt["http_attempts"] = int(attempt["http_attempts"]) + 1
+        _mineru_v4_upload_file(upload_urls[0], source, timeout=remaining_timeout(), verify_ssl=verify_ssl)
+        attempt["upload"] = {"count": 1, "status": "success"}
+        attempt["upload_duration_ms"] = round((time.monotonic() - upload_started) * 1000, 3)
+
+        last_state = "unknown"
+        while time.monotonic() < deadline:
+            stage = "poll"
+            attempt["http_attempts"] = int(attempt["http_attempts"]) + 1
+            status_payload = _mineru_v4_request_json_once(
+                _mineru_v4_results_url(root, batch_id),
+                api_key=api_key,
+                timeout=remaining_timeout(),
+                verify_ssl=verify_ssl,
+                stage="poll",
+            )
+            items = _mineru_v4_result_items(status_payload)
+            if not items:
+                raise MinerUV4Error(
+                    "MinerU v4 poll response missing extract_result entries",
+                    category="failed_polling",
+                    stage="poll",
+                )
+            item = items[0]
+            state = _mineru_v4_result_state(item)
+            normalized_state = state.lower()
+            last_state = state
+            attempt["poll_count"] = int(attempt["poll_count"]) + 1
+            attempt["final_status"] = state
+            status_history = attempt["status_history"]
+            if isinstance(status_history, list):
+                status_history.append(state)
+            if normalized_state in MINERU_V4_DONE_STATES:
+                stage = "result"
+                result_started = time.monotonic()
+                zip_url = _mineru_v4_zip_url(item)
+                zip_started = time.monotonic()
+                attempt["http_attempts"] = int(attempt["http_attempts"]) + 1
+                zip_bytes = _mineru_v4_download_zip(zip_url, timeout=remaining_timeout(), verify_ssl=verify_ssl)
+                attempt["zip_download"] = {
+                    "status": "success",
+                    "bytes": len(zip_bytes),
+                    "duration_ms": round((time.monotonic() - zip_started) * 1000, 3),
+                }
+                markdown, artifact_summary, asset_policy = _extract_mineru_v4_zip_markdown(
+                    zip_bytes,
+                    source=source,
+                    asset_mode=normalized_asset_mode,
+                    asset_output_dir=asset_output_dir,
+                    asset_document_stem=asset_document_stem,
+                )
+                attempt["result_fetch_duration_ms"] = round((time.monotonic() - result_started) * 1000, 3)
+                if normalized_asset_mode == "markdown_assets":
+                    attempt["asset_download_duration_ms"] = attempt["result_fetch_duration_ms"]
+                attempt["artifact_summary"] = artifact_summary
+                attempt["asset_policy"] = asset_policy
+                attempt["status"] = "success"
+                return markdown
+            if normalized_state in MINERU_V4_FAILED_STATES:
+                message = _mineru_v4_result_error(item)
+                raise MinerUV4Error(
+                    f"MinerU v4 parsing failed: {message}",
+                    category="failed_polling",
+                    stage="poll",
+                )
+            if normalized_state not in MINERU_V4_PENDING_STATES:
+                raise MinerUV4Error(
+                    f"MinerU v4 status response returned unknown state: {state}",
+                    category="failed_polling",
+                    stage="poll",
+                )
+            time.sleep(min(poll_interval, max(deadline - time.monotonic(), 0.0)))
+
+        raise MinerUV4Error(
+            f"MinerU v4 parsing timed out after {timeout:g}s; last state: {last_state}",
+            category="request_timeout",
+            stage="poll",
+        )
+    except MinerUV4Error as exc:
+        attempt["status"] = "timeout" if exc.category == "request_timeout" else "failed"
+        attempt["error_category"] = exc.category
+        attempt["http_status"] = exc.http_status
+        attempt["failed_stage"] = exc.stage or stage
+        attempt["error"] = str(exc)
+        if exc.category == "failed_upload":
+            attempt["upload"] = {"count": 0, "status": "failed"}
+        if exc.category == "bad_zip":
+            attempt["zip_download"] = {"status": "failed"}
+        raise
+    except DocConvertError as exc:
+        attempt["status"] = "failed"
+        attempt["error_category"] = "protocol_error"
+        attempt["failed_stage"] = stage
+        attempt["error"] = str(exc)
+        raise
+    finally:
+        attempt["total_duration_ms"] = round((time.monotonic() - started) * 1000, 3)
+        if remote_attempts is not None:
+            remote_attempts.append(attempt)
 
 
 def mineru_fastapi_convert(
@@ -2259,6 +3068,15 @@ def _probe_single_backend(
         )
     if backend == "mineru-fastapi":
         return _probe_mineru_fastapi_backend(
+            backend=backend,
+            base_url=mineru_base_url,
+            api_key=mineru_api_key,
+            network_check=network_check,
+            timeout=timeout,
+            verify_ssl=mineru_verify_ssl,
+        )
+    if backend in {"mineru-v4", "mineru-platform"}:
+        return _probe_mineru_v4_backend(
             backend=backend,
             base_url=mineru_base_url,
             api_key=mineru_api_key,
@@ -2886,8 +3704,22 @@ def _failure_class_from_remote_attempt(item: Mapping[str, Any]) -> str | None:
         return "resource_failure"
     if category == "auth_failed":
         return "credential_failure"
-    if category in {"protocol_error", "result_missing", "result_empty", "task_failed"}:
+    if category in {
+        "protocol_error",
+        "result_missing",
+        "result_empty",
+        "task_failed",
+        "wrong_endpoint_shape",
+        "missing_batch_id",
+        "missing_upload_urls",
+        "failed_polling",
+        "missing_zip_url",
+        "bad_zip",
+        "missing_markdown",
+    }:
         return "protocol_failure"
+    if category == "failed_upload":
+        return "resource_failure"
     if status == "failed":
         return "conversion_failure"
     return None
@@ -2948,7 +3780,7 @@ def _infer_runtime_context(
             context["backend"] = "unknown"
     has_local_process = any(str(item.get("backend")) == "mineru-cli" for item in process_attempts)
     has_persistent_mineru = any(
-        str(item.get("backend")) in {"mineru", "mineru-agent", "mineru-fastapi", "mineru-sync", "mineru-local"}
+        str(item.get("backend")) in {"mineru", "mineru-agent", "mineru-fastapi", "mineru-v4", "mineru-platform", "mineru-sync", "mineru-local"}
         for item in remote_attempts
     )
     if "local_process_startup_included" not in context:
@@ -3427,6 +4259,9 @@ def convert_source_to_markdown(
     mineru_cli_backend: str | None = None,
     mineru_fastapi_backend: str | None = None,
     mineru_fastapi_server_url: str | None = None,
+    mineru_v4_model_version: str | None = None,
+    mineru_v4_result_mode: str | None = "full_zip",
+    mineru_v4_data_id_prefix: str | None = None,
     asset_output_dir: str | Path | None = None,
     asset_document_stem: str | None = None,
     mineru_language: str = "ch",
@@ -3581,6 +4416,36 @@ def convert_source_to_markdown(
             if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
                 return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
             raise
+    if backend in {"mineru-v4", "mineru-platform"}:
+        if not mineru_base_url:
+            if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
+            raise DocConvertError("mineru-v4 backend requires --mineru-base-url or MINERU_BASE_URL")
+        try:
+            return mineru_v4_convert(
+                source,
+                base_url=mineru_base_url,
+                api_key=mineru_api_key,
+                timeout=mineru_timeout,
+                poll_interval=mineru_poll_interval,
+                verify_ssl=mineru_verify_ssl,
+                language=mineru_language,
+                page_range=mineru_page_range,
+                enable_table=mineru_enable_table,
+                is_ocr=mineru_is_ocr,
+                enable_formula=mineru_enable_formula,
+                asset_mode=mineru_asset_mode,
+                asset_output_dir=asset_output_dir,
+                asset_document_stem=asset_document_stem,
+                model_version=mineru_v4_model_version,
+                result_mode=mineru_v4_result_mode,
+                data_id_prefix=mineru_v4_data_id_prefix,
+                remote_attempts=remote_attempts,
+            ), warnings
+        except DocConvertError:
+            if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
+            raise
     if backend in {"mineru-sync", "mineru-local"}:
         if not mineru_base_url:
             if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
@@ -3610,7 +4475,7 @@ def convert_source_to_markdown(
     attempted = f"; attempted fallback: {'; '.join(warnings)}" if warnings else ""
     raise DocConvertError(
         f"no converter available for {source.source_path} ({suffix or 'no extension'}); "
-        f"builtin supports {supported}, or configure pandoc/remote/mineru-cli/mineru/mineru-fastapi/mineru-sync backend{attempted}"
+        f"builtin supports {supported}, or configure pandoc/remote/mineru-cli/mineru/mineru-fastapi/mineru-v4/mineru-sync backend{attempted}"
     )
 
 
@@ -3631,6 +4496,9 @@ def warmup_conversion_backend(
     mineru_cli_backend: str | None = None,
     mineru_fastapi_backend: str | None = None,
     mineru_fastapi_server_url: str | None = None,
+    mineru_v4_model_version: str | None = None,
+    mineru_v4_result_mode: str | None = "full_zip",
+    mineru_v4_data_id_prefix: str | None = None,
     mineru_language: str = "ch",
     mineru_page_range: str | None = None,
     mineru_enable_table: bool = True,
@@ -3685,6 +4553,9 @@ def warmup_conversion_backend(
                     mineru_cli_backend=mineru_cli_backend,
                     mineru_fastapi_backend=mineru_fastapi_backend,
                     mineru_fastapi_server_url=mineru_fastapi_server_url,
+                    mineru_v4_model_version=mineru_v4_model_version,
+                    mineru_v4_result_mode=mineru_v4_result_mode,
+                    mineru_v4_data_id_prefix=mineru_v4_data_id_prefix,
                     asset_output_dir=asset_output_dir,
                     mineru_language=mineru_language,
                     mineru_page_range=mineru_page_range,

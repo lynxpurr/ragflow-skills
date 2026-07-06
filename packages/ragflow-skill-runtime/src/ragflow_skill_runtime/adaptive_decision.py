@@ -22,6 +22,8 @@ BACKENDS = {
     "mineru-agent",
     "mineru-cli",
     "mineru-fastapi",
+    "mineru-platform",
+    "mineru-v4",
     "mineru-local",
     "mineru-sync",
     "pandoc",
@@ -160,6 +162,11 @@ def _apply_overrides(decision: dict[str, Any], overrides: Mapping[str, Any]) -> 
         if value:
             recommendation["mineru_fastapi_backend"] = value
             applied["mineru_fastapi_backend"] = value
+    if "mineru_v4_model_version" in overrides:
+        value = str(overrides.get("mineru_v4_model_version") or "").strip()
+        if value:
+            recommendation["mineru_v4_model_version"] = value
+            applied["mineru_v4_model_version"] = value
     if "mineru_asset_mode" in overrides:
         value = str(overrides.get("mineru_asset_mode") or "").strip()
         if value in {"markdown_only", "markdown_assets"}:
@@ -187,6 +194,7 @@ def make_pipeline_decision(
     requested_table_quality: str | None = None,
     requested_postprocess_profile: str | None = None,
     requested_mineru_fastapi_backend: str | None = None,
+    requested_mineru_v4_model_version: str | None = None,
     requested_mineru_asset_mode: str | None = None,
     policy: str = "formal",
     backend_probe_status: str | None = None,
@@ -280,6 +288,17 @@ def make_pipeline_decision(
         if requested_quality:
             table_quality = requested_quality
             reasons.append({"code": "requested_table_quality", "message": "User-requested table quality is preserved."})
+        elif backend in {"mineru-v4", "mineru-platform"} and source_table_signal:
+            table_quality = "high"
+            reasons.append(
+                {
+                    "code": "source_table_v4_high_accuracy",
+                    "message": (
+                        "Source inspection detected table signals and the MinerU v4 platform backend was requested; "
+                        "high-quality table extraction is enabled with model_version=vlm."
+                    ),
+                }
+            )
         elif backend == "mineru-fastapi" and source_table_signal and fastapi_probe_green:
             table_quality = "high"
             reasons.append(
@@ -355,12 +374,12 @@ def make_pipeline_decision(
                 "message": "Image-rich content should be reviewed with asset-upload-plan before live KB build.",
             }
         )
-    if table_quality == "high" and backend != "mineru-fastapi":
+    if table_quality == "high" and backend not in {"mineru-fastapi", "mineru-v4", "mineru-platform"}:
         warnings.append(
             {
                 "code": "high_table_quality_requires_fastapi",
                 "severity": "review",
-                "message": "High table quality is only applied by the MinerU FastAPI backend.",
+                "message": "High table quality is only applied by MinerU FastAPI or MinerU v4 backends.",
             }
         )
 
@@ -372,6 +391,15 @@ def make_pipeline_decision(
         effective_mineru_fastapi_backend = "hybrid-auto-engine"
     else:
         effective_mineru_fastapi_backend = "pipeline"
+    if requested_mineru_v4_model_version:
+        if table_quality == "high" and requested_mineru_v4_model_version != "MinerU-HTML":
+            effective_mineru_v4_model_version = "vlm"
+        else:
+            effective_mineru_v4_model_version = requested_mineru_v4_model_version
+    elif table_quality == "high" and backend in {"mineru-v4", "mineru-platform"}:
+        effective_mineru_v4_model_version = "vlm"
+    else:
+        effective_mineru_v4_model_version = "pipeline"
 
     recommendation = {
         "backend": backend,
@@ -379,6 +407,7 @@ def make_pipeline_decision(
         "postprocess_profile": postprocess,
         "mineru_asset_mode": asset_mode,
         "mineru_fastapi_backend": effective_mineru_fastapi_backend,
+        "mineru_v4_model_version": effective_mineru_v4_model_version,
         "allow_table_quality_fallback": bool(allow_table_quality_fallback),
         "kb_profile": profile,
     }
@@ -442,6 +471,9 @@ def pipeline_args_from_decision(
     fastapi_backend = recommendation.get("mineru_fastapi_backend")
     if fastapi_backend:
         args.extend(["--mineru-fastapi-backend", str(fastapi_backend)])
+    v4_model = recommendation.get("mineru_v4_model_version")
+    if v4_model:
+        args.extend(["--mineru-v4-model-version", str(v4_model)])
     if recommendation.get("allow_table_quality_fallback"):
         args.append("--allow-table-quality-fallback")
     args.append("--json")

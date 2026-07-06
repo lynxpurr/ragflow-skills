@@ -65,6 +65,7 @@ from .doc_convert import (
     make_doc_manifest_payload,
     make_doc_runtime_report_payload,
     mineru_fastapi_convert,
+    mineru_v4_convert,
     probe_conversion_backends,
     render_backend_probe_markdown,
     render_backend_warmup_markdown,

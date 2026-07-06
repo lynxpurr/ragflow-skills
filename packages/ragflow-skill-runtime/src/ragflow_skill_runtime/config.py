@@ -62,6 +62,9 @@ class MineruConfig:
     cli_backend: str | None = None
     fastapi_backend: str | None = None
     fastapi_server_url: str | None = None
+    v4_model_version: str | None = None
+    v4_result_mode: str | None = None
+    v4_data_id_prefix: str | None = None
     timeout: float | None = None
     poll_interval: float | None = None
     language: str | None = None
@@ -272,6 +275,9 @@ def _mineru_from_mapping(data: Mapping[str, Any]) -> MineruConfig:
         cli_backend=_pick(merged, "cli_backend", "mineru_cli_backend"),
         fastapi_backend=_pick(merged, "fastapi_backend", "mineru_fastapi_backend"),
         fastapi_server_url=_pick(merged, "fastapi_server_url", "mineru_fastapi_server_url", "server_url"),
+        v4_model_version=_pick(merged, "v4_model_version", "mineru_v4_model_version"),
+        v4_result_mode=_pick(merged, "v4_result_mode", "mineru_v4_result_mode"),
+        v4_data_id_prefix=_pick(merged, "v4_data_id_prefix", "mineru_v4_data_id_prefix"),
         timeout=float(timeout) if timeout is not None else None,
         poll_interval=float(poll_interval) if poll_interval is not None else None,
         language=_pick(merged, "language"),
@@ -316,6 +322,9 @@ def _merge_mineru(base: MineruConfig, override: MineruConfig) -> MineruConfig:
         cli_backend=override.cli_backend or base.cli_backend,
         fastapi_backend=override.fastapi_backend or base.fastapi_backend,
         fastapi_server_url=override.fastapi_server_url or base.fastapi_server_url,
+        v4_model_version=override.v4_model_version or base.v4_model_version,
+        v4_result_mode=override.v4_result_mode or base.v4_result_mode,
+        v4_data_id_prefix=override.v4_data_id_prefix or base.v4_data_id_prefix,
         timeout=override.timeout if override.timeout is not None else base.timeout,
         poll_interval=override.poll_interval if override.poll_interval is not None else base.poll_interval,
         language=override.language or base.language,
@@ -401,6 +410,9 @@ def load_skill_config(
             cli_backend=env_map.get("MINERU_CLI_BACKEND"),
             fastapi_backend=env_map.get("MINERU_FASTAPI_BACKEND"),
             fastapi_server_url=env_map.get("MINERU_FASTAPI_SERVER_URL"),
+            v4_model_version=env_map.get("MINERU_V4_MODEL_VERSION"),
+            v4_result_mode=env_map.get("MINERU_V4_RESULT_MODE"),
+            v4_data_id_prefix=env_map.get("MINERU_V4_DATA_ID_PREFIX"),
             timeout=float(env_map["MINERU_TIMEOUT"]) if env_map.get("MINERU_TIMEOUT") else None,
             poll_interval=float(env_map["MINERU_POLL_INTERVAL"])
             if env_map.get("MINERU_POLL_INTERVAL")

@@ -135,7 +135,7 @@ RAGFlow may be reachable through:
 
 Public scripts do not start or manage RAGFlow. They only call an explicitly configured endpoint.
 
-Pandoc and `mineru-cli` are treated as local binaries. Configure MinerU CLI with `MINERU_CLI_PATH`, `mineru.cli_path`, or `mineru` on `PATH`; `MINERU_CLI_BACKEND` defaults to `pipeline`. MinerU HTTP services are configured through the shared config file or `MINERU_*` environment variables. The `mineru` and `mineru-agent` backends expect the MinerU Agent API protocol: create a task at `/parse/file`, upload to the returned URL, poll `/parse/{task_id}`, then download Markdown. The `mineru-sync` and `mineru-local` backends support self-hosted synchronous multipart `/parse` services on localhost, LAN, VPN, or HTTPS.
+Pandoc and `mineru-cli` are treated as local binaries. Configure MinerU CLI with `MINERU_CLI_PATH`, `mineru.cli_path`, or `mineru` on `PATH`; `MINERU_CLI_BACKEND` defaults to `pipeline`. MinerU HTTP services are configured through the shared config file or `MINERU_*` environment variables. The `mineru` and `mineru-agent` backends expect the MinerU Agent API protocol: create a task at `/parse/file`, upload to the returned URL, poll `/parse/{task_id}`, then download Markdown. The `mineru-fastapi` backend expects self-hosted protocol-v2 `/tasks`. The `mineru-v4` and `mineru-platform` backends expect the public platform protocol under `/api/v4/file-urls/batch` and `/api/v4/extract-results/batch/{batch_id}`; do not point `mineru-fastapi` at the v4 platform URL. The `mineru-sync` and `mineru-local` backends support self-hosted synchronous multipart `/parse` services on localhost, LAN, VPN, or HTTPS.
 
 ### MinerU CLI Localization
 
@@ -186,7 +186,7 @@ python ragflow-doc-to-md/scripts/convert.py \
   --json
 ```
 
-The `mineru-cli` backend runs `mineru -b <backend> -p <source> -o <temp-output>` and reads the produced Markdown. The `mineru` backend uses the Agent parsing API shape: create a parse task, upload the local file to the returned signed URL, poll the task, and download the returned Markdown URL. Use `--backend mineru-sync` for synchronous multipart `/parse` services.
+The `mineru-cli` backend runs `mineru -b <backend> -p <source> -o <temp-output>` and reads the produced Markdown. The `mineru` backend uses the Agent parsing API shape: create a parse task, upload the local file to the returned signed URL, poll the task, and download the returned Markdown URL. Use `--backend mineru-v4` for the public platform precision API, where `--table-quality high` selects `--mineru-v4-model-version vlm` unless `MinerU-HTML` was explicitly configured. Use `--backend mineru-sync` for synchronous multipart `/parse` services.
 
 Generic remote converter:
 

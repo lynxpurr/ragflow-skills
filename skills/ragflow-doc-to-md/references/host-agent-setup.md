@@ -12,8 +12,8 @@ For a copy-paste prompt that end users can give to their own host agent, use `us
 - Use `templates/ragflow-config.example.yaml` as the config template.
 - Put real config in a stable host-agent path and point scripts to it with `RAGFLOW_CONFIG` or `--config`.
 - Treat RAGFlow and MinerU as external services. Do not start or supervise them from these skills.
-- Distinguish MinerU execution modes before testing conversion. The `mineru-fastapi` backend supports MinerU 3.2+ FastAPI protocol v2: submit files to `/tasks`, poll `/tasks/{task_id}`, then read Markdown from `/tasks/{task_id}/result`. The `mineru-cli` backend runs a local MinerU binary. The `mineru` and `mineru-agent` backends support the MinerU Agent API shape: create a parse task with `/parse/file`, upload to the returned URL, poll `/parse/{task_id}`, then download Markdown. The `mineru-sync` and `mineru-local` backends are legacy compatibility paths for synchronous multipart `/parse` services.
-- For a remote MinerU FastAPI service, set `doc_to_md.backend: mineru-fastapi` explicitly. Use `auto` only when local `mineru-cli` discovery is intentionally allowed. Do not set `doc_to_md.backend: mineru` for a FastAPI v2 or synchronous multipart MinerU service.
+- Distinguish MinerU execution modes before testing conversion. The `mineru-fastapi` backend supports MinerU 3.2+ FastAPI protocol v2: submit files to `/tasks`, poll `/tasks/{task_id}`, then read Markdown from `/tasks/{task_id}/result`. The `mineru-v4` and `mineru-platform` backends support the public MinerU v4 platform API: request upload URLs at `/api/v4/file-urls/batch`, upload files with `PUT`, poll `/api/v4/extract-results/batch/{batch_id}`, then extract Markdown from `full_zip_url`. The `mineru-cli` backend runs a local MinerU binary. The `mineru` and `mineru-agent` backends support the MinerU Agent API shape: create a parse task with `/parse/file`, upload to the returned URL, poll `/parse/{task_id}`, then download Markdown. The `mineru-sync` and `mineru-local` backends are legacy compatibility paths for synchronous multipart `/parse` services.
+- For a remote MinerU FastAPI service, set `doc_to_md.backend: mineru-fastapi` explicitly. For the public MinerU v4 platform API, set `doc_to_md.backend: mineru-v4` or `mineru-platform` explicitly. Use `auto` only when local `mineru-cli` discovery is intentionally allowed. Do not set `doc_to_md.backend: mineru` for a FastAPI v2, v4 platform, or synchronous multipart MinerU service.
 - Do not patch `scripts/_vendor` inside release artifacts. New backend support must be implemented in the source runtime package and then re-vendored by the release builder.
 - Keep all E2E artifacts in a temporary or user-approved workspace, and report paths at the end.
 
@@ -28,7 +28,7 @@ Recommended real config paths:
 
 The config file may contain `${ENV_VAR}` placeholders. Put secret values in the host environment, secret store, or mounted secret path.
 
-Config precedence for the MinerU FastAPI endpoint is: `--mineru-base-url` overrides `MINERU_BASE_URL`, which overrides `mineru.base_url` in the config file.
+Config precedence for MinerU endpoints is: `--mineru-base-url` overrides `MINERU_BASE_URL`, which overrides `mineru.base_url` in the config file. v4 model settings follow the same order: `--mineru-v4-model-version`, `MINERU_V4_MODEL_VERSION`, then `mineru.v4_model_version`.
 
 ## Sanitized Reports And Redaction Sidecars
 
@@ -52,6 +52,7 @@ ragflow:
 doc_to_md:
   # Remote Hermes-agent deployments should pin the intended converter.
   # Use mineru-fastapi for MinerU 3.2+ protocol-v2 async services.
+  # Use mineru-v4 for the public MinerU v4 platform precision API.
   # Use auto only when local CLI discovery is intentionally allowed.
   backend: mineru-fastapi
 
@@ -60,6 +61,7 @@ mineru:
   cli_path: ${MINERU_CLI_PATH}
   cli_backend: pipeline
   # FastAPI v2 async example: https://mineru.example.internal
+  # MinerU v4 platform example: https://mineru.net or https://mineru.net/api/v4
   # Agent API example: https://mineru.net/api/v1/agent
   # Legacy sync multipart example: http://mineru.example.internal:8777/api/v1
   base_url: https://mineru.example.internal
@@ -68,6 +70,9 @@ mineru:
   poll_interval: 3
   verify_ssl: true
   asset_mode: markdown_assets
+  v4_model_version: pipeline
+  v4_result_mode: full_zip
+  v4_data_id_prefix:
   language: ch
   page_range:
   enable_table: true
@@ -99,7 +104,7 @@ Before live E2E:
    - local CLI path through `MINERU_CLI_PATH`, `mineru.cli_path`, or `mineru` on `PATH`; or
    - `MINERU_BASE_URL`
    - `MINERU_API_KEY`
-   - whether the service implements MinerU Agent API or synchronous multipart `/parse`
+   - whether the service implements MinerU FastAPI v2, MinerU v4 platform, MinerU Agent API, or synchronous multipart `/parse`
    - **Note on CLI discovery**: `command -v mineru` and `pip list` both fail when MinerU is installed inside an isolated virtual environment (e.g. `~/tools/mineru/bin/mineru`). Do not report "not found" from these checks alone. When `MINERU_CLI_PATH` is unset and `command -v mineru` returns nothing, do a broad filesystem search (`find ~/tools ~/.local/bin ~/bin /opt -name 'mineru' -type f`) before concluding it is absent. This is a common false negative in real host-agent environments.
 5. Use LAN, VPN, or HTTPS endpoints by default. Use localhost only for an intentional single-machine debug setup.
 
@@ -148,6 +153,10 @@ python ragflow-doc-to-md/scripts/convert.py pipeline \
 For complex table documents on MinerU FastAPI, add `--table-quality high` for an explicit
 high-accuracy pass, or `--table-quality auto` when the host should promote only formal
 PDF/Office/image candidates.
+
+For the public MinerU v4 platform API, use `--backend mineru-v4` with the same formal
+handoff shape. `--table-quality high` selects `--mineru-v4-model-version vlm` unless the
+user explicitly configured `MinerU-HTML`.
 
 When the source shape is unknown, run the deterministic adaptive entrypoint first. Use
 `--decision-only` when the user wants to review parameters before conversion:
@@ -298,7 +307,7 @@ python ragflow-query/scripts/query.py \
   --json
 ```
 
-For PDF/Office/image E2E, use `--backend mineru-fastapi` when the service implements MinerU FastAPI protocol v2. Keep `--backend auto` only when a local MinerU CLI is configured and should be preferred. Use `--backend mineru-cli` to force local CLI, `--backend mineru` when the service implements the MinerU Agent API, or `--backend mineru-sync` only for legacy synchronous multipart `/parse`. If no compatible CLI or service protocol can be identified, report the uncertainty and skip the MinerU test rather than guessing.
+For PDF/Office/image E2E, use `--backend mineru-fastapi` when the service implements MinerU FastAPI protocol v2, or `--backend mineru-v4` when it is the public MinerU v4 platform API. Keep `--backend auto` only when a local MinerU CLI is configured and should be preferred. Use `--backend mineru-cli` to force local CLI, `--backend mineru` when the service implements the MinerU Agent API, or `--backend mineru-sync` only for legacy synchronous multipart `/parse`. If no compatible CLI or service protocol can be identified, report the uncertainty and skip the MinerU test rather than guessing.
 
 For formal `markdown_assets` handoffs, expect local image references to use readable semantic filenames when MinerU or another converter returns hash-like names. Do not treat the absence of hash filenames as lost provenance; content hashes remain in the public manifest and rich sidecars.
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 import subprocess
@@ -8,6 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -1548,6 +1550,312 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertIn(b'name="end_page_id"', body)
         self.assertIn(b"4", body)
         self.assertEqual(captured["status_calls"], 1)
+
+    def test_convert_mineru_v4_backend_from_environment(self) -> None:
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w") as archive:
+            archive.writestr("full.md", "# MinerU v4 CLI\n\nConverted by fake platform API.\n")
+        zip_payload = zip_buffer.getvalue()
+        captured: dict[str, object] = {"poll_calls": 0}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0"))
+                captured["path"] = self.path
+                captured["auth"] = self.headers.get("Authorization")
+                captured["body"] = json.loads(self.rfile.read(length).decode("utf-8"))
+                raw = json.dumps(
+                    {
+                        "code": 0,
+                        "data": {
+                            "batch_id": "batch-v4-cli",
+                            "file_urls": [
+                                f"http://127.0.0.1:{self.server.server_port}/upload/paper.pdf?token=object-secret"
+                            ],
+                        },
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_PUT(self) -> None:  # noqa: N802
+                captured["upload_auth"] = self.headers.get("Authorization")
+                captured["upload_body"] = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                self.send_response(200)
+                self.end_headers()
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/api/v4/extract-results/batch/batch-v4-cli":
+                    captured["poll_calls"] = int(captured["poll_calls"]) + 1
+                    raw = json.dumps(
+                        {
+                            "code": 0,
+                            "data": {
+                                "extract_result": [
+                                    {
+                                        "file_name": "paper.pdf",
+                                        "state": "completed",
+                                        "full_zip_url": f"http://127.0.0.1:{self.server.server_port}/result.zip?download=secret",
+                                    }
+                                ]
+                            },
+                        }
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                if self.path == "/result.zip?download=secret":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/zip")
+                    self.send_header("Content-Length", str(len(zip_payload)))
+                    self.end_headers()
+                    self.wfile.write(zip_payload)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                input_dir = root / "input"
+                output_dir = root / "handoff"
+                input_dir.mkdir()
+                (input_dir / "paper.pdf").write_bytes(b"%PDF fake v4 cli")
+                env = _env()
+                env.update(
+                    {
+                        "DOC_TO_MD_BACKEND": "mineru-v4",
+                        "MINERU_BASE_URL": f"http://127.0.0.1:{server.server_port}/api/v4",
+                        "MINERU_API_KEY": "v4-secret",
+                        "MINERU_TIMEOUT": "5",
+                        "MINERU_POLL_INTERVAL": "0.01",
+                        "MINERU_LANGUAGE": "en",
+                        "MINERU_PAGE_RANGE": "1-2",
+                        "MINERU_ENABLE_TABLE": "false",
+                        "MINERU_IS_OCR": "true",
+                        "MINERU_ENABLE_FORMULA": "false",
+                        "MINERU_V4_MODEL_VERSION": "MinerU-HTML",
+                        "MINERU_V4_RESULT_MODE": "full_zip",
+                        "MINERU_V4_DATA_ID_PREFIX": "case",
+                    }
+                )
+
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(CONVERT_SCRIPT),
+                        "--input",
+                        str(input_dir),
+                        "--output",
+                        str(output_dir),
+                        "--json",
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    env=env,
+                )
+
+                payload = json.loads(result.stdout)
+                markdown = (output_dir / "documents" / "paper.md").read_text(encoding="utf-8")
+                runtime_report = json.loads((output_dir / "runtime_report.json").read_text(encoding="utf-8"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(payload["ok"])
+        self.assertIn("# MinerU v4 CLI", markdown)
+        self.assertEqual(captured["path"], "/api/v4/file-urls/batch")
+        self.assertEqual(captured["auth"], "Bearer v4-secret")
+        self.assertIsNone(captured["upload_auth"])
+        self.assertEqual(captured["upload_body"], b"%PDF fake v4 cli")
+        request_body = captured["body"]
+        self.assertIsInstance(request_body, dict)
+        self.assertEqual(request_body["model_version"], "MinerU-HTML")
+        self.assertEqual(request_body["language"], "en")
+        self.assertEqual(request_body["enable_table"], False)
+        self.assertNotIn("is_ocr", request_body)
+        self.assertEqual(request_body["enable_formula"], False)
+        self.assertEqual(request_body["files"][0]["data_id"], "case-paper")
+        self.assertEqual(request_body["files"][0]["is_ocr"], True)
+        self.assertEqual(request_body["files"][0]["page_ranges"], "1-2")
+        attempt = runtime_report["remote_attempts"][0]
+        self.assertEqual(attempt["backend"], "mineru-v4")
+        self.assertEqual(attempt["batch_id"], "batch-v4-cli")
+        self.assertEqual(attempt["effective_mineru_v4_model_version"], "MinerU-HTML")
+        self.assertEqual(attempt["artifact_summary"]["markdown_entry"], "full.md")
+        context = runtime_report["performance"]["runtime_context"]
+        self.assertEqual(context["mineru_v4_model_version"], "MinerU-HTML")
+        self.assertEqual(context["mineru_v4_result_mode"], "full_zip")
+        self.assertEqual(captured["poll_calls"], 1)
+
+    def test_table_quality_high_maps_v4_to_vlm_model(self) -> None:
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w") as archive:
+            archive.writestr("full.md", "# V4 Table\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n")
+        zip_payload = zip_buffer.getvalue()
+        captured: dict[str, object] = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                captured["body"] = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))).decode("utf-8"))
+                raw = json.dumps(
+                    {
+                        "code": 0,
+                        "data": {
+                            "batch_id": "batch-v4-table",
+                            "file_urls": [f"http://127.0.0.1:{self.server.server_port}/upload"],
+                        },
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_PUT(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                self.send_response(200)
+                self.end_headers()
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/api/v4/extract-results/batch/batch-v4-table":
+                    raw = json.dumps(
+                        {
+                            "code": 0,
+                            "data": {
+                                "extract_result": [
+                                    {
+                                        "file_name": "paper.pdf",
+                                        "state": "success",
+                                        "full_zip_url": f"http://127.0.0.1:{self.server.server_port}/result.zip",
+                                    }
+                                ]
+                            },
+                        }
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                if self.path == "/result.zip":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/zip")
+                    self.send_header("Content-Length", str(len(zip_payload)))
+                    self.end_headers()
+                    self.wfile.write(zip_payload)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                input_dir = root / "input"
+                output_dir = root / "handoff"
+                input_dir.mkdir()
+                (input_dir / "paper.pdf").write_bytes(b"%PDF fake v4 table")
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(CONVERT_SCRIPT),
+                        "--input",
+                        str(input_dir),
+                        "--output",
+                        str(output_dir),
+                        "--backend",
+                        "mineru-platform",
+                        "--mineru-base-url",
+                        f"http://127.0.0.1:{server.server_port}",
+                        "--mineru-api-key",
+                        "v4-secret",
+                        "--mineru-timeout",
+                        "5",
+                        "--mineru-poll-interval",
+                        "0.01",
+                        "--table-quality",
+                        "high",
+                        "--json",
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    env=_env(),
+                )
+                payload = json.loads(result.stdout)
+                runtime_report = json.loads((output_dir / "runtime_report.json").read_text(encoding="utf-8"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["table_quality"]["configured_backend"], "mineru-platform")
+        self.assertEqual(payload["table_quality"]["effective_mineru_v4_model_version"], "vlm")
+        self.assertTrue(payload["table_quality"]["high_accuracy_model_requested"])
+        request_body = captured["body"]
+        self.assertIsInstance(request_body, dict)
+        self.assertEqual(request_body["model_version"], "vlm")
+        attempt = runtime_report["remote_attempts"][0]
+        self.assertEqual(attempt["backend"], "mineru-v4")
+        self.assertEqual(attempt["effective_mineru_v4_model_version"], "vlm")
+        context = runtime_report["performance"]["runtime_context"]
+        self.assertEqual(context["mineru_v4_model_version"], "vlm")
+
+    def test_backend_probe_mineru_v4_is_protocol_limited_without_network(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(CONVERT_SCRIPT),
+                "backend",
+                "probe",
+                "--backend",
+                "mineru-v4",
+                "--mineru-base-url",
+                "https://mineru.example.test/api/v4",
+                "--mineru-api-key",
+                "probe-secret",
+                "--network-check",
+                "--json",
+                "--fail-on-unavailable",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_env(),
+        )
+        payload = json.loads(result.stdout)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["selected_backend"], "mineru-v4")
+        self.assertEqual(payload["backends"][0]["status"], "available")
+        self.assertTrue(any("protocol-limited" in reason for reason in payload["backends"][0]["reasons"]))
+        network_checks = [item for item in payload["backends"][0]["checks"] if item["name"] == "network_check"]
+        self.assertTrue(network_checks[0]["skipped"])
 
     def test_table_quality_auto_promotes_fastapi_pdf_to_high_accuracy_backend(self) -> None:
         captured: dict[str, object] = {"body": b""}

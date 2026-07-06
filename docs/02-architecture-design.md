@@ -221,7 +221,8 @@ ragflow:
 doc_to_md:
   # Keep auto unless a specific converter is required.
   # Auto uses local mineru-cli first when available, then other configured backends.
-  # Use mineru/mineru-agent for Agent API; use mineru-sync/mineru-local for sync multipart /parse.
+  # Use mineru/mineru-agent for Agent API; mineru-v4 for the public platform API;
+  # use mineru-sync/mineru-local for sync multipart /parse.
   backend: auto
 
 mineru:
@@ -229,6 +230,7 @@ mineru:
   cli_path: ${MINERU_CLI_PATH}
   cli_backend: pipeline
   # Agent API example: https://mineru.net/api/v1/agent
+  # v4 platform example: https://mineru.net or https://mineru.net/api/v4
   # Sync multipart example: http://mineru.internal:8777/api/v1
   base_url: https://mineru.net/api/v1/agent
   api_key: ${MINERU_API_KEY}
@@ -238,6 +240,9 @@ mineru:
   enable_table: true
   is_ocr: false
   enable_formula: true
+  v4_model_version: pipeline
+  v4_result_mode: full_zip
+  v4_data_id_prefix:
 ```
 
 Core environment variables:
@@ -253,11 +258,11 @@ Core environment variables:
 | `RAGFLOW_SKILL_RUNTIME_PATH` | Optional development-time source override for `ragflow_skill_runtime`. |
 | `RAGFLOW_LLM_BASE_URL` | Optional OpenAI-compatible LLM endpoint for script-owned synthesis. |
 | `RAGFLOW_LLM_API_KEY` | Optional LLM API key. |
-| `DOC_TO_MD_BACKEND` | Document converter backend: `auto`, `builtin`, `pandoc`, `remote`, `mineru-cli`, `mineru`, `mineru-agent`, `mineru-sync`, or `mineru-local`. |
+| `DOC_TO_MD_BACKEND` | Document converter backend: `auto`, `builtin`, `pandoc`, `remote`, `mineru-cli`, `mineru`, `mineru-agent`, `mineru-fastapi`, `mineru-v4`, `mineru-platform`, `mineru-sync`, or `mineru-local`. |
 | `DOC_TO_MD_REMOTE_URL` | Generic remote converter endpoint. |
 | `DOC_TO_MD_REMOTE_API_KEY` | Generic remote converter bearer token. |
 | `DOC_TO_MD_TIMEOUT` | Generic remote converter timeout in seconds. |
-| `MINERU_BASE_URL` | MinerU service base URL. Use an Agent API base for `mineru` / `mineru-agent`, or a sync multipart service root for `mineru-sync` / `mineru-local`. |
+| `MINERU_BASE_URL` | MinerU service base URL. Use an Agent API base for `mineru` / `mineru-agent`, a FastAPI v2 root for `mineru-fastapi`, a platform root or `/api/v4` URL for `mineru-v4`, or a sync multipart service root for `mineru-sync` / `mineru-local`. |
 | `MINERU_API_KEY` | MinerU API key. |
 | `MINERU_CLI_PATH` | Optional local MinerU CLI path. If omitted, `auto` can still discover `mineru` on `PATH`. |
 | `MINERU_CLI_BACKEND` | Optional local MinerU CLI backend passed with `-b`; defaults to `pipeline`. |
@@ -268,6 +273,10 @@ Core environment variables:
 | `MINERU_ENABLE_TABLE` | MinerU table parsing boolean. |
 | `MINERU_IS_OCR` | MinerU OCR boolean. |
 | `MINERU_ENABLE_FORMULA` | MinerU formula parsing boolean. |
+| `MINERU_ASSET_MODE` | MinerU asset mode: `markdown_only` for preview or `markdown_assets` for formal handoff assets. |
+| `MINERU_V4_MODEL_VERSION` | MinerU v4 platform `model_version`: `pipeline`, `vlm`, or `MinerU-HTML`. |
+| `MINERU_V4_RESULT_MODE` | MinerU v4 result mode. The current supported value is `full_zip`. |
+| `MINERU_V4_DATA_ID_PREFIX` | Optional stable prefix for generated MinerU v4 `data_id` values. |
 
 No public script may default to `http://localhost:9380` unless the user asks for local mode or a config file explicitly declares it.
 

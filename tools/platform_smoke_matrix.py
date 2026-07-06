@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import shutil
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import zipfile
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -293,9 +295,31 @@ def _run_mineru_env_check(
     if profile.config_mode != "env":
         return None
 
+    v4_zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(v4_zip_buffer, "w") as archive:
+        archive.writestr("full.md", "# MinerU v4 Service Smoke\n\nConverted through mineru-v4 env config.\n")
+        archive.writestr("content_list.json", "[]")
+    v4_zip_payload = v4_zip_buffer.getvalue()
+
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
             self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            if self.path == "/api/v4/file-urls/batch":
+                body = json.dumps(
+                    {
+                        "code": 0,
+                        "data": {
+                            "batch_id": "smoke-v4-batch",
+                            "file_urls": [f"http://127.0.0.1:{self.server.server_port}/upload/smoke-v4?token=object-secret"],
+                        },
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path == "/tasks":
                 body = json.dumps(
                     {
@@ -349,6 +373,34 @@ def _run_mineru_env_check(
             self.end_headers()
 
         def do_GET(self) -> None:  # noqa: N802
+            if self.path == "/api/v4/extract-results/batch/smoke-v4-batch":
+                body = json.dumps(
+                    {
+                        "code": 0,
+                        "data": {
+                            "extract_result": [
+                                {
+                                    "file_name": "mineru.pdf",
+                                    "state": "done",
+                                    "full_zip_url": f"http://127.0.0.1:{self.server.server_port}/result/smoke-v4.zip?download=secret",
+                                }
+                            ]
+                        },
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.path == "/result/smoke-v4.zip?download=secret":
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Length", str(len(v4_zip_payload)))
+                self.end_headers()
+                self.wfile.write(v4_zip_payload)
+                return
             if self.path == "/health":
                 body = json.dumps(
                     {
@@ -428,6 +480,7 @@ def _run_mineru_env_check(
     mineru_output = workspace / "mineru-handoff"
     mineru_cli_output = workspace / "mineru-cli-handoff"
     mineru_fastapi_output = workspace / "mineru-fastapi-handoff"
+    mineru_v4_output = workspace / "mineru-v4-handoff"
     mineru_sync_output = workspace / "mineru-sync-handoff"
     mineru_input.mkdir(parents=True, exist_ok=True)
     (mineru_input / "mineru.pdf").write_bytes(b"%PDF mineru service smoke")
@@ -518,6 +571,28 @@ def _run_mineru_env_check(
             ],
             cwd=workspace,
             env=mineru_fastapi_env,
+        )
+        mineru_v4_env = {
+            **env,
+            "DOC_TO_MD_BACKEND": "mineru-v4",
+            "MINERU_BASE_URL": f"http://127.0.0.1:{server.server_port}",
+            "MINERU_API_KEY": "smoke-key",
+            "MINERU_TIMEOUT": "5",
+            "MINERU_POLL_INTERVAL": "0.1",
+            "MINERU_V4_MODEL_VERSION": "vlm",
+        }
+        v4_result = _run_command(
+            [
+                sys.executable,
+                str(convert_script),
+                "--input",
+                str(mineru_input),
+                "--output",
+                str(mineru_v4_output),
+                "--json",
+            ],
+            cwd=workspace,
+            env=mineru_v4_env,
         )
         backend_probe_result = _run_command(
             [
@@ -621,6 +696,12 @@ def _run_mineru_env_check(
         checks,
         "doc-to-md mineru-fastapi env backend",
         fastapi_result,
+        required_stdout='"ok": true',
+    )
+    _record_command_check(
+        checks,
+        "doc-to-md mineru-v4 env backend",
+        v4_result,
         required_stdout='"ok": true',
     )
     _record_command_check(
@@ -797,6 +878,18 @@ def _run_mineru_env_check(
             "ok": fastapi_ok,
             "returncode": 0 if fastapi_ok else 1,
             "error": "" if fastapi_ok else f"missing or invalid {fastapi_markdown_path}",
+        }
+    )
+    v4_markdown_path = mineru_v4_output / "documents" / "mineru.md"
+    v4_ok = v4_markdown_path.exists() and "MinerU v4 Service Smoke" in v4_markdown_path.read_text(
+        encoding="utf-8"
+    )
+    checks.append(
+        {
+            "name": "mineru-v4 service markdown produced",
+            "ok": v4_ok,
+            "returncode": 0 if v4_ok else 1,
+            "error": "" if v4_ok else f"missing or invalid {v4_markdown_path}",
         }
     )
     fastapi_runtime_path = mineru_fastapi_output / "runtime_report.json"

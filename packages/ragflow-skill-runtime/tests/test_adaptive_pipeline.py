@@ -14,6 +14,7 @@ from ragflow_skill_runtime import (
     PIPELINE_DECISION_SCHEMA,
     inspect_source_document,
     make_pipeline_decision,
+    pipeline_args_from_decision,
     render_document_features_markdown,
 )
 
@@ -169,6 +170,56 @@ class AdaptivePipelineTests(unittest.TestCase):
         reason_codes = {item["code"] for item in decision["reasons"]}
         self.assertIn("table_signal_mineru_fastapi_backend", reason_codes)
         self.assertIn("source_table_high_accuracy", reason_codes)
+
+    def test_pdf_table_signal_uses_v4_platform_model_when_requested(self) -> None:
+        features = {
+            "schema": DOCUMENT_FEATURES_SCHEMA,
+            "summary": {
+                "primary_language": "zh",
+                "source_kind_counts": {"pdf": 1},
+                "table_heavy": False,
+                "sample_table_count": 1,
+                "has_formal_ingest_candidates": True,
+                "image_rich": False,
+                "long_document": False,
+                "scanned_or_low_text_pdf_count": 0,
+                "numeric_or_unit_signal_count": 0,
+            },
+        }
+
+        decision = make_pipeline_decision(features, requested_backend="mineru-v4")
+        args = pipeline_args_from_decision(decision, input_path="<input>", output_path="<handoff>")
+
+        self.assertEqual(decision["recommendation"]["backend"], "mineru-v4")
+        self.assertEqual(decision["recommendation"]["table_quality"], "high")
+        self.assertEqual(decision["recommendation"]["mineru_v4_model_version"], "vlm")
+        self.assertIn("--mineru-v4-model-version", args)
+        self.assertIn("vlm", args)
+
+    def test_pdf_table_signal_preserves_explicit_v4_html_model(self) -> None:
+        features = {
+            "schema": DOCUMENT_FEATURES_SCHEMA,
+            "summary": {
+                "primary_language": "zh",
+                "source_kind_counts": {"pdf": 1},
+                "table_heavy": False,
+                "sample_table_count": 1,
+                "has_formal_ingest_candidates": True,
+                "image_rich": False,
+                "long_document": False,
+                "scanned_or_low_text_pdf_count": 0,
+                "numeric_or_unit_signal_count": 0,
+            },
+        }
+
+        decision = make_pipeline_decision(
+            features,
+            requested_backend="mineru-v4",
+            requested_mineru_v4_model_version="MinerU-HTML",
+        )
+
+        self.assertEqual(decision["recommendation"]["table_quality"], "high")
+        self.assertEqual(decision["recommendation"]["mineru_v4_model_version"], "MinerU-HTML")
 
     def test_low_text_pdf_table_signal_still_uses_high_quality_table_extraction(self) -> None:
         features = {

@@ -23,6 +23,7 @@ from ragflow_skill_runtime.doc_convert import (
     html_to_markdown,
     make_doc_manifest_payload,
     mineru_fastapi_convert,
+    mineru_v4_convert,
     probe_conversion_backends,
     render_backend_probe_markdown,
     safe_markdown_name,
@@ -41,6 +42,124 @@ from ragflow_skill_runtime.doc_segment import materialize_segments, plan_markdow
 
 
 class DocConvertTests(unittest.TestCase):
+    def _run_mineru_v4_fake_server(
+        self,
+        *,
+        submit_response: object | None = None,
+        poll_responses: list[object] | None = None,
+        zip_payload: bytes | None = None,
+        upload_status: int = 200,
+        remote_attempts: list[dict[str, object]] | None = None,
+        captured: dict[str, object] | None = None,
+        convert_kwargs: dict[str, object] | None = None,
+    ) -> str:
+        captured = captured if captured is not None else {}
+        remote_attempts = remote_attempts if remote_attempts is not None else []
+        zip_payload = zip_payload if zip_payload is not None else self._mineru_v4_zip("# V4\n")
+        poll_responses = poll_responses if poll_responses is not None else [
+            lambda port: {
+                "code": 0,
+                "data": {
+                    "extract_result": [
+                        {
+                            "file_name": "paper.pdf",
+                            "state": "done",
+                            "full_zip_url": f"http://127.0.0.1:{port}/result.zip?token=download-secret",
+                        }
+                    ]
+                },
+            }
+        ]
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                captured["submit_body"] = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))).decode("utf-8"))
+                payload = submit_response
+                if payload is None:
+                    payload = lambda port: {
+                        "code": 0,
+                        "data": {
+                            "batch_id": "batch-v4",
+                            "file_urls": [f"http://127.0.0.1:{port}/upload?token=object-secret"],
+                        },
+                    }
+                raw_payload = payload(self.server.server_port) if callable(payload) else payload
+                raw = json.dumps(raw_payload).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_PUT(self) -> None:  # noqa: N802
+                captured["upload_auth"] = self.headers.get("Authorization")
+                captured["upload_body"] = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                self.send_response(upload_status)
+                self.end_headers()
+                if upload_status >= 400:
+                    self.wfile.write(b"upload failed")
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path.startswith("/api/v4/extract-results/batch/"):
+                    poll_call = int(captured.get("poll_calls", 0))
+                    captured["poll_calls"] = poll_call + 1
+                    payload = poll_responses[min(poll_call, len(poll_responses) - 1)]
+                    raw_payload = payload(self.server.server_port) if callable(payload) else payload
+                    raw = json.dumps(raw_payload).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                if self.path == "/result.zip?token=download-secret":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/zip")
+                    self.send_header("Content-Length", str(len(zip_payload)))
+                    self.end_headers()
+                    self.wfile.write(zip_payload)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                source_path = Path(tmp) / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake v4")
+                kwargs = {
+                    "base_url": f"http://127.0.0.1:{server.server_port}",
+                    "api_key": "v4-secret",
+                    "timeout": 5,
+                    "poll_interval": 0.01,
+                    "remote_attempts": remote_attempts,
+                }
+                if convert_kwargs:
+                    kwargs.update(convert_kwargs)
+                return mineru_v4_convert(
+                    SourceDocument(path=source_path, source_path="paper.pdf"),
+                    **kwargs,
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    @staticmethod
+    def _mineru_v4_zip(markdown: str | None, *, entries: dict[str, bytes | str] | None = None) -> bytes:
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w") as archive:
+            if markdown is not None:
+                archive.writestr("full.md", markdown)
+            for name, payload in (entries or {}).items():
+                archive.writestr(name, payload)
+        return zip_buffer.getvalue()
+
     def test_discover_source_documents_skips_hidden(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -757,6 +876,412 @@ class DocConvertTests(unittest.TestCase):
         self.assertIn("![chart](images/paper/chart.webp)", markdown)
         self.assertEqual(saved_bytes, b"fake webp bytes")
         self.assertFalse(leaked)
+
+    def test_mineru_v4_convert_success_downloads_zip_and_saves_assets(self) -> None:
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w") as archive:
+            archive.writestr("full.md", "# MinerU v4\n\n![chart](images/chart.png)\n")
+            archive.writestr("images/chart.png", b"fake chart bytes")
+            archive.writestr("content_list.json", json.dumps([{"type": "text"}]))
+        zip_payload = zip_buffer.getvalue()
+        captured: dict[str, object] = {"poll_calls": 0}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(length).decode("utf-8")
+                captured["submit_path"] = self.path
+                captured["submit_auth"] = self.headers.get("Authorization")
+                captured["submit_body"] = json.loads(body)
+                raw = json.dumps(
+                    {
+                        "code": 0,
+                        "data": {
+                            "batch_id": "batch-v4",
+                            "file_urls": [
+                                f"http://127.0.0.1:{self.server.server_port}/upload/paper.pdf?token=object-secret"
+                            ],
+                        },
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_PUT(self) -> None:  # noqa: N802
+                captured["upload_path"] = self.path
+                captured["upload_auth"] = self.headers.get("Authorization")
+                captured["upload_body"] = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                self.send_response(200)
+                self.end_headers()
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/api/v4/extract-results/batch/batch-v4":
+                    captured["poll_calls"] = int(captured["poll_calls"]) + 1
+                    raw = json.dumps(
+                        {
+                            "code": 0,
+                            "data": {
+                                "batch_id": "batch-v4",
+                                "extract_result": [
+                                    {
+                                        "file_name": "paper.pdf",
+                                        "state": "done",
+                                        "data_id": "case-paper",
+                                        "full_zip_url": (
+                                            f"http://127.0.0.1:{self.server.server_port}"
+                                            "/result/full.zip?download=secret"
+                                        ),
+                                    }
+                                ],
+                            },
+                        }
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                if self.path == "/result/full.zip?download=secret":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/zip")
+                    self.send_header("Content-Length", str(len(zip_payload)))
+                    self.end_headers()
+                    self.wfile.write(zip_payload)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        remote_attempts: list[dict[str, object]] = []
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source_path = root / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake v4")
+                docs_dir = root / "handoff" / "documents"
+                docs_dir.mkdir(parents=True)
+                markdown = mineru_v4_convert(
+                    SourceDocument(path=source_path, source_path="paper.pdf"),
+                    base_url=f"http://127.0.0.1:{server.server_port}/api/v4",
+                    api_key="v4-secret",
+                    timeout=5,
+                    poll_interval=0.01,
+                    verify_ssl=True,
+                    language="en",
+                    page_range="2,4-6",
+                    enable_table=True,
+                    is_ocr=False,
+                    enable_formula=False,
+                    asset_mode="markdown_assets",
+                    asset_output_dir=docs_dir,
+                    asset_document_stem="paper",
+                    model_version="vlm",
+                    result_mode="full_zip",
+                    data_id_prefix="case",
+                    remote_attempts=remote_attempts,
+                )
+                saved_image = docs_dir / "images" / "paper" / "chart.png"
+                saved_bytes = saved_image.read_bytes()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(markdown, "# MinerU v4\n\n![chart](images/paper/chart.png)\n")
+        self.assertEqual(saved_bytes, b"fake chart bytes")
+        self.assertEqual(captured["submit_path"], "/api/v4/file-urls/batch")
+        self.assertEqual(captured["submit_auth"], "Bearer v4-secret")
+        submit_body = captured["submit_body"]
+        self.assertIsInstance(submit_body, dict)
+        self.assertEqual(submit_body["model_version"], "vlm")
+        self.assertEqual(submit_body["language"], "en")
+        self.assertEqual(submit_body["enable_formula"], False)
+        self.assertEqual(submit_body["enable_table"], True)
+        self.assertNotIn("is_ocr", submit_body)
+        self.assertEqual(submit_body["files"][0]["name"], "paper.pdf")
+        self.assertEqual(submit_body["files"][0]["data_id"], "case-paper")
+        self.assertEqual(submit_body["files"][0]["is_ocr"], False)
+        self.assertEqual(submit_body["files"][0]["page_ranges"], "2,4-6")
+        self.assertEqual(captured["upload_path"], "/upload/paper.pdf?token=object-secret")
+        self.assertIsNone(captured["upload_auth"])
+        self.assertEqual(captured["upload_body"], b"%PDF fake v4")
+        self.assertEqual(captured["poll_calls"], 1)
+        self.assertEqual(len(remote_attempts), 1)
+        attempt = remote_attempts[0]
+        self.assertEqual(attempt["status"], "success")
+        self.assertEqual(attempt["backend"], "mineru-v4")
+        self.assertEqual(attempt["batch_id"], "batch-v4")
+        self.assertEqual(attempt["task_id"], "batch-v4")
+        self.assertEqual(attempt["requested_mineru_v4_model_version"], "vlm")
+        self.assertEqual(attempt["effective_mineru_v4_model_version"], "vlm")
+        self.assertEqual(attempt["zip_download"]["status"], "success")
+        self.assertEqual(attempt["artifact_summary"]["markdown_entry"], "full.md")
+        self.assertEqual(attempt["asset_policy"]["saved"]["image_count"], 1)
+        self.assertEqual(attempt["asset_policy"]["saved"]["image_paths"], ["images/paper/chart.png"])
+        self.assertEqual(attempt["endpoint"], "http://<redacted-host>/api/v4")
+        self.assertNotIn("object-secret", json.dumps(attempt))
+        self.assertNotIn("download=secret", json.dumps(attempt))
+
+    def test_mineru_v4_convert_rejects_missing_batch_id(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                raw = json.dumps({"code": 0, "data": {"file_urls": ["http://127.0.0.1/upload"]}}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        remote_attempts: list[dict[str, object]] = []
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                source_path = Path(tmp) / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake v4")
+                with self.assertRaisesRegex(DocConvertError, "missing batch_id"):
+                    mineru_v4_convert(
+                        SourceDocument(path=source_path, source_path="paper.pdf"),
+                        base_url=f"http://127.0.0.1:{server.server_port}",
+                        api_key="v4-secret",
+                        timeout=5,
+                        poll_interval=0.01,
+                        remote_attempts=remote_attempts,
+                    )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(remote_attempts[0]["error_category"], "missing_batch_id")
+        self.assertEqual(remote_attempts[0]["failed_stage"], "submit")
+
+    def test_mineru_v4_convert_rejects_missing_upload_urls(self) -> None:
+        remote_attempts: list[dict[str, object]] = []
+
+        with self.assertRaisesRegex(DocConvertError, "missing upload URLs"):
+            self._run_mineru_v4_fake_server(
+                submit_response={"code": 0, "data": {"batch_id": "batch-v4", "file_urls": []}},
+                remote_attempts=remote_attempts,
+            )
+
+        self.assertEqual(remote_attempts[0]["error_category"], "missing_upload_urls")
+        self.assertEqual(remote_attempts[0]["failed_stage"], "submit")
+
+    def test_mineru_v4_convert_records_upload_failure(self) -> None:
+        remote_attempts: list[dict[str, object]] = []
+
+        with self.assertRaisesRegex(DocConvertError, "upload failed"):
+            self._run_mineru_v4_fake_server(upload_status=500, remote_attempts=remote_attempts)
+
+        self.assertEqual(remote_attempts[0]["error_category"], "failed_upload")
+        self.assertEqual(remote_attempts[0]["failed_stage"], "upload")
+        self.assertEqual(remote_attempts[0]["upload"]["status"], "failed")
+
+    def test_mineru_v4_convert_surfaces_failed_polling_state(self) -> None:
+        remote_attempts: list[dict[str, object]] = []
+
+        with self.assertRaisesRegex(DocConvertError, "table model crashed"):
+            self._run_mineru_v4_fake_server(
+                poll_responses=[
+                    {
+                        "code": 0,
+                        "data": {
+                            "extract_result": [
+                                {
+                                    "file_name": "paper.pdf",
+                                    "state": "failed",
+                                    "err_msg": "table model crashed",
+                                }
+                            ]
+                        },
+                    }
+                ],
+                remote_attempts=remote_attempts,
+            )
+
+        self.assertEqual(remote_attempts[0]["error_category"], "failed_polling")
+        self.assertEqual(remote_attempts[0]["failed_stage"], "poll")
+        self.assertEqual(remote_attempts[0]["final_status"], "failed")
+
+    def test_mineru_v4_convert_rejects_missing_zip_url(self) -> None:
+        remote_attempts: list[dict[str, object]] = []
+
+        with self.assertRaisesRegex(DocConvertError, "missing full_zip_url"):
+            self._run_mineru_v4_fake_server(
+                poll_responses=[
+                    {
+                        "code": 0,
+                        "data": {
+                            "extract_result": [
+                                {
+                                    "file_name": "paper.pdf",
+                                    "state": "done",
+                                }
+                            ]
+                        },
+                    }
+                ],
+                remote_attempts=remote_attempts,
+            )
+
+        self.assertEqual(remote_attempts[0]["error_category"], "missing_zip_url")
+        self.assertEqual(remote_attempts[0]["failed_stage"], "result")
+
+    def test_mineru_v4_convert_rejects_invalid_zip(self) -> None:
+        remote_attempts: list[dict[str, object]] = []
+
+        with self.assertRaisesRegex(DocConvertError, "zip is invalid"):
+            self._run_mineru_v4_fake_server(zip_payload=b"not a zip", remote_attempts=remote_attempts)
+
+        self.assertEqual(remote_attempts[0]["error_category"], "bad_zip")
+        self.assertEqual(remote_attempts[0]["failed_stage"], "result")
+        self.assertEqual(remote_attempts[0]["zip_download"]["status"], "failed")
+
+    def test_mineru_v4_convert_rejects_zip_without_markdown(self) -> None:
+        remote_attempts: list[dict[str, object]] = []
+
+        with self.assertRaisesRegex(DocConvertError, "does not contain Markdown"):
+            self._run_mineru_v4_fake_server(
+                zip_payload=self._mineru_v4_zip(None, entries={"content_list.json": "[]"}),
+                remote_attempts=remote_attempts,
+            )
+
+        self.assertEqual(remote_attempts[0]["error_category"], "missing_markdown")
+        self.assertEqual(remote_attempts[0]["failed_stage"], "result")
+
+    def test_mineru_v4_convert_waits_for_documented_pending_states(self) -> None:
+        remote_attempts: list[dict[str, object]] = []
+        captured: dict[str, object] = {}
+
+        markdown = self._run_mineru_v4_fake_server(
+            poll_responses=[
+                {
+                    "code": 0,
+                    "data": {"extract_result": [{"file_name": "paper.pdf", "state": "waiting-file"}]},
+                },
+                {
+                    "code": 0,
+                    "data": {"extract_result": [{"file_name": "paper.pdf", "state": "converting"}]},
+                },
+                lambda port: {
+                    "code": 0,
+                    "data": {
+                        "extract_result": [
+                            {
+                                "file_name": "paper.pdf",
+                                "state": "done",
+                                "full_zip_url": f"http://127.0.0.1:{port}/result.zip?token=download-secret",
+                            }
+                        ]
+                    },
+                },
+            ],
+            remote_attempts=remote_attempts,
+            captured=captured,
+        )
+
+        self.assertEqual(markdown, "# V4\n")
+        self.assertEqual(captured["poll_calls"], 3)
+        self.assertEqual(remote_attempts[0]["status_history"], ["waiting-file", "converting", "done"])
+
+    def test_mineru_v4_convert_rejects_zip_path_traversal(self) -> None:
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w") as archive:
+            archive.writestr("../full.md", "# Unsafe\n")
+        zip_payload = zip_buffer.getvalue()
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                raw = json.dumps(
+                    {
+                        "code": 0,
+                        "data": {
+                            "batch_id": "batch-unsafe",
+                            "file_urls": [f"http://127.0.0.1:{self.server.server_port}/upload"],
+                        },
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_PUT(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                self.send_response(200)
+                self.end_headers()
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/api/v4/extract-results/batch/batch-unsafe":
+                    raw = json.dumps(
+                        {
+                            "code": 0,
+                            "data": {
+                                "extract_result": [
+                                    {
+                                        "file_name": "paper.pdf",
+                                        "state": "success",
+                                        "full_zip_url": f"http://127.0.0.1:{self.server.server_port}/full.zip",
+                                    }
+                                ]
+                            },
+                        }
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                if self.path == "/full.zip":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/zip")
+                    self.send_header("Content-Length", str(len(zip_payload)))
+                    self.end_headers()
+                    self.wfile.write(zip_payload)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                source_path = Path(tmp) / "paper.pdf"
+                source_path.write_bytes(b"%PDF fake v4")
+                with self.assertRaisesRegex(DocConvertError, "unsafe zip entry"):
+                    mineru_v4_convert(
+                        SourceDocument(path=source_path, source_path="paper.pdf"),
+                        base_url=f"http://127.0.0.1:{server.server_port}",
+                        api_key="v4-secret",
+                        timeout=5,
+                        poll_interval=0.01,
+                    )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_mineru_fastapi_convert_task_failed(self) -> None:
         class Handler(BaseHTTPRequestHandler):

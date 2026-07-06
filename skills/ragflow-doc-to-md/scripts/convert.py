@@ -97,6 +97,8 @@ BACKEND_CHOICES = {
     "mineru-agent",
     "mineru-cli",
     "mineru-fastapi",
+    "mineru-platform",
+    "mineru-v4",
     "mineru-local",
     "mineru-sync",
     "pandoc",
@@ -128,6 +130,8 @@ TABLE_QUALITY_HIGH_FASTAPI_BACKENDS = {
     "hybrid-engine",
     "vlm-engine",
 }
+MINERU_V4_MODEL_CHOICES = {"pipeline", "vlm", "MinerU-HTML"}
+TABLE_QUALITY_HIGH_V4_MODEL = "vlm"
 FORMAL_PREP_SOURCE_EXTENSIONS = {
     ".bmp",
     ".doc",
@@ -426,6 +430,44 @@ def _mineru_fastapi_backend(args: argparse.Namespace, config) -> str | None:
     if normalized not in allowed:
         raise DocConvertError(f"MINERU_FASTAPI_BACKEND must be one of: {', '.join(sorted(allowed))}")
     return normalized
+
+
+def _mineru_v4_model_version(args: argparse.Namespace, config) -> str | None:
+    value = _config_or_arg(
+        args,
+        "mineru_v4_model_version",
+        getattr(config.mineru, "v4_model_version", None),
+        None,
+    )
+    if value is None or str(value).strip() == "":
+        return None
+    requested = str(value).strip()
+    canonical = {item.lower(): item for item in MINERU_V4_MODEL_CHOICES}.get(requested.lower())
+    if canonical is None:
+        raise DocConvertError(f"MINERU_V4_MODEL_VERSION must be one of: {', '.join(sorted(MINERU_V4_MODEL_CHOICES))}")
+    return canonical
+
+
+def _mineru_v4_result_mode(args: argparse.Namespace, config) -> str:
+    value = _config_or_arg(
+        args,
+        "mineru_v4_result_mode",
+        getattr(config.mineru, "v4_result_mode", None),
+        "full_zip",
+    )
+    normalized = str(value or "full_zip").strip().lower().replace("-", "_")
+    if normalized != "full_zip":
+        raise DocConvertError("MINERU_V4_RESULT_MODE must be full_zip")
+    return normalized
+
+
+def _mineru_v4_data_id_prefix(args: argparse.Namespace, config) -> str | None:
+    return _config_or_arg(
+        args,
+        "mineru_v4_data_id_prefix",
+        getattr(config.mineru, "v4_data_id_prefix", None),
+        None,
+    )
 
 
 def _candidate_table_quality_sources(sources: list[Any]) -> list[str]:
@@ -1113,6 +1155,8 @@ def _conversion_runtime_context(
     mineru_asset_mode: str,
     mineru_fastapi_backend: str,
     mineru_fastapi_server_url: str | None,
+    mineru_v4_model_version: str | None,
+    mineru_v4_result_mode: str,
     mineru_is_ocr: bool,
     mineru_enable_table: bool,
     mineru_enable_formula: bool,
@@ -1122,6 +1166,8 @@ def _conversion_runtime_context(
         "mineru_asset_mode": mineru_asset_mode,
         "mineru_fastapi_backend": mineru_fastapi_backend,
         "mineru_fastapi_server_url_configured": bool(mineru_fastapi_server_url),
+        "mineru_v4_model_version": mineru_v4_model_version or "pipeline",
+        "mineru_v4_result_mode": mineru_v4_result_mode,
         "ocr_requested": bool(mineru_is_ocr),
         "table_parsing_requested": bool(mineru_enable_table),
         "formula_parsing_requested": bool(mineru_enable_formula),
@@ -1137,7 +1183,7 @@ def _conversion_runtime_context(
                 "local_process_startup_included": True,
             }
         )
-    elif backend in {"mineru", "mineru-agent", "mineru-fastapi", "mineru-sync", "mineru-local"}:
+    elif backend in {"mineru", "mineru-agent", "mineru-fastapi", "mineru-v4", "mineru-platform", "mineru-sync", "mineru-local"}:
         context.update(
             {
                 "cold_warm": "warm_persistent_service",
@@ -1548,6 +1594,7 @@ def _table_quality_decision(
     sources: list[Any],
     table_quality: str,
     mineru_fastapi_backend: str | None,
+    mineru_v4_model_version: str | None,
     mineru_enable_table: bool,
     allow_fallback: bool,
 ) -> dict[str, Any]:
@@ -1556,13 +1603,55 @@ def _table_quality_decision(
     user_set_backend = mineru_fastapi_backend is not None
     requested_backend = (mineru_fastapi_backend or "pipeline").strip().lower() or "pipeline"
     effective_backend = requested_backend
+    user_set_v4_model = mineru_v4_model_version is not None
+    requested_v4_model = mineru_v4_model_version or "pipeline"
+    effective_v4_model = requested_v4_model
     candidate_sources = _candidate_table_quality_sources(sources)
     applied = False
+    v4_applied = False
     reason = "standard_compatibility"
     warnings: list[dict[str, str]] = []
 
     if table_quality == "standard":
         reason = "standard_compatibility"
+    elif backend in {"mineru-v4", "mineru-platform"}:
+        if not mineru_enable_table:
+            reason = "table_parsing_disabled"
+        elif table_quality == "high":
+            if user_set_v4_model and requested_v4_model == "MinerU-HTML":
+                effective_v4_model = "MinerU-HTML"
+                reason = "forced_high_accuracy_explicit_v4_model_preserved"
+                warnings.append(
+                    {
+                        "code": "explicit_v4_model_preserved",
+                        "severity": "review",
+                        "message": (
+                            "User requested MinerU v4 model_version 'MinerU-HTML' with table_quality 'high'. "
+                            "The explicit model is preserved instead of switching to vlm."
+                        ),
+                    }
+                )
+            else:
+                effective_v4_model = TABLE_QUALITY_HIGH_V4_MODEL
+                v4_applied = True
+                reason = "forced_v4_high_accuracy_model"
+        elif candidate_sources:
+            if user_set_v4_model and requested_v4_model == "MinerU-HTML":
+                effective_v4_model = "MinerU-HTML"
+                reason = "auto_candidate_source_explicit_v4_model_preserved"
+                warnings.append(
+                    {
+                        "code": "auto_v4_model_preserved",
+                        "severity": "info",
+                        "message": "Auto table quality would select model_version 'vlm', but explicit MinerU-HTML is preserved.",
+                    }
+                )
+            else:
+                effective_v4_model = TABLE_QUALITY_HIGH_V4_MODEL
+                v4_applied = True
+                reason = "auto_v4_candidate_source"
+        else:
+            reason = "auto_no_candidate_source"
     elif backend != "mineru-fastapi":
         reason = "requires_mineru_fastapi_backend"
     elif not mineru_enable_table:
@@ -1633,8 +1722,12 @@ def _table_quality_decision(
         ),
         "requested_mineru_fastapi_backend": requested_backend,
         "effective_mineru_fastapi_backend": effective_backend,
+        "requested_mineru_v4_model_version": requested_v4_model,
+        "effective_mineru_v4_model_version": effective_v4_model,
         "high_accuracy_backend_requested": applied and effective_backend != "pipeline",
+        "high_accuracy_model_requested": v4_applied and effective_v4_model == TABLE_QUALITY_HIGH_V4_MODEL,
         "auto_triggered": table_quality == "auto" and applied,
+        "auto_v4_triggered": table_quality == "auto" and v4_applied,
         "fallback_allowed": bool(allow_fallback),
         "fallback_count": 0,
         "table_quality_degraded": degraded,
@@ -1649,11 +1742,14 @@ def _table_quality_runtime_context(decision: dict[str, Any]) -> dict[str, Any]:
         "table_quality_reason": decision["reason"],
         "table_quality_candidate_source_count": decision["candidate_source_count"],
         "table_quality_high_accuracy_requested": decision["high_accuracy_backend_requested"],
+        "table_quality_high_accuracy_model_requested": decision["high_accuracy_model_requested"],
         "table_quality_auto_triggered": decision["auto_triggered"],
+        "table_quality_auto_v4_triggered": decision["auto_v4_triggered"],
         "table_quality_fallback_allowed": decision["fallback_allowed"],
         "table_quality_degraded": decision["table_quality_degraded"],
         "table_quality_fallback_count": decision["fallback_count"],
         "mineru_fastapi_backend": decision["effective_mineru_fastapi_backend"],
+        "mineru_v4_model_version": decision["effective_mineru_v4_model_version"],
     }
 
 
@@ -1668,6 +1764,14 @@ def _table_quality_warnings(decision: dict[str, Any]) -> list[dict[str, str]]:
                     "High-accuracy MinerU FastAPI backend was selected for table-quality conversion; "
                     "expect higher latency or resource usage than pipeline."
                 ),
+            }
+        )
+    if decision["high_accuracy_model_requested"]:
+        warnings.append(
+            {
+                "code": "table_high_accuracy_v4_model",
+                "severity": "info",
+                "message": "High-accuracy MinerU v4 model_version 'vlm' was selected for table-quality conversion.",
             }
         )
     if decision["mode"] in {"high", "auto"} and decision["reason"] in {
@@ -1782,6 +1886,9 @@ def _run(args: argparse.Namespace) -> int:
             "mineru_fastapi_server_url",
             getattr(config.mineru, "fastapi_server_url", None),
         )
+        mineru_v4_model_version = _mineru_v4_model_version(args, config)
+        mineru_v4_result_mode = _mineru_v4_result_mode(args, config)
+        mineru_v4_data_id_prefix = _mineru_v4_data_id_prefix(args, config)
         table_quality = _table_quality(args, config)
         allow_table_quality_fallback = _allow_table_quality_fallback(args, config)
         mineru_cli_backend = _config_or_arg(
@@ -1827,10 +1934,12 @@ def _run(args: argparse.Namespace) -> int:
             sources=sources,
             table_quality=table_quality,
             mineru_fastapi_backend=mineru_fastapi_backend,
+            mineru_v4_model_version=mineru_v4_model_version,
             mineru_enable_table=mineru_enable_table,
             allow_fallback=allow_table_quality_fallback,
         )
         mineru_fastapi_backend = table_quality_decision["effective_mineru_fastapi_backend"]
+        mineru_v4_model_version = table_quality_decision["effective_mineru_v4_model_version"]
         handoff_mode = THIN_PREVIEW_HANDOFF_MODE
         handoff_advisory = _thin_preview_handoff_advisory(sources)
         runtime_context = _conversion_runtime_context(
@@ -1838,6 +1947,8 @@ def _run(args: argparse.Namespace) -> int:
             mineru_asset_mode=mineru_asset_mode,
             mineru_fastapi_backend=mineru_fastapi_backend,
             mineru_fastapi_server_url=mineru_fastapi_server_url,
+            mineru_v4_model_version=mineru_v4_model_version,
+            mineru_v4_result_mode=mineru_v4_result_mode,
             mineru_is_ocr=mineru_is_ocr,
             mineru_enable_table=mineru_enable_table,
             mineru_enable_formula=mineru_enable_formula,
@@ -1887,6 +1998,9 @@ def _run(args: argparse.Namespace) -> int:
                         mineru_cli_backend=mineru_cli_backend,
                         mineru_fastapi_backend=fastapi_backend,
                         mineru_fastapi_server_url=mineru_fastapi_server_url,
+                        mineru_v4_model_version=mineru_v4_model_version,
+                        mineru_v4_result_mode=mineru_v4_result_mode,
+                        mineru_v4_data_id_prefix=mineru_v4_data_id_prefix,
                         asset_output_dir=markdown_path.parent,
                         asset_document_stem=markdown_path.stem,
                         mineru_language=mineru_language,
@@ -2658,6 +2772,11 @@ def _run_adaptive(args: argparse.Namespace) -> int:
             or getattr(config.mineru, "fastapi_backend", None)
             or None
         )
+        configured_v4_model_version = (
+            args.mineru_v4_model_version
+            or getattr(config.mineru, "v4_model_version", None)
+            or None
+        )
         allow_fallback = _allow_table_quality_fallback(args, config)
         features = inspect_source_document(
             args.input,
@@ -2672,6 +2791,7 @@ def _run_adaptive(args: argparse.Namespace) -> int:
             requested_table_quality=configured_table_quality,
             requested_postprocess_profile=args.postprocess_profile,
             requested_mineru_fastapi_backend=configured_fastapi_backend,
+            requested_mineru_v4_model_version=configured_v4_model_version,
             requested_mineru_asset_mode=configured_asset_mode,
             policy=args.adaptive_policy,
             backend_probe_status=args.backend_probe_status,
@@ -2685,6 +2805,7 @@ def _run_adaptive(args: argparse.Namespace) -> int:
         run_args.postprocess_profile = recommendation.get("postprocess_profile") or args.postprocess_profile
         run_args.mineru_asset_mode = recommendation.get("mineru_asset_mode") or configured_asset_mode
         run_args.mineru_fastapi_backend = recommendation.get("mineru_fastapi_backend") or configured_fastapi_backend
+        run_args.mineru_v4_model_version = recommendation.get("mineru_v4_model_version") or configured_v4_model_version
         run_args.allow_table_quality_fallback = bool(recommendation.get("allow_table_quality_fallback"))
 
         pipeline_result: dict[str, Any] = {}
@@ -3236,6 +3357,9 @@ def _run_backend_warmup(args: argparse.Namespace) -> int:
                 "mineru_fastapi_server_url",
                 getattr(config.mineru, "fastapi_server_url", None),
             ),
+            mineru_v4_model_version=_mineru_v4_model_version(args, config),
+            mineru_v4_result_mode=_mineru_v4_result_mode(args, config),
+            mineru_v4_data_id_prefix=_mineru_v4_data_id_prefix(args, config),
             mineru_language=_config_or_arg(args, "mineru_language", config.mineru.language, "ch") or "ch",
             mineru_page_range=_config_or_arg(args, "mineru_page_range", config.mineru.page_range),
             mineru_enable_table=_bool_config_or_arg(
@@ -3417,6 +3541,9 @@ def build_backend_parser() -> argparse.ArgumentParser:
     warmup.add_argument("--mineru-cli-backend", help="Local MinerU CLI backend passed with -b; defaults to MINERU_CLI_BACKEND, mineru.cli_backend, or pipeline")
     warmup.add_argument("--mineru-fastapi-backend", help="MinerU FastAPI parsing backend; defaults to MINERU_FASTAPI_BACKEND, mineru.fastapi_backend, or pipeline")
     warmup.add_argument("--mineru-fastapi-server-url", help="OpenAI-compatible server URL passed as server_url for MinerU *-http-client backends")
+    warmup.add_argument("--mineru-v4-model-version", choices=sorted(MINERU_V4_MODEL_CHOICES), help="MinerU v4 platform model_version; defaults to MINERU_V4_MODEL_VERSION or pipeline")
+    warmup.add_argument("--mineru-v4-result-mode", choices=["full_zip"], help="MinerU v4 result mode; defaults to MINERU_V4_RESULT_MODE or full_zip")
+    warmup.add_argument("--mineru-v4-data-id-prefix", help="Optional MinerU v4 data_id prefix")
     warmup.add_argument("--mineru-language", help="MinerU language option; defaults to MINERU_LANGUAGE or ch")
     warmup.add_argument("--mineru-page-range", help="MinerU page range; defaults to MINERU_PAGE_RANGE")
     warmup.add_argument("--mineru-enable-table", help="MinerU table parsing true/false; defaults to MINERU_ENABLE_TABLE or true")
@@ -3455,6 +3582,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mineru-cli-backend", help="Local MinerU CLI backend passed with -b; defaults to MINERU_CLI_BACKEND, mineru.cli_backend, or pipeline")
     parser.add_argument("--mineru-fastapi-backend", help="MinerU FastAPI parsing backend; defaults to MINERU_FASTAPI_BACKEND, mineru.fastapi_backend, or pipeline")
     parser.add_argument("--mineru-fastapi-server-url", help="OpenAI-compatible server URL passed as server_url for MinerU *-http-client backends")
+    parser.add_argument("--mineru-v4-model-version", choices=sorted(MINERU_V4_MODEL_CHOICES), help="MinerU v4 platform model_version; defaults to MINERU_V4_MODEL_VERSION or pipeline")
+    parser.add_argument("--mineru-v4-result-mode", choices=["full_zip"], help="MinerU v4 result mode; defaults to MINERU_V4_RESULT_MODE or full_zip")
+    parser.add_argument("--mineru-v4-data-id-prefix", help="Optional MinerU v4 data_id prefix")
     parser.add_argument("--mineru-language", help="MinerU language option; defaults to MINERU_LANGUAGE or ch")
     parser.add_argument("--mineru-page-range", help="MinerU page range; defaults to MINERU_PAGE_RANGE")
     parser.add_argument("--mineru-enable-table", help="MinerU table parsing true/false; defaults to MINERU_ENABLE_TABLE or true")

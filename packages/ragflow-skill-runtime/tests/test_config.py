@@ -115,6 +115,38 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(config.mineru.asset_mode, "markdown_assets")
 
+    def test_load_skill_config_reads_mineru_v4_options(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / ".ragflow"
+            config_dir.mkdir()
+            (config_dir / "config.local.yaml").write_text(
+                "mineru:\n"
+                "  v4_model_version: MinerU-HTML\n"
+                "  v4_result_mode: full_zip\n"
+                "  v4_data_id_prefix: case\n",
+                encoding="utf-8",
+            )
+
+            config = load_skill_config(env={}, cwd=root)
+
+        self.assertEqual(config.mineru.v4_model_version, "MinerU-HTML")
+        self.assertEqual(config.mineru.v4_result_mode, "full_zip")
+        self.assertEqual(config.mineru.v4_data_id_prefix, "case")
+
+    def test_environment_overrides_mineru_v4_options(self) -> None:
+        config = load_skill_config(
+            env={
+                "MINERU_V4_MODEL_VERSION": "vlm",
+                "MINERU_V4_RESULT_MODE": "full_zip",
+                "MINERU_V4_DATA_ID_PREFIX": "run",
+            }
+        )
+
+        self.assertEqual(config.mineru.v4_model_version, "vlm")
+        self.assertEqual(config.mineru.v4_result_mode, "full_zip")
+        self.assertEqual(config.mineru.v4_data_id_prefix, "run")
+
     def test_load_skill_config_reads_doc_table_quality(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

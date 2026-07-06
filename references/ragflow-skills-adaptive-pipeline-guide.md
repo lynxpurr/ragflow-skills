@@ -1,7 +1,7 @@
 # ragflow-skills：adaptive pipeline 端到端使用指南
 
-**日期**：2026-07-05
-**版本**：基于 `ragflow-skills` commit `b4f00e2 Add adaptive document pipeline reports`
+**日期**：2026-07-06
+**版本**：基于 `ragflow-skills` adaptive pipeline reports and MinerU v4 platform backend support
 
 ## 背景
 
@@ -19,6 +19,12 @@ python scripts/convert.py adaptive \
   [--postprocess-profile chunk-markers-dense] \
   [--json]
 ```
+
+如果使用 MinerU 公共 v4 platform precision API，将 `--backend mineru-fastapi`
+替换为 `--backend mineru-v4` 或别名 `--backend mineru-platform`。不要把 v4
+platform URL 配给 `mineru-fastapi`；FastAPI 使用 `/tasks` 协议，v4 platform 使用
+`/api/v4/file-urls/batch`、预签名上传 URL 和
+`/api/v4/extract-results/batch/{batch_id}`。
 
 ## 三个主要阶段
 
@@ -77,6 +83,7 @@ python scripts/convert.py adaptive \
     "postprocess_profile": "chunk-markers-dense",
     "mineru_asset_mode": "markdown_assets",
     "mineru_fastapi_backend": "pipeline",
+    "mineru_v4_model_version": "pipeline",
     "allow_table_quality_fallback": false,
     "kb_profile": {
       "id": "table-atomic-en-4096",
@@ -104,8 +111,18 @@ python scripts/convert.py adaptive \
 - `confidence`：规则决策通常是 `high`，LLM 决策可能为 `medium`
 - `signals`：从 `document_features` 提取的关键信号
 - `recommendation`：完整推荐参数组合
+- `recommendation.mineru_fastapi_backend`：仅适用于自托管 FastAPI v2；高质量表格通常为 `hybrid-auto-engine`
+- `recommendation.mineru_v4_model_version`：仅适用于 MinerU v4 platform；高质量表格通常为 `vlm`
 - `recommendation.kb_profile`：建议的 RAGFlow chunk profile
 - `reasons`：每条决策的可读理由
+
+当 `inspect-source` 在 PDF、Office、图片等需要转换的输入中检测到表格信号时：
+
+- `--backend auto` 仍会优先推荐自托管 `mineru-fastapi` 高精度路径；
+- 用户显式传入 `--backend mineru-v4` / `mineru-platform` 时，`adaptive` 会保留该
+  platform backend，并推荐 `table_quality: high` 与
+  `mineru_v4_model_version: vlm`；
+- 如果用户显式配置 `MinerU-HTML`，则保留该模型，并把需要 review 的选择写入报告。
 
 ### 3. adaptive 完整 pipeline（执行转换）
 
@@ -224,6 +241,7 @@ print('table rows:', sum(1 for line in lines if line.startswith('| APOLLO')))
 
 - 用真实 PDF（含本地图片 + 表格）验证 `semantic_rename_markdown_images` 和 `table-quality high` 路径
 - 在 Blackwell (RTX 5070 Ti) 上用 backend probe/warmup 和 fallback policy 验证 `mineru-fastapi` 路径
+- 使用 fake-server 以外的显式授权 live run 验证 `mineru-v4` platform 路径，并只保留脱敏报告摘要
 - 探索 `--decision-override` 参数用法，实现用户自定义决策规则
 
 ## Cross-refs

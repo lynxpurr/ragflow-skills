@@ -21,7 +21,8 @@ PDF/Office/图片文档时，稳定产出高质量、可入库、表格不被切
 
 因此需要代码层更新，但应分层推进：先保证后处理不破坏 HTML table，再给
 `mineru-fastapi` 增加 high-accuracy backend 透传，最后用质量门和 profile 建议让 Hermes
-自动选择正确路径。
+自动选择正确路径。MinerU v4 platform 是独立 backend：同一个 `--table-quality high`
+在 v4 中映射到 `model_version=vlm`，不是 FastAPI 的 high-accuracy backend。
 
 ## 2. 目标和非目标
 
@@ -59,6 +60,9 @@ PDF/Office/图片文档时，稳定产出高质量、可入库、表格不被切
   acceptance 和 strict vendor platform smoke。
 - `--table-quality standard|high|auto` 已实现：`standard` 保持兼容，`high` 强制选择
   high-accuracy FastAPI backend，`auto` 会对 PDF/Office/图片 formal candidates 自动提升。
+- 2026-07-06 MinerU v4 platform 后端已实现；`--table-quality high` 在
+  `mineru-v4` / `mineru-platform` 上选择 `mineru_v4_model_version=vlm`，显式
+  `MinerU-HTML` 会被保留并写入 review warning。
 - `--allow-table-quality-fallback` 已实现；backend unsupported 会按策略降级到 `pipeline`，
   资源/timeout 等失败只有显式允许时才降级，并在 runtime/quality report 中标记
   `table_quality_degraded`。
