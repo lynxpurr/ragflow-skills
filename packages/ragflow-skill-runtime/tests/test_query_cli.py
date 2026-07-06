@@ -1013,6 +1013,85 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
         self.assertIn("RAGFlow Table Query Strategy Report", markdown)
 
+    def test_validation_suggestions_generate_queries_and_qrels_from_retrieval_hints(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            hints = root / "retrieval_hints.json"
+            report_json = root / "validation_suggestions.json"
+            report_md = root / "validation_suggestions.md"
+            queries_json = root / "queries.json"
+            qrels_json = root / "qrels.json"
+            redaction_json = root / "validation_suggestions_redaction.json"
+            hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "table_artifacts": [
+                            {
+                                "document": "source.md",
+                                "caption": "APOLLO specification table",
+                                "source_heading": "APOLLO Specs",
+                                "model_label_candidates": ["APOLLO 11"],
+                                "expected_chunks": ["sha256:" + "a" * 64],
+                            }
+                        ],
+                        "image_artifacts": [
+                            {
+                                "path": "images/apollo-panel.png",
+                                "document": "source.md",
+                                "caption": "APOLLO control panel",
+                                "semantic_kind": "diagram",
+                                "source_heading": "Panel Overview",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "validation-suggestions",
+                        "--retrieval-hints",
+                        str(hints),
+                        "--report-json",
+                        str(report_json),
+                        "--report-md",
+                        str(report_md),
+                        "--queries-json",
+                        str(queries_json),
+                        "--qrels-json",
+                        str(qrels_json),
+                        "--redaction-report",
+                        str(redaction_json),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            file_payload = json.loads(report_json.read_text(encoding="utf-8"))
+            queries_payload = json.loads(queries_json.read_text(encoding="utf-8"))
+            qrels_payload = json.loads(qrels_json.read_text(encoding="utf-8"))
+            markdown = report_md.read_text(encoding="utf-8")
+            redaction_payload = json.loads(redaction_json.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["schema"], "ragflow_validation_query_suggestions_v1")
+        self.assertEqual(file_payload["summary"]["script_owned_llm_calls"], 0)
+        self.assertFalse(file_payload["summary"]["llm_invoked"])
+        self.assertGreaterEqual(file_payload["summary"]["query_count"], 3)
+        categories = {item["metadata"]["benchmark_category"] for item in queries_payload["queries"]}
+        self.assertIn("table_value", categories)
+        self.assertIn("diagram_software_screenshot", categories)
+        self.assertIn("mixed_table_plus_image", categories)
+        qrel_modalities = {item["expected_modality"] for item in qrels_payload["qrels"]}
+        self.assertIn("table", qrel_modalities)
+        self.assertIn("image", qrel_modalities)
+        self.assertTrue(any(item.get("expected_chunks") for item in qrels_payload["qrels"]))
+        self.assertIn("RAGFlow Validation Query Suggestions", markdown)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+
     def test_intent_commands_write_reports(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:

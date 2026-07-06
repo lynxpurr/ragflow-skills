@@ -67,6 +67,9 @@ Completed public offline work in the current implementation pass:
   tag scope hints, classifies no-result, wrong-modality, table-fragment, image-evidence,
   pollution, route-mismatch, and low-similarity symptoms, and maps each class to concrete
   follow-up commands in JSON and Markdown reports.
+- `ragflow-query validation-suggestions` now consumes `retrieval_hints.json` offline and
+  emits no-LLM benchmark-style `queries.json` and `qrels.json` suggestions for table,
+  image/diagram, and mixed table-plus-image validation.
 
 The live disposable Markdown-plus-image build remains gated. It must stay unchecked until
 the user explicitly approves live mutation and sanitized cleanup evidence is recorded.
@@ -448,7 +451,7 @@ All new live-capable features must use the same safety model:
 - [x] Add image-specific precision/recall and visual coverage metrics.
 - [ ] Let `ragflow-kb-build` consume `retrieval_hints.json` during dry-run readiness and
   profile recommendation.
-- [ ] Let `ragflow-query` generate deterministic validation query suggestions from table
+- [x] Let `ragflow-query` generate deterministic validation query suggestions from table
   and image hints without LLM calls.
 - [ ] Add consistency checks between `retrieval_hints.json`, `asset-upload-plan`,
   `chunk_profile_report.json`, and `kb_manifest.json`.
@@ -518,8 +521,9 @@ All new live-capable features must use the same safety model:
 5. Profile decision report with stricter benchmark thresholds. Completed.
 6. Multimodal benchmark categories and query diagnostics. Benchmark categories, qrels
    modality/chunk extensions, result modality distribution, and image/table coverage
-   metrics plus `diagnose-result` class mapping are completed; deterministic query
-   suggestions and consistency checks remain open.
+   metrics, `diagnose-result` class mapping, and deterministic query suggestions are
+   completed; retrieval-hint build/profile consumption and consistency checks remain
+   open.
 7. Batch/resume and performance telemetry expansion for larger corpora. Not started.
 
 This order keeps the first slice offline and fake-client-testable, then opens live

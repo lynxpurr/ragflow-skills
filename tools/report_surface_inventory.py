@@ -108,6 +108,7 @@ QUERY_COVERED_COMMANDS = (
     "ragflow-query session enrich",
     "ragflow-query session inspect",
     "ragflow-query table-strategy",
+    "ragflow-query validation-suggestions",
 )
 QUERY_NOT_APPLICABLE_COMMANDS = (
     "ragflow-query ask",

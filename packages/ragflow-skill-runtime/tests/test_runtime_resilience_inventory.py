@@ -20,7 +20,7 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_runtime_resilience_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 100)
+        self.assertEqual(report["summary"]["command_count"], 101)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
@@ -28,7 +28,7 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
                 "candidate": 0,
                 "covered": 22,
                 "deferred": 0,
-                "not_applicable": 78,
+                "not_applicable": 79,
             },
         )
 
@@ -46,6 +46,10 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
         fallback = by_command["ragflow-query fallback-test"]
         self.assertEqual(fallback["status"], "covered")
         self.assertEqual(fallback["features"], ["partial_failure"])
+
+        validation_suggestions = by_command["ragflow-query validation-suggestions"]
+        self.assertEqual(validation_suggestions["status"], "not_applicable")
+        self.assertEqual(validation_suggestions["features"], [])
 
         backend_probe = by_command["ragflow-doc-to-md backend probe"]
         self.assertEqual(backend_probe["status"], "covered")

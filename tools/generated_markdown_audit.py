@@ -102,6 +102,7 @@ SANITIZED_MARKDOWN_VERIFIED_COMMANDS = (
     "ragflow-query session enrich",
     "ragflow-query session inspect",
     "ragflow-query table-strategy",
+    "ragflow-query validation-suggestions",
 )
 
 

@@ -426,6 +426,14 @@ EXPECTED_IDENTITIES = (
         coverage_patterns=("ragflow_query_rewrite_plan_v1", "QUERY_REWRITE_PLAN_SCHEMA"),
     ),
     SchemaIdentity(
+        key="validation_query_suggestions",
+        group="query",
+        identity="ragflow_validation_query_suggestions_v1",
+        source_patterns=("ragflow_validation_query_suggestions_v1", "VALIDATION_QUERY_SUGGESTIONS_SCHEMA"),
+        coverage_patterns=("ragflow_validation_query_suggestions_v1", "VALIDATION_QUERY_SUGGESTIONS_SCHEMA"),
+        description="No-LLM validation query and qrels suggestions derived from retrieval hints.",
+    ),
+    SchemaIdentity(
         key="table_query_strategy_report",
         group="query",
         identity="ragflow_table_query_strategy_report_v1",

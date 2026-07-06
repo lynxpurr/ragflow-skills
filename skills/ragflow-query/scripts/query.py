@@ -53,6 +53,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     create_agentic_answer_request,
     build_query_rewrite_plan,
     build_table_query_strategy_report,
+    build_validation_query_suggestions,
     build_query_output_cache_report,
     classify_query_intent,
     build_query_session_inspection,
@@ -110,6 +111,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_query_rewrite_markdown,
     render_query_route_decision_markdown,
     render_table_query_strategy_markdown,
+    render_validation_query_suggestions_markdown,
     render_query_trace_markdown,
     render_route_activation_check_markdown,
     render_route_diagnose_markdown,
@@ -1283,6 +1285,48 @@ def _table_strategy(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _sanitize_validation_suggestions_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [*_collect_urls(report)]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.retrieval_hints,
+            args.report_json,
+            args.report_md,
+            args.queries_json,
+            args.qrels_json,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _validation_suggestions(args: argparse.Namespace) -> int:
+    try:
+        retrieval_hints = load_retrieval_hints(args.retrieval_hints)
+        report = build_validation_query_suggestions(
+            retrieval_hints,
+            max_tables=args.max_tables,
+            max_images=args.max_images,
+        )
+    except (OSError, ValueError, json.JSONDecodeError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_validation_suggestions_report(report, args)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_validation_query_suggestions_markdown(report))
+    _write_json(args.queries_json, report.get("queries_artifact", {}))
+    _write_json(args.qrels_json, report.get("qrels_artifact", {}))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _intent_classify(args: argparse.Namespace) -> int:
     try:
         report = classify_query_intent(
@@ -2401,6 +2445,21 @@ def build_parser() -> argparse.ArgumentParser:
     table_strategy.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     table_strategy.add_argument("--json", action="store_true", help="Emit JSON report")
     table_strategy.set_defaults(func=_table_strategy)
+
+    validation_suggestions = sub.add_parser(
+        "validation-suggestions",
+        help="Generate no-LLM benchmark query and qrels suggestions from retrieval hints",
+    )
+    validation_suggestions.add_argument("--retrieval-hints", required=True, help="retrieval_hints.json")
+    validation_suggestions.add_argument("--max-tables", type=int, default=3)
+    validation_suggestions.add_argument("--max-images", type=int, default=3)
+    validation_suggestions.add_argument("--queries-json", help="Optional benchmark queries JSON output path")
+    validation_suggestions.add_argument("--qrels-json", help="Optional benchmark qrels JSON output path")
+    validation_suggestions.add_argument("--report-json", help="Optional JSON report output path")
+    validation_suggestions.add_argument("--report-md", help="Optional Markdown report output path")
+    validation_suggestions.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    validation_suggestions.add_argument("--json", action="store_true", help="Emit JSON report")
+    validation_suggestions.set_defaults(func=_validation_suggestions)
 
     intent = sub.add_parser("intent", help="Classify and route query intent")
     intent_sub = intent.add_subparsers(dest="intent_command", required=True)
