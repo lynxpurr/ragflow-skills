@@ -661,6 +661,18 @@ class KbBuildCliTests(unittest.TestCase):
             input_dir = Path(tmp) / "docs"
             input_dir.mkdir()
             (input_dir / "sample.md").write_text("# Title\n\nBody\n", encoding="utf-8")
+            retrieval_hints = Path(tmp) / "retrieval_hints.json"
+            retrieval_hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "table_artifacts": [{"document": "sample.md", "caption": "Sample table"}],
+                        "image_artifacts": [{"path": "images/sample.png", "caption": "Sample image"}],
+                        "quality_risks": [{"code": "table_fragmentation", "severity": "warning"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             result = subprocess.run(
                 [
@@ -672,6 +684,8 @@ class KbBuildCliTests(unittest.TestCase):
                     "kb:test",
                     "--profile",
                     str(PROFILE_PATH),
+                    "--retrieval-hints",
+                    str(retrieval_hints),
                     "--dry-run",
                 ],
                 text=True,
@@ -686,6 +700,9 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertTrue(payload["dry_run"])
         self.assertEqual(payload["kb_name"], "kb:test")
         self.assertEqual(len(payload["documents"]), 1)
+        self.assertEqual(payload["retrieval_hints_summary"]["table_artifact_count"], 1)
+        self.assertEqual(payload["retrieval_hints_summary"]["image_artifact_count"], 1)
+        self.assertEqual(payload["retrieval_hints_summary"]["quality_risk_count"], 1)
 
     def test_build_live_path_reports_runtime_resilience_with_fake_client(self) -> None:
         module = load_build_module()
@@ -6639,6 +6656,17 @@ class KbBuildCliTests(unittest.TestCase):
                 env=_env(),
             )
             output_profile = root / "recommended.json"
+            retrieval_hints = root / "retrieval_hints.json"
+            retrieval_hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "table_artifacts": [{"caption": "APOLLO table"}],
+                        "image_artifacts": [{"path": "images/apollo.png"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
             recommend_result = subprocess.run(
                 [
                     sys.executable,
@@ -6648,6 +6676,8 @@ class KbBuildCliTests(unittest.TestCase):
                     "en",
                     "--doc-type",
                     "manual",
+                    "--retrieval-hints",
+                    str(retrieval_hints),
                     "--output",
                     str(output_profile),
                 ],
@@ -6658,12 +6688,16 @@ class KbBuildCliTests(unittest.TestCase):
             )
             lint_report_text = report_md.read_text(encoding="utf-8")
             recommended_payload = json.loads(output_profile.read_text(encoding="utf-8"))
+            recommend_report = json.loads(recommend_result.stdout)
 
         self.assertEqual(lint_result.returncode, 0, lint_result.stdout)
         self.assertIn("profile_lint_report_v1", lint_result.stdout)
         self.assertIn("default-en-768", lint_report_text)
         self.assertEqual(recommend_result.returncode, 0, recommend_result.stdout)
         self.assertEqual(recommended_payload["chunk_size"], 768)
+        self.assertEqual(recommend_report["retrieval_hints_summary"]["table_artifact_count"], 1)
+        self.assertEqual(recommend_report["retrieval_hints_summary"]["image_artifact_count"], 1)
+        self.assertTrue(any("retrieval hints" in item for item in recommend_report["rationale"]))
 
     def test_profile_compare_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

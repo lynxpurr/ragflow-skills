@@ -149,6 +149,7 @@ from .handoff import (
     render_doc_ingest_readiness_markdown,
     render_handoff_comparison_markdown,
     render_handoff_inspection_markdown,
+    summarize_retrieval_hints,
     write_doc_ingest_readiness_report,
     write_formal_handoff_manifest,
 )
@@ -1033,6 +1034,7 @@ __all__ = [
     "summarize_benchmark_report",
     "summarize_optimization_results",
     "summarize_metadata_for_documents",
+    "summarize_retrieval_hints",
     "suppression_report_file",
     "suppression_report_payload",
     "tagset_report_file",

@@ -104,6 +104,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     trend_benchmark_reports,
     delta_benchmark_reports,
     summarize_metadata_for_documents,
+    summarize_retrieval_hints,
     export_tagset_file,
     evaluate_apollo_table_qa_results,
     tagset_report_file,
@@ -773,6 +774,17 @@ def _run(args: argparse.Namespace) -> int:
             raise BuildError("metadata lint failed; run metadata lint for details")
         if args.dry_run:
             table_parent_chunk_preflight = {"exists": False, "status": "not_available", "table_count": 0}
+            retrieval_hints_payload = None
+            retrieval_hints_path = Path(args.retrieval_hints) if args.retrieval_hints else None
+            if retrieval_hints_path is None and args.doc_manifest:
+                candidate_hints = Path(args.doc_manifest).parent / "retrieval_hints.json"
+                if candidate_hints.is_file():
+                    retrieval_hints_path = candidate_hints
+            if retrieval_hints_path:
+                loaded_hints = _read_json_file(retrieval_hints_path, label="retrieval hints")
+                if not isinstance(loaded_hints, Mapping):
+                    raise BuildError("retrieval hints must be a JSON object")
+                retrieval_hints_payload = loaded_hints
             if args.doc_manifest:
                 try:
                     readiness = make_doc_ingest_readiness_payload(
@@ -801,6 +813,7 @@ def _run(args: argparse.Namespace) -> int:
                     "profile": profile.to_manifest_dict(),
                     "documents": [str(doc.path) for doc in docs],
                     "metadata_summary": metadata_summary,
+                    "retrieval_hints_summary": summarize_retrieval_hints(retrieval_hints_payload),
                     "table_parent_chunk_preflight": table_parent_chunk_preflight,
                 }
             )
@@ -3607,6 +3620,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--kb-name", required=True, help="RAGFlow dataset name")
     parser.add_argument("--profile", required=True, help="Chunk profile JSON/YAML")
     parser.add_argument("--metadata", help="Optional ragflow_metadata_v1 file to summarize and lint before upload")
+    parser.add_argument("--retrieval-hints", help="Optional retrieval_hints.json used by dry-run readiness review")
     parser.add_argument("--output", default="kb_manifest.json", help="Output kb_manifest.json path for non-dry-run builds")
     parser.add_argument("--config", help="Runtime config file")
     parser.add_argument("--base-url", help="RAGFlow base URL")

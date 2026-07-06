@@ -2826,6 +2826,7 @@ def _retrieval_hint_summary(retrieval_hints: Mapping[str, Any] | None) -> dict[s
             "asset_semantic_image_count": 0,
             "table_term_alias_candidate_count": 0,
             "table_semantic_risk_count": 0,
+            "quality_risk_count": 0,
         }
     asset_semantics = retrieval_hints.get("asset_semantics") if isinstance(retrieval_hints.get("asset_semantics"), Mapping) else {}
     asset_summary = asset_semantics.get("summary") if isinstance(asset_semantics.get("summary"), Mapping) else {}
@@ -2864,7 +2865,16 @@ def _retrieval_hint_summary(retrieval_hints: Mapping[str, Any] | None) -> dict[s
         if isinstance(retrieval_hints.get("layout_signals"), list)
         else 0,
         "asset_semantic_image_count": int(asset_summary.get("image_count", 0) or 0),
+        "quality_risk_count": len(retrieval_hints.get("quality_risks", []))
+        if isinstance(retrieval_hints.get("quality_risks"), list)
+        else 0,
     }
+
+
+def summarize_retrieval_hints(retrieval_hints: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return stable counts used by build and profile review surfaces."""
+
+    return _retrieval_hint_summary(retrieval_hints)
 
 
 def _chunk_readiness_summary(

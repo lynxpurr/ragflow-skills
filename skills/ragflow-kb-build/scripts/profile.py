@@ -45,6 +45,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_profile_compare_markdown,
     render_profile_decision_markdown,
     render_profile_lint_markdown,
+    summarize_retrieval_hints,
 )
 from ragflow_skill_runtime.profiles import ProfileError  # noqa: E402
 from _report_redaction import sanitize_cli_report  # noqa: E402
@@ -468,16 +469,24 @@ def _cmd_explain(args: argparse.Namespace) -> int:
 
 
 def _cmd_recommend(args: argparse.Namespace) -> int:
+    retrieval_hints_summary = summarize_retrieval_hints(None)
+    if args.retrieval_hints:
+        retrieval_hints = _read_json_file(args.retrieval_hints)
+        if not isinstance(retrieval_hints, Mapping):
+            raise ProfileError("retrieval hints must be a JSON object")
+        retrieval_hints_summary = summarize_retrieval_hints(retrieval_hints)
     recommendation = recommend_profile(
         language=args.language,
         doc_type=args.doc_type,
         profile_id=args.profile_id,
+        retrieval_hints_summary=retrieval_hints_summary,
     )
     payload = recommendation.to_dict()
     _write_json(args.output, payload["profile"])
     payload = _sanitize_profile_report(
         payload,
         args,
+        input_paths=[args.retrieval_hints],
         output_paths=[args.report_json, args.redaction_report],
     )
     _write_json(args.report_json, payload)
@@ -636,6 +645,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["general", "book", "manual", "paper", "notes", "mixed"],
     )
     recommend.add_argument("--profile-id", help="Override generated profile_id")
+    recommend.add_argument("--retrieval-hints", help="Optional retrieval_hints.json used to annotate profile recommendation")
     recommend.add_argument("--output", help="Optional profile JSON output path")
     recommend.add_argument("--report-json", help="Optional recommendation report output path")
     recommend.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")

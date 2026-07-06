@@ -150,9 +150,10 @@ class ProfileRecommendation:
     language: str
     doc_type: str
     rationale: list[str]
+    retrieval_hints_summary: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "ok": True,
             "schema": "ragflow_profile_recommendation_v1",
             "language": self.language,
@@ -160,6 +161,9 @@ class ProfileRecommendation:
             "profile": self.profile.to_manifest_dict(),
             "rationale": list(self.rationale),
         }
+        if self.retrieval_hints_summary is not None:
+            payload["retrieval_hints_summary"] = dict(self.retrieval_hints_summary)
+        return payload
 
 
 def load_profile(path: str | Path) -> ChunkProfile:
@@ -356,6 +360,7 @@ def recommend_profile(
     language: str = "auto",
     doc_type: str = "general",
     profile_id: str | None = None,
+    retrieval_hints_summary: Mapping[str, Any] | None = None,
 ) -> ProfileRecommendation:
     """Create a deterministic starter profile."""
 
@@ -421,11 +426,19 @@ def recommend_profile(
         rationale.append("Use smaller chunks for short notes to avoid merging unrelated snippets.")
     if doc_type == "mixed":
         rationale.append("Use a middle-size chunk for mixed document sets before per-domain tuning.")
+    if retrieval_hints_summary and retrieval_hints_summary.get("exists"):
+        table_count = int(retrieval_hints_summary.get("table_artifact_count", 0) or 0)
+        image_count = int(retrieval_hints_summary.get("image_artifact_count", 0) or 0)
+        if table_count or image_count:
+            rationale.append(
+                "Use retrieval hints to seed table/image benchmark validation before changing profile defaults."
+            )
     return ProfileRecommendation(
         profile=profile,
         language=language_label,
         doc_type=doc_type,
         rationale=rationale,
+        retrieval_hints_summary=dict(retrieval_hints_summary) if retrieval_hints_summary is not None else None,
     )
 
 

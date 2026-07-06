@@ -20,6 +20,7 @@ python scripts/build.py --input ./markdown --kb-name kb:project --profile ./temp
 python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-zh-512.json
 python scripts/build.py --config /path/to/ragflow-config.local.yaml --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-zh-512.json
 python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-en-768.json --dry-run --json
+python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --retrieval-hints ./handoff/retrieval_hints.json --kb-name kb:project --profile ./templates/default-en-768.json --dry-run --json
 python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --metadata ./run/metadata.merged.json --kb-name kb:project --profile ./templates/default-en-768.json --dry-run --json
 python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-en-768.json --allow-blocked
 python scripts/build.py model-providers probe --config /path/to/ragflow-config.local.yaml --embedding-model bge-m3 --rerank-model bge-reranker --embedding-adapter-url https://embedding.example/v1/embeddings --rerank-adapter-url https://rerank.example/rerank --report-md ./run/model_provider_probe.md --redaction-report ./run/model_provider_redaction.json --json
@@ -72,6 +73,7 @@ python scripts/inspect_kb.py --kb-manifest ./run/kb_manifest.json
 python scripts/profile.py lint --profile ./templates/default-en-768.json --report-md ./run/profile_lint.md
 python scripts/profile.py explain --profile ./templates/default-zh-512.json
 python scripts/profile.py recommend --language en --doc-type manual --output ./run/recommended-profile.json
+python scripts/profile.py recommend --language en --doc-type manual --retrieval-hints ./handoff/retrieval_hints.json --output ./run/recommended-profile.json
 python scripts/profile.py compare --report ./run/profile-a-validation.json --report ./run/profile-b-validation.json --report-md ./run/profile_compare.md
 python scripts/profile.py experiment --base-profile ./templates/default-en-768.json --set auto_keywords=0,3 --set auto_questions=0,2 --set retrieval.top_k=3,5 --candidate-set ./run/candidate_profile_set.json --report-md ./run/profile_experiment_matrix.md
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level smoke
@@ -86,7 +88,7 @@ Notes:
 - `build.py` creates the dataset, uploads Markdown, triggers parse, waits for parse completion by default, and emits `kb_manifest.json`.
 - `templates/kb_manifest.schema.json` documents the public `kb_manifest.json` contract for host agents and downstream consumers.
 - When a `doc_manifest.json` contains `quality_gate.status: BLOCKED`, `build.py` refuses to upload by default. Use `--allow-blocked` only after the user explicitly accepts the risk.
-- Use `--dry-run` to validate local inputs without touching RAGFlow; dry-run prints JSON and does not write `kb_manifest.json`.
+- Use `--dry-run` to validate local inputs without touching RAGFlow; dry-run prints JSON and does not write `kb_manifest.json`. Add `--retrieval-hints`, or place `retrieval_hints.json` next to `doc_manifest.json`, to include table/image/quality-risk hint counts in readiness output.
 - Use `--no-wait` only when the host platform should continue while RAGFlow parses asynchronously.
 - When `ragflow-doc-to-md pipeline` produced the handoff, review `ragflow_ingest_plan.yaml`, `profile_suggestions.json`, and `retrieval_hints.json`, then run `build.py --dry-run` against `doc_manifest.json` before any live build. Use `inspect-handoff` first to check sidecar completeness, image assets, and ingestion readiness.
 - Use `asset-upload-plan` to review a non-live Markdown plus local image package plan before upload; it reports Markdown image references, discovered/manifest image artifacts, missing image assets, unreferenced handoff images, sidecars, package paths, and optional local zip contents without calling RAGFlow.
@@ -118,7 +120,7 @@ Notes:
 - Use `cleanup.py` without `--execute` first; deletion requires `--execute`, an exact `--confirm-dataset-id`, and the matching `--confirm-kb-name` when the name is known.
 - Use `probe.py` to check safe RAGFlow API compatibility before live build operations.
 - Use `diagnose.py` to explain manifest, parse-state, duplicate-name, short-ID, and zero-chunk symptoms without private database access.
-- Use `profile.py lint/explain/recommend/compare` to review chunk profiles before upload and compare validation reports after profile experiments.
+- Use `profile.py lint/explain/recommend/compare` to review chunk profiles before upload and compare validation reports after profile experiments. Add `profile.py recommend --retrieval-hints` to include handoff table/image hints in the recommendation report and rationale.
 - Use `profile.py experiment` to expand an offline enrichment experiment matrix into a local candidate profile set for `optimize --profile-set`; it records retrieval settings and warns about slow or LLM-backed enrichment without touching RAGFlow.
 - `profile.py compare` and `optimize summarize` surface latency, parse-time, empty-result, chunk-count, and benchmark quality metrics when existing validation reports provide them.
 - `validate.py` supports `smoke`, `regression`, and `benchmark`; regression requires a query set, and benchmark requires both a query set and qrels.
