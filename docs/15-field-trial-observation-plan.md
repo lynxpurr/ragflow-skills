@@ -422,6 +422,12 @@ The next stage remains observation, not feature expansion. The representative PD
 field-trial shows the current CLI pipeline is sufficient for the RAGFlux replacement
 workflow when GPU capacity is available and credentials are current. The remaining
 post-CLI, private-bridge, provider, reranker, and optional LLM/backend work should stay
-gated until this plan produces concrete evidence that one of them is needed. The
-system-level closeout baseline and ongoing observation/improvement backlog are recorded
-in `docs/16-system-closeout-report.md`.
+gated until this plan produces concrete evidence that one of them is needed.
+
+The MinerU v4 platform backend is implemented and release-validated through fake-server
+tests, consumer acceptance, and strict-vendor platform smoke. A real MinerU v4 platform
+run is still observation-gated: it requires an explicit user request, credentials,
+a throwaway small fixture, no private corpus disclosure, and sanitized evidence capture.
+
+The system-level closeout baseline and ongoing observation/improvement backlog are
+recorded in `docs/16-system-closeout-report.md`.

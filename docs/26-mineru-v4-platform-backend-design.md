@@ -117,7 +117,7 @@ Map table quality as follows:
 | --- | --- |
 | `standard` | Preserve the configured `mineru_v4_model_version`, defaulting to `pipeline`. |
 | `high` | Use `model_version=vlm` unless the user explicitly configured `MinerU-HTML`; preserve explicit `MinerU-HTML` and report that the user-selected model was kept. |
-| `auto` | For PDF/Office/image formal-ingest candidates with table signals, recommend `backend=mineru-v4`, `table_quality=high`, `mineru_v4_model_version=vlm`, and `markdown_assets`-compatible asset handling where available. |
+| `auto` | For PDF/Office/image formal-ingest candidates with table signals, keep the configured or explicitly requested backend. If that backend is `mineru-v4` / `mineru-platform`, recommend `table_quality=high`, `mineru_v4_model_version=vlm`, and `markdown_assets`-compatible asset handling where available. Do not switch to the paid platform path merely because a token exists. |
 
 The table-quality report must distinguish:
 
@@ -211,13 +211,14 @@ Extend existing runtime and quality reports without leaking secrets:
 ### Adaptive Pipeline Integration
 
 - `inspect-source` remains offline and does not call MinerU.
-- `adaptive --decision-only` may recommend `mineru-v4` when:
+- `adaptive --decision-only` may preserve and tune `mineru-v4` when:
   - input is PDF/Office/image;
   - source inspection finds table signals or complex layout signals;
-  - the user requested a platform backend, or a backend-probe result says v4 is
-    available.
+  - the user requested a platform backend or supplied an explicit policy/override that
+    selects the v4 platform path.
 - Do not make `mineru-v4` the default adaptive remote backend merely because a token is
-  present. Prefer explicit user choice or explicit policy.
+  present. Prefer explicit user choice or explicit policy. Backend probe evidence can
+  confirm readiness, but it does not by itself opt the run into paid platform routing.
 - If `mineru-v4` is selected and `table_quality=high`, set effective
   `model_version=vlm`.
 

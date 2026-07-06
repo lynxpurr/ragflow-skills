@@ -55,6 +55,11 @@ Completed or closed for the current public command surface:
   `ragflow_adaptive_pipeline_summary_v1`, then reuse the existing formal `pipeline` and
   emit review commands for `inspect-handoff`, `asset-upload-plan`, and KB dry-run without
   enabling script-owned LLM calls or live RAGFlow mutation.
+- The 2026-07-06 MinerU v4 platform backend adds explicit `mineru-v4` /
+  `mineru-platform` support for the public MinerU precision API. The backend uses the
+  v4 local-file batch upload, signed object upload, batch polling, `full_zip_url`
+  extraction, safe asset materialization, redacted runtime telemetry, backend probe, and
+  release-path fake-server validation without making live MinerU calls by default.
 
 Partially completed and still active:
 
@@ -112,7 +117,7 @@ Completion priorities:
 
 Progress assessment:
 
-- Roadmap checklist status is 571 completed items out of 586 tracked items, about 97%.
+- Roadmap checklist status is 579 completed items out of 594 tracked items, about 97%.
 - The portable public CLI suite is complete for the planned portable archive
   release path: core commands, release packaging, redaction, report inventories, runtime
   helper pilots, contract gates, installed archive smoke, and primary manifest JSON Schema
@@ -1992,6 +1997,61 @@ Exit criteria:
 - RAGFlux baseline comparison shows no critical regression in the retirement metrics.
 - Sanitized evidence is retained under an explicit run root and summarized by the
   field-trial observation process.
+
+## Phase 42: MinerU v4 Platform Backend Release-Path Maintenance
+
+Goal: add a first-class public MinerU v4 platform backend without overloading the
+self-hosted FastAPI, Agent API, synchronous multipart, or local CLI adapters.
+
+Design source: `docs/26-mineru-v4-platform-backend-design.md`.
+
+Status note: Phase 42 is implemented and release-validated with fake-server coverage. It
+does not run live MinerU v4 calls by default, does not infer paid platform routing merely
+from a configured token, and does not open any remaining post-CLI, provider, reranker,
+LLM/backend, or private-bridge gated tracks.
+
+Tasks:
+
+- [x] Record the MinerU v4 protocol distinction, endpoint shape, request fields, result
+  contract, and live-validation boundary in `docs/26-mineru-v4-platform-backend-design.md`.
+- [x] Add `mineru-v4` plus the `mineru-platform` alias to runtime, CLI, adaptive, config,
+  and public template inventories.
+- [x] Implement the v4 local-file batch protocol: submit `/api/v4/file-urls/batch`,
+  upload to returned signed URLs without the bearer token, poll
+  `/api/v4/extract-results/batch/{batch_id}`, download `full_zip_url`, and extract
+  Markdown plus safe optional assets.
+- [x] Add v4 model/result/data-id configuration through env, config files, CLI flags, and
+  `convert_source_to_markdown()` dispatch.
+- [x] Calibrate table-quality and adaptive decisions so explicit v4 backends use
+  `model_version=vlm` for high-quality table extraction while preserving explicit
+  `MinerU-HTML`.
+- [x] Add runtime, CLI, config, adaptive, consumer-acceptance, and platform-smoke coverage
+  for success, protocol failures, zip safety, redaction, probe, and report fields.
+- [x] Update public skill docs, host-agent guidance, config examples, architecture docs,
+  table-quality notes, and comparison references.
+- [x] Run the release-facing validation chain and keep live MinerU v4 validation as a
+  future explicit, credentialed, sanitized field-trial task.
+
+Implementation record, 2026-07-06:
+
+- Commit `1baaf15 Add MinerU v4 platform backend` added the backend implementation,
+  docs, focused tests, consumer acceptance, and strict-vendor platform smoke coverage.
+- The implementation submits one source per conversion call to match the existing
+  `ragflow-doc-to-md` contract, while using the official v4 batch API under the hood.
+- `adaptive` remains conservative for paid platform routing: it recommends v4
+  high-quality table extraction only when the user explicitly requested
+  `mineru-v4` / `mineru-platform`; `auto` continues to prefer existing host routing or
+  configured FastAPI behavior rather than switching solely because a token exists.
+
+Exit criteria:
+
+- `docs/26` has no unchecked implementation items.
+- Public CLI/config/docs distinguish `mineru-fastapi` `/tasks` from MinerU v4
+  `/api/v4/file-urls/batch` and `/api/v4/extract-results/batch/{batch_id}`.
+- Fake-server runtime and CLI tests prove success, failure, redaction, and zip-safety
+  paths.
+- Release hygiene, consumer acceptance, archive export, and strict-vendor platform smoke
+  remain green.
 
 ## Definition of Done
 
