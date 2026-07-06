@@ -10,6 +10,7 @@ from ragflow_skill_runtime.kb_build import (
     BuildError,
     BuildDocument,
     KB_ASSET_UPLOAD_PLAN_SCHEMA,
+    MULTIMODAL_KB_MANIFEST_SCHEMA,
     create_kb_asset_upload_plan,
     discover_markdown_documents,
     extract_document_states,
@@ -19,6 +20,7 @@ from ragflow_skill_runtime.kb_build import (
     extract_document_name,
     extract_uploaded_document_id,
     make_kb_manifest_payload,
+    make_multimodal_kb_manifest_payload,
     normalize_document_state,
     write_kb_asset_upload_zip,
     wait_for_document_states,
@@ -331,6 +333,72 @@ class KbBuildTests(unittest.TestCase):
         self.assertEqual(payload["documents"][0]["source_path"], "a.pdf")
         self.assertEqual(payload["profile"]["id"], "default-en-768")
 
+    def test_make_multimodal_kb_manifest_links_markdown_visuals_and_observed_state(self) -> None:
+        profile = ChunkProfile.from_dict({"profile_id": "default-zh-1024", "chunk_size": 1024})
+        payload = make_multimodal_kb_manifest_payload(
+            base_url="https://ragflow.example.test/api/v1",
+            dataset_id="ds-visual",
+            dataset_name="visual-fixture",
+            profile=profile,
+            markdown_documents=[
+                (
+                    BuildDocument(path=Path("documents/source.md"), manifest_source_path="source.pdf"),
+                    "doc-md",
+                    "DONE",
+                    7,
+                )
+            ],
+            asset_upload_plan={
+                "schema": "ragflow_kb_asset_upload_plan_v2",
+                "planned_visual_upload_files": [
+                    {
+                        "source_path": "documents/images/page-00.png",
+                        "package_path": "documents/images/page-00.png",
+                        "asset_class": "markdown_referenced",
+                        "sha256": "abc123",
+                        "mime_type": "image/png",
+                    }
+                ],
+            },
+            document_list_response={
+                "data": {
+                    "items": [
+                        {
+                            "id": "doc-md",
+                            "name": "source.md",
+                            "run": "DONE",
+                            "chunk_count": 7,
+                            "mime_type": "text/markdown",
+                        },
+                        {
+                            "id": "doc-image",
+                            "name": "page-00.png",
+                            "run": "DONE",
+                            "chunk_count": 2,
+                            "mime_type": "image/png",
+                            "thumbnail_url": "thumbnails/page-00.png",
+                            "vlm_status": "completed",
+                        },
+                    ]
+                }
+            },
+        )
+
+        self.assertEqual(payload["schema"], MULTIMODAL_KB_MANIFEST_SCHEMA)
+        self.assertEqual(payload["summary"]["markdown_document_count"], 1)
+        self.assertEqual(payload["summary"]["visual_document_count"], 1)
+        self.assertEqual(payload["summary"]["thumbnail_document_count"], 1)
+        self.assertEqual(payload["summary"]["vlm_observed_document_count"], 1)
+        visual = payload["visual_documents"][0]
+        self.assertEqual(visual["document_id"], "doc-image")
+        self.assertEqual(visual["source_path"], "documents/images/page-00.png")
+        self.assertEqual(visual["asset_class"], "markdown_referenced")
+        self.assertEqual(visual["sha256"], "abc123")
+        self.assertEqual(visual["status"], "done")
+        self.assertEqual(visual["chunk_count"], 2)
+        self.assertEqual(visual["thumbnail"]["url"], "thumbnails/page-00.png")
+        self.assertEqual(visual["vlm_status"], "completed")
+
     def test_normalize_document_state_uses_progress_as_success(self) -> None:
         state = normalize_document_state(
             {"id": "doc-1", "progress": 1.0, "chunk_count": "7"},
@@ -352,6 +420,35 @@ class KbBuildTests(unittest.TestCase):
         )
         self.assertEqual(list(states), ["doc-1"])
         self.assertEqual(states["doc-1"]["status"], "done")
+
+    def test_extract_document_states_preserves_visual_document_observations(self) -> None:
+        states = extract_document_states(
+            {
+                "data": {
+                    "docs": [
+                        {
+                            "id": "img-1",
+                            "name": "figure.png",
+                            "run": "DONE",
+                            "chunk_count": "3",
+                            "mime_type": "image/png",
+                            "thumbnail_url": "thumbs/figure.png",
+                            "vlm_status": "completed",
+                        },
+                        "malformed",
+                        {"id": "", "name": "missing-id.png"},
+                    ]
+                }
+            }
+        )
+
+        self.assertEqual(set(states), {"img-1"})
+        self.assertEqual(states["img-1"]["document_kind"], "image")
+        self.assertEqual(states["img-1"]["name"], "figure.png")
+        self.assertEqual(states["img-1"]["chunk_count"], 3)
+        self.assertEqual(states["img-1"]["thumbnail"]["url"], "thumbs/figure.png")
+        self.assertEqual(states["img-1"]["vlm_status"], "completed")
+        self.assertEqual(extract_document_states({"data": {"items": "not-a-list"}}), {})
 
     def test_wait_for_document_states_returns_when_all_parsed(self) -> None:
         client = FakeDocumentClient(

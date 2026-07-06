@@ -17,6 +17,7 @@ from .manifests import DocManifest, KbDocumentEntry
 from .profiles import ChunkProfile
 
 KB_ASSET_UPLOAD_PLAN_SCHEMA = "ragflow_kb_asset_upload_plan_v2"
+MULTIMODAL_KB_MANIFEST_SCHEMA = "ragflow_multimodal_kb_manifest_v1"
 MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)]\(([^)]+)\)")
 IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".tif", ".tiff", ".webp"}
 ASSET_UPLOAD_PLAN_IMAGE_CLASSES = (
@@ -1013,6 +1014,44 @@ def extract_document_id(document: Mapping[str, Any]) -> str:
     return ""
 
 
+def _first_string(document: Mapping[str, Any], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = document.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _document_mime_type(document: Mapping[str, Any], *, name: str) -> str:
+    explicit = _first_string(document, ("mime_type", "content_type", "type", "file_type"))
+    if explicit:
+        return explicit
+    guessed, _encoding = mimetypes.guess_type(name)
+    return guessed or ""
+
+
+def _document_kind(*, name: str, mime_type: str) -> str:
+    suffix = Path(name).suffix.lower()
+    lowered_mime = mime_type.lower()
+    if lowered_mime.startswith("image/") or suffix in IMAGE_SUFFIXES:
+        return "image"
+    if suffix in {".md", ".markdown"} or lowered_mime in {"text/markdown", "text/x-markdown"}:
+        return "markdown"
+    if lowered_mime.startswith("text/"):
+        return "text"
+    return "other"
+
+
+def _document_thumbnail(document: Mapping[str, Any]) -> dict[str, Any]:
+    url = _first_string(document, ("thumbnail_url", "thumb_url", "thumbnail", "thumbnail_path"))
+    return {"url": url or None, "observed": bool(url)}
+
+
+def _document_vlm_status(document: Mapping[str, Any]) -> str | None:
+    value = _first_string(document, ("vlm_status", "vision_status", "image_parse_status", "vlm_run", "image_status"))
+    return value or None
+
+
 def _as_float(value: Any) -> float | None:
     if isinstance(value, bool) or value is None:
         return None
@@ -1037,6 +1076,10 @@ def normalize_document_state(document: Mapping[str, Any], *, document_id: str = 
     """Normalize one live document status entry returned by RAGFlow."""
 
     doc_id = str(document.get("id") or document.get("document_id") or document_id)
+    name = extract_document_name(document)
+    mime_type = _document_mime_type(document, name=name)
+    thumbnail = _document_thumbnail(document)
+    vlm_status = _document_vlm_status(document)
     run = _normalize_parse_status(document.get("run"))
     status = _normalize_parse_status(document.get("status"))
     progress = _as_float(document.get("progress"))
@@ -1062,12 +1105,17 @@ def normalize_document_state(document: Mapping[str, Any], *, document_id: str = 
 
     return {
         "document_id": doc_id,
+        "name": name,
+        "mime_type": mime_type,
+        "document_kind": _document_kind(name=name, mime_type=mime_type),
         "status": effective_status,
         "chunk_count": chunk_count,
         "progress": progress,
         "progress_msg": message,
         "raw_status": status,
         "run": run,
+        "thumbnail": thumbnail,
+        "vlm_status": vlm_status,
     }
 
 
@@ -1108,6 +1156,168 @@ def parse_state_failed(state: Mapping[str, Any]) -> bool:
         or (isinstance(progress, (int, float)) and progress < 0)
         or _message_indicates_failure(str(state.get("progress_msg", "")))
     )
+
+
+def _profile_manifest_dict(profile: ChunkProfile | Mapping[str, Any]) -> dict[str, Any]:
+    if isinstance(profile, ChunkProfile):
+        return profile.to_manifest_dict()
+    return dict(profile)
+
+
+def _visual_assets_from_upload_plan(asset_upload_plan: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(asset_upload_plan, Mapping):
+        return []
+    raw_files = asset_upload_plan.get("planned_visual_upload_files")
+    if not isinstance(raw_files, list):
+        return []
+    assets: list[dict[str, Any]] = []
+    for item in raw_files:
+        if not isinstance(item, Mapping):
+            continue
+        source_path = item.get("source_path")
+        package_path = item.get("package_path")
+        if not isinstance(source_path, str) or not source_path:
+            continue
+        assets.append(
+            {
+                "source_path": source_path,
+                "package_path": package_path if isinstance(package_path, str) and package_path else source_path,
+                "asset_class": item.get("asset_class") if isinstance(item.get("asset_class"), str) else None,
+                "sha256": item.get("sha256") if isinstance(item.get("sha256"), str) else None,
+                "mime_type": item.get("mime_type") if isinstance(item.get("mime_type"), str) else None,
+                "name": Path(source_path).name,
+            }
+        )
+    return assets
+
+
+def _state_by_name(states: Mapping[str, Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
+    by_name: dict[str, Mapping[str, Any]] = {}
+    for state in states.values():
+        name = state.get("name")
+        if isinstance(name, str) and name:
+            by_name.setdefault(Path(name).name, state)
+    return by_name
+
+
+def _compact_observed_state(state: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not state:
+        return None
+    return {
+        "document_id": state.get("document_id"),
+        "name": state.get("name"),
+        "document_kind": state.get("document_kind"),
+        "status": state.get("status"),
+        "chunk_count": state.get("chunk_count"),
+        "progress": state.get("progress"),
+        "progress_msg": state.get("progress_msg"),
+        "mime_type": state.get("mime_type"),
+        "thumbnail": state.get("thumbnail"),
+        "vlm_status": state.get("vlm_status"),
+    }
+
+
+def make_multimodal_kb_manifest_payload(
+    *,
+    base_url: str | None,
+    dataset_id: str,
+    dataset_name: str,
+    profile: ChunkProfile | Mapping[str, Any],
+    markdown_documents: list[tuple[BuildDocument, str, str | None, int | None]],
+    asset_upload_plan: Mapping[str, Any] | None = None,
+    document_list_response: Any | None = None,
+) -> dict[str, Any]:
+    """Create a multimodal KB manifest from build inputs and read-only document state."""
+
+    observed_states = extract_document_states(document_list_response) if document_list_response is not None else {}
+    observed_by_name = _state_by_name(observed_states)
+
+    markdown_records: list[dict[str, Any]] = []
+    matched_observed_ids: set[str] = set()
+    for doc, document_id, status, chunk_count in markdown_documents:
+        observed = observed_states.get(document_id)
+        if observed:
+            matched_observed_ids.add(document_id)
+        record = {
+            "document_id": document_id,
+            "source_path": doc.manifest_source_path,
+            "markdown_path": str(doc.path),
+            "status": str(observed.get("status") if observed else status or "").lower(),
+            "chunk_count": observed.get("chunk_count") if observed else chunk_count,
+            "observed_state": _compact_observed_state(observed),
+        }
+        markdown_records.append(record)
+
+    visual_records: list[dict[str, Any]] = []
+    for asset in _visual_assets_from_upload_plan(asset_upload_plan):
+        observed = observed_by_name.get(Path(str(asset["source_path"])).name)
+        if observed and isinstance(observed.get("document_id"), str):
+            matched_observed_ids.add(str(observed["document_id"]))
+        thumbnail = observed.get("thumbnail") if isinstance(observed, Mapping) else None
+        record = {
+            "document_id": observed.get("document_id") if observed else None,
+            "name": observed.get("name") if observed else asset["name"],
+            "source_path": asset["source_path"],
+            "package_path": asset["package_path"],
+            "asset_class": asset["asset_class"],
+            "sha256": asset["sha256"],
+            "mime_type": observed.get("mime_type") if observed and observed.get("mime_type") else asset["mime_type"],
+            "status": observed.get("status") if observed else "not_observed",
+            "chunk_count": observed.get("chunk_count") if observed else None,
+            "thumbnail": thumbnail if isinstance(thumbnail, Mapping) else {"url": None, "observed": False},
+            "vlm_status": observed.get("vlm_status") if observed else None,
+            "observed_state": _compact_observed_state(observed),
+        }
+        visual_records.append(record)
+
+    for document_id, state in observed_states.items():
+        if document_id in matched_observed_ids or state.get("document_kind") != "image":
+            continue
+        visual_records.append(
+            {
+                "document_id": document_id,
+                "name": state.get("name"),
+                "source_path": None,
+                "package_path": None,
+                "asset_class": "observed_unlinked",
+                "sha256": None,
+                "mime_type": state.get("mime_type"),
+                "status": state.get("status"),
+                "chunk_count": state.get("chunk_count"),
+                "thumbnail": state.get("thumbnail"),
+                "vlm_status": state.get("vlm_status"),
+                "observed_state": _compact_observed_state(state),
+            }
+        )
+
+    manifest_documents = [*markdown_records, *visual_records]
+    parsed_count = sum(1 for item in manifest_documents if parse_state_succeeded(item))
+    failed_count = sum(1 for item in manifest_documents if parse_state_failed(item))
+    chunk_total = sum(int(item.get("chunk_count") or 0) for item in manifest_documents)
+    thumbnail_count = sum(1 for item in visual_records if isinstance(item.get("thumbnail"), Mapping) and item["thumbnail"].get("url"))
+    vlm_count = sum(1 for item in visual_records if item.get("vlm_status"))
+
+    return {
+        "schema": MULTIMODAL_KB_MANIFEST_SCHEMA,
+        "created_at": _now(),
+        "ragflow_base_url": base_url,
+        "dataset": {"id": dataset_id, "name": dataset_name},
+        "profile": _profile_manifest_dict(profile),
+        "summary": {
+            "document_count": len(manifest_documents),
+            "markdown_document_count": len(markdown_records),
+            "visual_document_count": len(visual_records),
+            "observed_document_count": len(observed_states),
+            "parsed_document_count": parsed_count,
+            "failed_document_count": failed_count,
+            "chunk_count": chunk_total,
+            "thumbnail_document_count": thumbnail_count,
+            "vlm_observed_document_count": vlm_count,
+        },
+        "markdown_documents": markdown_records,
+        "visual_documents": visual_records,
+        "observed_documents": list(observed_states.values()),
+    }
 
 
 def wait_for_document_states(

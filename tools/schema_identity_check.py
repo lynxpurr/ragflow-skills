@@ -80,6 +80,14 @@ EXPECTED_IDENTITIES = (
         description="Versioned KB handoff manifest written as kb_manifest.json.",
     ),
     SchemaIdentity(
+        key="multimodal_kb_manifest",
+        group="kb_build",
+        identity="ragflow_multimodal_kb_manifest_v1",
+        source_patterns=("ragflow_multimodal_kb_manifest_v1", "MULTIMODAL_KB_MANIFEST_SCHEMA"),
+        coverage_patterns=("ragflow_multimodal_kb_manifest_v1", "MULTIMODAL_KB_MANIFEST_SCHEMA"),
+        description="Read-only multimodal KB manifest linking Markdown and visual document state.",
+    ),
+    SchemaIdentity(
         key="kb_asset_upload_plan",
         group="kb_build",
         identity="ragflow_kb_asset_upload_plan_v2",
