@@ -370,9 +370,9 @@ All new live-capable features must use the same safety model:
 - [x] Add fake read-only document-list fixtures covering Markdown docs, visual docs,
   thumbnails, chunk counts, parse states, and malformed response shapes.
 - [x] Teach `parse-report` and `health-report` to consume multimodal manifest fields.
-- [ ] Define `ragflow_kb_asset_ingestion_report_v1` for gated visual-document upload
+- [x] Define `ragflow_kb_asset_ingestion_report_v1` for gated visual-document upload
   execution.
-- [ ] Add a non-mutating image-ingestion readiness command that consumes
+- [x] Add a non-mutating image-ingestion readiness command that consumes
   `asset-upload-plan` and build profile evidence.
 - [ ] Add explicit live execution flags and confirmation checks for visual-document
   ingestion.

@@ -20,7 +20,7 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_runtime_resilience_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 97)
+        self.assertEqual(report["summary"]["command_count"], 98)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
@@ -28,7 +28,7 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
                 "candidate": 0,
                 "covered": 21,
                 "deferred": 0,
-                "not_applicable": 76,
+                "not_applicable": 77,
             },
         )
 

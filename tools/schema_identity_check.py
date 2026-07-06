@@ -96,6 +96,14 @@ EXPECTED_IDENTITIES = (
         description="No-live Markdown plus local image asset upload package dry-run report.",
     ),
     SchemaIdentity(
+        key="kb_asset_ingestion_report",
+        group="kb_build",
+        identity="ragflow_kb_asset_ingestion_report_v1",
+        source_patterns=("ragflow_kb_asset_ingestion_report_v1", "KB_ASSET_INGESTION_REPORT_SCHEMA"),
+        coverage_patterns=("ragflow_kb_asset_ingestion_report_v1", "KB_ASSET_INGESTION_REPORT_SCHEMA"),
+        description="No-live readiness/execution report contract for gated visual document ingestion.",
+    ),
+    SchemaIdentity(
         key="document_features",
         group="doc_convert",
         identity="ragflow_document_features_v1",

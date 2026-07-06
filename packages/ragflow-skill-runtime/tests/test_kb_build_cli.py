@@ -1109,6 +1109,88 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("doc_manifest.json", names)
         self.assertIn("retrieval_hints.json", names)
 
+    def test_image_ingestion_readiness_via_build_subcommand(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            private_dir = root / "private-home" / ".ragflow"
+            private_dir.mkdir(parents=True)
+            asset_plan = root / "asset_upload_plan.json"
+            profile = private_dir / "profile.local.json"
+            report_json = root / "image_ingestion_readiness.json"
+            report_md = root / "image_ingestion_readiness.md"
+            redaction_report = root / "image_ingestion_readiness.redaction.json"
+            asset_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_kb_asset_upload_plan_v2",
+                        "status": "ready_with_review",
+                        "summary": {
+                            "planned_visual_upload_file_count": 2,
+                            "missing_image_asset_count": 0,
+                            "outside_handoff_image_count": 0,
+                            "residual_unreferenced_image_count": 1,
+                        },
+                        "planned_visual_upload_files": [
+                            {"source_path": "documents/images/a.png", "asset_class": "markdown_referenced"},
+                            {"source_path": "documents/images/b.png", "asset_class": "markdown_referenced"},
+                        ],
+                        "residual_images": [{"source_path": "artifacts/images/hash.png"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "visual-readiness-profile",
+                        "chunk_size": 1024,
+                        "parser_config": {"chunk_token_num": 1024, "layout_recognize": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "image-ingestion-readiness",
+                    "--asset-upload-plan",
+                    str(asset_plan),
+                    "--profile",
+                    str(profile),
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                    "--redaction-report",
+                    str(redaction_report),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(report_json.read_text(encoding="utf-8")) if report_json.exists() else {}
+            report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+            redaction_payload = json.loads(redaction_report.read_text(encoding="utf-8")) if redaction_report.exists() else {}
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(payload["schema"], "ragflow_kb_asset_ingestion_report_v1")
+        self.assertTrue(payload["ok"], payload["issues"])
+        self.assertTrue(payload["advisory_only"])
+        self.assertEqual(payload["mutation"], "none")
+        self.assertEqual(payload["execution"]["ragflow_calls"], 0)
+        self.assertEqual(payload["summary"]["planned_visual_upload_file_count"], 2)
+        self.assertEqual(payload["profile"]["id"], "visual-readiness-profile")
+        self.assertIn("residual_visual_assets_require_review", {issue["code"] for issue in payload["issues"]})
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertIn("RAGFlow Image Ingestion Readiness", report_md_text)
+        combined = json.dumps(payload, ensure_ascii=False) + report_md_text + result.stdout
+        self.assertNotIn(str(profile), combined)
+        self.assertIn("<redacted:config-path>", combined)
+
     def test_metadata_governance_subcommands_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

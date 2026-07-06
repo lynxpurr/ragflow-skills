@@ -14,9 +14,10 @@ from typing import Any, Mapping
 import zipfile
 
 from .manifests import DocManifest, KbDocumentEntry
-from .profiles import ChunkProfile
+from .profiles import ChunkProfile, ProfileError, load_profile
 
 KB_ASSET_UPLOAD_PLAN_SCHEMA = "ragflow_kb_asset_upload_plan_v2"
+KB_ASSET_INGESTION_REPORT_SCHEMA = "ragflow_kb_asset_ingestion_report_v1"
 MULTIMODAL_KB_MANIFEST_SCHEMA = "ragflow_multimodal_kb_manifest_v1"
 MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)]\(([^)]+)\)")
 IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".tif", ".tiff", ".webp"}
@@ -82,6 +83,15 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _as_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
@@ -786,6 +796,178 @@ def create_kb_asset_upload_plan(
             ],
         },
     }
+
+
+def create_kb_asset_ingestion_readiness_report(
+    *,
+    asset_upload_plan_path: str | Path,
+    profile_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Create a non-mutating readiness report for future gated visual ingestion."""
+
+    plan = _read_json_mapping(Path(asset_upload_plan_path), label="asset_upload_plan")
+    issues: list[dict[str, str]] = []
+    if plan.get("schema") != KB_ASSET_UPLOAD_PLAN_SCHEMA:
+        issues.append(
+            _issue(
+                severity="error",
+                code="asset_upload_plan_schema_mismatch",
+                message=f"asset upload plan schema must be {KB_ASSET_UPLOAD_PLAN_SCHEMA}",
+                recommendation="Regenerate the plan with ragflow-kb-build asset-upload-plan before image ingestion readiness.",
+            )
+        )
+
+    summary = plan.get("summary", {}) if isinstance(plan.get("summary"), Mapping) else {}
+    planned_count = _as_int(summary.get("planned_visual_upload_file_count"))
+    if planned_count is None:
+        planned_count = _as_int(summary.get("planned_image_file_count")) or 0
+    missing_count = _as_int(summary.get("missing_image_asset_count")) or _as_int(summary.get("missing_image_count")) or 0
+    outside_count = _as_int(summary.get("outside_handoff_image_count")) or 0
+    residual_count = _as_int(summary.get("residual_unreferenced_image_count")) or _as_int(summary.get("orphan_image_count")) or 0
+
+    if planned_count <= 0:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="no_planned_visual_assets",
+                message="Asset upload plan has no planned visual upload files.",
+                recommendation="Use Markdown-only build unless visual documents are intentionally needed.",
+            )
+        )
+    if missing_count or outside_count:
+        issues.append(
+            _issue(
+                severity="error",
+                code="visual_assets_missing_or_outside_handoff",
+                message=f"Asset plan has {missing_count} missing and {outside_count} outside-handoff visual asset(s).",
+                recommendation="Repair or regenerate handoff assets before enabling visual document ingestion.",
+            )
+        )
+    if residual_count:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="residual_visual_assets_require_review",
+                message=f"Asset plan has {residual_count} residual image asset(s) outside the default upload set.",
+                recommendation="Keep residual images excluded unless a user explicitly broadens the visual upload policy.",
+            )
+        )
+
+    profile_payload: dict[str, Any] | None = None
+    profile_source = str(profile_path) if profile_path else None
+    if profile_path:
+        try:
+            profile = load_profile(profile_path)
+            profile_payload = profile.to_manifest_dict()
+        except (ProfileError, OSError) as exc:
+            issues.append(
+                _issue(
+                    severity="error",
+                    code="profile_load_failed",
+                    message=str(exc),
+                    recommendation="Provide a valid build profile before image ingestion readiness.",
+                )
+            )
+
+    parser_config = profile_payload.get("parser_config", {}) if isinstance(profile_payload, Mapping) else {}
+    chunk_token_num = _as_int(parser_config.get("chunk_token_num")) if isinstance(parser_config, Mapping) else None
+    visual_profile_hints = [
+        key
+        for key, value in sorted(parser_config.items())
+        if any(part in str(key).lower() for part in ("layout", "visual", "image", "vision", "ocr"))
+        and bool(value)
+    ] if isinstance(parser_config, Mapping) else []
+
+    error_count = sum(1 for issue in issues if issue["severity"] == "error")
+    warning_count = sum(1 for issue in issues if issue["severity"] == "warning")
+    status = "blocked" if error_count else "ready_with_review" if warning_count else "ready"
+    return {
+        "ok": error_count == 0,
+        "schema": KB_ASSET_INGESTION_REPORT_SCHEMA,
+        "created_at": _now(),
+        "mode": "readiness",
+        "advisory_only": True,
+        "offline_only": True,
+        "mutation": "none",
+        "mutation_allowed": False,
+        "live_upload_enabled": False,
+        "execution": {
+            "status": "not_run",
+            "ragflow_calls": 0,
+            "db_calls": 0,
+            "redis_calls": 0,
+            "docker_calls": 0,
+            "system_service_calls": 0,
+        },
+        "inputs": {
+            "asset_upload_plan": str(asset_upload_plan_path),
+            "profile": profile_source,
+        },
+        "status": status,
+        "summary": {
+            "planned_visual_upload_file_count": planned_count,
+            "missing_image_asset_count": missing_count,
+            "outside_handoff_image_count": outside_count,
+            "residual_unreferenced_image_count": residual_count,
+            "issue_count": len(issues),
+            "error_count": error_count,
+            "warning_count": warning_count,
+        },
+        "profile": profile_payload,
+        "profile_review": {
+            "source": profile_source,
+            "chunk_token_num": chunk_token_num,
+            "visual_profile_hint_keys": visual_profile_hints,
+        },
+        "checks": {
+            "asset_plan_schema": {"status": "PASS" if plan.get("schema") == KB_ASSET_UPLOAD_PLAN_SCHEMA else "FAIL"},
+            "planned_visual_upload_set": {"status": "PASS" if planned_count > 0 else "REVIEW", "count": planned_count},
+            "asset_path_readiness": {
+                "status": "PASS" if not missing_count and not outside_count else "FAIL",
+                "missing_image_asset_count": missing_count,
+                "outside_handoff_image_count": outside_count,
+            },
+            "residual_asset_review": {"status": "REVIEW" if residual_count else "PASS", "count": residual_count},
+            "profile_evidence": {"status": "PASS" if profile_payload else "REVIEW", "source": profile_source},
+        },
+        "issues": issues,
+        "next_steps": [
+            "Review planned_visual_upload_files before any live image ingestion execution.",
+            "Require explicit live execution flags and exact confirmation before uploading visual documents.",
+            "Keep residual_unreferenced images excluded unless the user intentionally broadens the policy.",
+        ],
+    }
+
+
+def render_kb_asset_ingestion_readiness_markdown(report: Mapping[str, Any]) -> str:
+    """Render a concise Markdown summary for image-ingestion readiness."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    profile = report.get("profile", {}) if isinstance(report.get("profile"), Mapping) else {}
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    lines = [
+        "# RAGFlow Image Ingestion Readiness",
+        "",
+        f"- schema: `{report.get('schema', KB_ASSET_INGESTION_REPORT_SCHEMA)}`",
+        f"- status: `{report.get('status', 'unknown')}`",
+        f"- mutation: `{report.get('mutation', 'none')}`",
+        f"- planned visual upload files: `{summary.get('planned_visual_upload_file_count', 0)}`",
+        f"- missing image assets: `{summary.get('missing_image_asset_count', 0)}`",
+        f"- outside-handoff images: `{summary.get('outside_handoff_image_count', 0)}`",
+        f"- residual images: `{summary.get('residual_unreferenced_image_count', 0)}`",
+        f"- profile: `{profile.get('id', 'not_supplied')}`",
+        "",
+        "## Issues",
+        "",
+    ]
+    if issues:
+        for issue in issues[:20]:
+            if not isinstance(issue, Mapping):
+                continue
+            lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    else:
+        lines.append("- No issues found.")
+    return "\n".join(lines) + "\n"
 
 
 def write_kb_asset_upload_zip(report: Mapping[str, Any], *, output_path: str | Path) -> dict[str, Any]:
