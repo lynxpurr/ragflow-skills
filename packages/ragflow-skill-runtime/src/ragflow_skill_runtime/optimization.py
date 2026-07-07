@@ -1279,8 +1279,10 @@ def _result_tradeoffs(result: Mapping[str, Any], winner: Mapping[str, Any]) -> l
     metrics = result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
     winner_metrics = winner.get("metrics") if isinstance(winner.get("metrics"), Mapping) else {}
     tradeoffs = []
+    if _decision_score_value(result) < _decision_score_value(winner):
+        tradeoffs.append("Lower normalized decision score than the recommended profile.")
     if metrics.get("score", 0.0) < winner_metrics.get("score", 0.0):
-        tradeoffs.append("Lower composite score than the recommended profile.")
+        tradeoffs.append("Lower raw composite score than the recommended profile.")
     if metrics.get("hit_rate", 0.0) < winner_metrics.get("hit_rate", 0.0):
         tradeoffs.append("Lower hit rate indicates weaker retrieval coverage.")
     if metrics.get("mrr", 0.0) < winner_metrics.get("mrr", 0.0):
@@ -1296,8 +1298,11 @@ def _result_tradeoffs(result: Mapping[str, Any], winner: Mapping[str, Any]) -> l
 
 def _recommendation_rationale(winner: Mapping[str, Any], ranked: list[Mapping[str, Any]]) -> list[str]:
     metrics = winner.get("metrics") if isinstance(winner.get("metrics"), Mapping) else {}
+    decision_score = winner.get("decision_score") if isinstance(winner.get("decision_score"), Mapping) else {}
     rationale = [
-        f"Selected `{winner.get('profile_id')}` because it has the highest composite score ({metrics.get('score', 0.0):.4f})."
+        "Selected "
+        f"`{winner.get('profile_id')}` because it has the highest normalized decision score "
+        f"({decision_score.get('score', _decision_score_value(winner)):.4f}; raw composite {metrics.get('score', 0.0):.4f})."
     ]
     if metrics.get("hit_rate", 0.0) >= max((item.get("metrics", {}).get("hit_rate", 0.0) for item in ranked), default=0.0):
         rationale.append("It ties or leads retrieval hit rate across the candidate set.")
@@ -1434,6 +1439,301 @@ def _profile_enrichment_weight(profile: Mapping[str, Any]) -> float:
     return weight
 
 
+def _clamp01(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return min(1.0, max(0.0, float(value)))
+
+
+def _round_score(value: float) -> float:
+    return round(value, 4)
+
+
+def _decision_latency_component(
+    metrics: Mapping[str, Any],
+    *,
+    max_latency_ms: float,
+) -> tuple[dict[str, Any], float]:
+    observed = bool(metrics.get("query_latency_ms_observed"))
+    if observed:
+        value = max(0.0, _metric_value(metrics, "query_latency_ms"))
+        relative = value / max_latency_ms if max_latency_ms > 0 else 0.0
+        penalty = 0.05 * min(1.0, relative)
+        return (
+            {
+                "status": "observed",
+                "value_ms": _round_score(value),
+                "relative": _round_score(relative),
+                "penalty": _round_score(penalty),
+            },
+            penalty,
+        )
+    penalty = 0.025
+    return (
+        {
+            "status": "unknown",
+            "value_ms": None,
+            "relative": None,
+            "penalty": _round_score(penalty),
+        },
+        penalty,
+    )
+
+
+def _decision_parse_time_component(
+    metrics: Mapping[str, Any],
+    *,
+    max_parse_time_ms: float,
+) -> tuple[dict[str, Any], float]:
+    observed = bool(metrics.get("parse_time_ms_observed"))
+    if observed:
+        value = max(0.0, _metric_value(metrics, "parse_time_ms"))
+        relative = value / max_parse_time_ms if max_parse_time_ms > 0 else 0.0
+        penalty = 0.05 * min(1.0, relative)
+        return (
+            {
+                "status": "observed",
+                "value_ms": _round_score(value),
+                "relative": _round_score(relative),
+                "penalty": _round_score(penalty),
+            },
+            penalty,
+        )
+    penalty = 0.025
+    return (
+        {
+            "status": "unknown",
+            "value_ms": None,
+            "relative": None,
+            "penalty": _round_score(penalty),
+        },
+        penalty,
+    )
+
+
+def _decision_enrichment_component(profile: Mapping[str, Any], *, max_enrichment_weight: float) -> tuple[dict[str, Any], float]:
+    weight = _profile_enrichment_weight(profile)
+    relative = weight / max_enrichment_weight if max_enrichment_weight > 0 else 0.0
+    relative = min(1.0, max(0.0, relative))
+    penalty = 0.04 * relative
+    return (
+        {
+            "status": "estimated" if weight > 0 else "none",
+            "weight": _round_score(weight),
+            "relative": _round_score(relative),
+            "penalty": _round_score(penalty),
+        },
+        penalty,
+    )
+
+
+def _decision_cost_component(
+    result: Mapping[str, Any],
+    *,
+    max_latency_ms: float,
+    max_parse_time_ms: float,
+    max_enrichment_weight: float,
+) -> tuple[dict[str, Any], float]:
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
+    profile = result.get("profile") if isinstance(result.get("profile"), Mapping) else {}
+    latency, latency_penalty = _decision_latency_component(metrics, max_latency_ms=max_latency_ms)
+    parse_time, parse_penalty = _decision_parse_time_component(metrics, max_parse_time_ms=max_parse_time_ms)
+    enrichment, enrichment_penalty = _decision_enrichment_component(profile, max_enrichment_weight=max_enrichment_weight)
+    penalty = latency_penalty + parse_penalty + enrichment_penalty
+    max_penalty = 0.14
+    if latency["status"] == "unknown" or parse_time["status"] == "unknown":
+        status = "unknown"
+    elif enrichment["status"] == "estimated":
+        status = "estimated"
+    else:
+        status = "observed"
+    return (
+        {
+            "status": status,
+            "score": _round_score(1.0 - min(1.0, penalty / max_penalty)),
+            "penalty": _round_score(penalty),
+            "latency": latency,
+            "parse_time": parse_time,
+            "enrichment": enrichment,
+        },
+        penalty,
+    )
+
+
+def _decision_modality_component(benchmark_strength: Mapping[str, Any] | None) -> tuple[dict[str, Any], float]:
+    if not benchmark_strength:
+        return ({"status": "unknown", "coverage": None, "score": 1.0, "penalty": 0.0}, 0.0)
+    summary = benchmark_strength.get("summary") if isinstance(benchmark_strength.get("summary"), Mapping) else {}
+    raw_coverage = summary.get("expected_modality_coverage")
+    if isinstance(raw_coverage, bool) or not isinstance(raw_coverage, (int, float)):
+        return ({"status": "unknown", "coverage": None, "score": 1.0, "penalty": 0.0}, 0.0)
+    coverage = _clamp01(raw_coverage)
+    penalty = 0.02 * (1.0 - coverage)
+    return (
+        {
+            "status": "observed" if coverage > 0 else "missing",
+            "coverage": _round_score(coverage),
+            "score": _round_score(coverage),
+            "penalty": _round_score(penalty),
+        },
+        penalty,
+    )
+
+
+def _decision_context_warning_component(result: Mapping[str, Any]) -> tuple[dict[str, Any], float]:
+    warning_codes: list[str] = []
+    if result.get("ok") is False:
+        warning_codes.append("validation_failed")
+    diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), Mapping) else {}
+    if diagnostics.get("required"):
+        warning_codes.extend(str(code) for code in diagnostics.get("reason_codes", []) if code)
+    evidence = result.get("runtime_evidence") if isinstance(result.get("runtime_evidence"), Mapping) else {}
+    parse = evidence.get("parse_report") if isinstance(evidence.get("parse_report"), Mapping) else {}
+    drift = parse.get("drift") if isinstance(parse.get("drift"), Mapping) else {}
+    if drift.get("drift"):
+        warning_codes.append("parser_config_drift")
+    health = evidence.get("health_report") if isinstance(evidence.get("health_report"), Mapping) else {}
+    if health.get("embedding_model_rebuild_required"):
+        warning_codes.append("embedding_model_rebuild_required")
+    if health.get("parser_warning"):
+        warning_codes.append("parser_warning")
+    if isinstance(health.get("issue_codes"), list):
+        warning_codes.extend(str(code) for code in health.get("issue_codes", []) if code)
+    unique_codes = sorted(set(warning_codes))
+    penalty = min(0.05, 0.01 * len(unique_codes))
+    return (
+        {
+            "status": "warning" if unique_codes else "clear",
+            "score": _round_score(1.0 - min(1.0, len(unique_codes) / 5.0)),
+            "warning_count": len(unique_codes),
+            "warning_codes": unique_codes,
+            "penalty": _round_score(penalty),
+        },
+        penalty,
+    )
+
+
+def _decision_score_for_result(
+    result: Mapping[str, Any],
+    *,
+    benchmark_strength: Mapping[str, Any] | None,
+    max_latency_ms: float,
+    max_parse_time_ms: float,
+    max_enrichment_weight: float,
+) -> dict[str, Any]:
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
+    pass_rate = _clamp01(metrics.get("pass_rate"))
+    hit_rate = _clamp01(metrics.get("hit_rate"))
+    mrr = _clamp01(metrics.get("mrr"))
+    ndcg = _clamp01(metrics.get("ndcg_at_k"))
+    strict_recall = _clamp01(metrics.get("strict_chunk_recall_at_k"))
+    expected_hit = _clamp01(metrics.get("expected_chunk_hit_rate"))
+    empty_rate = _clamp01(metrics.get("empty_result_rate"))
+
+    quality_weighted = (pass_rate * 0.30) + (hit_rate * 0.20) + (mrr * 0.20) + (ndcg * 0.15)
+    strict_weighted = (strict_recall * 0.10) + (expected_hit * 0.05)
+    empty_penalty = empty_rate * 0.10
+    pre_cost_score = max(0.0, quality_weighted + strict_weighted - empty_penalty)
+
+    cost, cost_penalty = _decision_cost_component(
+        result,
+        max_latency_ms=max_latency_ms,
+        max_parse_time_ms=max_parse_time_ms,
+        max_enrichment_weight=max_enrichment_weight,
+    )
+    modality, modality_penalty = _decision_modality_component(benchmark_strength)
+    context, context_penalty = _decision_context_warning_component(result)
+    final_score = _clamp01(pre_cost_score - cost_penalty - modality_penalty - context_penalty)
+
+    return {
+        "basis": "normalized_decision_score",
+        "score": _round_score(final_score),
+        "pre_cost_score": _round_score(_clamp01(pre_cost_score)),
+        "raw_score": _round_score(_metric_value(metrics, "score")),
+        "weights": {
+            "quality": 0.85,
+            "strict_evidence": 0.15,
+            "empty_result_risk_penalty": 0.10,
+            "cost_penalty": 0.14,
+            "modality_coverage_penalty": 0.02,
+            "context_warning_penalty": 0.05,
+        },
+        "components": {
+            "quality": {
+                "score": _round_score(quality_weighted / 0.85 if 0.85 else 0.0),
+                "weighted_score": _round_score(quality_weighted),
+                "metrics": {
+                    "pass_rate": _round_score(pass_rate),
+                    "hit_rate": _round_score(hit_rate),
+                    "mrr": _round_score(mrr),
+                    "ndcg_at_k": _round_score(ndcg),
+                },
+            },
+            "strict_evidence": {
+                "score": _round_score(strict_weighted / 0.15 if 0.15 else 0.0),
+                "weighted_score": _round_score(strict_weighted),
+                "metrics": {
+                    "strict_chunk_recall_at_k": _round_score(strict_recall),
+                    "expected_chunk_hit_rate": _round_score(expected_hit),
+                },
+            },
+            "modality_coverage": modality,
+            "empty_result_risk": {
+                "score": _round_score(1.0 - empty_rate),
+                "empty_result_rate": _round_score(empty_rate),
+                "penalty": _round_score(empty_penalty),
+            },
+            "cost": cost,
+            "context_warnings": context,
+        },
+    }
+
+
+def _attach_decision_scores(results: list[dict[str, Any]], benchmark_strength: Mapping[str, Any] | None) -> None:
+    observed_latency = [
+        _metric_value(item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}, "query_latency_ms")
+        for item in results
+        if isinstance(item.get("metrics"), Mapping) and bool(item["metrics"].get("query_latency_ms_observed"))
+    ]
+    observed_parse = [
+        _metric_value(item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}, "parse_time_ms")
+        for item in results
+        if isinstance(item.get("metrics"), Mapping) and bool(item["metrics"].get("parse_time_ms_observed"))
+    ]
+    enrichment_weights = [
+        _profile_enrichment_weight(item.get("profile") if isinstance(item.get("profile"), Mapping) else {})
+        for item in results
+    ]
+    max_latency_ms = max(observed_latency, default=0.0)
+    max_parse_time_ms = max(observed_parse, default=0.0)
+    max_enrichment_weight = max(enrichment_weights, default=0.0)
+    for item in results:
+        item["decision_score"] = _decision_score_for_result(
+            item,
+            benchmark_strength=benchmark_strength,
+            max_latency_ms=max_latency_ms,
+            max_parse_time_ms=max_parse_time_ms,
+            max_enrichment_weight=max_enrichment_weight,
+        )
+
+
+def _decision_score_value(result: Mapping[str, Any]) -> float:
+    decision_score = result.get("decision_score") if isinstance(result.get("decision_score"), Mapping) else {}
+    value = decision_score.get("score")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        metrics = result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
+        return _metric_value(metrics, "score")
+    return float(value)
+
+
+def _pre_cost_decision_score_value(result: Mapping[str, Any]) -> float:
+    decision_score = result.get("decision_score") if isinstance(result.get("decision_score"), Mapping) else {}
+    value = decision_score.get("pre_cost_score")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return _decision_score_value(result)
+    return float(value)
+
+
 def _metric_cost_key(metrics: Mapping[str, Any], metric: str, observed_metric: str) -> tuple[int, float]:
     observed = bool(metrics.get(observed_metric))
     value = _metric_value(metrics, metric)
@@ -1446,7 +1746,7 @@ def _result_sort_key(result: Mapping[str, Any]) -> tuple[float, float, tuple[int
     candidate_index = result.get("candidate_index")
     index = int(candidate_index) if isinstance(candidate_index, int) and not isinstance(candidate_index, bool) else 0
     return (
-        -_metric_value(metrics, "score"),
+        -_decision_score_value(result),
         _profile_enrichment_weight(profile),
         _metric_cost_key(metrics, "query_latency_ms", "query_latency_ms_observed"),
         _metric_cost_key(metrics, "parse_time_ms", "parse_time_ms_observed"),
@@ -1457,12 +1757,10 @@ def _result_sort_key(result: Mapping[str, Any]) -> tuple[float, float, tuple[int
 def _co_winners(ranked: list[Mapping[str, Any]], *, score_epsilon: float) -> list[Mapping[str, Any]]:
     if not ranked:
         return []
-    top_metrics = ranked[0].get("metrics") if isinstance(ranked[0].get("metrics"), Mapping) else {}
-    top_score = _metric_value(top_metrics, "score")
+    top_score = _pre_cost_decision_score_value(ranked[0])
     winners = []
     for item in ranked:
-        metrics = item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}
-        if abs(_metric_value(metrics, "score") - top_score) <= score_epsilon:
+        if abs(_pre_cost_decision_score_value(item) - top_score) <= score_epsilon:
             winners.append(item)
     return winners
 
@@ -1470,9 +1768,7 @@ def _co_winners(ranked: list[Mapping[str, Any]], *, score_epsilon: float) -> lis
 def _score_delta(ranked: list[Mapping[str, Any]]) -> float | None:
     if len(ranked) < 2:
         return None
-    first_metrics = ranked[0].get("metrics") if isinstance(ranked[0].get("metrics"), Mapping) else {}
-    second_metrics = ranked[1].get("metrics") if isinstance(ranked[1].get("metrics"), Mapping) else {}
-    return round(_metric_value(first_metrics, "score") - _metric_value(second_metrics, "score"), 4)
+    return round(_decision_score_value(ranked[0]) - _decision_score_value(ranked[1]), 4)
 
 
 def _cost_review_reasons(winner: Mapping[str, Any] | None, co_winners: list[Mapping[str, Any]]) -> list[str]:
@@ -1530,11 +1826,14 @@ def _co_winner_summary(co_winners: list[Mapping[str, Any]]) -> list[dict[str, An
     summaries = []
     for item in co_winners:
         metrics = item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}
+        decision_score = item.get("decision_score") if isinstance(item.get("decision_score"), Mapping) else {}
         summaries.append(
             {
                 "profile_id": item.get("profile_id"),
                 "rank": item.get("rank"),
                 "score": metrics.get("score"),
+                "raw_score": metrics.get("score"),
+                "decision_score": decision_score.get("score"),
                 "disposable_kb_name": item.get("disposable_kb_name"),
             }
         )
@@ -1552,7 +1851,7 @@ def _append_decision_rationale(
 ) -> list[str]:
     if len(co_winners) > 1:
         profile_ids = ", ".join(f"`{item.get('profile_id')}`" for item in co_winners)
-        rationale.append(f"Multiple profiles are co-winners within the configured score epsilon: {profile_ids}.")
+        rationale.append(f"Multiple profiles are pre-cost decision co-winners within the configured score epsilon: {profile_ids}.")
     if decision_status == "insufficient_evidence" and score_delta is not None and score_delta < min_score_delta:
         rationale.append(
             f"Decision is downgraded because score delta {score_delta:.4f} is below the minimum score delta {min_score_delta:.4f}."
@@ -1721,12 +2020,13 @@ def summarize_optimization_results(
             )
         )
 
+    benchmark_strength = _benchmark_strength_from_plan(plan)
+    _attach_decision_scores(results, benchmark_strength)
     decision_config = _decision_config(plan, score_epsilon=score_epsilon, min_score_delta=min_score_delta)
     ranked = sorted(results, key=_result_sort_key)
     for rank, item in enumerate(ranked, start=1):
         item["rank"] = rank
     winner = ranked[0] if ranked else None
-    benchmark_strength = _benchmark_strength_from_plan(plan)
     benchmark_artifact_followups = _benchmark_artifact_followups(benchmark_strength)
     co_winner_items = _co_winners(ranked, score_epsilon=decision_config["score_epsilon"])
     score_delta = _score_delta(ranked)
@@ -1811,12 +2111,14 @@ def summarize_optimization_results(
             "benchmark_artifact_followup_count": len(benchmark_artifact_followups),
             "saturated_metric_count": len(metric_saturation["saturated_metrics"]),
             "co_winner_count": len(co_winner_items),
+            "score_basis": "normalized_decision_score",
         },
         "benchmark_strength": benchmark_strength,
         "benchmark_artifact_followups": benchmark_artifact_followups,
         "metric_saturation": metric_saturation,
         "decision": {
             "status": decision_status,
+            "score_basis": "normalized_decision_score",
             "score_epsilon": decision_config["score_epsilon"],
             "min_score_delta": decision_config["min_score_delta"],
             "score_delta": score_delta,
@@ -1829,6 +2131,8 @@ def summarize_optimization_results(
             "profile_id": winner.get("profile_id") if winner else None,
             "disposable_kb_name": winner.get("disposable_kb_name") if winner else None,
             "score": winner.get("score") if winner else None,
+            "raw_score": winner.get("score") if winner else None,
+            "decision_score": winner.get("decision_score") if winner else None,
             "co_winner_profile_ids": [item.get("profile_id") for item in co_winner_items],
             "rationale": rationale,
         },
@@ -2497,11 +2801,13 @@ def render_best_profile_markdown(results: Mapping[str, Any]) -> str:
 
     recommendation = results.get("recommendation") if isinstance(results.get("recommendation"), Mapping) else {}
     summary = results.get("summary") if isinstance(results.get("summary"), Mapping) else {}
+    decision = results.get("decision") if isinstance(results.get("decision"), Mapping) else {}
     lines = [
         "# RAGFlow Best Profile Report",
         "",
         f"- Status: `{'passed' if results.get('ok') else 'failed'}`",
         f"- Decision status: `{recommendation.get('decision_status') or '-'}`",
+        f"- Score basis: `{decision.get('score_basis') or summary.get('score_basis') or '-'}`",
         f"- Recommended profile: `{recommendation.get('profile_id') or '-'}`",
         f"- Candidate results: `{summary.get('result_count', 0)}`",
         f"- Errors: `{summary.get('errors', 0)}`",
@@ -2525,20 +2831,47 @@ def render_best_profile_markdown(results: Mapping[str, Any]) -> str:
             "",
             "## Ranking",
             "",
-            "| rank | profile | score | hit_rate | mrr | ndcg@k | strict_chunk_recall | empty_rate | latency_ms | parse_ms |",
-            "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+            "| rank | profile | decision_score | raw_score | hit_rate | mrr | ndcg@k | strict_chunk_recall | empty_rate | latency_ms | parse_ms |",
+            "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for candidate in results.get("candidates", []) if isinstance(results.get("candidates"), list) else []:
         if not isinstance(candidate, Mapping):
             continue
         metrics = candidate.get("metrics") if isinstance(candidate.get("metrics"), Mapping) else {}
+        decision_score = candidate.get("decision_score") if isinstance(candidate.get("decision_score"), Mapping) else {}
         lines.append(
-            f"| {candidate.get('rank', 0)} | `{candidate.get('profile_id')}` | {metrics.get('score', 0.0):.4f} | "
+            f"| {candidate.get('rank', 0)} | `{candidate.get('profile_id')}` | {decision_score.get('score', 0.0):.4f} | "
+            f"{metrics.get('score', 0.0):.4f} | "
             f"{metrics.get('hit_rate', 0.0):.4f} | {metrics.get('mrr', 0.0):.4f} | "
             f"{metrics.get('ndcg_at_k', 0.0):.4f} | {metrics.get('strict_chunk_recall_at_k', 0.0):.4f} | "
             f"{metrics.get('empty_result_rate', 0.0):.4f} | {metrics.get('query_latency_ms', 0.0):.1f} | "
             f"{metrics.get('parse_time_ms', 0.0):.1f} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Decision Score Components",
+            "",
+            "| profile | quality | strict_evidence | modality_coverage | empty_result_risk | cost | cost_status | context_warnings |",
+            "|---|---:|---:|---:|---:|---:|---|---:|",
+        ]
+    )
+    for candidate in results.get("candidates", []) if isinstance(results.get("candidates"), list) else []:
+        if not isinstance(candidate, Mapping):
+            continue
+        decision_score = candidate.get("decision_score") if isinstance(candidate.get("decision_score"), Mapping) else {}
+        components = decision_score.get("components") if isinstance(decision_score.get("components"), Mapping) else {}
+        quality = components.get("quality") if isinstance(components.get("quality"), Mapping) else {}
+        strict = components.get("strict_evidence") if isinstance(components.get("strict_evidence"), Mapping) else {}
+        modality = components.get("modality_coverage") if isinstance(components.get("modality_coverage"), Mapping) else {}
+        empty = components.get("empty_result_risk") if isinstance(components.get("empty_result_risk"), Mapping) else {}
+        cost = components.get("cost") if isinstance(components.get("cost"), Mapping) else {}
+        context = components.get("context_warnings") if isinstance(components.get("context_warnings"), Mapping) else {}
+        lines.append(
+            f"| `{candidate.get('profile_id')}` | {quality.get('score', 0.0):.4f} | {strict.get('score', 0.0):.4f} | "
+            f"{modality.get('score', 0.0):.4f} | {empty.get('score', 0.0):.4f} | {cost.get('score', 0.0):.4f} | "
+            f"`{cost.get('status', '-')}` | {context.get('warning_count', 0)} |"
         )
     lines.extend(["", "## Tradeoffs", ""])
     for candidate in results.get("candidates", []) if isinstance(results.get("candidates"), list) else []:

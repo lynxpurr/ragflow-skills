@@ -291,13 +291,13 @@ to audit after explicit approval.
 
 ### Normalized Scoring And Cost Signals
 
-- [ ] Add a normalized decision score that keeps raw metrics available but separates them
+- [x] Add a normalized decision score that keeps raw metrics available but separates them
   from recommendation logic.
-- [ ] Treat missing latency, parse time, and cost as unknown rather than zero.
-- [ ] Add latency, parse-time, and enrichment-cost penalties when evidence exists.
-- [ ] Add score component breakdowns for quality, strict recall, modality coverage,
+- [x] Treat missing latency, parse time, and cost as unknown rather than zero.
+- [x] Add latency, parse-time, and enrichment-cost penalties when evidence exists.
+- [x] Add score component breakdowns for quality, strict recall, modality coverage,
   empty-result risk, cost, and context warnings.
-- [ ] Add tests for raw nDCG compatibility and normalized decision scoring.
+- [x] Add tests for raw nDCG compatibility and normalized decision scoring.
 
 ### Cleanup And Field-Trial Closure
 

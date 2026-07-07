@@ -594,6 +594,102 @@ class OptimizationTests(unittest.TestCase):
         self.assertEqual(results["decision"]["score_delta"], 0.02)
         self.assertIn("minimum score delta", " ".join(results["recommendation"]["rationale"]))
 
+    def test_summarize_optimization_results_uses_normalized_decision_score_without_changing_raw_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            fast = root / "fast.json"
+            slow = root / "slow.json"
+            _write_profile(fast, "fast-profile")
+            _write_profile(slow, "slow-enriched-profile", auto_keywords=3)
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[slow, fast],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            _mark_benchmark_strength_promotable(plan)
+            plan_path = root / "optimization_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            for candidate in plan["candidates"]:
+                _write_validation_report(
+                    Path(candidate["artifacts"]["validation_report"]),
+                    mrr=1.0 if candidate["profile_id"] == "slow-enriched-profile" else 0.95,
+                    hit_rate=1.0,
+                    query_latency_ms=650.0 if candidate["profile_id"] == "slow-enriched-profile" else 80.0,
+                    parse_time_ms=1500.0 if candidate["profile_id"] == "slow-enriched-profile" else 180.0,
+                )
+
+            results = summarize_optimization_results(plan_path=plan_path)
+            rendered = render_best_profile_markdown(results)
+
+        self.assertEqual(results["decision"]["score_basis"], "normalized_decision_score")
+        self.assertEqual(results["recommendation"]["profile_id"], "fast-profile")
+        self.assertLessEqual(results["recommendation"]["decision_score"]["score"], 1.0)
+        self.assertNotEqual(results["recommendation"]["decision_score"]["score"], results["recommendation"]["score"])
+        raw_slow = next(candidate for candidate in results["candidates"] if candidate["profile_id"] == "slow-enriched-profile")
+        self.assertAlmostEqual(raw_slow["metrics"]["ndcg_at_k"], 1.0)
+        self.assertAlmostEqual(raw_slow["metrics"]["score"], 1.0)
+        self.assertAlmostEqual(raw_slow["score"], 1.0)
+        raw_fast = next(candidate for candidate in results["candidates"] if candidate["profile_id"] == "fast-profile")
+        self.assertAlmostEqual(raw_fast["metrics"]["score"], 0.9825)
+        self.assertGreater(raw_fast["decision_score"]["score"], raw_slow["decision_score"]["score"])
+        for candidate in results["candidates"]:
+            self.assertEqual(
+                set(candidate["decision_score"]["components"]),
+                {"quality", "strict_evidence", "modality_coverage", "empty_result_risk", "cost", "context_warnings"},
+            )
+        self.assertIn("decision_score", rendered)
+        self.assertIn("raw_score", rendered)
+
+    def test_summarize_optimization_results_marks_missing_decision_cost_signals_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            baseline = root / "baseline.json"
+            enriched = root / "enriched.json"
+            _write_profile(baseline, "baseline-profile")
+            _write_profile(enriched, "enriched-profile", auto_keywords=3)
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[baseline, enriched],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            _mark_benchmark_strength_promotable(plan)
+            plan_path = root / "optimization_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            for candidate in plan["candidates"]:
+                _write_validation_report_without_cost(Path(candidate["artifacts"]["validation_report"]), mrr=1.0, hit_rate=1.0)
+
+            results = summarize_optimization_results(plan_path=plan_path)
+
+        enriched_candidate = next(candidate for candidate in results["candidates"] if candidate["profile_id"] == "enriched-profile")
+        cost = enriched_candidate["decision_score"]["components"]["cost"]
+        self.assertEqual(cost["latency"]["status"], "unknown")
+        self.assertEqual(cost["parse_time"]["status"], "unknown")
+        self.assertEqual(cost["enrichment"]["status"], "estimated")
+        self.assertEqual(cost["status"], "unknown")
+        self.assertEqual(results["decision"]["score_basis"], "normalized_decision_score")
+
     def test_summarize_optimization_results_generates_diagnostics_for_zero_chunks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
