@@ -8408,6 +8408,58 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("llm_backed_enrichment_enabled", {issue["code"] for issue in payload["issues"]})
         self.assertIn("RAGFlow Enrichment Experiment Matrix", report_text)
 
+    def test_profile_experiment_collapses_alias_duplicates_via_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            matrix = root / "matrix.json"
+            candidate_set = root / "candidate_profile_set.json"
+            report_json = root / "experiment_report.json"
+            report_md = root / "experiment_report.md"
+            matrix.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_enrichment_experiment_matrix_v1",
+                        "name": "alias-collapse-smoke",
+                        "dimensions": {
+                            "chunk_size": [512, 1024],
+                            "parser_config.chunk_token_num": [512, 1024],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROFILE_SCRIPT),
+                    "experiment",
+                    "--base-profile",
+                    str(PROFILE_PATH),
+                    "--matrix",
+                    str(matrix),
+                    "--candidate-set",
+                    str(candidate_set),
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(report_json.read_text(encoding="utf-8")) if report_json.exists() else {}
+            candidate_payload = json.loads(candidate_set.read_text(encoding="utf-8")) if candidate_set.exists() else {}
+            report_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(payload["summary"]["planned_experiment_count"], 4)
+        self.assertEqual(payload["summary"]["candidate_profile_count"], 2)
+        self.assertEqual(payload["summary"]["duplicate_effective_profile_group_count"], 2)
+        self.assertEqual(len(candidate_payload["profiles"]), 2)
+        self.assertIn("Duplicate Effective Profiles", report_text)
+
     def test_profile_experiment_checkpoint_resume_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from itertools import product
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from .config import read_config_file
 
@@ -867,6 +867,25 @@ def _set_nested(mapping: dict[str, Any], dotted_key: str, value: Any) -> None:
     target[parts[-1]] = value
 
 
+def _is_chunk_token_alias(key: str) -> bool:
+    return key.strip() in {
+        "chunk_size",
+        "profile.chunk_size",
+        "chunk_token_num",
+        "profile.chunk_token_num",
+        "parser_config.chunk_token_num",
+    }
+
+
+def _chunk_alias_fields(keys: Iterable[str]) -> list[str]:
+    aliases = []
+    for key in keys:
+        normalized = str(key).strip()
+        if _is_chunk_token_alias(normalized):
+            aliases.append(normalized)
+    return sorted(set(aliases))
+
+
 def _apply_experiment_setting(profile_data: dict[str, Any], settings: dict[str, Any], key: str, value: Any) -> None:
     parser_config = profile_data.setdefault("parser_config", {})
     if not isinstance(parser_config, dict):
@@ -874,11 +893,16 @@ def _apply_experiment_setting(profile_data: dict[str, Any], settings: dict[str, 
         profile_data["parser_config"] = parser_config
 
     normalized = key.strip()
-    if normalized in {"chunk_size", "profile.chunk_size"}:
+    if normalized in {"chunk_size", "profile.chunk_size", "chunk_token_num", "profile.chunk_token_num", "parser_config.chunk_token_num"}:
         chunk_size = int(value)
         profile_data["chunk_size"] = chunk_size
         parser_config["chunk_token_num"] = chunk_size
-        _set_nested(settings, "profile.chunk_size", chunk_size)
+        if normalized == "parser_config.chunk_token_num":
+            _set_nested(settings, "parser_config.chunk_token_num", chunk_size)
+        elif normalized in {"chunk_token_num", "profile.chunk_token_num"}:
+            _set_nested(settings, "profile.chunk_token_num", chunk_size)
+        else:
+            _set_nested(settings, "profile.chunk_size", chunk_size)
     elif normalized in {"chunk_overlap", "profile.chunk_overlap"}:
         chunk_overlap = int(value)
         profile_data["chunk_overlap"] = chunk_overlap
@@ -909,6 +933,90 @@ def _apply_experiment_setting(profile_data: dict[str, Any], settings: dict[str, 
 def _setting_digest(settings: Mapping[str, Any]) -> str:
     payload = json.dumps(settings, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
+
+
+def _effective_profile_payload(profile: ChunkProfile) -> dict[str, Any]:
+    payload = profile.to_manifest_dict()
+    parser_config = payload.get("parser_config")
+    if not isinstance(parser_config, dict):
+        parser_config = {}
+        payload["parser_config"] = parser_config
+    chunk_token_num = parser_config.get("chunk_token_num", payload.get("chunk_size"))
+    if isinstance(chunk_token_num, bool) or not isinstance(chunk_token_num, (int, float)):
+        chunk_token_num = payload.get("chunk_size")
+    if not isinstance(chunk_token_num, bool) and isinstance(chunk_token_num, (int, float)):
+        effective_chunk_size = int(chunk_token_num)
+        payload["chunk_size"] = effective_chunk_size
+        parser_config["chunk_token_num"] = effective_chunk_size
+    payload.pop("id", None)
+    payload.pop("profile_id", None)
+    return payload
+
+
+def _effective_profile_key(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:12]
+
+
+def _effective_settings_from_profile(profile_payload: Mapping[str, Any]) -> dict[str, Any]:
+    parser_config = profile_payload.get("parser_config") if isinstance(profile_payload.get("parser_config"), Mapping) else {}
+    settings: dict[str, Any] = {
+        "profile": {"chunk_size": profile_payload.get("chunk_size")},
+        "parser_config": {"chunk_token_num": parser_config.get("chunk_token_num")},
+    }
+    for key in ("auto_keywords", "auto_questions", "delimiter"):
+        if key in parser_config:
+            settings["parser_config"][key] = parser_config[key]
+    return settings
+
+
+def _normalized_effective_settings(raw_settings: Mapping[str, Any], profile_payload: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        settings = json.loads(json.dumps(raw_settings, ensure_ascii=False))
+    except (TypeError, ValueError):
+        settings = dict(raw_settings)
+    if not isinstance(settings, dict):
+        settings = {}
+    effective = _effective_settings_from_profile(profile_payload)
+    profile_settings = settings.get("profile")
+    if not isinstance(profile_settings, dict):
+        profile_settings = {}
+        settings["profile"] = profile_settings
+    profile_settings["chunk_size"] = effective["profile"]["chunk_size"]
+    parser_settings = settings.get("parser_config")
+    if not isinstance(parser_settings, dict):
+        parser_settings = {}
+        settings["parser_config"] = parser_settings
+    parser_settings.update(effective["parser_config"])
+    return settings
+
+
+def _matrix_alias_warning(
+    *,
+    fixed: Mapping[str, Any],
+    dimensions: list[tuple[str, list[Any]]],
+    issues: list[ProfileIssue],
+) -> None:
+    alias_fields = _chunk_alias_fields([*fixed.keys(), *(key for key, _ in dimensions)])
+    if len(alias_fields) > 1:
+        issues.append(
+            ProfileIssue(
+                "warning",
+                "aliased_profile_dimensions",
+                "experiment matrix varies aliased chunk-size fields that collapse to effective chunk_token_num values",
+                "dimensions",
+                "Vary only one of chunk_size, chunk_token_num, or parser_config.chunk_token_num.",
+            )
+        )
+
+
+def _duplicate_override_reason(records: list[Mapping[str, Any]]) -> str:
+    for record in records:
+        settings = record.get("settings") if isinstance(record.get("settings"), Mapping) else {}
+        setting_text = json.dumps(settings, ensure_ascii=False, sort_keys=True)
+        if "chunk_size" in setting_text or "chunk_token_num" in setting_text:
+            return "chunk_token_num_alias"
+    return "duplicate_effective_profile"
 
 
 def _risk_issues(*, profile: ChunkProfile, settings: Mapping[str, Any], index: int) -> list[ProfileIssue]:
@@ -973,6 +1081,7 @@ def plan_enrichment_experiments(
     matrix: Mapping[str, Any],
     profile_id_prefix: str | None = None,
     max_experiments: int = 64,
+    fail_on_duplicate_effective_profiles: bool = False,
 ) -> dict[str, Any]:
     """Expand an offline enrichment experiment matrix into candidate profiles."""
 
@@ -993,9 +1102,12 @@ def plan_enrichment_experiments(
                 "Reduce dimensions or pass a larger max_experiments value after reviewing runtime cost.",
             )
         )
+    _matrix_alias_warning(fixed=fixed, dimensions=dimensions, issues=issues)
 
     experiments: list[dict[str, Any]] = []
     profiles: list[dict[str, Any]] = []
+    raw_experiments: list[dict[str, Any]] = []
+    records_by_effective_key: dict[str, list[dict[str, Any]]] = {}
     prefix = _slug(profile_id_prefix or base_profile.profile_id, default="profile")
     if not any(issue.severity == "error" for issue in issues):
         keys = [key for key, _ in dimensions]
@@ -1008,9 +1120,9 @@ def plan_enrichment_experiments(
                     _apply_experiment_setting(profile_data, settings, str(key), value)
                 for key, value in zip(keys, values):
                     _apply_experiment_setting(profile_data, settings, key, value)
-                digest = _setting_digest(settings)
-                profile_data["profile_id"] = f"{prefix}-exp-{index:02d}-{digest}"
                 profile = ChunkProfile.from_dict(profile_data)
+                effective_profile = _effective_profile_payload(profile)
+                effective_key = _effective_profile_key(effective_profile)
             except (ProfileError, TypeError, ValueError) as exc:
                 issues.append(
                     ProfileIssue(
@@ -1021,21 +1133,75 @@ def plan_enrichment_experiments(
                     )
                 )
                 continue
-            lint = lint_profile(profile)
-            risk_issues = _risk_issues(profile=profile, settings=settings, index=index - 1)
-            issues.extend(risk_issues)
+            record = {
+                "index": index,
+                "settings": settings,
+                "effective_profile_key": effective_key,
+                "effective_profile": effective_profile,
+            }
+            raw_experiments.append(
+                {
+                    "index": index,
+                    "settings": settings,
+                    "effective_profile_key": effective_key,
+                    "normalized_settings": _normalized_effective_settings(settings, effective_profile),
+                }
+            )
+            records_by_effective_key.setdefault(effective_key, []).append(record)
+
+        duplicate_groups = []
+        for effective_key, records in records_by_effective_key.items():
+            if len(records) <= 1:
+                continue
+            duplicate_groups.append(
+                {
+                    "effective_profile_key": effective_key,
+                    "raw_indexes": [record["index"] for record in records],
+                    "raw_settings": [record["settings"] for record in records],
+                    "normalized_settings": _normalized_effective_settings(records[0]["settings"], records[0]["effective_profile"]),
+                    "normalized_profile": records[0]["effective_profile"],
+                    "override_reason": _duplicate_override_reason(records),
+                }
+            )
+        for group in duplicate_groups:
+            severity = "error" if fail_on_duplicate_effective_profiles else "warning"
+            issues.append(
+                ProfileIssue(
+                    severity,
+                    "duplicate_effective_profiles_blocked"
+                    if fail_on_duplicate_effective_profiles
+                    else "duplicate_effective_profile_collapsed",
+                    "experiment matrix contains raw combinations that normalize to the same effective profile",
+                    "dimensions",
+                    "Remove aliased or redundant dimensions before running expensive live experiments.",
+                )
+            )
+
+        for unique_index, (effective_key, records) in enumerate(records_by_effective_key.items(), start=1):
+            representative = records[0]
+            effective_profile = dict(representative["effective_profile"])
+            settings = _normalized_effective_settings(representative["settings"], effective_profile)
+            digest = _setting_digest(settings)
+            effective_profile["profile_id"] = f"{prefix}-exp-{unique_index:02d}-{digest}"
+            profile = ChunkProfile.from_dict(effective_profile)
             profile_payload = profile.to_manifest_dict()
+            risk_issues = _risk_issues(profile=profile, settings=settings, index=unique_index - 1)
+            issues.extend(risk_issues)
             profiles.append(profile_payload)
             experiments.append(
                 {
-                    "index": index,
+                    "index": unique_index,
                     "profile_id": profile.profile_id,
                     "settings": settings,
+                    "raw_indexes": [record["index"] for record in records],
+                    "effective_profile_key": effective_key,
                     "profile": profile_payload,
-                    "lint": lint.to_dict(),
+                    "lint": lint_profile(profile).to_dict(),
                     "risk_issues": [issue.to_dict() for issue in risk_issues],
                 }
             )
+    else:
+        duplicate_groups = []
 
     counts = _matrix_issue_counts(issues)
     candidate_profile_set = {
@@ -1062,8 +1228,24 @@ def plan_enrichment_experiments(
             **counts,
             "dimension_count": len(dimensions),
             "planned_experiment_count": experiment_count if dimensions else 0,
+            "raw_experiment_count": len(raw_experiments),
+            "unique_effective_profile_count": len(profiles),
+            "duplicate_effective_profile_group_count": len(duplicate_groups),
             "candidate_profile_count": len(profiles),
             "mutation_steps": 0,
+        },
+        "raw_matrix_audit": {
+            "raw_experiment_count": len(raw_experiments),
+            "experiments": raw_experiments,
+        },
+        "effective_profile_deduplication": {
+            "enabled": True,
+            "collapse_duplicates": True,
+            "fail_on_duplicate_effective_profiles": fail_on_duplicate_effective_profiles,
+            "raw_experiment_count": len(raw_experiments),
+            "unique_effective_profile_count": len(profiles),
+            "duplicate_effective_profile_group_count": len(duplicate_groups),
+            "duplicate_effective_profile_groups": duplicate_groups,
         },
         "candidate_profile_set": candidate_profile_set,
         "experiments": experiments,
@@ -1081,6 +1263,9 @@ def render_enrichment_experiment_markdown(report: Mapping[str, Any]) -> str:
         f"- Status: `{'passed' if report.get('ok') else 'failed'}`",
         f"- Mutates RAGFlow: `false`",
         f"- Dimensions: `{summary.get('dimension_count', 0)}`",
+        f"- Raw combinations: `{summary.get('raw_experiment_count', summary.get('planned_experiment_count', 0))}`",
+        f"- Unique effective profiles: `{summary.get('unique_effective_profile_count', summary.get('candidate_profile_count', 0))}`",
+        f"- Duplicate effective profile groups: `{summary.get('duplicate_effective_profile_group_count', 0)}`",
         f"- Candidate profiles: `{summary.get('candidate_profile_count', 0)}`",
         f"- Warnings: `{summary.get('warnings', 0)}`",
         "",
@@ -1095,6 +1280,30 @@ def render_enrichment_experiment_markdown(report: Mapping[str, Any]) -> str:
         settings = json.dumps(item.get("settings", {}), ensure_ascii=False, sort_keys=True)
         risk_issues = item.get("risk_issues") if isinstance(item.get("risk_issues"), list) else []
         lines.append(f"| {item.get('index')} | `{item.get('profile_id')}` | `{settings}` | {len(risk_issues)} |")
+    deduplication = report.get("effective_profile_deduplication") if isinstance(report.get("effective_profile_deduplication"), Mapping) else {}
+    duplicate_groups = (
+        deduplication.get("duplicate_effective_profile_groups")
+        if isinstance(deduplication.get("duplicate_effective_profile_groups"), list)
+        else []
+    )
+    if duplicate_groups:
+        lines.extend(
+            [
+                "",
+                "## Duplicate Effective Profiles",
+                "",
+                "| effective key | raw indexes | reason |",
+                "|---|---|---|",
+            ]
+        )
+        for group in duplicate_groups:
+            if not isinstance(group, Mapping):
+                continue
+            raw_indexes = group.get("raw_indexes") if isinstance(group.get("raw_indexes"), list) else []
+            lines.append(
+                f"| `{group.get('effective_profile_key')}` | {', '.join(str(index) for index in raw_indexes)} | "
+                f"{group.get('override_reason') or '-'} |"
+            )
     if report.get("issues"):
         lines.extend(["", "## Issues", "", "| severity | code | field | message |", "|---|---|---|---|"])
         for issue in report.get("issues", []) if isinstance(report.get("issues"), list) else []:

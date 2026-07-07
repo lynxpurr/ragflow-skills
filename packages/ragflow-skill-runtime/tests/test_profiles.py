@@ -434,6 +434,87 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(len(profile_ids), 4)
         self.assertIn("RAGFlow Enrichment Experiment Matrix", render_enrichment_experiment_markdown(report))
 
+    def test_plan_enrichment_experiments_collapses_aliased_chunk_dimensions(self) -> None:
+        base = ChunkProfile.from_dict(
+            {
+                "profile_id": "base-en",
+                "chunk_size": 512,
+                "chunk_overlap": 64,
+                "parser_config": {
+                    "chunk_token_num": 512,
+                    "auto_keywords": 0,
+                    "auto_questions": 0,
+                    "__language__": "English",
+                },
+            }
+        )
+        matrix = {
+            "schema": ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA,
+            "name": "alias-collapse",
+            "dimensions": {
+                "chunk_size": [512, 1024],
+                "parser_config.chunk_token_num": [512, 1024],
+            },
+        }
+
+        report = plan_enrichment_experiments(base_profile=base, matrix=matrix, profile_id_prefix="alias")
+        markdown = render_enrichment_experiment_markdown(report)
+
+        self.assertTrue(report["ok"], report["issues"])
+        self.assertEqual(report["summary"]["planned_experiment_count"], 4)
+        self.assertEqual(report["summary"]["raw_experiment_count"], 4)
+        self.assertEqual(report["summary"]["candidate_profile_count"], 2)
+        self.assertEqual(report["summary"]["unique_effective_profile_count"], 2)
+        self.assertEqual(report["summary"]["duplicate_effective_profile_group_count"], 2)
+        self.assertEqual(len(report["candidate_profile_set"]["profiles"]), 2)
+        effective_sizes = {
+            profile["chunk_size"]
+            for profile in report["candidate_profile_set"]["profiles"]
+        }
+        self.assertEqual(effective_sizes, {512, 1024})
+        for profile in report["candidate_profile_set"]["profiles"]:
+            self.assertEqual(profile["parser_config"]["chunk_token_num"], profile["chunk_size"])
+        duplicate_groups = report["effective_profile_deduplication"]["duplicate_effective_profile_groups"]
+        self.assertEqual(len(duplicate_groups), 2)
+        self.assertTrue(all(len(group["raw_indexes"]) == 2 for group in duplicate_groups))
+        self.assertTrue(all(group["override_reason"] == "chunk_token_num_alias" for group in duplicate_groups))
+        self.assertIn("duplicate_effective_profile_collapsed", {issue["code"] for issue in report["issues"]})
+        self.assertIn("Duplicate Effective Profiles", markdown)
+
+    def test_plan_enrichment_experiments_can_fail_on_duplicate_effective_profiles(self) -> None:
+        base = ChunkProfile.from_dict(
+            {
+                "profile_id": "base-en",
+                "chunk_size": 512,
+                "chunk_overlap": 64,
+                "parser_config": {
+                    "chunk_token_num": 512,
+                    "auto_keywords": 0,
+                    "auto_questions": 0,
+                    "__language__": "English",
+                },
+            }
+        )
+        matrix = {
+            "schema": ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA,
+            "name": "alias-collapse",
+            "dimensions": {
+                "chunk_size": [512, 1024],
+                "chunk_token_num": [512, 1024],
+            },
+        }
+
+        report = plan_enrichment_experiments(
+            base_profile=base,
+            matrix=matrix,
+            profile_id_prefix="alias",
+            fail_on_duplicate_effective_profiles=True,
+        )
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["summary"]["duplicate_effective_profile_group_count"], 2)
+        self.assertIn("duplicate_effective_profiles_blocked", {issue["code"] for issue in report["issues"]})
+
 
 if __name__ == "__main__":
     unittest.main()

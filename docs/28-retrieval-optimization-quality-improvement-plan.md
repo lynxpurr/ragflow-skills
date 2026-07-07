@@ -253,16 +253,16 @@ to audit after explicit approval.
 
 ### Alias-Aware Profile Experiments
 
-- [ ] Detect aliasing between `chunk_size`, `chunk_token_num`, and
+- [x] Detect aliasing between `chunk_size`, `chunk_token_num`, and
   `parser_config.chunk_token_num` during matrix expansion.
-- [ ] Emit duplicate effective profile groups with raw settings, normalized settings,
+- [x] Emit duplicate effective profile groups with raw settings, normalized settings,
   and override reason.
-- [ ] Collapse duplicate effective profiles by default, while preserving a raw matrix
+- [x] Collapse duplicate effective profiles by default, while preserving a raw matrix
   audit section.
-- [ ] Add an option to fail on duplicate effective profiles for expensive live
+- [x] Add an option to fail on duplicate effective profiles for expensive live
   experiments.
-- [ ] Add tests for matrix dimensions that intentionally and accidentally overlap.
-- [ ] Update profile experiment docs and examples to avoid varying aliased fields
+- [x] Add tests for matrix dimensions that intentionally and accidentally overlap.
+- [x] Update profile experiment docs and examples to avoid varying aliased fields
   independently.
 
 ### Effective Runtime Evidence

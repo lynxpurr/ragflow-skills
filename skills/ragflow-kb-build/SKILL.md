@@ -137,7 +137,7 @@ Notes:
 - Use `probe.py` to check safe RAGFlow API compatibility before live build operations.
 - Use `diagnose.py` to explain manifest, parse-state, duplicate-name, short-ID, and zero-chunk symptoms without private database access.
 - Use `profile.py lint/explain/recommend/compare` to review chunk profiles before upload and compare validation reports after profile experiments. Add `profile.py recommend --retrieval-hints` to include handoff table/image hints in the recommendation report and rationale.
-- Use `profile.py experiment` to expand an offline enrichment experiment matrix into a local candidate profile set for `optimize --profile-set`; it records retrieval settings and warns about slow or LLM-backed enrichment without touching RAGFlow.
+- Use `profile.py experiment` to expand an offline enrichment experiment matrix into a local candidate profile set for `optimize --profile-set`; it records retrieval settings and warns about slow or LLM-backed enrichment without touching RAGFlow. When varying chunk size, use only one of `chunk_size`, `chunk_token_num`, or `parser_config.chunk_token_num`; aliased combinations are collapsed by default and can be blocked with `--fail-on-duplicate-effective-profiles`.
 - `profile.py compare` and `optimize summarize` surface latency, parse-time, operational cost, empty-result, chunk-count, and benchmark quality metrics when existing validation reports provide them.
 - `validate.py` supports `smoke`, `regression`, and `benchmark`; regression requires a query set, and benchmark requires both a query set and qrels.
 - Query sets are small JSON files with `question`, optional `min_chunks`, `expected_terms`, and `expected_documents`.

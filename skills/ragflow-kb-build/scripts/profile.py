@@ -116,6 +116,7 @@ def _experiment_request_hash(
     matrix: Mapping[str, Any],
     profile_id_prefix: str | None,
     max_experiments: int,
+    fail_on_duplicate_effective_profiles: bool,
 ) -> str:
     return _stable_digest(
         {
@@ -123,6 +124,7 @@ def _experiment_request_hash(
             "matrix": dict(matrix),
             "profile_id_prefix": profile_id_prefix,
             "max_experiments": max_experiments,
+            "fail_on_duplicate_effective_profiles": fail_on_duplicate_effective_profiles,
         }
     )
 
@@ -153,6 +155,7 @@ def _validate_experiment_checkpoint(
     candidate_set: str | None,
     profile_id_prefix: str | None,
     max_experiments: int,
+    fail_on_duplicate_effective_profiles: bool,
 ) -> None:
     if dict(checkpoint.get("source_hashes") or {}) != dict(source_hashes):
         raise ProfileError("profile experiment checkpoint source hashes do not match current inputs")
@@ -164,6 +167,7 @@ def _validate_experiment_checkpoint(
     expected_parameters = {
         "profile_id_prefix": profile_id_prefix,
         "max_experiments": max_experiments,
+        "fail_on_duplicate_effective_profiles": fail_on_duplicate_effective_profiles,
     }
     if dict(checkpoint.get("parameters") or {}) != expected_parameters:
         raise ProfileError("profile experiment checkpoint parameters do not match current request")
@@ -177,6 +181,7 @@ def _write_experiment_checkpoint(
     candidate_set: str | None,
     profile_id_prefix: str | None,
     max_experiments: int,
+    fail_on_duplicate_effective_profiles: bool,
     processed_profile_ids: list[str],
     total_profile_count: int,
     completed: bool,
@@ -193,6 +198,7 @@ def _write_experiment_checkpoint(
         "parameters": {
             "profile_id_prefix": profile_id_prefix,
             "max_experiments": max_experiments,
+            "fail_on_duplicate_effective_profiles": fail_on_duplicate_effective_profiles,
         },
         "processed_profile_ids": processed,
         "summary": {
@@ -217,6 +223,7 @@ def _apply_experiment_checkpoint(
     candidate_set: str | None,
     profile_id_prefix: str | None,
     max_experiments: int,
+    fail_on_duplicate_effective_profiles: bool,
 ) -> dict[str, Any]:
     experiments = payload.get("experiments") if isinstance(payload.get("experiments"), list) else []
     profile_ids = [str(item.get("profile_id")) for item in experiments if isinstance(item, Mapping) and item.get("profile_id")]
@@ -232,6 +239,7 @@ def _apply_experiment_checkpoint(
             candidate_set=candidate_set,
             profile_id_prefix=profile_id_prefix,
             max_experiments=max_experiments,
+            fail_on_duplicate_effective_profiles=fail_on_duplicate_effective_profiles,
         )
         processed_profile_ids = list(checkpoint.get("processed_profile_ids") or [])
         checkpoint_created_at = str(checkpoint.get("created_at") or "") or None
@@ -272,6 +280,7 @@ def _apply_experiment_checkpoint(
             candidate_set=candidate_set,
             profile_id_prefix=profile_id_prefix,
             max_experiments=max_experiments,
+            fail_on_duplicate_effective_profiles=fail_on_duplicate_effective_profiles,
             processed_profile_ids=ordered_processed,
             total_profile_count=len(profile_ids),
             completed=completed,
@@ -585,12 +594,14 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
         matrix=matrix,
         profile_id_prefix=args.profile_id_prefix,
         max_experiments=args.max_experiments,
+        fail_on_duplicate_effective_profiles=args.fail_on_duplicate_effective_profiles,
     )
     payload = plan_enrichment_experiments(
         base_profile=base_profile,
         matrix=matrix,
         profile_id_prefix=args.profile_id_prefix,
         max_experiments=args.max_experiments,
+        fail_on_duplicate_effective_profiles=args.fail_on_duplicate_effective_profiles,
     )
     payload = _apply_experiment_checkpoint(
         payload,
@@ -602,6 +613,7 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
         candidate_set=args.candidate_set,
         profile_id_prefix=args.profile_id_prefix,
         max_experiments=args.max_experiments,
+        fail_on_duplicate_effective_profiles=args.fail_on_duplicate_effective_profiles,
     )
     _write_json(args.candidate_set, payload["candidate_profile_set"])
     payload = _sanitize_profile_report(
@@ -676,6 +688,11 @@ def build_parser() -> argparse.ArgumentParser:
     experiment.add_argument("--name", help="Optional experiment matrix name")
     experiment.add_argument("--profile-id-prefix", help="Prefix for generated candidate profile ids")
     experiment.add_argument("--max-experiments", type=int, default=64, help="Maximum matrix expansion size")
+    experiment.add_argument(
+        "--fail-on-duplicate-effective-profiles",
+        action="store_true",
+        help="Fail when raw matrix combinations collapse to duplicate effective profiles",
+    )
     experiment.add_argument("--candidate-set", help="Optional ragflow_candidate_profile_set_v1 output path")
     experiment.add_argument("--checkpoint", help="Checkpoint path for resumable offline profile experiment planning")
     experiment.add_argument("--resume", action="store_true", help="Resume from an existing profile experiment checkpoint")
