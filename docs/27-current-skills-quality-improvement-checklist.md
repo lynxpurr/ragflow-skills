@@ -93,6 +93,9 @@ Completed public offline work in the current implementation pass:
   `kb_manifest.json`, `parse_report.json`, and `kb_activation_plan.json` sidecars so
   assistant review artifacts can combine rich-handoff sidecars with build, parse, chunk,
   and activation readiness evidence without mutating assistant settings.
+- `ragflow-kb-build parse-report` now compares requested profile settings with effective
+  parser config captured from `kb_manifest.json`, explicit `--parser-config`, or
+  read-only `--documents-json` API payloads when those payloads expose `parser_config`.
 
 The live disposable Markdown-plus-image build remains gated. It must stay unchecked until
 the user explicitly approves live mutation and sanitized cleanup evidence is recorded.
@@ -484,7 +487,7 @@ All new live-capable features must use the same safety model:
 
 ### P1: Improve Production Readiness And Refresh
 
-- [ ] Capture requested profile and effective parser config when the API exposes them.
+- [x] Capture requested profile and effective parser config when the API exposes them.
 - [x] Record embedding model or `unknown` with reason in build and health reports.
 - [x] Warn when embedding model drift implies rebuild or reparse risk.
 - [x] Connect model-provider probe evidence to health reports without requiring mutation.

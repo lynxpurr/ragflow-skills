@@ -239,6 +239,86 @@ class ParseReportTests(unittest.TestCase):
         self.assertIn("requested_effective_profile_drift", {issue["code"] for issue in report["issues"]})
         self.assertIn("Requested/effective drift: True", markdown)
 
+    def test_parse_report_uses_effective_parser_config_from_documents_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kb_manifest = root / "kb_manifest.json"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-api-parser", "name": "kb:api-parser"},
+                        "documents": [
+                            {
+                                "document_id": "doc-api-parser",
+                                "source_path": "source.md",
+                                "markdown_path": "documents/source.md",
+                                "status": "done",
+                                "chunk_count": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            documents_json = root / "documents.json"
+            documents_json.write_text(
+                json.dumps(
+                    {
+                        "data": {
+                            "dataset": {
+                                "parser_config": {
+                                    "chunk_token_num": 1024,
+                                    "auto_keywords": 2,
+                                    "auto_questions": 0,
+                                }
+                            },
+                            "docs": [
+                                {
+                                    "id": "doc-api-parser",
+                                    "name": "source.md",
+                                    "run": "DONE",
+                                    "chunk_count": 2,
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            requested_profile = root / "requested.json"
+            requested_profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "requested-api-parser",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                        "parser_config": {
+                            "chunk_token_num": 512,
+                            "auto_keywords": 0,
+                            "auto_questions": 0,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = create_parse_report(
+                kb_manifest_path=kb_manifest,
+                documents_json_path=documents_json,
+                profile_path=requested_profile,
+            )
+
+        visibility = report["profile_visibility"]
+        self.assertEqual(visibility["effective_source"], "documents_json.data.dataset.parser_config")
+        self.assertEqual(visibility["requested_parser_config"]["chunk_token_num"], 512)
+        self.assertEqual(visibility["effective_parser_config"]["chunk_token_num"], 1024)
+        self.assertIn(
+            {"key": "chunk_token_num", "requested": 512, "effective": 1024},
+            visibility["drift"]["changed_values"],
+        )
+        self.assertIn("requested_effective_profile_drift", {issue["code"] for issue in report["issues"]})
+
     def test_parse_report_rejects_documents_json_without_documents(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

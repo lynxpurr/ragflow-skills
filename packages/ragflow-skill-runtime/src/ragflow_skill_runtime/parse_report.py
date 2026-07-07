@@ -51,6 +51,8 @@ DETAIL_CHUNK_COUNT_KEYS = (
     "total_chunks",
     "total_chunk_count",
 )
+DETAIL_NESTED_KEYS = ("dataset", "kb", "knowledgebase", "knowledge_base", "detail", "details", "summary")
+PARSER_CONFIG_KEYS = ("parser_config", "parserConfig")
 VISUAL_PARSER_KEY_PARTS = ("layout", "visual", "ocr", "image", "table", "vision")
 
 
@@ -245,11 +247,11 @@ def _detail_count_from_mapping(payload: Mapping[str, Any], keys: Iterable[str]) 
     data = payload.get("data")
     if isinstance(data, Mapping):
         roots.append(data)
-        for nested_key in ("dataset", "kb", "knowledgebase", "knowledge_base", "detail", "details", "summary"):
+        for nested_key in DETAIL_NESTED_KEYS:
             nested = data.get(nested_key)
             if isinstance(nested, Mapping):
                 roots.append(nested)
-    for nested_key in ("dataset", "kb", "knowledgebase", "knowledge_base", "detail", "details", "summary"):
+    for nested_key in DETAIL_NESTED_KEYS:
         nested = payload.get(nested_key)
         if isinstance(nested, Mapping):
             roots.append(nested)
@@ -274,6 +276,37 @@ def _extract_detail_counts(payload: Any) -> dict[str, int | None]:
         "document_count": document_count,
         "chunk_count": _detail_count_from_mapping(payload, DETAIL_CHUNK_COUNT_KEYS),
     }
+
+
+def _extract_effective_parser_config(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
+    if not isinstance(payload, Mapping):
+        return None, None
+
+    roots: list[tuple[str, Mapping[str, Any]]] = [("documents_json", payload)]
+    data = payload.get("data")
+    if isinstance(data, Mapping):
+        roots.append(("documents_json.data", data))
+        for nested_key in DETAIL_NESTED_KEYS:
+            nested = data.get(nested_key)
+            if isinstance(nested, Mapping):
+                roots.append((f"documents_json.data.{nested_key}", nested))
+    for nested_key in DETAIL_NESTED_KEYS:
+        nested = payload.get(nested_key)
+        if isinstance(nested, Mapping):
+            roots.append((f"documents_json.{nested_key}", nested))
+
+    for prefix, root in roots:
+        for key in PARSER_CONFIG_KEYS:
+            value = root.get(key)
+            if isinstance(value, Mapping):
+                return dict(value), f"{prefix}.{key}"
+        parser = root.get("parser")
+        if isinstance(parser, Mapping):
+            for key in PARSER_CONFIG_KEYS:
+                value = parser.get(key)
+                if isinstance(value, Mapping):
+                    return dict(value), f"{prefix}.parser.{key}"
+    return None, None
 
 
 def _multimodal_manifest_summary(
@@ -1024,11 +1057,16 @@ def create_parse_report(
     documents_payload: Any = None
     document_status_index = None
     detail_counts = {"document_count": None, "chunk_count": None}
+    api_effective_parser_config: dict[str, Any] | None = None
+    api_effective_parser_config_source: str | None = None
     if documents_json_path:
         loaded = load_document_status_payload(documents_json_path)
         documents_payload = loaded["payload"]
         document_status_index = _index_document_statuses(loaded["items"])
         detail_counts = _extract_detail_counts(documents_payload)
+        api_effective_parser_config, api_effective_parser_config_source = _extract_effective_parser_config(
+            documents_payload
+        )
 
     parse_log_list = list(parse_log_paths or [])
     parse_log_summary = _parse_logs(parse_log_list) if parse_log_list else _empty_parse_log_summary()
@@ -1042,6 +1080,9 @@ def create_parse_report(
     if parser_config_path:
         visibility_effective_config = parser_settings.get("parser_config", {})
         visibility_effective_source = str(parser_settings.get("source") or "none")
+    elif api_effective_parser_config is not None:
+        visibility_effective_config = api_effective_parser_config
+        visibility_effective_source = str(api_effective_parser_config_source or "documents_json.parser_config")
     elif effective_profile is not None:
         visibility_effective_config = effective_profile.parser_config
         visibility_effective_source = "kb_manifest.profile"
