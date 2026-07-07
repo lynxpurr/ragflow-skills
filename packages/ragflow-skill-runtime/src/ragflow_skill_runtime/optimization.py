@@ -10,11 +10,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from .benchmark_governance import BenchmarkGovernanceError, preflight_benchmark_dataset, resolve_benchmark_artifacts
+from .benchmark_governance import (
+    CHUNK_SNAPSHOT_REPORT_SCHEMA,
+    BenchmarkGovernanceError,
+    preflight_benchmark_dataset,
+    resolve_benchmark_artifacts,
+)
 from .config import ConfigError, read_config_file
 from .diagnostics import DIAGNOSTIC_REPORT_SCHEMA, diagnose_kb_manifest
+from .health_report import HEALTH_REPORT_SCHEMA
+from .kb_build import KB_REFRESH_REPORT_SCHEMA
 from .manifests import ManifestError, load_kb_manifest
+from .parse_report import PARSE_REPORT_SCHEMA
 from .profiles import ChunkProfile, ProfileError, lint_profile, load_profile, recommend_profile
+from .validation import CHUNK_SNAPSHOT_SCHEMA
 
 
 CANDIDATE_PROFILE_SET_SCHEMA = "ragflow_candidate_profile_set_v1"
@@ -23,6 +32,7 @@ PROFILE_EXPERIMENT_RESULTS_SCHEMA = "ragflow_profile_experiment_results_v1"
 OPTIMIZATION_CLEANUP_PLAN_SCHEMA = "ragflow_optimization_cleanup_plan_v1"
 OPTIMIZATION_LIVE_READINESS_REPORT_SCHEMA = "ragflow_optimization_live_readiness_report_v1"
 PROFILE_FILE_SUFFIXES = {".json", ".yaml", ".yml"}
+CHUNK_DELIMITER_RE = re.compile(r"<!--\s*chunk\s*-->", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -371,6 +381,11 @@ def _candidate_artifacts(artifact_dir: str | Path, profile_id: str) -> dict[str,
         "validation_report": str(candidate_dir / "validation_report.json"),
         "validation_report_md": str(candidate_dir / "validation_report.md"),
         "diagnostic_report": str(candidate_dir / "diagnostic_report.json"),
+        "parse_report": str(candidate_dir / "parse_report.json"),
+        "refresh_report": str(candidate_dir / "kb_refresh_report.json"),
+        "chunk_snapshot": str(candidate_dir / "chunk_snapshot.json"),
+        "chunk_snapshot_report": str(candidate_dir / "chunk_snapshot_report.json"),
+        "health_report": str(candidate_dir / "health_report.json"),
         "cleanup_plan": str(candidate_dir / "cleanup_plan.json"),
     }
 
@@ -927,6 +942,339 @@ def _candidate_diagnostic(
     return payload
 
 
+def _mapping_copy(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _mapping_items(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _first_sidecar_path(artifacts: Mapping[str, Any], keys: Iterable[str]) -> Path | None:
+    for key in keys:
+        value = artifacts.get(key)
+        if isinstance(value, str) and value:
+            return Path(value)
+    return None
+
+
+def _unavailable_sidecar(schema: str, path: Path | None) -> dict[str, Any]:
+    return {
+        "available": False,
+        "schema": schema,
+        "path": str(path) if path else None,
+    }
+
+
+def _read_runtime_sidecar(
+    artifacts: Mapping[str, Any],
+    *,
+    keys: Iterable[str],
+    expected_schemas: set[str],
+    label: str,
+    issues: list[OptimizationIssue],
+    field: str,
+) -> tuple[dict[str, Any] | None, Path | None]:
+    keys = tuple(keys)
+    first_path = _first_sidecar_path(artifacts, keys)
+    for key in keys:
+        raw_path = artifacts.get(key)
+        if not isinstance(raw_path, str) or not raw_path:
+            continue
+        path = Path(raw_path)
+        if not path.exists():
+            continue
+        try:
+            payload = _read_json_mapping(path, label=label)
+        except ProfileError as exc:
+            issues.append(
+                OptimizationIssue(
+                    "warning",
+                    "runtime_evidence_sidecar_invalid",
+                    str(exc),
+                    field,
+                    "Regenerate the sidecar or remove the invalid artifact path before relying on runtime evidence.",
+                )
+            )
+            return None, path
+        schema = payload.get("schema")
+        if schema not in expected_schemas:
+            expected = " or ".join(sorted(expected_schemas))
+            issues.append(
+                OptimizationIssue(
+                    "warning",
+                    "runtime_evidence_sidecar_schema_invalid",
+                    f"{label} schema should be {expected}",
+                    field,
+                    "Regenerate the sidecar with the matching command before relying on runtime evidence.",
+                )
+            )
+            return None, path
+        return payload, path
+    return None, first_path
+
+
+def _parse_report_runtime_evidence(
+    report: Mapping[str, Any] | None,
+    *,
+    path: Path | None,
+    issues: list[OptimizationIssue],
+    field: str,
+) -> dict[str, Any]:
+    if report is None:
+        return _unavailable_sidecar(PARSE_REPORT_SCHEMA, path)
+    summary = _mapping_copy(report.get("summary"))
+    visibility = _mapping_copy(report.get("profile_visibility"))
+    drift = _mapping_copy(visibility.get("drift"))
+    drifted = bool(drift.get("drift"))
+    if drifted:
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                "runtime_parser_config_drift",
+                "parse-report evidence shows requested parser config differs from effective runtime config",
+                field,
+                "Review requested/effective parser_config before promoting this profile.",
+            )
+        )
+    return {
+        "available": True,
+        "schema": report.get("schema"),
+        "path": str(path) if path else None,
+        "status": report.get("status"),
+        "summary": summary,
+        "requested_parser_config": _mapping_copy(visibility.get("requested_parser_config")),
+        "effective_parser_config": _mapping_copy(visibility.get("effective_parser_config")),
+        "effective_source": visibility.get("effective_source"),
+        "drift": drift,
+        "unsupported_effective_keys": list(visibility.get("unsupported_effective_keys") or []),
+    }
+
+
+def _refresh_report_runtime_evidence(report: Mapping[str, Any] | None, *, path: Path | None) -> dict[str, Any]:
+    if report is None:
+        return _unavailable_sidecar(KB_REFRESH_REPORT_SCHEMA, path)
+    documents = _mapping_items(report.get("documents"))
+    return {
+        "available": True,
+        "schema": report.get("schema"),
+        "path": str(path) if path else None,
+        "summary": _mapping_copy(report.get("summary")),
+        "document_count": len(documents),
+        "documents": documents[:10],
+    }
+
+
+def _first_number(mappings: Iterable[Mapping[str, Any]], key: str, *, default: int | float = 0) -> int | float:
+    for mapping in mappings:
+        value = mapping.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return value
+    return default
+
+
+def _snapshot_content(value: Mapping[str, Any]) -> str:
+    for key in ("content", "text", "content_preview"):
+        item = value.get(key)
+        if isinstance(item, str):
+            return item
+    return ""
+
+
+def _chunk_snapshot_runtime_evidence(report: Mapping[str, Any] | None, *, path: Path | None) -> dict[str, Any]:
+    if report is None:
+        return _unavailable_sidecar(CHUNK_SNAPSHOT_SCHEMA, path)
+
+    schema = str(report.get("schema") or "")
+    summary = _mapping_copy(report.get("summary"))
+    if schema == CHUNK_SNAPSHOT_REPORT_SCHEMA:
+        review = _mapping_copy(report.get("chunk_review"))
+        metrics = _mapping_copy(review.get("metrics"))
+        examples = _mapping_copy(review.get("examples"))
+        boundary_sources = [metrics, summary]
+    else:
+        chunks = _mapping_items(report.get("chunks"))
+        delimiter_indexes: list[int] = []
+        max_chunk_chars = 0
+        for index, chunk in enumerate(chunks, start=1):
+            content = _snapshot_content(chunk)
+            max_chunk_chars = max(max_chunk_chars, len(content))
+            if content and CHUNK_DELIMITER_RE.search(content):
+                delimiter_indexes.append(index)
+        metrics = {
+            "delimiter_visible_chunk_count": len(delimiter_indexes),
+            "max_chunk_chars": max_chunk_chars,
+        }
+        examples = {"delimiter_visible_chunk_indexes": delimiter_indexes[:20]}
+        boundary_sources = [summary, metrics]
+
+    boundary = {
+        "chunk_count": _first_number(boundary_sources, "chunk_count"),
+        "source_chunk_count": _first_number(boundary_sources, "source_chunk_count"),
+        "delimiter_visible_chunk_count": _first_number(boundary_sources, "delimiter_visible_chunk_count"),
+        "possible_split_table_chunk_count": _first_number(boundary_sources, "possible_split_table_chunk_count"),
+        "table_like_chunk_count": _first_number(boundary_sources, "table_like_chunk_count"),
+        "image_only_chunk_count": _first_number(boundary_sources, "image_only_chunk_count"),
+        "max_chunk_chars": _first_number(boundary_sources, "max_chunk_chars"),
+    }
+    delimiter_visible = int(boundary["delimiter_visible_chunk_count"])
+    chunk_count = int(boundary["chunk_count"])
+    if chunk_count <= 0:
+        delimiter_status = "unknown"
+    elif delimiter_visible:
+        delimiter_status = "visible"
+    else:
+        delimiter_status = "consumed"
+
+    return {
+        "available": True,
+        "schema": report.get("schema"),
+        "path": str(path) if path else None,
+        "summary": summary,
+        "boundary_evidence": boundary,
+        "delimiter_consumption": {
+            "status": delimiter_status,
+            "delimiter_visible_chunk_count": delimiter_visible,
+        },
+        "examples": examples,
+    }
+
+
+def _health_report_runtime_evidence(
+    report: Mapping[str, Any] | None,
+    *,
+    path: Path | None,
+    issues: list[OptimizationIssue],
+    field: str,
+) -> dict[str, Any]:
+    if report is None:
+        return _unavailable_sidecar(HEALTH_REPORT_SCHEMA, path)
+    summary = _mapping_copy(report.get("summary"))
+    knowledge_bases = _mapping_items(report.get("knowledge_bases"))
+    distribution = _mapping_items(report.get("embedding_model_distribution"))
+    issue_items = _mapping_items(report.get("issues"))
+    issue_codes = [str(item.get("code")) for item in issue_items if item.get("code")]
+    models = [
+        str(item.get("model"))
+        for item in distribution
+        if item.get("model") and str(item.get("model")) != "unknown"
+    ]
+    if not models:
+        models = sorted({str(item.get("embedding_model")) for item in knowledge_bases if item.get("embedding_model")})
+    rebuild_required = bool(summary.get("embedding_model_rebuild_required_kb_count")) or any(
+        bool(item.get("embedding_model_check", {}).get("rebuild_or_reparse_required"))
+        for item in knowledge_bases
+        if isinstance(item.get("embedding_model_check"), Mapping)
+    )
+    parser_warning_codes = {
+        "parser_performance_review",
+        "stale_or_failed_parse_state",
+        "zero_chunk_documents",
+        "stale_count_fields",
+    }
+    parser_warning = bool(summary.get("stale_parse_kb_count")) or any(code in parser_warning_codes for code in issue_codes)
+    if rebuild_required:
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                "runtime_health_embedding_model_rebuild_required",
+                "health-report evidence indicates embedding model rebuild or re-parse may be required",
+                field,
+                "Rebuild or re-parse affected KBs before treating profile metrics as comparable.",
+            )
+        )
+    if parser_warning:
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                "runtime_health_parser_warning",
+                "health-report evidence contains parser or parse-state warnings",
+                field,
+                "Refresh parse sidecars and resolve stale or failed parse states before promotion.",
+            )
+        )
+    return {
+        "available": True,
+        "schema": report.get("schema"),
+        "path": str(path) if path else None,
+        "status": report.get("status"),
+        "summary": summary,
+        "embedding_models": models,
+        "embedding_model_rebuild_required": rebuild_required,
+        "parser_warning": parser_warning,
+        "issue_codes": issue_codes,
+    }
+
+
+def _candidate_runtime_evidence(
+    candidate: Mapping[str, Any],
+    *,
+    issues: list[OptimizationIssue],
+    field: str,
+) -> dict[str, Any]:
+    artifacts = candidate.get("artifacts") if isinstance(candidate.get("artifacts"), Mapping) else {}
+    parse_report, parse_path = _read_runtime_sidecar(
+        artifacts,
+        keys=("parse_report",),
+        expected_schemas={PARSE_REPORT_SCHEMA},
+        label="parse report",
+        issues=issues,
+        field=f"{field}.parse_report",
+    )
+    refresh_report, refresh_path = _read_runtime_sidecar(
+        artifacts,
+        keys=("refresh_report", "kb_refresh_report"),
+        expected_schemas={KB_REFRESH_REPORT_SCHEMA},
+        label="refresh report",
+        issues=issues,
+        field=f"{field}.refresh_report",
+    )
+    snapshot_report, snapshot_path = _read_runtime_sidecar(
+        artifacts,
+        keys=("chunk_snapshot_report", "chunk_snapshot"),
+        expected_schemas={CHUNK_SNAPSHOT_REPORT_SCHEMA, CHUNK_SNAPSHOT_SCHEMA},
+        label="chunk snapshot",
+        issues=issues,
+        field=f"{field}.chunk_snapshot",
+    )
+    health_report, health_path = _read_runtime_sidecar(
+        artifacts,
+        keys=("health_report",),
+        expected_schemas={HEALTH_REPORT_SCHEMA},
+        label="health report",
+        issues=issues,
+        field=f"{field}.health_report",
+    )
+    evidence = {
+        "parse_report": _parse_report_runtime_evidence(
+            parse_report,
+            path=parse_path,
+            issues=issues,
+            field=f"{field}.parse_report",
+        ),
+        "refresh_report": _refresh_report_runtime_evidence(refresh_report, path=refresh_path),
+        "chunk_snapshot": _chunk_snapshot_runtime_evidence(snapshot_report, path=snapshot_path),
+        "health_report": _health_report_runtime_evidence(
+            health_report,
+            path=health_path,
+            issues=issues,
+            field=f"{field}.health_report",
+        ),
+    }
+    sidecar_count = sum(1 for item in evidence.values() if isinstance(item, Mapping) and item.get("available"))
+    return {
+        "available": sidecar_count > 0,
+        "sidecar_count": sidecar_count,
+        **evidence,
+    }
+
+
 def _result_tradeoffs(result: Mapping[str, Any], winner: Mapping[str, Any]) -> list[str]:
     metrics = result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
     winner_metrics = winner.get("metrics") if isinstance(winner.get("metrics"), Mapping) else {}
@@ -1301,6 +1649,7 @@ def summarize_optimization_results(
                     **diagnostic,
                 }
             )
+        runtime_evidence = _candidate_runtime_evidence(candidate, issues=issues, field=f"candidates[{index}].artifacts")
         results.append(
             {
                 "profile_id": candidate.get("profile_id"),
@@ -1312,6 +1661,7 @@ def summarize_optimization_results(
                 "metrics": metrics,
                 "score": metrics["score"],
                 "diagnostics": diagnostic,
+                "runtime_evidence": runtime_evidence,
                 "source": candidate.get("source", {}),
                 "candidate_index": index,
             }
@@ -1375,6 +1725,29 @@ def summarize_optimization_results(
 
     issue_summary = _issue_counts(issues)
     diagnostic_report_count = sum(1 for item in diagnostics if item.get("report_available"))
+    runtime_evidence_candidate_count = sum(
+        1
+        for item in results
+        if isinstance(item.get("runtime_evidence"), Mapping) and item["runtime_evidence"].get("available")
+    )
+    parser_drift_candidate_count = sum(
+        1
+        for item in results
+        if isinstance(item.get("runtime_evidence"), Mapping)
+        and isinstance(item["runtime_evidence"].get("parse_report"), Mapping)
+        and bool(item["runtime_evidence"]["parse_report"].get("drift", {}).get("drift"))
+    )
+    health_warning_candidate_count = sum(
+        1
+        for item in results
+        if isinstance(item.get("runtime_evidence"), Mapping)
+        and isinstance(item["runtime_evidence"].get("health_report"), Mapping)
+        and (
+            bool(item["runtime_evidence"]["health_report"].get("embedding_model_rebuild_required"))
+            or bool(item["runtime_evidence"]["health_report"].get("parser_warning"))
+            or bool(item["runtime_evidence"]["health_report"].get("issue_codes"))
+        )
+    )
     return {
         "ok": _ok(issues),
         "schema": PROFILE_EXPERIMENT_RESULTS_SCHEMA,
@@ -1391,6 +1764,9 @@ def summarize_optimization_results(
             ),
             "diagnostic_required_count": len(diagnostics),
             "diagnostic_report_count": diagnostic_report_count,
+            "runtime_evidence_candidate_count": runtime_evidence_candidate_count,
+            "parser_drift_candidate_count": parser_drift_candidate_count,
+            "health_warning_candidate_count": health_warning_candidate_count,
             "benchmark_strength_status": benchmark_strength.get("status") if benchmark_strength else None,
             "saturated_metric_count": len(metric_saturation["saturated_metrics"]),
             "co_winner_count": len(co_winner_items),
@@ -2136,6 +2512,48 @@ def render_best_profile_markdown(results: Mapping[str, Any]) -> str:
                 f"| `{item.get('profile_id')}` | {', '.join(str(reason) for reason in reason_codes) or '-'} | "
                 f"`{item.get('report_path') or '-'}` | `{str(bool(item.get('generated'))).lower()}` | "
                 f"{', '.join(str(issue) for issue in issue_types) or '-'} |"
+            )
+        lines.append("")
+    runtime_candidates = [
+        candidate
+        for candidate in results.get("candidates", [])
+        if isinstance(candidate, Mapping)
+        and isinstance(candidate.get("runtime_evidence"), Mapping)
+        and candidate["runtime_evidence"].get("available")
+    ]
+    if runtime_candidates:
+        lines.extend(
+            [
+                "## Runtime Evidence",
+                "",
+                "| profile | sidecars | parser drift | effective chunks | delimiter status | delimiter visible | embedding models | health warnings |",
+                "|---|---:|---:|---:|---|---:|---|---|",
+            ]
+        )
+        for candidate in runtime_candidates:
+            evidence = candidate.get("runtime_evidence") if isinstance(candidate.get("runtime_evidence"), Mapping) else {}
+            parse = evidence.get("parse_report") if isinstance(evidence.get("parse_report"), Mapping) else {}
+            refresh = evidence.get("refresh_report") if isinstance(evidence.get("refresh_report"), Mapping) else {}
+            snapshot = evidence.get("chunk_snapshot") if isinstance(evidence.get("chunk_snapshot"), Mapping) else {}
+            health = evidence.get("health_report") if isinstance(evidence.get("health_report"), Mapping) else {}
+            parse_summary = parse.get("summary") if isinstance(parse.get("summary"), Mapping) else {}
+            refresh_summary = refresh.get("summary") if isinstance(refresh.get("summary"), Mapping) else {}
+            boundary = snapshot.get("boundary_evidence") if isinstance(snapshot.get("boundary_evidence"), Mapping) else {}
+            delimiter = snapshot.get("delimiter_consumption") if isinstance(snapshot.get("delimiter_consumption"), Mapping) else {}
+            models = health.get("embedding_models") if isinstance(health.get("embedding_models"), list) else []
+            health_warnings: list[str] = []
+            if health.get("embedding_model_rebuild_required"):
+                health_warnings.append("embedding_rebuild")
+            if health.get("parser_warning"):
+                health_warnings.append("parser")
+            effective_chunks = parse_summary.get("effective_chunk_total", refresh_summary.get("observed_chunk_total", "-"))
+            drift = parse.get("drift") if isinstance(parse.get("drift"), Mapping) else {}
+            lines.append(
+                f"| `{candidate.get('profile_id')}` | {evidence.get('sidecar_count', 0)} | "
+                f"`{str(bool(drift.get('drift'))).lower()}` | {effective_chunks} | "
+                f"`{delimiter.get('status', '-')}` | {boundary.get('delimiter_visible_chunk_count', 0)} | "
+                f"{', '.join(f'`{model}`' for model in models) or '-'} | "
+                f"{', '.join(health_warnings) or '-'} |"
             )
         lines.append("")
     if results.get("issues"):

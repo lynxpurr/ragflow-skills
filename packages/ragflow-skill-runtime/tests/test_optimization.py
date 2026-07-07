@@ -126,6 +126,146 @@ def _mark_benchmark_strength_promotable(plan: dict[str, object]) -> None:
     strength["issue_codes"] = []
 
 
+def _write_parse_report(path: Path, *, drift: bool = True) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "schema": "ragflow_parse_report_v1",
+                "status": "REVIEW" if drift else "PASS",
+                "dataset": {"id": "ds-test", "name": path.parent.name},
+                "summary": {
+                    "manifest_document_count": 1,
+                    "effective_chunk_total": 7,
+                    "failed_document_count": 0,
+                    "pending_document_count": 0,
+                },
+                "profile_visibility": {
+                    "requested_parser_config": {
+                        "chunk_token_num": 512,
+                        "auto_keywords": 3,
+                        "delimiter": "`<!-- chunk -->`",
+                    },
+                    "effective_parser_config": {
+                        "chunk_token_num": 480,
+                        "auto_keywords": 0,
+                    },
+                    "effective_source": "document_list",
+                    "drift": {
+                        "drift": drift,
+                        "changed_keys": ["chunk_token_num", "auto_keywords"] if drift else [],
+                        "missing_effective_keys": ["delimiter"] if drift else [],
+                    },
+                    "unsupported_effective_keys": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_refresh_report(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "schema": "ragflow_kb_refresh_report_v1",
+                "summary": {
+                    "observed_document_count": 1,
+                    "observed_chunk_total": 7,
+                    "done_document_count": 1,
+                },
+                "documents": [
+                    {
+                        "document_id": "doc-test",
+                        "name": "sample.md",
+                        "chunk_count": 7,
+                        "parse_state": "done",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_chunk_snapshot_report(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "schema": "ragflow_chunk_snapshot_report_v1",
+                "summary": {
+                    "chunk_count": 7,
+                    "source_chunk_count": 7,
+                    "delimiter_visible_chunk_count": 1,
+                    "possible_split_table_chunk_count": 2,
+                    "table_like_chunk_count": 3,
+                    "max_chunk_chars": 740,
+                    "observed_state_chunk_total": 7,
+                },
+                "chunk_review": {
+                    "metrics": {
+                        "delimiter_visible_chunk_count": 1,
+                        "possible_split_table_chunk_count": 2,
+                        "table_like_chunk_count": 3,
+                        "max_chunk_chars": 740,
+                    },
+                    "examples": {"delimiter_visible_chunk_indexes": [2]},
+                    "issues": [{"severity": "review", "code": "chunk_delimiter_visible_in_snapshot"}],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_health_report(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "schema": "ragflow_kb_health_report_v1",
+                "status": "REVIEW",
+                "summary": {
+                    "kb_count": 1,
+                    "embedding_model_count": 1,
+                    "embedding_model_rebuild_required_kb_count": 1,
+                    "stale_parse_kb_count": 1,
+                    "issue_counts": {"warning": 2},
+                },
+                "embedding_model_distribution": [
+                    {"model": "bge-large-en-v1.5", "kb_count": 1, "dataset_ids": ["ds-test"]},
+                ],
+                "knowledge_bases": [
+                    {
+                        "dataset_id": "ds-test",
+                        "kb_name": path.parent.name,
+                        "status": "REVIEW",
+                        "embedding_model": "bge-large-en-v1.5",
+                        "embedding_model_check": {
+                            "status": "mismatch",
+                            "rebuild_or_reparse_required": True,
+                            "expected_models": ["bge-m3"],
+                            "observed_model": "bge-large-en-v1.5",
+                        },
+                        "parse": {"failed_document_count": 0, "pending_document_count": 1},
+                    }
+                ],
+                "issues": [
+                    {"severity": "warning", "code": "embedding_model_rebuild_required"},
+                    {"severity": "warning", "code": "stale_or_failed_parse_state"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 class OptimizationTests(unittest.TestCase):
     def test_load_candidate_profile_set_from_file_dir_and_recommendation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -198,6 +338,8 @@ class OptimizationTests(unittest.TestCase):
         self.assertIn("RAGFlow Optimization Plan", render_optimization_plan_markdown(plan))
         for candidate in plan["candidates"]:
             self.assertFalse(candidate["disposable_kb_name"].endswith("__"))
+            for artifact_name in ("parse_report", "refresh_report", "chunk_snapshot", "chunk_snapshot_report", "health_report"):
+                self.assertIn(artifact_name, candidate["artifacts"])
             self.assertIsNone(candidate["commands"]["build"])
             self.assertFalse(candidate["mutation_commands"]["build"]["enabled"])
             self.assertTrue(candidate["mutation_commands"]["build"]["requires_execute"])
@@ -522,6 +664,106 @@ class OptimizationTests(unittest.TestCase):
             self.assertIn("zero_chunks", diagnostics["reason_codes"])
             self.assertIn("document_zero_chunks", diagnostics["summary"]["issue_types"])
             self.assertIn("## Diagnostics", render_best_profile_markdown(results))
+
+    def test_summarize_optimization_results_includes_runtime_evidence_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            _write_profile(profile, "runtime-evidence-profile", auto_keywords=3)
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[profile],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            _mark_benchmark_strength_promotable(plan)
+            candidate = plan["candidates"][0]
+            artifacts = candidate["artifacts"]
+            _write_validation_report(Path(artifacts["validation_report"]), mrr=1.0, hit_rate=1.0)
+            _write_parse_report(Path(artifacts["parse_report"]))
+            _write_refresh_report(Path(artifacts["refresh_report"]))
+            _write_chunk_snapshot_report(Path(artifacts["chunk_snapshot_report"]))
+            _write_health_report(Path(artifacts["health_report"]))
+            plan_path = root / "optimization_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+            results = summarize_optimization_results(plan_path=plan_path)
+            rendered = render_best_profile_markdown(results)
+
+        evidence = results["candidates"][0]["runtime_evidence"]
+        self.assertTrue(evidence["available"])
+        self.assertEqual(evidence["sidecar_count"], 4)
+        self.assertEqual(evidence["parse_report"]["requested_parser_config"]["delimiter"], "`<!-- chunk -->`")
+        self.assertEqual(evidence["parse_report"]["effective_parser_config"]["chunk_token_num"], 480)
+        self.assertTrue(evidence["parse_report"]["drift"]["drift"])
+        self.assertEqual(evidence["refresh_report"]["summary"]["observed_chunk_total"], 7)
+        self.assertEqual(evidence["chunk_snapshot"]["boundary_evidence"]["delimiter_visible_chunk_count"], 1)
+        self.assertEqual(evidence["chunk_snapshot"]["boundary_evidence"]["possible_split_table_chunk_count"], 2)
+        self.assertEqual(evidence["health_report"]["embedding_models"], ["bge-large-en-v1.5"])
+        self.assertTrue(evidence["health_report"]["embedding_model_rebuild_required"])
+        self.assertEqual(results["summary"]["runtime_evidence_candidate_count"], 1)
+        self.assertEqual(results["summary"]["parser_drift_candidate_count"], 1)
+        self.assertEqual(results["summary"]["health_warning_candidate_count"], 1)
+        issue_codes = {issue["code"] for issue in results["issues"]}
+        self.assertIn("runtime_parser_config_drift", issue_codes)
+        self.assertIn("runtime_health_embedding_model_rebuild_required", issue_codes)
+        self.assertIn("## Runtime Evidence", rendered)
+        self.assertIn("runtime-evidence-profile", rendered)
+
+    def test_summarize_optimization_results_tolerates_missing_partial_and_malformed_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            _write_profile(profile, "partial-evidence-profile")
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[profile],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            _mark_benchmark_strength_promotable(plan)
+            candidate = plan["candidates"][0]
+            artifacts = candidate["artifacts"]
+            _write_validation_report(Path(artifacts["validation_report"]), mrr=1.0, hit_rate=1.0)
+            Path(artifacts["parse_report"]).parent.mkdir(parents=True, exist_ok=True)
+            Path(artifacts["parse_report"]).write_text("{not-json", encoding="utf-8")
+            Path(artifacts["health_report"]).write_text(json.dumps({"schema": "unexpected_health_schema"}), encoding="utf-8")
+            plan_path = root / "optimization_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+            results = summarize_optimization_results(plan_path=plan_path)
+
+        self.assertTrue(results["ok"], results["issues"])
+        evidence = results["candidates"][0]["runtime_evidence"]
+        self.assertFalse(evidence["available"])
+        self.assertFalse(evidence["parse_report"]["available"])
+        self.assertFalse(evidence["refresh_report"]["available"])
+        self.assertFalse(evidence["chunk_snapshot"]["available"])
+        self.assertFalse(evidence["health_report"]["available"])
+        issue_codes = {issue["code"] for issue in results["issues"]}
+        self.assertIn("runtime_evidence_sidecar_invalid", issue_codes)
+        self.assertIn("runtime_evidence_sidecar_schema_invalid", issue_codes)
+        self.assertEqual(results["summary"]["runtime_evidence_candidate_count"], 0)
 
     def test_create_optimization_cleanup_plan_with_ready_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

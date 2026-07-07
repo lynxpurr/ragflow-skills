@@ -267,14 +267,14 @@ to audit after explicit approval.
 
 ### Effective Runtime Evidence
 
-- [ ] Allow `optimize summarize` to consume optional parse, refresh, snapshot, and health
+- [x] Allow `optimize summarize` to consume optional parse, refresh, snapshot, and health
   sidecars per candidate.
-- [ ] Add requested-vs-effective parser config fields to optimization candidate summaries
+- [x] Add requested-vs-effective parser config fields to optimization candidate summaries
   when parse-report evidence exists.
-- [ ] Add delimiter-consumption and chunk-boundary evidence from chunk snapshots when
+- [x] Add delimiter-consumption and chunk-boundary evidence from chunk snapshots when
   marker information is available.
-- [ ] Add embedding-model and parser-drift warnings from health reports.
-- [ ] Add tests that prove summaries remain valid when sidecars are missing, partial, or
+- [x] Add embedding-model and parser-drift warnings from health reports.
+- [x] Add tests that prove summaries remain valid when sidecars are missing, partial, or
   malformed.
 
 ### Strong Benchmark Artifact Generation
