@@ -3408,6 +3408,8 @@ def _run_optimize_summarize(args: argparse.Namespace) -> int:
         results = summarize_optimization_results(
             plan_path=args.plan,
             report_paths=args.report,
+            score_epsilon=args.score_epsilon,
+            min_score_delta=args.min_score_delta,
         )
         if args.redaction_report:
             results, redaction_report = _sanitize_governance_report(
@@ -4515,6 +4517,8 @@ def build_optimize_summarize_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", default="profile_experiment_results.json", help="Output ragflow_profile_experiment_results_v1 JSON")
     parser.add_argument("--report-md", default="best_profile_report.md", help="Output best profile Markdown report")
     parser.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
+    parser.add_argument("--score-epsilon", type=float, help="Score tie epsilon for co-winner decisions")
+    parser.add_argument("--min-score-delta", type=float, help="Minimum score delta required for a single recommended winner")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     parser.set_defaults(func=_run_optimize_summarize)
     return parser

@@ -6236,6 +6236,104 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("RAGFlow Best Profile Report", best_md_text)
         self.assertIn("## Diagnostics", best_md_text)
 
+    def test_optimize_summarize_cli_accepts_decision_thresholds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_report = root / "baseline-validation.json"
+            enriched_report = root / "enriched-validation.json"
+            plan_path = root / "optimization_plan.json"
+            output = root / "profile_experiment_results.json"
+            report_md = root / "best_profile_report.md"
+            validation_payload = {
+                "ok": True,
+                "level": "benchmark",
+                "metrics": {"pass_rate": 1.0, "query_latency_ms": 100.0, "parse_time_ms": 200.0},
+                "benchmark": {
+                    "metrics": {
+                        "hit_rate": 1.0,
+                        "mrr": 1.0,
+                        "precision_at_k": 1.0,
+                        "recall_at_k": 1.0,
+                        "ndcg_at_k": 1.0,
+                        "map_at_k": 1.0,
+                        "strict_chunk_recall_at_k": 1.0,
+                        "expected_chunk_hit_rate": 1.0,
+                        "empty_result_rate": 0.0,
+                    }
+                },
+            }
+            baseline_report.write_text(json.dumps(validation_payload), encoding="utf-8")
+            enriched_report.write_text(json.dumps(validation_payload), encoding="utf-8")
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_optimization_plan_v1",
+                        "ok": True,
+                        "inputs": {
+                            "benchmark": {
+                                "preflight": {
+                                    "benchmark_strength": {
+                                        "schema": "ragflow_benchmark_strength_v1",
+                                        "status": "promotable",
+                                        "summary": {},
+                                        "issue_codes": [],
+                                    }
+                                }
+                            }
+                        },
+                        "candidates": [
+                            {
+                                "profile_id": "z-enriched-profile",
+                                "disposable_kb_name": "tmp-z",
+                                "profile": {"parser_config": {"auto_keywords": 3, "auto_questions": 0}},
+                                "artifacts": {"validation_report": str(enriched_report)},
+                                "source": {"type": "test"},
+                            },
+                            {
+                                "profile_id": "a-baseline-profile",
+                                "disposable_kb_name": "tmp-a",
+                                "profile": {"parser_config": {"auto_keywords": 0, "auto_questions": 0}},
+                                "artifacts": {"validation_report": str(baseline_report)},
+                                "source": {"type": "test"},
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "summarize",
+                    "--plan",
+                    str(plan_path),
+                    "--score-epsilon",
+                    "0.001",
+                    "--min-score-delta",
+                    "0.0",
+                    "--output",
+                    str(output),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+            report_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["recommendation"]["decision_status"], "co_winners")
+        self.assertEqual(payload["recommendation"]["profile_id"], "a-baseline-profile")
+        self.assertEqual(payload["recommendation"]["co_winner_profile_ids"], ["a-baseline-profile", "z-enriched-profile"])
+        self.assertIn("Decision status: `co_winners`", report_text)
+
     def test_optimize_plan_only_checkpoint_resume_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

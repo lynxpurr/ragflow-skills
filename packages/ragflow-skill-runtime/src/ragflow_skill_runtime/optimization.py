@@ -743,6 +743,17 @@ def _metric_first(mappings: list[Mapping[str, Any]], *keys: str) -> float:
     return 0.0
 
 
+def _metric_first_observed(mappings: list[Mapping[str, Any]], *keys: str) -> tuple[float, bool]:
+    for mapping in mappings:
+        for key in keys:
+            value = mapping.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                return float(value), True
+    return 0.0, False
+
+
 def _empty_result_rate(top_metrics: Mapping[str, Any], benchmark_metrics: Mapping[str, Any]) -> float:
     direct = _metric_first([benchmark_metrics, top_metrics], "empty_result_rate", "empty_rate")
     if direct:
@@ -752,12 +763,27 @@ def _empty_result_rate(top_metrics: Mapping[str, Any], benchmark_metrics: Mappin
     return empty_results / total if total > 0 else 0.0
 
 
-def _validation_report_metrics(report: Mapping[str, Any]) -> dict[str, float]:
+def _validation_report_metrics(report: Mapping[str, Any]) -> dict[str, Any]:
     top_metrics = report.get("metrics") if isinstance(report.get("metrics"), Mapping) else {}
     benchmark = report.get("benchmark") if isinstance(report.get("benchmark"), Mapping) else {}
     benchmark_metrics = benchmark.get("metrics") if isinstance(benchmark.get("metrics"), Mapping) else {}
     metadata = report.get("metadata") if isinstance(report.get("metadata"), Mapping) else {}
     timing = report.get("timing") if isinstance(report.get("timing"), Mapping) else {}
+    query_latency_ms, query_latency_ms_observed = _metric_first_observed(
+        [benchmark_metrics, top_metrics, timing, metadata],
+        "query_latency_ms",
+        "average_query_latency_ms",
+        "avg_query_latency_ms",
+        "latency_ms",
+        "duration_ms",
+    )
+    parse_time_ms, parse_time_ms_observed = _metric_first_observed(
+        [top_metrics, timing, metadata],
+        "parse_time_ms",
+        "parse_duration_ms",
+        "average_parse_time_ms",
+        "avg_parse_time_ms",
+    )
     metrics = {
         "pass_rate": _metric_value(top_metrics, "pass_rate"),
         "hit_rate": _metric_value(benchmark_metrics, "hit_rate"),
@@ -770,21 +796,10 @@ def _validation_report_metrics(report: Mapping[str, Any]) -> dict[str, float]:
         "expected_chunk_hit_rate": _metric_value(benchmark_metrics, "expected_chunk_hit_rate"),
         "empty_result_rate": _empty_result_rate(top_metrics, benchmark_metrics),
         "average_chunks": _metric_first([top_metrics], "average_chunks", "avg_chunks"),
-        "query_latency_ms": _metric_first(
-            [benchmark_metrics, top_metrics, timing, metadata],
-            "query_latency_ms",
-            "average_query_latency_ms",
-            "avg_query_latency_ms",
-            "latency_ms",
-            "duration_ms",
-        ),
-        "parse_time_ms": _metric_first(
-            [top_metrics, timing, metadata],
-            "parse_time_ms",
-            "parse_duration_ms",
-            "average_parse_time_ms",
-            "avg_parse_time_ms",
-        ),
+        "query_latency_ms": query_latency_ms,
+        "query_latency_ms_observed": query_latency_ms_observed,
+        "parse_time_ms": parse_time_ms,
+        "parse_time_ms_observed": parse_time_ms_observed,
     }
     metrics["benchmark_quality_score"] = (metrics["hit_rate"] + metrics["mrr"] + metrics["ndcg_at_k"]) / 3
     metrics["score"] = (
@@ -990,10 +1005,182 @@ def _metric_saturation(results: list[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _non_negative_float(value: Any, *, default: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return max(0.0, float(value))
+
+
+def _decision_config(
+    plan: Mapping[str, Any],
+    *,
+    score_epsilon: float | None,
+    min_score_delta: float | None,
+) -> dict[str, float]:
+    inputs = plan.get("inputs") if isinstance(plan.get("inputs"), Mapping) else {}
+    raw = plan.get("decision") if isinstance(plan.get("decision"), Mapping) else None
+    if raw is None:
+        raw = inputs.get("decision") if isinstance(inputs.get("decision"), Mapping) else None
+    if raw is None:
+        raw = inputs.get("optimization_decision") if isinstance(inputs.get("optimization_decision"), Mapping) else {}
+    return {
+        "score_epsilon": _non_negative_float(
+            score_epsilon if score_epsilon is not None else raw.get("score_epsilon") if isinstance(raw, Mapping) else None,
+            default=1e-9,
+        ),
+        "min_score_delta": _non_negative_float(
+            min_score_delta if min_score_delta is not None else raw.get("min_score_delta") if isinstance(raw, Mapping) else None,
+            default=0.0,
+        ),
+    }
+
+
+def _profile_enrichment_weight(profile: Mapping[str, Any]) -> float:
+    parser_config = profile.get("parser_config") if isinstance(profile.get("parser_config"), Mapping) else {}
+    keys = ("auto_keywords", "auto_questions")
+    weight = 0.0
+    for key in keys:
+        value = parser_config.get(key, profile.get(key))
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        weight += max(0.0, float(value))
+    return weight
+
+
+def _metric_cost_key(metrics: Mapping[str, Any], metric: str, observed_metric: str) -> tuple[int, float]:
+    observed = bool(metrics.get(observed_metric))
+    value = _metric_value(metrics, metric)
+    return (0, value) if observed else (1, 0.0)
+
+
+def _result_sort_key(result: Mapping[str, Any]) -> tuple[float, float, tuple[int, float], tuple[int, float], int]:
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
+    profile = result.get("profile") if isinstance(result.get("profile"), Mapping) else {}
+    candidate_index = result.get("candidate_index")
+    index = int(candidate_index) if isinstance(candidate_index, int) and not isinstance(candidate_index, bool) else 0
+    return (
+        -_metric_value(metrics, "score"),
+        _profile_enrichment_weight(profile),
+        _metric_cost_key(metrics, "query_latency_ms", "query_latency_ms_observed"),
+        _metric_cost_key(metrics, "parse_time_ms", "parse_time_ms_observed"),
+        index,
+    )
+
+
+def _co_winners(ranked: list[Mapping[str, Any]], *, score_epsilon: float) -> list[Mapping[str, Any]]:
+    if not ranked:
+        return []
+    top_metrics = ranked[0].get("metrics") if isinstance(ranked[0].get("metrics"), Mapping) else {}
+    top_score = _metric_value(top_metrics, "score")
+    winners = []
+    for item in ranked:
+        metrics = item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}
+        if abs(_metric_value(metrics, "score") - top_score) <= score_epsilon:
+            winners.append(item)
+    return winners
+
+
+def _score_delta(ranked: list[Mapping[str, Any]]) -> float | None:
+    if len(ranked) < 2:
+        return None
+    first_metrics = ranked[0].get("metrics") if isinstance(ranked[0].get("metrics"), Mapping) else {}
+    second_metrics = ranked[1].get("metrics") if isinstance(ranked[1].get("metrics"), Mapping) else {}
+    return round(_metric_value(first_metrics, "score") - _metric_value(second_metrics, "score"), 4)
+
+
+def _cost_review_reasons(winner: Mapping[str, Any] | None, co_winners: list[Mapping[str, Any]]) -> list[str]:
+    if not winner or len(co_winners) <= 1:
+        return []
+    reasons: list[str] = []
+    if any(
+        _profile_enrichment_weight(item.get("profile") if isinstance(item.get("profile"), Mapping) else {}) > 0
+        and (
+            not bool((item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}).get("query_latency_ms_observed"))
+            or not bool((item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}).get("parse_time_ms_observed"))
+        )
+        for item in co_winners
+    ):
+        reasons.append("Quality-tied enrichment profiles require latency and parse-cost evidence before promotion.")
+    winner_metrics = winner.get("metrics") if isinstance(winner.get("metrics"), Mapping) else {}
+    if bool(winner_metrics.get("query_latency_ms_observed")) and bool(winner_metrics.get("parse_time_ms_observed")):
+        winner_latency = _metric_value(winner_metrics, "query_latency_ms")
+        winner_parse = _metric_value(winner_metrics, "parse_time_ms")
+        for item in co_winners:
+            if item is winner:
+                continue
+            metrics = item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}
+            if not bool(metrics.get("query_latency_ms_observed")) or not bool(metrics.get("parse_time_ms_observed")):
+                continue
+            if winner_latency > _metric_value(metrics, "query_latency_ms") or winner_parse > _metric_value(metrics, "parse_time_ms"):
+                reasons.append("The conservative representative is quality-tied but has worse measured latency or parse time.")
+                break
+    return reasons
+
+
+def _decision_status(
+    *,
+    winner: Mapping[str, Any] | None,
+    benchmark_strength: Mapping[str, Any] | None,
+    co_winners: list[Mapping[str, Any]],
+    score_delta: float | None,
+    min_score_delta: float,
+    cost_review_reasons: list[str],
+) -> str:
+    if not winner:
+        return "insufficient_evidence"
+    if benchmark_strength and benchmark_strength.get("status") in {"exploratory", "blocked"}:
+        return "insufficient_evidence"
+    if len(co_winners) == 1 and score_delta is not None and score_delta < min_score_delta:
+        return "insufficient_evidence"
+    if cost_review_reasons:
+        return "needs_cost_review"
+    if len(co_winners) > 1:
+        return "co_winners"
+    return "recommended"
+
+
+def _co_winner_summary(co_winners: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    summaries = []
+    for item in co_winners:
+        metrics = item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}
+        summaries.append(
+            {
+                "profile_id": item.get("profile_id"),
+                "rank": item.get("rank"),
+                "score": metrics.get("score"),
+                "disposable_kb_name": item.get("disposable_kb_name"),
+            }
+        )
+    return summaries
+
+
+def _append_decision_rationale(
+    rationale: list[str],
+    *,
+    decision_status: str,
+    co_winners: list[Mapping[str, Any]],
+    score_delta: float | None,
+    min_score_delta: float,
+    cost_review_reasons: list[str],
+) -> list[str]:
+    if len(co_winners) > 1:
+        profile_ids = ", ".join(f"`{item.get('profile_id')}`" for item in co_winners)
+        rationale.append(f"Multiple profiles are co-winners within the configured score epsilon: {profile_ids}.")
+    if decision_status == "insufficient_evidence" and score_delta is not None and score_delta < min_score_delta:
+        rationale.append(
+            f"Decision is downgraded because score delta {score_delta:.4f} is below the minimum score delta {min_score_delta:.4f}."
+        )
+    for reason in cost_review_reasons:
+        rationale.append(f"Cost review required: {reason}")
+    return rationale
+
+
 def summarize_optimization_results(
     *,
     plan_path: str | Path,
     report_paths: Iterable[str | Path] | None = None,
+    score_epsilon: float | None = None,
+    min_score_delta: float | None = None,
 ) -> dict[str, Any]:
     """Summarize completed profile experiment validation reports without live execution."""
 
@@ -1126,6 +1313,7 @@ def summarize_optimization_results(
                 "score": metrics["score"],
                 "diagnostics": diagnostic,
                 "source": candidate.get("source", {}),
+                "candidate_index": index,
             }
         )
 
@@ -1144,14 +1332,42 @@ def summarize_optimization_results(
             )
         )
 
-    ranked = sorted(results, key=lambda item: (item["score"], str(item.get("profile_id"))), reverse=True)
+    decision_config = _decision_config(plan, score_epsilon=score_epsilon, min_score_delta=min_score_delta)
+    ranked = sorted(results, key=_result_sort_key)
     for rank, item in enumerate(ranked, start=1):
         item["rank"] = rank
     winner = ranked[0] if ranked else None
     benchmark_strength = _benchmark_strength_from_plan(plan)
-    decision_status = _recommendation_decision_status(benchmark_strength)
+    co_winner_items = _co_winners(ranked, score_epsilon=decision_config["score_epsilon"])
+    score_delta = _score_delta(ranked)
+    cost_review_reasons = _cost_review_reasons(winner, co_winner_items)
+    decision_status = _decision_status(
+        winner=winner,
+        benchmark_strength=benchmark_strength,
+        co_winners=co_winner_items,
+        score_delta=score_delta,
+        min_score_delta=decision_config["min_score_delta"],
+        cost_review_reasons=cost_review_reasons,
+    )
+    if cost_review_reasons:
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                "optimization_cost_review_required",
+                "quality-tied profile candidates require cost review before promotion",
+                "recommendation.decision_status",
+                "Provide latency, parse-time, or operational-cost evidence for tied enrichment profiles.",
+            )
+        )
     if winner:
-        rationale = _append_benchmark_strength_rationale(_recommendation_rationale(winner, ranked), benchmark_strength)
+        rationale = _append_decision_rationale(
+            _append_benchmark_strength_rationale(_recommendation_rationale(winner, ranked), benchmark_strength),
+            decision_status=decision_status,
+            co_winners=co_winner_items,
+            score_delta=score_delta,
+            min_score_delta=decision_config["min_score_delta"],
+            cost_review_reasons=cost_review_reasons,
+        )
         for item in ranked:
             item["tradeoffs"] = _result_tradeoffs(item, winner)
     else:
@@ -1177,17 +1393,29 @@ def summarize_optimization_results(
             "diagnostic_report_count": diagnostic_report_count,
             "benchmark_strength_status": benchmark_strength.get("status") if benchmark_strength else None,
             "saturated_metric_count": len(metric_saturation["saturated_metrics"]),
+            "co_winner_count": len(co_winner_items),
         },
         "benchmark_strength": benchmark_strength,
         "metric_saturation": metric_saturation,
+        "decision": {
+            "status": decision_status,
+            "score_epsilon": decision_config["score_epsilon"],
+            "min_score_delta": decision_config["min_score_delta"],
+            "score_delta": score_delta,
+            "co_winner_count": len(co_winner_items),
+            "cost_review_required": bool(cost_review_reasons),
+            "cost_review_reasons": cost_review_reasons,
+        },
         "recommendation": {
             "decision_status": decision_status,
             "profile_id": winner.get("profile_id") if winner else None,
             "disposable_kb_name": winner.get("disposable_kb_name") if winner else None,
             "score": winner.get("score") if winner else None,
+            "co_winner_profile_ids": [item.get("profile_id") for item in co_winner_items],
             "rationale": rationale,
         },
         "winner": winner,
+        "co_winners": _co_winner_summary(co_winner_items),
         "candidates": ranked,
         "diagnostics": diagnostics,
         "issues": [issue.to_dict() for issue in issues],
@@ -1855,14 +2083,16 @@ def render_best_profile_markdown(results: Mapping[str, Any]) -> str:
         "# RAGFlow Best Profile Report",
         "",
         f"- Status: `{'passed' if results.get('ok') else 'failed'}`",
+        f"- Decision status: `{recommendation.get('decision_status') or '-'}`",
         f"- Recommended profile: `{recommendation.get('profile_id') or '-'}`",
         f"- Candidate results: `{summary.get('result_count', 0)}`",
         f"- Errors: `{summary.get('errors', 0)}`",
         f"- Warnings: `{summary.get('warnings', 0)}`",
-        "",
-        "## Rationale",
-        "",
     ]
+    co_winner_ids = recommendation.get("co_winner_profile_ids")
+    if isinstance(co_winner_ids, list) and co_winner_ids:
+        lines.append(f"- Co-winners: {', '.join(f'`{profile_id}`' for profile_id in co_winner_ids)}")
+    lines.extend(["", "## Rationale", ""])
     for item in recommendation.get("rationale", []) if isinstance(recommendation.get("rationale"), list) else []:
         lines.append(f"- {item}")
     lines.extend(

@@ -22,7 +22,7 @@ from ragflow_skill_runtime.optimization import (
 )
 
 
-def _write_profile(path: Path, profile_id: str, chunk_size: int = 512) -> None:
+def _write_profile(path: Path, profile_id: str, chunk_size: int = 512, *, auto_keywords: int = 0, auto_questions: int = 0) -> None:
     path.write_text(
         json.dumps(
             {
@@ -32,8 +32,8 @@ def _write_profile(path: Path, profile_id: str, chunk_size: int = 512) -> None:
                 "chunk_overlap": 64,
                 "parser_config": {
                     "chunk_token_num": chunk_size,
-                    "auto_keywords": 0,
-                    "auto_questions": 0,
+                    "auto_keywords": auto_keywords,
+                    "auto_questions": auto_questions,
                     "__language__": "English",
                 },
             }
@@ -80,6 +80,50 @@ def _write_validation_report(
         ),
         encoding="utf-8",
     )
+
+
+def _write_validation_report_without_cost(path: Path, *, mrr: float, hit_rate: float = 1.0) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "level": "benchmark",
+                "metrics": {
+                    "pass_rate": hit_rate,
+                    "average_chunks": 3.0,
+                },
+                "dataset": {"id": "ds-test", "name": path.parent.name},
+                "benchmark": {
+                    "metrics": {
+                        "hit_rate": hit_rate,
+                        "mrr": mrr,
+                        "precision_at_k": 0.5,
+                        "recall_at_k": hit_rate,
+                        "ndcg_at_k": mrr,
+                        "map_at_k": mrr,
+                        "strict_chunk_recall_at_k": hit_rate,
+                        "expected_chunk_hit_rate": hit_rate,
+                        "empty_result_rate": 0.0,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _mark_benchmark_strength_promotable(plan: dict[str, object]) -> None:
+    inputs = plan.get("inputs")
+    assert isinstance(inputs, dict)
+    benchmark = inputs.get("benchmark")
+    assert isinstance(benchmark, dict)
+    preflight = benchmark.get("preflight")
+    assert isinstance(preflight, dict)
+    strength = preflight.get("benchmark_strength")
+    assert isinstance(strength, dict)
+    strength["status"] = "promotable"
+    strength["issue_codes"] = []
 
 
 class OptimizationTests(unittest.TestCase):
@@ -280,6 +324,129 @@ class OptimizationTests(unittest.TestCase):
         self.assertEqual(results["summary"]["saturated_metric_count"], 3)
         self.assertEqual(results["metric_saturation"]["saturated_metrics"], ["hit_rate", "mrr", "recall_at_k"])
         self.assertIn("metric_saturation_hit_rate", {issue["code"] for issue in results["issues"]})
+
+    def test_summarize_optimization_results_reports_co_winners_with_conservative_tie_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            enriched = root / "enriched.json"
+            baseline = root / "baseline.json"
+            _write_profile(enriched, "z-enriched-profile", auto_keywords=3)
+            _write_profile(baseline, "a-baseline-profile")
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[enriched, baseline],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            _mark_benchmark_strength_promotable(plan)
+            plan_path = root / "optimization_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            for candidate in plan["candidates"]:
+                _write_validation_report(
+                    Path(candidate["artifacts"]["validation_report"]),
+                    mrr=1.0,
+                    hit_rate=1.0,
+                    query_latency_ms=100.0,
+                    parse_time_ms=200.0,
+                )
+
+            results = summarize_optimization_results(plan_path=plan_path)
+            rendered = render_best_profile_markdown(results)
+
+        self.assertEqual(results["recommendation"]["decision_status"], "co_winners")
+        self.assertEqual(results["recommendation"]["profile_id"], "a-baseline-profile")
+        self.assertEqual(results["recommendation"]["co_winner_profile_ids"], ["a-baseline-profile", "z-enriched-profile"])
+        self.assertEqual(results["summary"]["co_winner_count"], 2)
+        self.assertEqual([candidate["profile_id"] for candidate in results["co_winners"]], ["a-baseline-profile", "z-enriched-profile"])
+        self.assertIn("Decision status: `co_winners`", rendered)
+        self.assertIn("Co-winners: `a-baseline-profile`, `z-enriched-profile`", rendered)
+
+    def test_summarize_optimization_results_requires_cost_review_for_enrichment_tie_with_missing_cost(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            baseline = root / "baseline.json"
+            enriched = root / "enriched.json"
+            _write_profile(baseline, "baseline-profile")
+            _write_profile(enriched, "enriched-profile", auto_keywords=3)
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[baseline, enriched],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            _mark_benchmark_strength_promotable(plan)
+            plan_path = root / "optimization_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            for candidate in plan["candidates"]:
+                _write_validation_report_without_cost(Path(candidate["artifacts"]["validation_report"]), mrr=1.0, hit_rate=1.0)
+
+            results = summarize_optimization_results(plan_path=plan_path)
+
+        self.assertEqual(results["recommendation"]["decision_status"], "needs_cost_review")
+        self.assertEqual(results["recommendation"]["profile_id"], "baseline-profile")
+        self.assertIn("optimization_cost_review_required", {issue["code"] for issue in results["issues"]})
+        self.assertTrue(results["decision"]["cost_review_required"])
+
+    def test_summarize_optimization_results_uses_min_score_delta_for_insufficient_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            first = root / "first.json"
+            second = root / "second.json"
+            _write_profile(first, "first-profile")
+            _write_profile(second, "second-profile")
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[first, second],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            _mark_benchmark_strength_promotable(plan)
+            plan_path = root / "optimization_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            for candidate in plan["candidates"]:
+                _write_validation_report(
+                    Path(candidate["artifacts"]["validation_report"]),
+                    mrr=0.92 if candidate["profile_id"] == "second-profile" else 0.90,
+                    hit_rate=0.92 if candidate["profile_id"] == "second-profile" else 0.90,
+                    query_latency_ms=100.0,
+                    parse_time_ms=200.0,
+                )
+
+            results = summarize_optimization_results(plan_path=plan_path, min_score_delta=0.05)
+
+        self.assertEqual(results["recommendation"]["decision_status"], "insufficient_evidence")
+        self.assertEqual(results["decision"]["score_delta"], 0.02)
+        self.assertIn("minimum score delta", " ".join(results["recommendation"]["rationale"]))
 
     def test_summarize_optimization_results_generates_diagnostics_for_zero_chunks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

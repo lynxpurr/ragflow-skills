@@ -240,15 +240,15 @@ to audit after explicit approval.
 
 ### Optimization Decision Semantics
 
-- [ ] Add decision statuses: `recommended`, `co_winners`, `insufficient_evidence`, and
+- [x] Add decision statuses: `recommended`, `co_winners`, `insufficient_evidence`, and
   `needs_cost_review`.
-- [ ] Replace profile-ID tie-breaking with a deterministic tie policy that prefers lower
+- [x] Replace profile-ID tie-breaking with a deterministic tie policy that prefers lower
   enrichment, lower measured cost, lower latency, and stable input order.
-- [ ] Add configurable epsilon thresholds for score ties and minimum score deltas.
-- [ ] Represent co-winners explicitly in JSON and Markdown summaries.
-- [ ] Mark enrichment-heavy profiles as needing cost review when quality ties and
+- [x] Add configurable epsilon thresholds for score ties and minimum score deltas.
+- [x] Represent co-winners explicitly in JSON and Markdown summaries.
+- [x] Mark enrichment-heavy profiles as needing cost review when quality ties and
   latency or parse-cost evidence is missing.
-- [ ] Add focused unit and CLI tests for equal-score candidates, enrichment ties,
+- [x] Add focused unit and CLI tests for equal-score candidates, enrichment ties,
   insufficient sample size, and conservative tie selection.
 
 ### Alias-Aware Profile Experiments
