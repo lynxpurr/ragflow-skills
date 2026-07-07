@@ -153,6 +153,47 @@ def _record_file_check(checks: list[dict[str, Any]], name: str, path: Path) -> b
     return ok
 
 
+def _json_path(payload: Mapping[str, Any], path: Sequence[str]) -> Any:
+    value: Any = payload
+    for key in path:
+        if not isinstance(value, Mapping):
+            return None
+        value = value.get(key)
+    return value
+
+
+def _record_json_path_check(
+    checks: list[dict[str, Any]],
+    name: str,
+    path: Path,
+    json_path: Sequence[str],
+    *,
+    expected: Any | None = None,
+    non_empty: bool = False,
+) -> bool:
+    error = ""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        checks.append({"name": name, "ok": False, "path": str(path), "error": f"invalid JSON: {exc}"})
+        return False
+    value = _json_path(payload, json_path)
+    if expected is not None:
+        ok = value == expected
+        if not ok:
+            error = f"{'.'.join(json_path)} was {value!r}, expected {expected!r}"
+    elif non_empty:
+        ok = bool(value)
+        if not ok:
+            error = f"{'.'.join(json_path)} was empty or missing"
+    else:
+        ok = value is not None
+        if not ok:
+            error = f"{'.'.join(json_path)} was missing"
+    checks.append({"name": name, "ok": ok, "path": str(path), "error": error})
+    return ok
+
+
 def _record_redaction_sidecar_check(
     checks: list[dict[str, Any]],
     name: str,
@@ -4111,6 +4152,10 @@ raise SystemExit(code)
             str(benchmark_report_json),
             "--report",
             str(baseline_benchmark_report_json),
+            "--cleanup-plan",
+            str(optimization_cleanup_plan),
+            "--readiness-report",
+            str(optimization_readiness_report),
             "--output",
             str(profile_experiment_results),
             "--report-md",
@@ -4127,6 +4172,34 @@ raise SystemExit(code)
         "kb-build optimize summarize",
         optimize_summary_result,
         required_output='"schema": "ragflow_profile_experiment_results_v1"',
+    )
+    _record_json_path_check(
+        checks,
+        "kb-build optimize summary benchmark strength",
+        profile_experiment_results,
+        ("benchmark_strength", "status"),
+        non_empty=True,
+    )
+    _record_json_path_check(
+        checks,
+        "kb-build optimize summary benchmark followups",
+        profile_experiment_results,
+        ("benchmark_artifact_followups",),
+        non_empty=True,
+    )
+    _record_json_path_check(
+        checks,
+        "kb-build optimize summary cleanup lifecycle",
+        profile_experiment_results,
+        ("cleanup_lifecycle", "status"),
+        expected="cleanup_pending",
+    )
+    _record_json_path_check(
+        checks,
+        "kb-build optimize summary field-trial suggestion",
+        profile_experiment_results,
+        ("field_trial_record_suggestion", "workflow"),
+        expected="ragflow-kb-build optimize",
     )
     _record_redaction_sidecar_check(
         checks,

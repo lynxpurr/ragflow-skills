@@ -1,6 +1,6 @@
 # Retrieval Optimization Quality Improvement Plan
 
-Status: proposed follow-up plan
+Status: completed follow-up round
 Date: 2026-07-07
 
 This document focuses on functional and effectiveness improvements for the current
@@ -312,13 +312,24 @@ to audit after explicit approval.
 
 ### Cross-Skill Documentation And Acceptance
 
-- [ ] Update public skill guidance so users know when document-only benchmarks are
+- [x] Update public skill guidance so users know when document-only benchmarks are
   exploratory versus promotable.
-- [ ] Add examples that connect `ragflow-doc-to-md` retrieval hints,
+- [x] Add examples that connect `ragflow-doc-to-md` retrieval hints,
   `ragflow-kb-build` benchmark artifacts, optimize decisions, and `ragflow-query`
   diagnostics.
-- [ ] Add consumer acceptance coverage for the stronger optimize path with no live
+- [x] Add consumer acceptance coverage for the stronger optimize path with no live
   mutation.
-- [ ] Run schema identity, report-surface inventory, generated Markdown audit, release
+- [x] Run schema identity, report-surface inventory, generated Markdown audit, release
   hygiene, consumer acceptance, and platform smoke after any public command or schema
   change.
+
+## Closeout
+
+The follow-up round is complete for the public offline scope. The optimize path now
+distinguishes exploratory document-level evidence from promotable strict evidence, keeps
+co-winner and cost-review decisions explicit, collapses aliased profile matrices, consumes
+effective parse/runtime sidecars, recommends stronger benchmark artifacts from handoff
+hints and evidence maps, uses normalized decision scoring, and carries cleanup plus
+field-trial closure state through summaries and acceptance checks.
+
+No live RAGFlow mutation, script-owned LLM, or RAGAS execution was added by this round.
