@@ -279,14 +279,14 @@ to audit after explicit approval.
 
 ### Strong Benchmark Artifact Generation
 
-- [ ] Extend `validation-suggestions` or add a KB-build helper that converts
+- [x] Extend `validation-suggestions` or add a KB-build helper that converts
   `retrieval_hints.json` into table, image, and mixed-modality benchmark suggestions.
-- [ ] Add a deterministic path from grounded QA evidence maps to expected-chunk qrels.
-- [ ] Suggest negative or wrong-document benchmark cases when multiple documents or KBs
+- [x] Add a deterministic path from grounded QA evidence maps to expected-chunk qrels.
+- [x] Suggest negative or wrong-document benchmark cases when multiple documents or KBs
   are present.
-- [ ] Add optimize follow-up recommendations when benchmark artifacts lack strict chunk
+- [x] Add optimize follow-up recommendations when benchmark artifacts lack strict chunk
   or modality evidence.
-- [ ] Add no-LLM fixtures that cover table values, image evidence, mixed table-image
+- [x] Add no-LLM fixtures that cover table values, image evidence, mixed table-image
   evidence, and wrong-document cases.
 
 ### Normalized Scoring And Cost Signals

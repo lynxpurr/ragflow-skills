@@ -2877,6 +2877,7 @@ def _run_benchmark_suggest(args: argparse.Namespace) -> int:
             report_path=args.report,
             baseline_report_path=args.baseline_report,
             gate_config_path=args.gate_config,
+            retrieval_hints_path=args.retrieval_hints,
             current_top_k=args.current_top_k,
             current_similarity_threshold=args.current_similarity_threshold,
         )
@@ -2884,8 +2885,8 @@ def _run_benchmark_suggest(args: argparse.Namespace) -> int:
             report, redaction_report = _sanitize_benchmark_report(
                 report,
                 args,
-                input_paths=[args.report, args.baseline_report, args.gate_config],
-                context_json_paths=[args.report, args.baseline_report, args.gate_config],
+                input_paths=[args.report, args.baseline_report, args.gate_config, args.retrieval_hints],
+                context_json_paths=[args.report, args.baseline_report, args.gate_config, args.retrieval_hints],
             )
             _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
@@ -4250,6 +4251,7 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     suggest.add_argument("--report", required=True, help="Current benchmark validation report JSON")
     suggest.add_argument("--baseline-report", help="Optional prior benchmark validation report JSON")
     suggest.add_argument("--gate-config", help="Optional benchmark gate threshold JSON")
+    suggest.add_argument("--retrieval-hints", help="Optional ragflow_retrieval_hints_v1 JSON for benchmark artifact suggestions")
     suggest.add_argument("--current-top-k", type=int, help="Current retrieval top_k, defaults to benchmark cutoff when available")
     suggest.add_argument("--current-similarity-threshold", type=float, help="Current retrieval similarity threshold")
     suggest.add_argument("--report-json", help="Optional suggestion report JSON path")

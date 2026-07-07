@@ -431,6 +431,10 @@ class OptimizationTests(unittest.TestCase):
         self.assertEqual(results["benchmark_strength"]["status"], "exploratory")
         self.assertEqual(results["recommendation"]["decision_status"], "insufficient_evidence")
         self.assertEqual(results["summary"]["benchmark_strength_status"], "exploratory")
+        followup_codes = {item["code"] for item in results["benchmark_artifact_followups"]}
+        self.assertIn("add_expected_chunk_qrels", followup_codes)
+        self.assertIn("add_modality_benchmark_cases", followup_codes)
+        self.assertGreaterEqual(results["summary"]["benchmark_artifact_followup_count"], 2)
         self.assertIn("weak benchmark evidence", " ".join(results["recommendation"]["rationale"]))
 
     def test_summarize_optimization_results_warns_when_core_metrics_are_saturated(self) -> None:

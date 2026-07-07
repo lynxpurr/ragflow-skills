@@ -798,6 +798,11 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertEqual(evidence_map["summary"]["evidence_mapping_confidence"], 1.0)
         self.assertEqual(evidence_map["summary"]["mapped_chunk_coverage"], 1.0)
         self.assertEqual(evidence_map["items"][0]["expected_chunks"], [stable_hash])
+        self.assertEqual(evidence_map["summary"]["qrels_template_item_count"], 1)
+        self.assertEqual(evidence_map["qrels_template"]["qrels"][0]["query_id"], "q1")
+        self.assertEqual(evidence_map["qrels_template"]["qrels"][0]["expected_chunks"], [stable_hash])
+        self.assertEqual(evidence_map["qrels_template"]["qrels"][0]["expected_documents"], ["source.md"])
+        self.assertEqual(report["qrels_template"]["qrels"][0]["expected_chunks"], [stable_hash])
         self.assertEqual(evidence_map["items"][0]["evidence"][0]["document_match_status"], "document_match")
         self.assertEqual(evidence_map["items"][0]["evidence"][0]["mapping_confidence"], 1.0)
 
@@ -1246,6 +1251,77 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertLess(suggestions["retrieval.similarity_threshold"]["suggested"], 0.35)
         self.assertIn("hit_rate", report["delta"])
         self.assertFalse(report["gate"]["ok"], report["gate"])
+
+    def test_suggest_benchmark_artifacts_from_retrieval_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            current = root / "current.json"
+            hints = root / "retrieval_hints.json"
+            current.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "dataset": {"id": "ds-1", "name": "kb:test"},
+                        "benchmark": {
+                            "cutoff": 5,
+                            "metrics": {
+                                "hit_rate": 1.0,
+                                "mrr": 1.0,
+                                "precision_at_k": 0.6,
+                                "recall_at_k": 1.0,
+                                "ndcg_at_k": 1.0,
+                                "map_at_k": 1.0,
+                                "empty_result_rate": 0.0,
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "table_artifacts": [
+                            {
+                                "document": "documents/apollo.md",
+                                "caption": "APOLLO torque table",
+                                "source_heading": "Torque specs",
+                                "model_label_candidates": ["HH-A", "HH-B"],
+                                "header_preview": ["Model", "Rated torque"],
+                            }
+                        ],
+                        "image_artifacts": [
+                            {
+                                "document": "documents/apollo.md",
+                                "path": "images/apollo-panel.png",
+                                "caption": "APOLLO control panel",
+                                "semantic_kind": "diagram",
+                            }
+                        ],
+                        "section_boundaries": [
+                            {"document": "documents/apollo.md", "title": "Torque specs"},
+                            {"document": "documents/warranty.md", "title": "Warranty"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = suggest_benchmark_retrieval_parameters(report_path=current, retrieval_hints_path=hints)
+
+        self.assertEqual(report["schema"], BENCHMARK_RETRIEVAL_SUGGESTION_REPORT_SCHEMA)
+        self.assertEqual(report["retrieval_hints"]["schema"], "ragflow_retrieval_hints_v1")
+        self.assertEqual(report["summary"]["benchmark_artifact_suggestion_count"], 4)
+        suggestions = {item["id"]: item for item in report["benchmark_artifact_suggestions"]}
+        self.assertEqual(suggestions["hint_table_001"]["query_type"], "table_value")
+        self.assertEqual(suggestions["hint_table_001"]["qrel_template"]["expected_modalities"], ["table"])
+        self.assertIn("HH-A", suggestions["hint_table_001"]["query_template"])
+        self.assertEqual(suggestions["hint_image_001"]["query_type"], "visual_identification")
+        self.assertEqual(suggestions["hint_image_001"]["qrel_template"]["expected_modalities"], ["image"])
+        self.assertEqual(suggestions["hint_mixed_001"]["query_type"], "mixed_table_plus_image")
+        self.assertEqual(suggestions["hint_mixed_001"]["qrel_template"]["expected_modalities"], ["mixed", "table", "image"])
+        self.assertEqual(suggestions["hint_negative_001"]["kind"], "wrong_document_negative")
 
     def test_trend_and_delta_reports_root_cause_regression_hints(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

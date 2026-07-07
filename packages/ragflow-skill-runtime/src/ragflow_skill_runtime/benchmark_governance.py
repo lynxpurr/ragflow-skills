@@ -28,7 +28,7 @@ from .validation import (
 )
 from .retrieval import CHUNK_HASH_ALGORITHM, NormalizedChunk, normalize_chunk, normalize_retrieval_response, stable_chunk_hash
 from .runtime_resilience import build_runtime_partial_failure_report
-from .handoff import CJK_PHRASE_RE, STOPWORDS, WORD_RE
+from .handoff import CJK_PHRASE_RE, RETRIEVAL_HINTS_SCHEMA, STOPWORDS, WORD_RE
 from .metadata_governance import lint_tagset_file, tagset_report_file
 from .kb_build import BuildError, KB_REFRESH_REPORT_SCHEMA, load_kb_refresh_report, summarize_kb_refresh_observed_state
 
@@ -1505,6 +1505,38 @@ def _evidence_mapping_confidence(*, match_count: int, document_status: str) -> f
     return round(max(0.0, base - ambiguity_penalty), 4)
 
 
+def _qrels_template_from_evidence_map_items(items: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    qrels: list[dict[str, Any]] = []
+    for item in items:
+        expected_chunks = [str(chunk) for chunk in item.get("expected_chunks", []) if chunk]
+        if not expected_chunks:
+            continue
+        query_id = _first_string(item, ("query_id", "id")) or f"qa-{len(qrels) + 1}"
+        documents = sorted(
+            {
+                str(evidence.get("document"))
+                for evidence in item.get("evidence", [])
+                if isinstance(evidence, Mapping) and evidence.get("mapped") and evidence.get("document")
+            }
+        )
+        qrel: dict[str, Any] = {
+            "query_id": query_id,
+            "expected_chunks": expected_chunks,
+            "relevance": 2,
+            "metadata": {
+                "source": "grounded_qa_evidence_map",
+                "strict_chunk_evidence": True,
+            },
+        }
+        if documents:
+            qrel["expected_documents"] = documents
+        qrels.append(qrel)
+    return {
+        "schema": BENCHMARK_QRELS_SCHEMA,
+        "qrels": qrels,
+    }
+
+
 def map_grounded_qa_evidence(
     *,
     qa_path: str | Path,
@@ -1715,6 +1747,8 @@ def map_grounded_qa_evidence(
         "mapped_chunk_coverage": _rate(len(mapped_expected_chunks), len(chunks)),
         "chunk_count": len(chunks),
     }
+    qrels_template = _qrels_template_from_evidence_map_items(mapped_items)
+    summary["qrels_template_item_count"] = len(qrels_template["qrels"])
     if not runtime_items and issues:
         runtime_items.append({"label": "items", "status": "invalid"})
     runtime_partial_failure = _qa_evidence_map_runtime_partial_failure_report(runtime_items)
@@ -1734,6 +1768,7 @@ def map_grounded_qa_evidence(
         "chunk_snapshot": str(chunk_snapshot_path),
         "summary": summary,
         "items": mapped_items,
+        "qrels_template": qrels_template,
         "issues": [issue.to_dict() for issue in issues],
     }
     _write_json(output_path, artifact)
@@ -1748,6 +1783,7 @@ def map_grounded_qa_evidence(
             "output": str(output_path),
         },
         "summary": report_summary,
+        "qrels_template": qrels_template,
         "runtime_partial_failure": runtime_partial_failure,
         "issues": [issue.to_dict() for issue in issues],
     }
@@ -3582,11 +3618,184 @@ def _retrieval_suggestion(
     return payload
 
 
+def _retrieval_hints_payload(path: str | Path | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    payload = _read_json(path)
+    if not isinstance(payload, Mapping) or payload.get("schema") != RETRIEVAL_HINTS_SCHEMA:
+        raise BenchmarkGovernanceError(f"retrieval hints schema must be {RETRIEVAL_HINTS_SCHEMA}")
+    return dict(payload)
+
+
+def _hint_list(payload: Mapping[str, Any], key: str) -> list[dict[str, Any]]:
+    value = payload.get(key)
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _hint_text(item: Mapping[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _hint_strings(item: Mapping[str, Any], *keys: str, limit: int = 6) -> list[str]:
+    values: list[str] = []
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            values.append(value.strip())
+        elif isinstance(value, list):
+            for raw in value:
+                if isinstance(raw, str) and raw.strip():
+                    values.append(raw.strip())
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = value.casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(value)
+        if len(deduped) >= limit:
+            break
+    return deduped
+
+
+def _hint_document(item: Mapping[str, Any]) -> str | None:
+    return _hint_text(item, "document", "source_document", "markdown", "path", "source")
+
+
+def _qrel_template(*, documents: Iterable[str | None], modalities: list[str], terms: Iterable[str]) -> dict[str, Any]:
+    docs = [doc for doc in documents if doc]
+    return {
+        "expected_documents": sorted(set(docs)),
+        "expected_modalities": modalities,
+        "expected_terms": list(terms)[:8],
+    }
+
+
+def _benchmark_artifact_suggestions_from_hints(payload: Mapping[str, Any] | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if payload is None:
+        return [], {
+            "provided": False,
+            "schema": RETRIEVAL_HINTS_SCHEMA,
+            "summary": {
+                "table_artifact_count": 0,
+                "image_artifact_count": 0,
+                "document_count": 0,
+            },
+        }
+
+    tables = _hint_list(payload, "table_artifacts")
+    images = _hint_list(payload, "image_artifacts")
+    sections = _hint_list(payload, "section_boundaries")
+    documents = {
+        document
+        for document in [_hint_document(item) for item in [*tables, *images, *sections]]
+        if document
+    }
+    suggestions: list[dict[str, Any]] = []
+
+    for index, table in enumerate(tables[:5], start=1):
+        caption = _hint_text(table, "caption", "source_heading", "title") or "table evidence"
+        model_terms = _hint_strings(table, "model_label_candidates", "header_preview", "caption", "source_heading")
+        focus = model_terms[0] if model_terms else caption
+        document = _hint_document(table)
+        suggestions.append(
+            {
+                "id": f"hint_table_{index:03d}",
+                "kind": "table",
+                "query_type": "table_value",
+                "source": f"retrieval_hints.table_artifacts[{index - 1}]",
+                "query_template": f"What table value is associated with {focus} in {caption}?",
+                "qrel_template": _qrel_template(documents=[document], modalities=["table"], terms=model_terms or [caption]),
+                "rationale": "Table retrieval hints should become table-value benchmark cases with expected modality evidence.",
+            }
+        )
+
+    for index, image in enumerate(images[:5], start=1):
+        caption = _hint_text(image, "caption", "alt_text", "source_heading", "path") or "image evidence"
+        document = _hint_document(image)
+        terms = _hint_strings(image, "caption", "alt_text", "semantic_kind", "source_heading", "path")
+        suggestions.append(
+            {
+                "id": f"hint_image_{index:03d}",
+                "kind": "image",
+                "query_type": "visual_identification",
+                "source": f"retrieval_hints.image_artifacts[{index - 1}]",
+                "query_template": f"What visual evidence is shown in {caption}?",
+                "qrel_template": _qrel_template(documents=[document], modalities=["image"], terms=terms or [caption]),
+                "rationale": "Image retrieval hints should become visual benchmark cases with expected modality evidence.",
+            }
+        )
+
+    if tables and images:
+        table = tables[0]
+        image = images[0]
+        table_caption = _hint_text(table, "caption", "source_heading", "title") or "table evidence"
+        image_caption = _hint_text(image, "caption", "alt_text", "path") or "image evidence"
+        table_doc = _hint_document(table)
+        image_doc = _hint_document(image)
+        terms = _hint_strings(table, "model_label_candidates", "header_preview", "caption", "source_heading")
+        terms.extend(_hint_strings(image, "caption", "alt_text", "semantic_kind", "source_heading"))
+        suggestions.append(
+            {
+                "id": "hint_mixed_001",
+                "kind": "mixed",
+                "query_type": "mixed_table_plus_image",
+                "source": "retrieval_hints.table_artifacts[0]+image_artifacts[0]",
+                "query_template": f"Connect the table evidence in {table_caption} with the visual evidence in {image_caption}.",
+                "qrel_template": _qrel_template(
+                    documents=[table_doc, image_doc],
+                    modalities=["mixed", "table", "image"],
+                    terms=terms or [table_caption, image_caption],
+                ),
+                "rationale": "Combined table and image hints should become mixed-modality benchmark cases.",
+            }
+        )
+
+    if len(documents) > 1:
+        sorted_docs = sorted(documents)
+        suggestions.append(
+            {
+                "id": "hint_negative_001",
+                "kind": "wrong_document_negative",
+                "query_type": "wrong_document_negative",
+                "source": "retrieval_hints.document_distribution",
+                "query_template": f"Verify evidence from {sorted_docs[0]} is not answered from {sorted_docs[1]}.",
+                "qrel_template": {
+                    "expected_documents": [sorted_docs[0]],
+                    "negative_documents": [sorted_docs[1]],
+                    "expected_modalities": ["text"],
+                    "expected_terms": [],
+                },
+                "rationale": "Multi-document handoffs should include at least one wrong-document negative case.",
+            }
+        )
+
+    hint_summary = {
+        "provided": True,
+        "schema": payload.get("schema"),
+        "summary": {
+            "table_artifact_count": len(tables),
+            "image_artifact_count": len(images),
+            "section_boundary_count": len(sections),
+            "document_count": len(documents),
+        },
+    }
+    return suggestions, hint_summary
+
+
 def suggest_benchmark_retrieval_parameters(
     *,
     report_path: str | Path,
     baseline_report_path: str | Path | None = None,
     gate_config_path: str | Path | None = None,
+    retrieval_hints_path: str | Path | None = None,
     current_top_k: int | None = None,
     current_similarity_threshold: float | None = None,
 ) -> dict[str, Any]:
@@ -3616,6 +3825,8 @@ def suggest_benchmark_retrieval_parameters(
             if isinstance(item.get("absolute"), (int, float))
         } if deltas else None
         gate_result = evaluate_benchmark_gate(metrics, gate=gate, baseline_delta=baseline_delta)
+    retrieval_hints = _retrieval_hints_payload(retrieval_hints_path)
+    artifact_suggestions, retrieval_hints_summary = _benchmark_artifact_suggestions_from_hints(retrieval_hints)
 
     hit_rate = metrics.get("hit_rate", 1.0)
     recall = metrics.get("recall_at_k", 1.0)
@@ -3804,7 +4015,13 @@ def suggest_benchmark_retrieval_parameters(
             }
         )
 
-    status = "REVIEW" if any(item["action"] != "hold" for item in suggestions) or (isinstance(gate_result, Mapping) and not gate_result.get("ok", True)) else "PASS"
+    status = (
+        "REVIEW"
+        if artifact_suggestions
+        or any(item["action"] != "hold" for item in suggestions)
+        or (isinstance(gate_result, Mapping) and not gate_result.get("ok", True))
+        else "PASS"
+    )
     return {
         "ok": True,
         "schema": BENCHMARK_RETRIEVAL_SUGGESTION_REPORT_SCHEMA,
@@ -3812,6 +4029,7 @@ def suggest_benchmark_retrieval_parameters(
         "report": str(report_path),
         "baseline_report": str(baseline_report_path) if baseline_report_path else None,
         "gate_config": str(gate_config_path) if gate_config_path else None,
+        "retrieval_hints_path": str(retrieval_hints_path) if retrieval_hints_path else None,
         "dataset": current_report.get("dataset", {}),
         "current_parameters": {
             "retrieval.top_k": inferred_top_k,
@@ -3829,7 +4047,17 @@ def suggest_benchmark_retrieval_parameters(
             "precision_gap": precision_gap,
             "pollution_risk": pollution_risk,
             "action_counts": _action_counts(suggestions),
+            "benchmark_artifact_suggestion_count": len(artifact_suggestions),
+            "suggested_query_types": sorted(
+                {
+                    str(item.get("query_type"))
+                    for item in artifact_suggestions
+                    if item.get("query_type")
+                }
+            ),
         },
+        "retrieval_hints": retrieval_hints_summary,
+        "benchmark_artifact_suggestions": artifact_suggestions,
         "retrieval_parameter_suggestions": suggestions,
         "recommended_experiments": recommended_experiments,
         "quality_hints": _dedupe_hints([*_quality_hints(metrics), *_regression_hints(deltas)]),
@@ -4732,6 +4960,33 @@ def render_benchmark_governance_markdown(report: Mapping[str, Any], *, title: st
                     suggested=suggestion.get("suggested", ""),
                     confidence=suggestion.get("confidence", ""),
                     reason=str(suggestion.get("reason", "")).replace("|", "\\|"),
+                )
+            )
+    artifact_suggestions = report.get("benchmark_artifact_suggestions")
+    if isinstance(artifact_suggestions, list) and artifact_suggestions:
+        lines.extend(
+            [
+                "",
+                "## Benchmark Artifact Suggestions",
+                "",
+                "| id | kind | query type | expected documents | expected modalities | query template |",
+                "| --- | --- | --- | --- | --- | --- |",
+            ]
+        )
+        for suggestion in artifact_suggestions:
+            if not isinstance(suggestion, Mapping):
+                continue
+            qrel_template = suggestion.get("qrel_template") if isinstance(suggestion.get("qrel_template"), Mapping) else {}
+            documents = qrel_template.get("expected_documents") if isinstance(qrel_template.get("expected_documents"), list) else []
+            modalities = qrel_template.get("expected_modalities") if isinstance(qrel_template.get("expected_modalities"), list) else []
+            lines.append(
+                "| {id} | `{kind}` | `{query_type}` | {documents} | {modalities} | {query_template} |".format(
+                    id=suggestion.get("id", ""),
+                    kind=suggestion.get("kind", ""),
+                    query_type=suggestion.get("query_type", ""),
+                    documents=", ".join(str(item) for item in documents) or "-",
+                    modalities=", ".join(str(item) for item in modalities) or "-",
+                    query_template=str(suggestion.get("query_template", "")).replace("|", "\\|"),
                 )
             )
     experiments = report.get("recommended_experiments")

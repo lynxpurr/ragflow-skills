@@ -1336,6 +1336,45 @@ def _append_benchmark_strength_rationale(rationale: list[str], benchmark_strengt
     return rationale
 
 
+def _benchmark_artifact_followups(benchmark_strength: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    if not benchmark_strength:
+        return []
+    summary = benchmark_strength.get("summary") if isinstance(benchmark_strength.get("summary"), Mapping) else {}
+    issue_codes = set(benchmark_strength.get("issue_codes", []) if isinstance(benchmark_strength.get("issue_codes"), list) else [])
+    followups: list[dict[str, Any]] = []
+    expected_chunk_coverage = summary.get("expected_chunk_coverage")
+    if "missing_strict_evidence" in issue_codes or expected_chunk_coverage == 0:
+        followups.append(
+            {
+                "code": "add_expected_chunk_qrels",
+                "severity": "warning",
+                "reason": "Benchmark artifacts do not include strict expected chunk evidence.",
+                "recommendation": "Run snapshot-chunks and qa map-evidence, then add expected_chunks qrels before promoting an optimized profile.",
+            }
+        )
+    expected_modality_coverage = summary.get("expected_modality_coverage")
+    if expected_modality_coverage == 0:
+        followups.append(
+            {
+                "code": "add_modality_benchmark_cases",
+                "severity": "info",
+                "reason": "Benchmark artifacts do not mark table, image, or mixed-modality expectations.",
+                "recommendation": "Run benchmark suggest with retrieval_hints.json to draft table, image, and mixed-modality benchmark cases.",
+            }
+        )
+    target_document_count = summary.get("target_document_count")
+    if isinstance(target_document_count, int) and target_document_count <= 1:
+        followups.append(
+            {
+                "code": "add_wrong_document_cases",
+                "severity": "info",
+                "reason": "Benchmark qrels cover only one target document.",
+                "recommendation": "Add negative or wrong-document cases when the handoff or corpus contains multiple documents.",
+            }
+        )
+    return followups
+
+
 def _metric_saturation(results: list[Mapping[str, Any]]) -> dict[str, Any]:
     saturated_metrics: list[str] = []
     inspected_metrics = ["hit_rate", "mrr", "recall_at_k"]
@@ -1688,6 +1727,7 @@ def summarize_optimization_results(
         item["rank"] = rank
     winner = ranked[0] if ranked else None
     benchmark_strength = _benchmark_strength_from_plan(plan)
+    benchmark_artifact_followups = _benchmark_artifact_followups(benchmark_strength)
     co_winner_items = _co_winners(ranked, score_epsilon=decision_config["score_epsilon"])
     score_delta = _score_delta(ranked)
     cost_review_reasons = _cost_review_reasons(winner, co_winner_items)
@@ -1768,10 +1808,12 @@ def summarize_optimization_results(
             "parser_drift_candidate_count": parser_drift_candidate_count,
             "health_warning_candidate_count": health_warning_candidate_count,
             "benchmark_strength_status": benchmark_strength.get("status") if benchmark_strength else None,
+            "benchmark_artifact_followup_count": len(benchmark_artifact_followups),
             "saturated_metric_count": len(metric_saturation["saturated_metrics"]),
             "co_winner_count": len(co_winner_items),
         },
         "benchmark_strength": benchmark_strength,
+        "benchmark_artifact_followups": benchmark_artifact_followups,
         "metric_saturation": metric_saturation,
         "decision": {
             "status": decision_status,
@@ -2471,6 +2513,13 @@ def render_best_profile_markdown(results: Mapping[str, Any]) -> str:
     lines.extend(["", "## Rationale", ""])
     for item in recommendation.get("rationale", []) if isinstance(recommendation.get("rationale"), list) else []:
         lines.append(f"- {item}")
+    followups = results.get("benchmark_artifact_followups")
+    if isinstance(followups, list) and followups:
+        lines.extend(["", "## Benchmark Artifact Follow-ups", ""])
+        for item in followups:
+            if not isinstance(item, Mapping):
+                continue
+            lines.append(f"- `{item.get('code')}`: {item.get('recommendation') or item.get('reason')}")
     lines.extend(
         [
             "",

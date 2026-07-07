@@ -3307,6 +3307,7 @@ class KbBuildCliTests(unittest.TestCase):
             queries = root / "queries.json"
             qrels = root / "qrels.json"
             gate = root / "gate.json"
+            retrieval_hints = root / "retrieval_hints.json"
             report = root / "benchmark_report.json"
             chunk_report = root / "chunk_report.json"
             chunk_snapshot = root / "chunk_snapshot.json"
@@ -3327,6 +3328,29 @@ class KbBuildCliTests(unittest.TestCase):
                 encoding="utf-8",
             )
             qrels.write_text(json.dumps({"q1": {"source.md": 1}}), encoding="utf-8")
+            retrieval_hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "table_artifacts": [
+                            {
+                                "document": "source.md",
+                                "caption": "Support matrix",
+                                "model_label_candidates": ["Alpha"],
+                                "header_preview": ["Model", "Support"],
+                            }
+                        ],
+                        "image_artifacts": [
+                            {
+                                "document": "source.md",
+                                "path": "images/support.png",
+                                "caption": "Support diagram",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
             chunk_report.write_text(
                 json.dumps(
                     {
@@ -3563,6 +3587,8 @@ class KbBuildCliTests(unittest.TestCase):
                     str(baseline_report),
                     "--gate-config",
                     str(gate),
+                    "--retrieval-hints",
+                    str(retrieval_hints),
                     "--current-top-k",
                     "3",
                     "--current-similarity-threshold",
@@ -3606,7 +3632,9 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("RAGFlow Benchmark Delta Report", delta_md_text)
         self.assertEqual(suggest_result.returncode, 0, suggest_result.stdout)
         self.assertIn("ragflow_benchmark_retrieval_suggestion_report_v1", suggest_result.stdout)
+        self.assertIn("benchmark_artifact_suggestion_count", suggest_result.stdout)
         self.assertIn("RAGFlow Benchmark Retrieval Suggestions", suggest_md_text)
+        self.assertIn("Benchmark Artifact Suggestions", suggest_md_text)
 
     def test_benchmark_import_checkpoint_resume_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
