@@ -3022,6 +3022,115 @@ class QueryCliTests(unittest.TestCase):
         self.assertNotIn(str(routing), activation_combined)
         self.assertNotIn(str(routes), activation_combined)
 
+    def test_route_activation_check_reviews_validation_thresholds(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            routing = root / "routing.json"
+            routes = root / "routes.json"
+            activation_plan = root / "kb_activation_plan.json"
+            validation_report = root / "validation_report.json"
+            report_json = root / "route_activation_check.json"
+            routing.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "knowledge_bases": [
+                            {
+                                "name": "kb:activation-thresholds",
+                                "dataset_id": "ds-activation-thresholds",
+                                "hints": ["activation thresholds"],
+                                "params": {"top_k": 5},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            routes.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {
+                                "id": "threshold-route",
+                                "question": "activation thresholds",
+                                "expected_kb": "kb:activation-thresholds",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            activation_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "kb_activation_plan_v1",
+                        "kb_name": "kb:activation-thresholds",
+                        "dataset_id": "ds-activation-thresholds",
+                        "summary": {"blocked_check_count": 0, "review_check_count": 0},
+                        "route_entry_suggestion": {
+                            "name": "kb:activation-thresholds",
+                            "dataset_id": "ds-activation-thresholds",
+                            "hints": ["activation thresholds"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            validation_report.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "level": "benchmark",
+                        "dataset": {"id": "ds-activation-thresholds", "name": "kb:activation-thresholds"},
+                        "metrics": {"total": 2, "passed": 2, "failed": 0, "pass_rate": 1.0},
+                        "benchmark": {
+                            "schema": "ragflow_benchmark_report_v1",
+                            "metrics": {
+                                "query_count": 2,
+                                "hit_rate": 0.75,
+                                "empty_result_rate": 0.0,
+                                "mrr": 0.6,
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "route-activation-check",
+                        "--activation-plan",
+                        str(activation_plan),
+                        "--routing-config",
+                        str(routing),
+                        "--queries",
+                        str(routes),
+                        "--validation-report",
+                        str(validation_report),
+                        "--min-hit-rate",
+                        "0.9",
+                        "--max-empty-result-rate",
+                        "0.1",
+                        "--report-json",
+                        str(report_json),
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            file_payload = json.loads(report_json.read_text(encoding="utf-8")) if report_json.exists() else {}
+
+        issue_codes = {issue["code"] for issue in payload["issues"]}
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "FAIL")
+        self.assertIn("route_retrieval_params_missing", issue_codes)
+        self.assertIn("validation_hit_rate_below_threshold", issue_codes)
+        self.assertEqual(payload["summary"]["validation_query_count"], 2)
+        self.assertEqual(payload["checks"]["validation_readiness"]["metrics"]["hit_rate"], 0.75)
+        self.assertEqual(file_payload["checks"]["retrieval_params"]["missing"], ["similarity_threshold"])
+
     def test_assistant_profile_recommend_command_writes_reports(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:

@@ -947,6 +947,7 @@ def _sanitize_route_activation_check_report(
     activation_plan: dict[str, Any],
     queries: Any,
     route_test_report: dict[str, Any] | None,
+    validation_report: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     routing_payload = routing.to_dict() if hasattr(routing, "to_dict") else {}
     urls = [
@@ -954,6 +955,7 @@ def _sanitize_route_activation_check_report(
         *_collect_urls(activation_plan),
         *_collect_urls(queries or {}),
         *_collect_urls(route_test_report or {}),
+        *_collect_urls(validation_report or {}),
         *_collect_urls(report),
     ]
     sanitized, redaction_report = sanitize_report_payload(
@@ -964,6 +966,7 @@ def _sanitize_route_activation_check_report(
             args.routing_config,
             args.queries,
             args.route_test_report,
+            args.validation_report,
             args.centroid_index,
             args.report_json,
             args.report_md,
@@ -979,17 +982,25 @@ def _route_activation_check(args: argparse.Namespace) -> int:
         activation_plan = load_route_activation_plan(args.activation_plan)
         queries = load_route_test_queries(args.queries) if args.queries else None
         route_test_report = load_route_test_report(args.route_test_report) if args.route_test_report else None
+        validation_report = _read_json(args.validation_report) if args.validation_report else None
+        if validation_report is not None and not isinstance(validation_report, dict):
+            raise RoutingError("validation report must be a JSON object")
         report = run_route_activation_check(
             activation_plan,
             routing,
             queries=queries,
             route_test_report=route_test_report,
+            validation_report=validation_report,
+            min_hit_rate=args.min_hit_rate,
+            max_empty_result_rate=args.max_empty_result_rate,
+            min_validation_query_count=args.min_validation_query_count,
             centroid_index=_load_centroid_index(args),
             inputs={
                 "activation_plan": args.activation_plan,
                 "route_config": args.routing_config,
                 "route_tests": args.queries,
                 "route_test_report": args.route_test_report,
+                "validation_report": args.validation_report,
                 "centroid_index": args.centroid_index,
             },
         )
@@ -1003,6 +1014,7 @@ def _route_activation_check(args: argparse.Namespace) -> int:
             activation_plan,
             queries,
             route_test_report,
+            validation_report,
         )
         _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
@@ -2427,6 +2439,15 @@ def build_parser() -> argparse.ArgumentParser:
     route_activation_check.add_argument("--activation-plan", required=True, help="kb_activation_plan_v1 JSON")
     route_activation_check.add_argument("--queries", help="Optional route-test queries JSON")
     route_activation_check.add_argument("--route-test-report", help="Optional saved route-test report JSON")
+    route_activation_check.add_argument("--validation-report", help="Optional saved smoke/regression/benchmark validation report JSON")
+    route_activation_check.add_argument("--min-hit-rate", type=float, help="Minimum benchmark hit_rate for route activation")
+    route_activation_check.add_argument("--max-empty-result-rate", type=float, help="Maximum benchmark empty_result_rate for route activation")
+    route_activation_check.add_argument(
+        "--min-validation-query-count",
+        type=int,
+        default=1,
+        help="Minimum smoke or benchmark query count when --validation-report is supplied",
+    )
     route_activation_check.add_argument("--report-json", help="Optional JSON report output path")
     route_activation_check.add_argument("--report-md", help="Optional Markdown report output path")
     route_activation_check.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")

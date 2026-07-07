@@ -1758,6 +1758,151 @@ def _route_activation_status(issues: list[dict[str, str]]) -> str:
     return "PASS"
 
 
+def _float_metric(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_metric(value: Any) -> int | None:
+    metric = _float_metric(value)
+    if metric is None:
+        return None
+    return int(metric)
+
+
+def _validation_report_readiness(
+    validation_report: Mapping[str, Any] | None,
+    *,
+    refs: set[str],
+    min_hit_rate: float | None,
+    max_empty_result_rate: float | None,
+    min_validation_query_count: int,
+) -> dict[str, Any]:
+    thresholds = {
+        "min_hit_rate": min_hit_rate,
+        "max_empty_result_rate": max_empty_result_rate,
+        "min_validation_query_count": min_validation_query_count,
+    }
+    if not validation_report:
+        return {
+            "provided": False,
+            "status": "not_available",
+            "level": None,
+            "dataset": {},
+            "metrics": {},
+            "thresholds": thresholds,
+            "issues": [],
+        }
+
+    issues: list[dict[str, str]] = []
+    dataset = validation_report.get("dataset", {}) if isinstance(validation_report.get("dataset"), Mapping) else {}
+    metrics = validation_report.get("metrics", {}) if isinstance(validation_report.get("metrics"), Mapping) else {}
+    benchmark = validation_report.get("benchmark", {}) if isinstance(validation_report.get("benchmark"), Mapping) else {}
+    benchmark_metrics = benchmark.get("metrics", {}) if isinstance(benchmark.get("metrics"), Mapping) else {}
+    cases = validation_report.get("cases", []) if isinstance(validation_report.get("cases"), list) else []
+    query_count = (
+        _int_metric(benchmark_metrics.get("query_count"))
+        or _int_metric(metrics.get("total"))
+        or len(cases)
+    )
+    hit_rate = _float_metric(benchmark_metrics.get("hit_rate"))
+    empty_result_rate = _float_metric(benchmark_metrics.get("empty_result_rate"))
+    pass_rate = _float_metric(metrics.get("pass_rate"))
+    validation_metrics = {
+        "query_count": query_count,
+        "pass_rate": pass_rate,
+        "hit_rate": hit_rate,
+        "empty_result_rate": empty_result_rate,
+        "mrr": _float_metric(benchmark_metrics.get("mrr")),
+    }
+    dataset_refs = {str(dataset.get("id") or ""), str(dataset.get("name") or "")} - {""}
+    if refs and dataset_refs and not (refs & dataset_refs):
+        issues.append(
+            _activation_issue(
+                "error",
+                "validation_dataset_mismatch",
+                "validation report dataset does not match the activation-plan KB",
+                path="validation_report.dataset",
+                recommendation="Use validation output from the same KB before route activation.",
+            )
+        )
+    if query_count < min_validation_query_count:
+        issues.append(
+            _activation_issue(
+                "error",
+                "validation_query_count_below_minimum",
+                "validation report does not include enough smoke or benchmark queries",
+                path="validation_report.metrics.total",
+                recommendation="Run smoke or benchmark validation with enough target queries before activation.",
+            )
+        )
+    if validation_report.get("ok") is False:
+        issues.append(
+            _activation_issue(
+                "error",
+                "validation_report_failed",
+                "validation report status is not passing",
+                path="validation_report.ok",
+                recommendation="Resolve validation failures before route activation.",
+            )
+        )
+    if min_hit_rate is not None:
+        if hit_rate is None:
+            issues.append(
+                _activation_issue(
+                    "error",
+                    "validation_hit_rate_missing",
+                    "validation threshold requires benchmark hit_rate but the report does not include it",
+                    path="validation_report.benchmark.metrics.hit_rate",
+                    recommendation="Provide a benchmark validation report or omit --min-hit-rate for smoke-only activation.",
+                )
+            )
+        elif hit_rate < min_hit_rate:
+            issues.append(
+                _activation_issue(
+                    "error",
+                    "validation_hit_rate_below_threshold",
+                    "benchmark hit_rate is below the route activation threshold",
+                    path="validation_report.benchmark.metrics.hit_rate",
+                    recommendation="Improve retrieval quality or lower the reviewed threshold before activation.",
+                )
+            )
+    if max_empty_result_rate is not None:
+        if empty_result_rate is None:
+            issues.append(
+                _activation_issue(
+                    "error",
+                    "validation_empty_result_rate_missing",
+                    "validation threshold requires benchmark empty_result_rate but the report does not include it",
+                    path="validation_report.benchmark.metrics.empty_result_rate",
+                    recommendation="Provide a benchmark validation report or omit --max-empty-result-rate for smoke-only activation.",
+                )
+            )
+        elif empty_result_rate > max_empty_result_rate:
+            issues.append(
+                _activation_issue(
+                    "error",
+                    "validation_empty_result_rate_above_threshold",
+                    "benchmark empty_result_rate is above the route activation threshold",
+                    path="validation_report.benchmark.metrics.empty_result_rate",
+                    recommendation="Resolve empty retrievals before route activation.",
+                )
+            )
+    return {
+        "provided": True,
+        "status": _route_activation_status(issues),
+        "level": validation_report.get("level"),
+        "dataset": dict(dataset),
+        "metrics": validation_metrics,
+        "thresholds": thresholds,
+        "issues": issues,
+    }
+
+
 def _activation_summary_count(summary: Mapping[str, Any], key: str) -> int:
     value = summary.get(key, 0)
     if value in (None, ""):
@@ -1891,6 +2036,10 @@ def run_route_activation_check(
     *,
     queries: list[dict[str, Any]] | None = None,
     route_test_report: Mapping[str, Any] | None = None,
+    validation_report: Mapping[str, Any] | None = None,
+    min_hit_rate: float | None = None,
+    max_empty_result_rate: float | None = None,
+    min_validation_query_count: int = 1,
     centroid_index: Mapping[str, Any] | None = None,
     inputs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -1958,6 +2107,17 @@ def run_route_activation_check(
             )
         )
     else:
+        route_param_check = _route_param_coverage(registered.params)
+        if not route_param_check["complete"]:
+            issues.append(
+                _activation_issue(
+                    "error",
+                    "route_retrieval_params_missing",
+                    "registered KB route is missing retrieval parameter defaults",
+                    path="routing_config.knowledge_bases[].params",
+                    recommendation="Add top_k and similarity_threshold defaults before accepting route activation.",
+                )
+            )
         missing_hints = sorted(_suggested_hints(activation_plan) - set(registered.hints))
         if missing_hints:
             issues.append(
@@ -1969,6 +2129,8 @@ def run_route_activation_check(
                     recommendation="Review whether activation-plan hints should be added to the route config.",
                 )
             )
+    if not registered:
+        route_param_check = _route_param_coverage({})
     route_report, target_cases, route_test_source = _route_test_cases_for_activation(
         config=config,
         refs=refs,
@@ -2010,6 +2172,14 @@ def run_route_activation_check(
         )
     centroid_check = _centroid_check_for_activation(registered_kb=registered, centroid_index=centroid_index)
     issues.extend(centroid_check["issues"])
+    validation_check = _validation_report_readiness(
+        validation_report,
+        refs=refs,
+        min_hit_rate=min_hit_rate,
+        max_empty_result_rate=max_empty_result_rate,
+        min_validation_query_count=min_validation_query_count,
+    )
+    issues.extend(validation_check["issues"])
     status = _route_activation_status(issues)
     return {
         "ok": status == "PASS",
@@ -2029,6 +2199,10 @@ def run_route_activation_check(
             "target_route_test_count": len(target_cases),
             "passed_target_route_test_count": passed_target,
             "failed_target_route_test_count": failed_target,
+            "validation_query_count": validation_check["metrics"].get("query_count", 0)
+            if isinstance(validation_check.get("metrics"), Mapping)
+            else 0,
+            "validation_threshold_issue_count": len(validation_check["issues"]),
         },
         "checks": {
             "activation_plan": {
@@ -2046,6 +2220,8 @@ def run_route_activation_check(
                 "passed_target_case_count": passed_target,
                 "failed_target_case_count": failed_target,
             },
+            "retrieval_params": route_param_check,
+            "validation_readiness": validation_check,
             "centroid_alignment": centroid_check,
         },
         "route_test_report": route_report,
@@ -2063,6 +2239,10 @@ def render_route_activation_check_markdown(report: Mapping[str, Any]) -> str:
     """Render a route activation check report."""
 
     summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    checks = report.get("checks", {}) if isinstance(report.get("checks"), Mapping) else {}
+    retrieval_params = checks.get("retrieval_params", {}) if isinstance(checks.get("retrieval_params"), Mapping) else {}
+    validation = checks.get("validation_readiness", {}) if isinstance(checks.get("validation_readiness"), Mapping) else {}
+    validation_metrics = validation.get("metrics", {}) if isinstance(validation.get("metrics"), Mapping) else {}
     lines = [
         "# RAGFlow Route Activation Check",
         "",
@@ -2072,6 +2252,9 @@ def render_route_activation_check_markdown(report: Mapping[str, Any]) -> str:
         f"- Dataset: `{report.get('dataset_id')}`",
         f"- Target route tests: `{summary.get('target_route_test_count', 0)}`",
         f"- Failed target route tests: `{summary.get('failed_target_route_test_count', 0)}`",
+        f"- Retrieval params complete: `{retrieval_params.get('complete')}`",
+        f"- Validation queries: `{validation_metrics.get('query_count', 0)}`",
+        f"- Validation hit_rate: `{validation_metrics.get('hit_rate')}`",
         "",
         "## Issues",
         "",

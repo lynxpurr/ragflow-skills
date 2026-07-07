@@ -96,6 +96,9 @@ Completed public offline work in the current implementation pass:
 - `ragflow-kb-build parse-report` now compares requested profile settings with effective
   parser config captured from `kb_manifest.json`, explicit `--parser-config`, or
   read-only `--documents-json` API payloads when those payloads expose `parser_config`.
+- `ragflow-query route-activation-check` now verifies registered KB retrieval params and
+  optional saved smoke/benchmark validation reports against reviewed retrieval thresholds
+  before route activation.
 
 The live disposable Markdown-plus-image build remains gated. It must stay unchecked until
 the user explicitly approves live mutation and sanitized cleanup evidence is recorded.
@@ -494,7 +497,7 @@ All new live-capable features must use the same safety model:
 - [x] Make `activation-plan` a standard post-build recommendation.
 - [x] Generate assistant profile and assistant test plan review artifacts from build
   evidence as well as handoff sidecars.
-- [ ] Add route-activation checks for KB name, route hints, benchmark smoke queries, and
+- [x] Add route-activation checks for KB name, route hints, benchmark smoke queries, and
   retrieval thresholds.
 - [ ] Define `ragflow_kb_refresh_report_v1`.
 - [ ] Add a read-only refresh command that exports current dataset document states and
