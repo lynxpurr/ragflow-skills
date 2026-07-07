@@ -8,7 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from .kb_build import parse_state_failed, parse_state_succeeded
+from .kb_build import (
+    check_embedding_model_drift,
+    describe_embedding_model,
+    normalize_embedding_model_expectations,
+    parse_state_failed,
+    parse_state_succeeded,
+)
 from .manifests import KbManifest, ManifestError, load_kb_manifest
 from .parse_report import PARSE_REPORT_SCHEMA
 from .topology import KB_ACTIVATION_PLAN_SCHEMA
@@ -132,50 +138,23 @@ def _manifest_parse_counts(kb_manifest: KbManifest) -> dict[str, int]:
     return dict(counts)
 
 
-def _embedding_model(kb_manifest: KbManifest) -> str:
-    value = kb_manifest.profile.get("embedding_model") if isinstance(kb_manifest.profile, Mapping) else None
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return "unknown"
-
-
 def _normalize_expected_models(values: Iterable[str] | None) -> list[str]:
-    seen: set[str] = set()
-    models: list[str] = []
-    for value in values or []:
-        text = str(value).strip()
-        if not text:
-            continue
-        key = text.casefold()
-        if key not in seen:
-            seen.add(key)
-            models.append(text)
-    return models
+    return normalize_embedding_model_expectations(list(values or []))
 
 
-def _embedding_model_check(embedding_model: str, expected_embedding_models: list[str]) -> dict[str, Any]:
-    if not expected_embedding_models:
-        return {
-            "status": "not_configured",
-            "expected_models": [],
-            "matches_expected": None,
-            "rebuild_or_reparse_required": False,
-        }
-    if embedding_model == "unknown":
-        return {
-            "status": "unknown",
-            "expected_models": list(expected_embedding_models),
-            "matches_expected": None,
-            "rebuild_or_reparse_required": False,
-        }
-    expected_keys = {model.casefold() for model in expected_embedding_models}
-    matches = embedding_model.casefold() in expected_keys
-    return {
-        "status": "match" if matches else "mismatch",
-        "expected_models": list(expected_embedding_models),
-        "matches_expected": matches,
-        "rebuild_or_reparse_required": not matches,
-    }
+def _embedding_model_evidence(kb_manifest: KbManifest) -> dict[str, Any]:
+    if kb_manifest.embedding_model_evidence:
+        evidence = dict(kb_manifest.embedding_model_evidence)
+        model = str(evidence.get("model") or "unknown").strip() or "unknown"
+        evidence["model"] = model
+        evidence.setdefault("status", "unknown" if model == "unknown" else "known")
+        evidence.setdefault("source", "kb_manifest.embedding_model")
+        if model == "unknown":
+            evidence.setdefault("reason", "profile_embedding_model_missing")
+        else:
+            evidence.setdefault("reason", None)
+        return evidence
+    return describe_embedding_model(kb_manifest.profile)
 
 
 def _parse_summary(parse_report: Mapping[str, Any] | None, kb_manifest: KbManifest) -> dict[str, Any]:
@@ -267,8 +246,9 @@ def _kb_health_item(
     kb_name = kb_manifest.dataset.name
     document_count = len(kb_manifest.documents)
     chunk_total = _manifest_chunk_total(kb_manifest)
-    embedding_model = _embedding_model(kb_manifest)
-    embedding_check = _embedding_model_check(embedding_model, expected_embedding_models)
+    embedding_model_evidence = _embedding_model_evidence(kb_manifest)
+    embedding_model = str(embedding_model_evidence.get("model") or "unknown")
+    embedding_check = check_embedding_model_drift(embedding_model_evidence, expected_embedding_models)
     parse = _parse_summary(parse_report, kb_manifest)
     activation = _activation_summary(activation_plan)
 
@@ -296,13 +276,14 @@ def _kb_health_item(
             )
         )
     if embedding_model == "unknown":
+        reason = embedding_model_evidence.get("reason") or "unknown"
         risks.append(
             _issue(
                 severity="info",
                 code="embedding_model_unknown",
                 dataset_id=dataset_id,
                 kb_name=kb_name,
-                message="KB manifest profile does not record an embedding model.",
+                message=f"KB manifest does not record an embedding model ({reason}).",
                 recommendation="Record embedding_model in the build profile or manifest for cross-KB health comparisons.",
             )
         )
@@ -415,6 +396,7 @@ def _kb_health_item(
             "document_count": document_count,
             "declared_chunk_count": chunk_total,
             "embedding_model": embedding_model,
+            "embedding_model_evidence": embedding_model_evidence,
             "embedding_model_check": embedding_check,
             "parse": parse,
             "route_activation": activation,

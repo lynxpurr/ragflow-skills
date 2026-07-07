@@ -9,7 +9,22 @@
   "profile": {
     "id": "default-en-768",
     "language": "en",
-    "chunk_method": "naive"
+    "chunk_method": "naive",
+    "embedding_model": "bge-m3"
+  },
+  "embedding_model": {
+    "model": "bge-m3",
+    "status": "known",
+    "source": "profile.embedding_model",
+    "reason": null
+  },
+  "embedding_model_check": {
+    "status": "not_configured",
+    "observed_model": "bge-m3",
+    "expected_models": [],
+    "matches_expected": null,
+    "rebuild_or_reparse_required": false,
+    "reason": null
   },
   "documents": [
     {

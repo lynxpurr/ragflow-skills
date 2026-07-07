@@ -1,6 +1,6 @@
 # Current Skills Quality Improvement Checklist
 
-Status: in progress; P0 live build remains gated and P1 multimodal validation is partially complete
+Status: in progress; P0 live build remains gated and P1 production readiness is partially complete
 Date: 2026-07-06
 Last reviewed: 2026-07-07
 
@@ -77,6 +77,10 @@ Completed public offline work in the current implementation pass:
   `asset-upload-plan`, `chunk_profile_report.json`, and `kb_manifest.json` offline,
   producing a sanitized consistency report before follow-up validation or live visual
   ingestion.
+- `ragflow-kb-build` dry-run and live `kb_manifest.json` now record embedding model
+  evidence as either a known profile model or `unknown` with reason, while build and
+  `health-report` expected-model checks warn when embedding drift implies rebuild or
+  reparse risk.
 
 The live disposable Markdown-plus-image build remains gated. It must stay unchecked until
 the user explicitly approves live mutation and sanitized cleanup evidence is recorded.
@@ -469,8 +473,8 @@ All new live-capable features must use the same safety model:
 ### P1: Improve Production Readiness And Refresh
 
 - [ ] Capture requested profile and effective parser config when the API exposes them.
-- [ ] Record embedding model or `unknown` with reason in build and health reports.
-- [ ] Warn when embedding model drift implies rebuild or reparse risk.
+- [x] Record embedding model or `unknown` with reason in build and health reports.
+- [x] Warn when embedding model drift implies rebuild or reparse risk.
 - [ ] Connect model-provider probe evidence to health reports without requiring mutation.
 - [ ] Make `activation-plan` a standard post-build recommendation.
 - [ ] Generate assistant profile and assistant test plan review artifacts from build

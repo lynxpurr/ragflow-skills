@@ -97,6 +97,92 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
+def normalize_embedding_model_expectations(values: list[str] | tuple[str, ...] | None) -> list[str]:
+    """Return de-duplicated expected embedding model labels for report checks."""
+
+    seen: set[str] = set()
+    models: list[str] = []
+    for value in values or []:
+        text = str(value).strip()
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        models.append(text)
+    return models
+
+
+def describe_embedding_model(profile: ChunkProfile | Mapping[str, Any] | None) -> dict[str, Any]:
+    """Describe the embedding model captured by a build profile."""
+
+    value: Any = None
+    if isinstance(profile, ChunkProfile):
+        value = profile.embedding_model
+    elif isinstance(profile, Mapping):
+        value = profile.get("embedding_model")
+
+    if isinstance(value, str) and value.strip():
+        return {
+            "model": value.strip(),
+            "status": "known",
+            "source": "profile.embedding_model",
+            "reason": None,
+        }
+    return {
+        "model": "unknown",
+        "status": "unknown",
+        "source": "profile.embedding_model",
+        "reason": "profile_embedding_model_missing",
+    }
+
+
+def check_embedding_model_drift(
+    embedding_model: Mapping[str, Any] | str,
+    expected_embedding_models: list[str] | tuple[str, ...] | None,
+) -> dict[str, Any]:
+    """Compare observed embedding model evidence with expected model labels."""
+
+    expected_models = normalize_embedding_model_expectations(expected_embedding_models)
+    if isinstance(embedding_model, Mapping):
+        observed_model = str(embedding_model.get("model") or "unknown").strip() or "unknown"
+        reason = embedding_model.get("reason")
+    else:
+        observed_model = str(embedding_model or "unknown").strip() or "unknown"
+        reason = "profile_embedding_model_missing" if observed_model == "unknown" else None
+
+    if not expected_models:
+        return {
+            "status": "not_configured",
+            "observed_model": observed_model,
+            "expected_models": [],
+            "matches_expected": None,
+            "rebuild_or_reparse_required": False,
+            "reason": reason,
+        }
+    if observed_model == "unknown":
+        return {
+            "status": "unknown",
+            "observed_model": observed_model,
+            "expected_models": expected_models,
+            "matches_expected": None,
+            "rebuild_or_reparse_required": False,
+            "reason": reason,
+        }
+
+    expected_keys = {model.casefold() for model in expected_models}
+    matches = observed_model.casefold() in expected_keys
+    return {
+        "status": "match" if matches else "mismatch",
+        "observed_model": observed_model,
+        "expected_models": expected_models,
+        "matches_expected": matches,
+        "rebuild_or_reparse_required": not matches,
+        "reason": None if matches else "embedding_model_expected_mismatch",
+    }
+
+
 def _is_relative_to(path: Path, root: Path) -> bool:
     try:
         path.resolve(strict=False).relative_to(root.resolve(strict=False))
@@ -1433,15 +1519,19 @@ def make_kb_manifest_payload(
     dataset_name: str,
     profile: ChunkProfile,
     documents: list[tuple[BuildDocument, str, str | None, int | None]],
+    expected_embedding_models: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Create a serializable KB manifest payload."""
 
+    embedding_model = describe_embedding_model(profile)
     return {
         "version": "0.1",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "ragflow_base_url": base_url,
         "dataset": {"id": dataset_id, "name": dataset_name},
         "profile": profile.to_manifest_dict(),
+        "embedding_model": embedding_model,
+        "embedding_model_check": check_embedding_model_drift(embedding_model, expected_embedding_models),
         "documents": [
             {
                 "document_id": document_id,

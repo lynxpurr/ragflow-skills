@@ -94,6 +94,28 @@ KB_MANIFEST_JSON_SCHEMA: dict[str, Any] = {
             },
         },
         "profile": {"type": "object", "additionalProperties": True},
+        "embedding_model": {
+            "type": ["object", "null"],
+            "additionalProperties": True,
+            "properties": {
+                "model": {"type": "string"},
+                "status": {"type": "string", "enum": ["known", "unknown"]},
+                "source": {"type": ["string", "null"]},
+                "reason": {"type": ["string", "null"]},
+            },
+        },
+        "embedding_model_check": {
+            "type": ["object", "null"],
+            "additionalProperties": True,
+            "properties": {
+                "status": {"type": "string", "enum": ["not_configured", "unknown", "match", "mismatch"]},
+                "observed_model": {"type": "string"},
+                "expected_models": {"type": "array", "items": {"type": "string"}},
+                "matches_expected": {"type": ["boolean", "null"]},
+                "rebuild_or_reparse_required": {"type": "boolean"},
+                "reason": {"type": ["string", "null"]},
+            },
+        },
         "documents": {
             "type": "array",
             "items": {
@@ -412,6 +434,7 @@ class KbManifest:
     dataset: KbDataset
     documents: list[KbDocumentEntry]
     profile: dict[str, Any] = field(default_factory=dict)
+    embedding_model_evidence: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "KbManifest":
@@ -422,6 +445,17 @@ class KbManifest:
         profile = data.get("profile", {})
         if not isinstance(profile, dict):
             raise ManifestError("kb_manifest.profile must be an object when provided")
+        embedding_model_evidence: dict[str, Any] = {}
+        raw_embedding_model = data.get("embedding_model")
+        if isinstance(raw_embedding_model, dict):
+            embedding_model_evidence = dict(raw_embedding_model)
+        elif isinstance(raw_embedding_model, str) and raw_embedding_model.strip():
+            embedding_model_evidence = {
+                "model": raw_embedding_model.strip(),
+                "status": "known",
+                "source": "kb_manifest.embedding_model",
+                "reason": None,
+            }
         return cls(
             version=_require_str(data, "version"),
             created_at=data.get("created_at"),
@@ -429,6 +463,7 @@ class KbManifest:
             dataset=KbDataset.from_dict(data.get("dataset", {})),
             documents=[KbDocumentEntry.from_dict(item) for item in raw_documents],
             profile=profile,
+            embedding_model_evidence=embedding_model_evidence,
         )
 
 

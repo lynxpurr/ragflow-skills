@@ -127,6 +127,10 @@ class HealthReportTests(unittest.TestCase):
         self.assertIn("zero_or_thin_chunk_kb", issue_codes)
         self.assertIn("embedding_model_unknown", issue_codes)
         self.assertIn("activation_plan_missing", issue_codes)
+        empty_item = next(item for item in report["knowledge_bases"] if item["dataset_id"] == "ds-empty")
+        self.assertEqual(empty_item["embedding_model"], "unknown")
+        self.assertEqual(empty_item["embedding_model_evidence"]["reason"], "profile_embedding_model_missing")
+        self.assertEqual(empty_item["embedding_model_evidence"]["source"], "profile.embedding_model")
         self.assertIn("RAGFlow KB Health Report", markdown)
         self.assertIn("Execution Guard", markdown)
 

@@ -47,6 +47,8 @@ from ragflow_skill_runtime import (  # noqa: E402
     create_optimization_live_readiness_report,
     create_optimization_plan,
     discover_markdown_documents,
+    check_embedding_model_drift,
+    describe_embedding_model,
     inspect_rich_handoff,
     load_benchmark_baseline,
     load_benchmark_gate,
@@ -65,6 +67,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     make_tagset_template_payload,
     map_grounded_qa_evidence,
     merge_metadata_payloads,
+    normalize_embedding_model_expectations,
     probe_model_providers,
     configured_private_hosts_from_urls,
     create_kb_activation_plan,
@@ -764,6 +767,9 @@ def _run(args: argparse.Namespace) -> int:
         stage_results: list[dict[str, Any]] = []
         stage_latency_ms: list[float] = []
         profile = load_profile(args.profile)
+        expected_embedding_models = normalize_embedding_model_expectations(args.expected_embedding_model)
+        embedding_model = describe_embedding_model(profile)
+        embedding_model_check = check_embedding_model_drift(embedding_model, expected_embedding_models)
         doc_manifest = load_doc_manifest(args.doc_manifest) if args.doc_manifest else None
         _guard_quality_gate(doc_manifest, allow_blocked=args.allow_blocked)
         docs = discover_markdown_documents(
@@ -813,6 +819,8 @@ def _run(args: argparse.Namespace) -> int:
                     "dry_run": True,
                     "kb_name": args.kb_name,
                     "profile": profile.to_manifest_dict(),
+                    "embedding_model": embedding_model,
+                    "embedding_model_check": embedding_model_check,
                     "documents": [str(doc.path) for doc in docs],
                     "metadata_summary": metadata_summary,
                     "retrieval_hints_summary": summarize_retrieval_hints(retrieval_hints_payload),
@@ -904,6 +912,7 @@ def _run(args: argparse.Namespace) -> int:
             dataset_name=args.kb_name,
             profile=profile,
             documents=uploaded,
+            expected_embedding_models=expected_embedding_models,
         )
         if metadata_summary:
             payload["metadata_summary"] = metadata_summary
@@ -922,6 +931,8 @@ def _run(args: argparse.Namespace) -> int:
                 "parse_triggered": not args.no_parse,
                 "parse_waited": not args.no_parse and not args.no_wait,
                 "parse_response": parse_response,
+                "embedding_model": embedding_model,
+                "embedding_model_check": embedding_model_check,
                 "runtime_partial_failure": runtime_partial_failure,
                 "runtime_metrics": runtime_metrics,
             }
@@ -3664,6 +3675,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", help="Runtime config file")
     parser.add_argument("--base-url", help="RAGFlow base URL")
     parser.add_argument("--api-key", help="RAGFlow API key")
+    parser.add_argument(
+        "--expected-embedding-model",
+        action="append",
+        default=[],
+        help="Expected embedding model label for dry-run/build drift warnings; repeatable",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Validate inputs without touching RAGFlow or writing kb_manifest.json")
     parser.add_argument("--no-parse", action="store_true", help="Upload documents without triggering parse")
     parser.add_argument("--no-wait", action="store_true", help="Do not wait for parse completion after triggering parse")

@@ -48,6 +48,79 @@
       "type": "object",
       "additionalProperties": true
     },
+    "embedding_model": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "known",
+            "unknown"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "embedding_model_check": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "not_configured",
+            "unknown",
+            "match",
+            "mismatch"
+          ]
+        },
+        "observed_model": {
+          "type": "string"
+        },
+        "expected_models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "matches_expected": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "rebuild_or_reparse_required": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
     "documents": {
       "type": "array",
       "items": {

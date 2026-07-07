@@ -704,6 +704,56 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["retrieval_hints_summary"]["image_artifact_count"], 1)
         self.assertEqual(payload["retrieval_hints_summary"]["quality_risk_count"], 1)
 
+    def test_build_dry_run_reports_embedding_model_drift_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "docs"
+            input_dir.mkdir()
+            (input_dir / "sample.md").write_text("# Title\n\nBody\n", encoding="utf-8")
+            profile = root / "legacy-profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "legacy-profile",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                        "embedding_model": "legacy-embed",
+                        "parser_config": {"chunk_token_num": 512},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "--input",
+                    str(input_dir),
+                    "--kb-name",
+                    "kb:test",
+                    "--profile",
+                    str(profile),
+                    "--expected-embedding-model",
+                    "bge-m3",
+                    "--dry-run",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["embedding_model"]["model"], "legacy-embed")
+        self.assertEqual(payload["embedding_model"]["status"], "known")
+        self.assertEqual(payload["embedding_model"]["source"], "profile.embedding_model")
+        self.assertEqual(payload["embedding_model_check"]["status"], "mismatch")
+        self.assertTrue(payload["embedding_model_check"]["rebuild_or_reparse_required"])
+        self.assertEqual(payload["embedding_model_check"]["expected_models"], ["bge-m3"])
+
     def test_build_live_path_reports_runtime_resilience_with_fake_client(self) -> None:
         module = load_build_module()
         FakeOptimizeBuildClient.instances = []
@@ -741,8 +791,12 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["runtime_partial_failure"]["summary"]["status"], "completed")
         self.assertEqual(payload["runtime_metrics"]["schema"], "ragflow_runtime_metrics_v1")
         self.assertEqual(payload["runtime_metrics"]["counters"]["document_count"], 1)
+        self.assertEqual(payload["embedding_model"]["model"], "unknown")
+        self.assertEqual(payload["embedding_model"]["reason"], "profile_embedding_model_missing")
         self.assertEqual(manifest["runtime_partial_failure"]["summary"]["status"], "completed")
         self.assertEqual(manifest["runtime_metrics"]["counters"]["parse_triggered"], 1)
+        self.assertEqual(manifest["embedding_model"]["model"], "unknown")
+        self.assertEqual(manifest["embedding_model"]["reason"], "profile_embedding_model_missing")
 
     def test_build_dry_run_accepts_doc_manifest_paths_relative_to_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
