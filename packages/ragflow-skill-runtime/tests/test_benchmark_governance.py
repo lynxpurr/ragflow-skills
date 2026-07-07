@@ -70,6 +70,172 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertEqual(preflight["schema"], BENCHMARK_PREFLIGHT_REPORT_SCHEMA)
         self.assertTrue(preflight["ok"], preflight["issues"])
 
+    def test_preflight_reports_weak_document_only_benchmark_strength(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            qa = root / "qa.json"
+            queries.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {"id": "q1", "question": "What is supported?", "metadata": {"type": "fact"}},
+                            {"id": "q2", "question": "What is precise?", "metadata": {"type": "fact"}},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            qrels.write_text(
+                json.dumps(
+                    {
+                        "qrels": [
+                            {"query_id": "q1", "target": "source.md", "field": "document"},
+                            {"query_id": "q2", "target": "source.md", "field": "document"},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            qa.write_text(json.dumps({"schema": "ragflow_grounded_qa_v1", "items": []}), encoding="utf-8")
+
+            preflight = preflight_benchmark_dataset(queries_path=queries, qrels_path=qrels, qa_path=qa)
+
+        strength = preflight["benchmark_strength"]
+        self.assertTrue(preflight["ok"], preflight["issues"])
+        self.assertEqual(strength["schema"], "ragflow_benchmark_strength_v1")
+        self.assertEqual(strength["status"], "exploratory")
+        self.assertEqual(strength["summary"]["query_count"], 2)
+        self.assertEqual(strength["summary"]["target_document_count"], 1)
+        self.assertEqual(strength["summary"]["qrel_field_counts"], {"document": 2})
+        self.assertEqual(strength["summary"]["expected_chunk_qrel_count"], 0)
+        self.assertIn("document_only_qrels", strength["issue_codes"])
+        self.assertIn("single_target_document", strength["issue_codes"])
+        self.assertIn("missing_strict_evidence", strength["issue_codes"])
+        self.assertIn("benchmark_document_only_qrels", {issue["code"] for issue in preflight["issues"]})
+
+    def test_preflight_applies_explicit_benchmark_strength_gate_thresholds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            gate = root / "gate.json"
+            queries.write_text(
+                json.dumps({"queries": [{"id": "q1", "question": "What is supported?", "metadata": {"type": "fact"}}]}),
+                encoding="utf-8",
+            )
+            qrels.write_text(json.dumps({"q1": {"source.md": 1}}), encoding="utf-8")
+            gate.write_text(
+                json.dumps(
+                    {
+                        "thresholds": {
+                            "min_query_count": 3,
+                            "min_qrel_strength": 0.7,
+                            "min_expected_chunk_coverage": 1.0,
+                            "min_query_type_diversity": 2,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            preflight = preflight_benchmark_dataset(queries_path=queries, qrels_path=qrels, gate_config_path=gate)
+
+        self.assertFalse(preflight["ok"])
+        self.assertEqual(preflight["benchmark_strength"]["status"], "blocked")
+        codes = {issue["code"] for issue in preflight["issues"]}
+        self.assertIn("benchmark_min_query_count_not_met", codes)
+        self.assertIn("benchmark_min_qrel_strength_not_met", codes)
+        self.assertIn("benchmark_min_expected_chunk_coverage_not_met", codes)
+        self.assertIn("benchmark_min_query_type_diversity_not_met", codes)
+
+    def test_preflight_reports_mixed_strict_and_multimodal_benchmark_strength(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            qa = root / "qa.json"
+            queries.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {
+                                "id": "q1",
+                                "question": "Which table value is supported?",
+                                "expected_terms": ["42"],
+                                "metadata": {"type": "table_lookup", "expected_modalities": ["table"]},
+                            },
+                            {
+                                "id": "q2",
+                                "question": "Which image evidence is relevant?",
+                                "expected_terms": ["diagram"],
+                                "metadata": {"type": "image_lookup", "modalities": ["image"]},
+                            },
+                            {
+                                "id": "q3",
+                                "question": "Which wrong document should be rejected?",
+                                "metadata": {"type": "negative_control"},
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            qrels.write_text(
+                json.dumps(
+                    {
+                        "qrels": [
+                            {
+                                "query_id": "q1",
+                                "expected_documents": ["table-source.md"],
+                                "expected_chunks": ["chunk-table-001"],
+                                "metadata": {"expected_modality": "table"},
+                            },
+                            {
+                                "query_id": "q2",
+                                "target": "chunk-image-001",
+                                "field": "expected_chunk",
+                                "metadata": {"expected_modalities": ["image"]},
+                            },
+                            {
+                                "query_id": "q3",
+                                "target": "distractor.md",
+                                "field": "document",
+                                "metadata": {"case_type": "negative_control"},
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            qa.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_grounded_qa_v1",
+                        "items": [
+                            {"id": "qa1", "question_id": "q1", "answer": "42"},
+                            {"id": "qa2", "question_id": "q2", "answer": "diagram"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            preflight = preflight_benchmark_dataset(queries_path=queries, qrels_path=qrels, qa_path=qa)
+
+        strength = preflight["benchmark_strength"]
+        self.assertTrue(preflight["ok"], preflight["issues"])
+        self.assertEqual(strength["status"], "promotable")
+        self.assertEqual(strength["summary"]["expected_chunk_qrel_count"], 2)
+        self.assertEqual(strength["summary"]["expected_chunk_coverage"], 0.6667)
+        self.assertEqual(strength["summary"]["expected_modality_query_count"], 2)
+        self.assertEqual(strength["summary"]["expected_modality_coverage"], 0.6667)
+        self.assertEqual(strength["summary"]["negative_case_query_count"], 1)
+        self.assertEqual(strength["summary"]["negative_case_coverage"], 0.3333)
+        self.assertEqual(strength["summary"]["query_type_count"], 3)
+        self.assertNotIn("missing_strict_evidence", strength["issue_codes"])
+
     def test_import_benchmark_dataset_can_checkpoint_and_resume_batches(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

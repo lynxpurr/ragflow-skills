@@ -207,6 +207,80 @@ class OptimizationTests(unittest.TestCase):
         self.assertIn("RAGFlow Best Profile Report", rendered)
         self.assertIn("latency_ms", rendered)
 
+    def test_summarize_optimization_results_downgrades_weak_benchmark_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            weak = root / "weak.json"
+            strong = root / "strong.json"
+            _write_profile(weak, "weak-profile")
+            _write_profile(strong, "strong-profile", chunk_size=768)
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[weak, strong],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            plan_path = root / "optimization_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            for candidate in plan["candidates"]:
+                report_path = Path(candidate["artifacts"]["validation_report"])
+                _write_validation_report(
+                    report_path,
+                    mrr=0.95 if candidate["profile_id"] == "strong-profile" else 0.4,
+                    hit_rate=1.0 if candidate["profile_id"] == "strong-profile" else 0.7,
+                )
+
+            results = summarize_optimization_results(plan_path=plan_path)
+
+        self.assertEqual(results["benchmark_strength"]["status"], "exploratory")
+        self.assertEqual(results["recommendation"]["decision_status"], "insufficient_evidence")
+        self.assertEqual(results["summary"]["benchmark_strength_status"], "exploratory")
+        self.assertIn("weak benchmark evidence", " ".join(results["recommendation"]["rationale"]))
+
+    def test_summarize_optimization_results_warns_when_core_metrics_are_saturated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            first = root / "first.json"
+            second = root / "second.json"
+            _write_profile(first, "first-profile")
+            _write_profile(second, "second-profile", chunk_size=768)
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[first, second],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            plan_path = root / "optimization_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            for candidate in plan["candidates"]:
+                _write_validation_report(Path(candidate["artifacts"]["validation_report"]), mrr=1.0, hit_rate=1.0)
+
+            results = summarize_optimization_results(plan_path=plan_path)
+
+        self.assertEqual(results["summary"]["saturated_metric_count"], 3)
+        self.assertEqual(results["metric_saturation"]["saturated_metrics"], ["hit_rate", "mrr", "recall_at_k"])
+        self.assertIn("metric_saturation_hit_rate", {issue["code"] for issue in results["issues"]})
+
     def test_summarize_optimization_results_generates_diagnostics_for_zero_chunks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

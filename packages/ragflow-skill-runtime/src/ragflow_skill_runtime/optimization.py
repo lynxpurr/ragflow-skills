@@ -947,6 +947,49 @@ def _recommendation_rationale(winner: Mapping[str, Any], ranked: list[Mapping[st
     return rationale
 
 
+def _benchmark_strength_from_plan(plan: Mapping[str, Any]) -> dict[str, Any] | None:
+    inputs = plan.get("inputs") if isinstance(plan.get("inputs"), Mapping) else {}
+    benchmark = inputs.get("benchmark") if isinstance(inputs.get("benchmark"), Mapping) else {}
+    preflight = benchmark.get("preflight") if isinstance(benchmark.get("preflight"), Mapping) else {}
+    strength = preflight.get("benchmark_strength")
+    return dict(strength) if isinstance(strength, Mapping) else None
+
+
+def _recommendation_decision_status(benchmark_strength: Mapping[str, Any] | None) -> str:
+    if not benchmark_strength:
+        return "recommended"
+    status = benchmark_strength.get("status")
+    if status in {"exploratory", "blocked"}:
+        return "insufficient_evidence"
+    return "recommended"
+
+
+def _append_benchmark_strength_rationale(rationale: list[str], benchmark_strength: Mapping[str, Any] | None) -> list[str]:
+    if not benchmark_strength:
+        return rationale
+    status = benchmark_strength.get("status")
+    if status in {"exploratory", "blocked"}:
+        rationale.append("Decision is downgraded because weak benchmark evidence is not sufficient for profile promotion.")
+    return rationale
+
+
+def _metric_saturation(results: list[Mapping[str, Any]]) -> dict[str, Any]:
+    saturated_metrics: list[str] = []
+    inspected_metrics = ["hit_rate", "mrr", "recall_at_k"]
+    for metric in inspected_metrics:
+        values: list[float] = []
+        for result in results:
+            metrics = result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
+            values.append(_metric_value(metrics, metric))
+        if len(values) > 1 and len(set(values)) == 1:
+            saturated_metrics.append(metric)
+    return {
+        "status": "saturated" if saturated_metrics else "variable",
+        "inspected_metrics": inspected_metrics,
+        "saturated_metrics": saturated_metrics,
+    }
+
+
 def summarize_optimization_results(
     *,
     plan_path: str | Path,
@@ -1089,12 +1132,26 @@ def summarize_optimization_results(
     if not results:
         issues.append(OptimizationIssue("error", "validation_reports_missing", "no usable validation reports were found", "reports"))
 
+    metric_saturation = _metric_saturation(results)
+    for metric in metric_saturation["saturated_metrics"]:
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                f"metric_saturation_{metric}",
+                f"{metric} is identical across all candidate validation reports and cannot distinguish profile quality.",
+                f"metrics.{metric}",
+                "Add stricter qrels, expected chunk evidence, or more diverse queries before promoting a profile solely from this experiment.",
+            )
+        )
+
     ranked = sorted(results, key=lambda item: (item["score"], str(item.get("profile_id"))), reverse=True)
     for rank, item in enumerate(ranked, start=1):
         item["rank"] = rank
     winner = ranked[0] if ranked else None
+    benchmark_strength = _benchmark_strength_from_plan(plan)
+    decision_status = _recommendation_decision_status(benchmark_strength)
     if winner:
-        rationale = _recommendation_rationale(winner, ranked)
+        rationale = _append_benchmark_strength_rationale(_recommendation_rationale(winner, ranked), benchmark_strength)
         for item in ranked:
             item["tradeoffs"] = _result_tradeoffs(item, winner)
     else:
@@ -1118,8 +1175,13 @@ def summarize_optimization_results(
             ),
             "diagnostic_required_count": len(diagnostics),
             "diagnostic_report_count": diagnostic_report_count,
+            "benchmark_strength_status": benchmark_strength.get("status") if benchmark_strength else None,
+            "saturated_metric_count": len(metric_saturation["saturated_metrics"]),
         },
+        "benchmark_strength": benchmark_strength,
+        "metric_saturation": metric_saturation,
         "recommendation": {
+            "decision_status": decision_status,
             "profile_id": winner.get("profile_id") if winner else None,
             "disposable_kb_name": winner.get("disposable_kb_name") if winner else None,
             "score": winner.get("score") if winner else None,

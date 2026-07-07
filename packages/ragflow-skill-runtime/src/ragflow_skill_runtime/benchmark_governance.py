@@ -7,6 +7,7 @@ import json
 import math
 import random
 import re
+from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,6 +48,7 @@ BENCHMARK_IMPORT_REPORT_SCHEMA = "ragflow_benchmark_import_report_v1"
 BENCHMARK_IMPORT_CHECKPOINT_SCHEMA = "ragflow_benchmark_import_checkpoint_v1"
 BENCHMARK_SAMPLE_REPORT_SCHEMA = "ragflow_benchmark_sample_report_v1"
 BENCHMARK_PREFLIGHT_REPORT_SCHEMA = "ragflow_benchmark_preflight_report_v1"
+BENCHMARK_STRENGTH_SCHEMA = "ragflow_benchmark_strength_v1"
 BENCHMARK_SUMMARY_REPORT_SCHEMA = "ragflow_benchmark_summary_report_v1"
 BENCHMARK_GATE_REPORT_SCHEMA = "ragflow_benchmark_gate_report_v1"
 BENCHMARK_TREND_REPORT_SCHEMA = "ragflow_benchmark_trend_report_v1"
@@ -2627,6 +2629,250 @@ def resolve_benchmark_artifacts(
     return {"queries": queries, "qrels": qrels, "qa": qa}
 
 
+def _query_type_from_metadata(metadata: Mapping[str, Any]) -> str:
+    value = metadata.get("type") or metadata.get("query_type") or metadata.get("benchmark_category") or "default"
+    text = str(value).strip()
+    return text or "default"
+
+
+def _expected_modalities_from_metadata(metadata: Mapping[str, Any]) -> set[str]:
+    values: list[Any] = []
+    for key in ("expected_modality", "modality"):
+        if key in metadata:
+            values.append(metadata[key])
+    for key in ("expected_modalities", "modalities"):
+        if key in metadata:
+            values.append(metadata[key])
+    modalities: set[str] = set()
+    for value in values:
+        if isinstance(value, str):
+            if value.strip():
+                modalities.add(value.strip())
+        elif isinstance(value, list):
+            modalities.update(str(item).strip() for item in value if str(item).strip())
+    return modalities
+
+
+def _metadata_text_values(metadata: Mapping[str, Any], keys: tuple[str, ...]) -> list[str]:
+    values: list[str] = []
+    for key in keys:
+        value = metadata.get(key)
+        if isinstance(value, str):
+            values.append(value)
+        elif isinstance(value, list):
+            values.extend(str(item) for item in value)
+    return values
+
+
+def _is_negative_case_metadata(metadata: Mapping[str, Any]) -> bool:
+    if metadata.get("negative_case") is True or metadata.get("negative") is True:
+        return True
+    markers = ("negative", "wrong_document", "distractor", "pollution", "reject")
+    values = _metadata_text_values(
+        metadata,
+        (
+            "type",
+            "query_type",
+            "benchmark_category",
+            "category",
+            "case",
+            "case_type",
+            "control_type",
+            "expected_behavior",
+            "label",
+            "labels",
+        ),
+    )
+    return any(marker in value.lower() for value in values for marker in markers)
+
+
+def _is_expected_chunk_qrel(qrel: BenchmarkQrel) -> bool:
+    return qrel.field in {"expected_chunk", "chunk_hash", "chunk_id"}
+
+
+def analyze_benchmark_strength(
+    *,
+    queries: Iterable[ValidationQuery],
+    qrels: Mapping[str, list[BenchmarkQrel]],
+    qa_payload: Mapping[str, Any] | None = None,
+    gate_config: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[BenchmarkGovernanceIssue]]:
+    """Analyze whether benchmark artifacts are strong enough for profile decisions."""
+
+    query_items = list(queries)
+    qrel_items = [qrel for items in qrels.values() for qrel in items]
+    qa_items = qa_payload.get("items") if isinstance(qa_payload, Mapping) and isinstance(qa_payload.get("items"), list) else []
+    qrel_field_counts = Counter(qrel.field for qrel in qrel_items)
+    query_type_counts = Counter(_query_type_from_metadata(query.metadata) for query in query_items)
+    document_targets = {
+        qrel.target
+        for qrel in qrel_items
+        if qrel.field in {"document", "document_name", "document_id"}
+    }
+    expected_chunk_query_ids = {
+        qrel.query_id
+        for qrel in qrel_items
+        if _is_expected_chunk_qrel(qrel)
+    }
+    expected_modality_query_ids = {
+        query.id
+        for query in query_items
+        if _expected_modalities_from_metadata(query.metadata)
+    }
+    negative_case_query_ids = {
+        query.id
+        for query in query_items
+        if _is_negative_case_metadata(query.metadata)
+    }
+    for qrel in qrel_items:
+        if _expected_modalities_from_metadata(qrel.metadata):
+            expected_modality_query_ids.add(qrel.query_id)
+        if _is_negative_case_metadata(qrel.metadata):
+            negative_case_query_ids.add(qrel.query_id)
+
+    query_count = len(query_items)
+    qrel_count = len(qrel_items)
+    expected_term_query_count = sum(1 for query in query_items if query.expected_terms)
+    expected_document_query_count = sum(1 for query in query_items if query.expected_documents)
+    expected_chunk_qrel_count = sum(1 for qrel in qrel_items if _is_expected_chunk_qrel(qrel))
+    expected_chunk_coverage = _rate(len(expected_chunk_query_ids), query_count)
+    expected_term_coverage = _rate(expected_term_query_count, query_count)
+    expected_modality_coverage = _rate(len(expected_modality_query_ids), query_count)
+    grounded_qa_coverage = _rate(len(qa_items), query_count)
+    negative_case_coverage = _rate(len(negative_case_query_ids), query_count)
+    negative_qrel_count = sum(1 for qrel in qrel_items if qrel.query_id in negative_case_query_ids or _is_negative_case_metadata(qrel.metadata))
+    query_type_diversity = len(query_type_counts)
+    target_document_count = len(document_targets)
+
+    issue_codes: list[str] = []
+    issues: list[BenchmarkGovernanceIssue] = []
+
+    def add_warning(code: str, message: str, recommendation: str) -> None:
+        issue_codes.append(code)
+        issues.append(BenchmarkGovernanceIssue("warning", f"benchmark_{code}", message, "benchmark_strength", recommendation))
+
+    if qrel_count and qrel_field_counts and set(qrel_field_counts) <= {"document", "document_name", "document_id"}:
+        add_warning(
+            "document_only_qrels",
+            "benchmark qrels only judge document-level relevance",
+            "Add expected_chunks, chunk IDs, content targets, or grounded QA evidence before promoting a profile.",
+        )
+    if qrel_count and target_document_count <= 1:
+        add_warning(
+            "single_target_document",
+            "benchmark qrels target only one supporting document",
+            "Add multi-document or wrong-document cases so precision and pollution risks are measurable.",
+        )
+    if expected_chunk_qrel_count == 0 and not qa_items and expected_term_query_count == 0:
+        add_warning(
+            "missing_strict_evidence",
+            "benchmark has no expected chunks, grounded QA items, or expected terms",
+            "Map grounded QA evidence to expected chunk qrels or add deterministic expected terms.",
+        )
+
+    qrel_strength_score = round(
+        (
+            (expected_chunk_coverage * 0.40)
+            + (expected_term_coverage * 0.20)
+            + (min(target_document_count, 3) / 3 * 0.15 if query_count else 0.0)
+            + (min(query_type_diversity, 4) / 4 * 0.10 if query_count else 0.0)
+            + (min(len(qa_items), query_count) / query_count * 0.10 if query_count else 0.0)
+            + (negative_case_coverage * 0.05)
+        ),
+        4,
+    )
+
+    thresholds = gate_config.get("thresholds", gate_config) if isinstance(gate_config, Mapping) else {}
+    if not isinstance(thresholds, Mapping):
+        thresholds = {}
+
+    def add_threshold_error(code: str, actual: float | int, threshold: float | int, metric: str) -> None:
+        issue_codes.append(code)
+        issues.append(
+            BenchmarkGovernanceIssue(
+                "error",
+                f"benchmark_{code}",
+                f"benchmark strength metric {metric} is below the configured threshold",
+                f"thresholds.{metric}",
+                "Strengthen benchmark artifacts or lower the explicit benchmark-strength gate.",
+            )
+        )
+
+    min_query_count = thresholds.get("min_query_count")
+    if isinstance(min_query_count, (int, float)) and not isinstance(min_query_count, bool) and query_count < int(min_query_count):
+        add_threshold_error("min_query_count_not_met", query_count, int(min_query_count), "min_query_count")
+    min_qrel_strength = thresholds.get("min_qrel_strength")
+    if isinstance(min_qrel_strength, (int, float)) and not isinstance(min_qrel_strength, bool) and qrel_strength_score < float(min_qrel_strength):
+        add_threshold_error("min_qrel_strength_not_met", qrel_strength_score, float(min_qrel_strength), "min_qrel_strength")
+    min_expected_chunk_coverage = thresholds.get("min_expected_chunk_coverage")
+    if (
+        isinstance(min_expected_chunk_coverage, (int, float))
+        and not isinstance(min_expected_chunk_coverage, bool)
+        and expected_chunk_coverage < float(min_expected_chunk_coverage)
+    ):
+        add_threshold_error(
+            "min_expected_chunk_coverage_not_met",
+            expected_chunk_coverage,
+            float(min_expected_chunk_coverage),
+            "min_expected_chunk_coverage",
+        )
+    min_query_type_diversity = thresholds.get("min_query_type_diversity")
+    if (
+        isinstance(min_query_type_diversity, (int, float))
+        and not isinstance(min_query_type_diversity, bool)
+        and query_type_diversity < int(min_query_type_diversity)
+    ):
+        add_threshold_error(
+            "min_query_type_diversity_not_met",
+            query_type_diversity,
+            int(min_query_type_diversity),
+            "min_query_type_diversity",
+        )
+
+    warning_codes = [issue.code for issue in issues if issue.severity == "warning"]
+    error_codes = [issue.code for issue in issues if issue.severity == "error"]
+    status = "blocked" if error_codes else ("exploratory" if warning_codes else "promotable")
+    return (
+        {
+            "schema": BENCHMARK_STRENGTH_SCHEMA,
+            "status": status,
+            "summary": {
+                "query_count": query_count,
+                "qrel_count": qrel_count,
+                "judged_query_count": len(qrels),
+                "target_document_count": target_document_count,
+                "qrel_field_counts": dict(sorted(qrel_field_counts.items())),
+                "expected_term_query_count": expected_term_query_count,
+                "expected_term_coverage": expected_term_coverage,
+                "expected_document_query_count": expected_document_query_count,
+                "grounded_qa_item_count": len(qa_items),
+                "grounded_qa_coverage": grounded_qa_coverage,
+                "expected_chunk_qrel_count": expected_chunk_qrel_count,
+                "expected_chunk_coverage": expected_chunk_coverage,
+                "expected_modality_query_count": len(expected_modality_query_ids),
+                "expected_modality_coverage": expected_modality_coverage,
+                "query_type_count": query_type_diversity,
+                "query_type_counts": dict(sorted(query_type_counts.items())),
+                "negative_case_query_count": len(negative_case_query_ids),
+                "negative_case_coverage": negative_case_coverage,
+                "negative_qrel_count": negative_qrel_count,
+                "qrel_strength_score": qrel_strength_score,
+            },
+            "issue_codes": sorted(set(issue_codes)),
+        },
+        issues,
+    )
+
+
+def _gate_config_payload(path: str | Path | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    raw = _read_json(path)
+    if not isinstance(raw, Mapping):
+        raise BenchmarkGovernanceError("gate config must be a JSON object")
+    return dict(raw)
+
+
 def preflight_benchmark_dataset(
     *,
     manifest_path: str | Path | None = None,
@@ -2652,6 +2898,8 @@ def preflight_benchmark_dataset(
 
     queries = []
     qrels: dict[str, list[BenchmarkQrel]] = {}
+    qa_payload: dict[str, Any] | None = None
+    gate_config_payload: dict[str, Any] | None = None
     if artifacts["queries"]:
         try:
             queries = load_validation_queries(artifacts["queries"])
@@ -2664,7 +2912,7 @@ def preflight_benchmark_dataset(
             issues.append(BenchmarkGovernanceIssue("error", "qrels_invalid", str(exc), "qrels"))
     if artifacts["qa"]:
         try:
-            _qa_payload(artifacts["qa"])
+            qa_payload = _qa_payload(artifacts["qa"])
         except (BenchmarkGovernanceError, OSError) as exc:
             issues.append(BenchmarkGovernanceIssue("error", "qa_invalid", str(exc), "qa"))
     if chunk_snapshot_path:
@@ -2674,8 +2922,11 @@ def preflight_benchmark_dataset(
             issues.append(BenchmarkGovernanceIssue("error", "chunk_snapshot_invalid", str(exc), "chunk_snapshot"))
     if gate_config_path:
         try:
+            gate_config_payload = _gate_config_payload(gate_config_path)
             load_benchmark_gate(gate_config_path)
         except (ValidationError, OSError) as exc:
+            issues.append(BenchmarkGovernanceIssue("error", "gate_config_invalid", str(exc), "gate_config"))
+        except BenchmarkGovernanceError as exc:
             issues.append(BenchmarkGovernanceIssue("error", "gate_config_invalid", str(exc), "gate_config"))
 
     query_ids = {query.id for query in queries}
@@ -2698,6 +2949,13 @@ def preflight_benchmark_dataset(
                 f"qrels.{query_id}",
             )
         )
+    benchmark_strength, strength_issues = analyze_benchmark_strength(
+        queries=queries,
+        qrels=qrels,
+        qa_payload=qa_payload,
+        gate_config=gate_config_payload,
+    )
+    issues.extend(strength_issues)
 
     return {
         "ok": _ok(issues),
@@ -2713,7 +2971,9 @@ def preflight_benchmark_dataset(
             "qrel_count": sum(len(items) for items in qrels.values()),
             "gate_config": str(gate_config_path) if gate_config_path else None,
             "chunk_snapshot": str(chunk_snapshot_path) if chunk_snapshot_path else None,
+            "benchmark_strength_status": benchmark_strength["status"],
         },
+        "benchmark_strength": benchmark_strength,
         "issues": [issue.to_dict() for issue in issues],
     }
 
