@@ -205,6 +205,63 @@ class FieldTrialMetricsTests(unittest.TestCase):
         self.assertIn("<redacted:home-path>", combined)
         self.assertGreaterEqual(redaction["summary"]["redaction_count"], 1)
 
+    def test_cleanup_execution_reports_feed_top_level_cleanup_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run = root / "run-cleanup"
+            _write_json(
+                run / "cleanup_plan.json",
+                {
+                    "schema": "ragflow_optimization_cleanup_plan_v1",
+                    "ok": True,
+                    "summary": {
+                        "target_count": 2,
+                        "ready_target_count": 1,
+                        "pending_target_count": 1,
+                        "invalid_target_count": 0,
+                    },
+                },
+            )
+            _write_json(
+                run / "cleanup_execution_report.json",
+                {
+                    "schema": "ragflow_optimization_cleanup_execution_report_v1",
+                    "ok": True,
+                    "summary": {
+                        "target_count": 1,
+                        "deleted_target_count": 1,
+                        "failed_target_count": 0,
+                        "post_cleanup_verified": False,
+                    },
+                    "post_cleanup_verification": {"status": "not_checked", "network_checked": False},
+                },
+            )
+            _write_json(
+                run / "field_trial_record.json",
+                {
+                    "schema": "ragflow_field_trial_record_v1",
+                    "workflow": "kb-build",
+                    "sample_types": ["scanned_pdf"],
+                    "gated_trigger": "none",
+                },
+            )
+
+            report, _ = build_field_trial_metrics([run])
+
+        cleanup = report["metrics"]["cleanup"]
+        self.assertEqual(cleanup["plan_count"], 1)
+        self.assertEqual(cleanup["execution_count"], 1)
+        self.assertEqual(cleanup["executed_count"], 1)
+        self.assertEqual(cleanup["cleanup_required_count"], 2)
+        self.assertEqual(cleanup["ready_target_count"], 1)
+        self.assertEqual(cleanup["pending_target_count"], 1)
+        self.assertEqual(cleanup["deleted_target_count"], 1)
+        self.assertEqual(cleanup["failed_target_count"], 0)
+        self.assertEqual(cleanup["post_cleanup_unverified_count"], 1)
+        matrix_cleanup = report["retirement_observation_matrix"]["coverage"]["scanned_pdf"]["signals"]["cleanup"]
+        self.assertEqual(matrix_cleanup["execution_count"], 1)
+        self.assertEqual(matrix_cleanup["executed_count"], 1)
+
     def test_markdown_renderer_summarizes_metrics(self) -> None:
         report = {
             "schema": SCHEMA,
@@ -229,6 +286,15 @@ class FieldTrialMetricsTests(unittest.TestCase):
                     "answer_evaluation_failure_count": 0,
                 },
                 "release": {"report_count": 0, "ok_count": 0, "failure_count": 0},
+                "cleanup": {
+                    "plan_count": 1,
+                    "execution_count": 1,
+                    "executed_count": 1,
+                    "cleanup_required_count": 1,
+                    "pending_target_count": 0,
+                    "deleted_target_count": 1,
+                    "post_cleanup_unverified_count": 1,
+                },
             },
             "gated_triggers": [{"track": "serve", "count": 1, "reasons": ["host needs lifecycle"]}],
             "retirement_observation_matrix": {
@@ -262,6 +328,7 @@ class FieldTrialMetricsTests(unittest.TestCase):
         self.assertIn("reports scanned: `2`", text)
         self.assertIn("## Retirement Observation Matrix", text)
         self.assertIn("| `scanned_pdf` | `passed` | `2` |", text)
+        self.assertIn("Cleanup", text)
         self.assertIn("`serve`", text)
 
     def test_cli_writes_json_markdown_and_redaction_sidecar(self) -> None:

@@ -3405,10 +3405,15 @@ def _run_optimize(args: argparse.Namespace) -> int:
 
 def _run_optimize_summarize(args: argparse.Namespace) -> int:
     try:
-        context_secrets, context_hosts, context_paths = _collect_redaction_context_from_json_paths([args.plan, *args.report])
+        context_secrets, context_hosts, context_paths = _collect_redaction_context_from_json_paths(
+            [args.plan, *args.report, args.cleanup_plan, args.readiness_report, args.cleanup_execution_report]
+        )
         results = summarize_optimization_results(
             plan_path=args.plan,
             report_paths=args.report,
+            cleanup_plan_path=args.cleanup_plan,
+            readiness_report_path=args.readiness_report,
+            cleanup_execution_report_path=args.cleanup_execution_report,
             score_epsilon=args.score_epsilon,
             min_score_delta=args.min_score_delta,
         )
@@ -3416,7 +3421,15 @@ def _run_optimize_summarize(args: argparse.Namespace) -> int:
             results, redaction_report = _sanitize_governance_report(
                 results,
                 args,
-                input_paths=[args.plan, *args.report, *context_paths, *_collect_path_like_literals(results)],
+                input_paths=[
+                    args.plan,
+                    *args.report,
+                    args.cleanup_plan,
+                    args.readiness_report,
+                    args.cleanup_execution_report,
+                    *context_paths,
+                    *_collect_path_like_literals(results),
+                ],
                 output_paths=[args.output],
                 extra_secret_literals=context_secrets,
                 extra_private_hosts=context_hosts,
@@ -3634,7 +3647,14 @@ def _run_optimize_cleanup_execute(args: argparse.Namespace) -> int:
             "summary": {
                 "target_count": len(ready_targets),
                 "deleted_target_count": len(results),
+                "failed_target_count": 0,
                 "cleanup_executed": True,
+                "post_cleanup_verified": False,
+            },
+            "post_cleanup_verification": {
+                "status": "not_checked",
+                "network_checked": False,
+                "reason": "cleanup-execute deletes confirmed datasets but does not perform post-delete read-back verification.",
             },
             "results": results,
         }
@@ -4519,6 +4539,9 @@ def build_optimize_summarize_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", default="profile_experiment_results.json", help="Output ragflow_profile_experiment_results_v1 JSON")
     parser.add_argument("--report-md", default="best_profile_report.md", help="Output best profile Markdown report")
     parser.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
+    parser.add_argument("--cleanup-plan", help="Optional ragflow_optimization_cleanup_plan_v1 JSON for lifecycle closure")
+    parser.add_argument("--readiness-report", help="Optional ragflow_optimization_live_readiness_report_v1 JSON")
+    parser.add_argument("--cleanup-execution-report", help="Optional ragflow_optimization_cleanup_execution_report_v1 JSON")
     parser.add_argument("--score-epsilon", type=float, help="Score tie epsilon for co-winner decisions")
     parser.add_argument("--min-score-delta", type=float, help="Minimum score delta required for a single recommended winner")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")

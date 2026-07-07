@@ -30,6 +30,7 @@ CANDIDATE_PROFILE_SET_SCHEMA = "ragflow_candidate_profile_set_v1"
 OPTIMIZATION_PLAN_SCHEMA = "ragflow_optimization_plan_v1"
 PROFILE_EXPERIMENT_RESULTS_SCHEMA = "ragflow_profile_experiment_results_v1"
 OPTIMIZATION_CLEANUP_PLAN_SCHEMA = "ragflow_optimization_cleanup_plan_v1"
+OPTIMIZATION_CLEANUP_EXECUTION_REPORT_SCHEMA = "ragflow_optimization_cleanup_execution_report_v1"
 OPTIMIZATION_LIVE_READINESS_REPORT_SCHEMA = "ragflow_optimization_live_readiness_report_v1"
 PROFILE_FILE_SUFFIXES = {".json", ".yaml", ".yml"}
 CHUNK_DELIMITER_RE = re.compile(r"<!--\s*chunk\s*-->", re.IGNORECASE)
@@ -1403,6 +1404,15 @@ def _non_negative_float(value: Any, *, default: float) -> float:
     return max(0.0, float(value))
 
 
+def _int_value(value: Any, *, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _decision_config(
     plan: Mapping[str, Any],
     *,
@@ -1861,10 +1871,362 @@ def _append_decision_rationale(
     return rationale
 
 
+def _optional_report(
+    path: str | Path | None,
+    *,
+    label: str,
+    expected_schema: str,
+    field: str,
+    issues: list[OptimizationIssue],
+) -> dict[str, Any] | None:
+    if not path:
+        return None
+    try:
+        report = _read_json_mapping(path, label=label)
+    except ProfileError as exc:
+        issues.append(OptimizationIssue("warning", f"{field}_invalid", str(exc), field))
+        return None
+    if report.get("schema") != expected_schema:
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                f"{field}_schema_invalid",
+                f"{label} schema should be {expected_schema}",
+                field,
+            )
+        )
+        return None
+    return report
+
+
+def _cleanup_plan_status(cleanup_plan: Mapping[str, Any] | None) -> dict[str, Any]:
+    if cleanup_plan is None:
+        return {
+            "status": "missing",
+            "target_count": 0,
+            "ready_target_count": 0,
+            "pending_target_count": 0,
+            "invalid_target_count": 0,
+            "ready_targets": [],
+        }
+    summary = cleanup_plan.get("summary") if isinstance(cleanup_plan.get("summary"), Mapping) else {}
+    targets = cleanup_plan.get("targets") if isinstance(cleanup_plan.get("targets"), list) else []
+    target_count = _int_value(summary.get("target_count") if "target_count" in summary else len(targets))
+    ready_target_count = _int_value(
+        summary.get("ready_target_count")
+        if "ready_target_count" in summary
+        else sum(1 for target in targets if isinstance(target, Mapping) and target.get("status") == "ready")
+    )
+    pending_target_count = _int_value(
+        summary.get("pending_target_count")
+        if "pending_target_count" in summary
+        else sum(1 for target in targets if isinstance(target, Mapping) and str(target.get("status", "")).startswith("pending"))
+    )
+    invalid_target_count = _int_value(
+        summary.get("invalid_target_count")
+        if "invalid_target_count" in summary
+        else sum(1 for target in targets if isinstance(target, Mapping) and str(target.get("status", "")).startswith("invalid"))
+    )
+    if cleanup_plan.get("ok") is False or invalid_target_count:
+        status = "invalid"
+    elif target_count == 0:
+        status = "empty"
+    elif pending_target_count:
+        status = "pending"
+    elif ready_target_count:
+        status = "ready"
+    else:
+        status = "present"
+    ready_targets = []
+    for target in targets:
+        if not isinstance(target, Mapping) or target.get("status") != "ready":
+            continue
+        target_payload = target.get("target") if isinstance(target.get("target"), Mapping) else {}
+        dataset_id = target_payload.get("dataset_id")
+        dataset_name = target_payload.get("dataset_name")
+        if isinstance(dataset_id, str) and dataset_id:
+            ready_targets.append(
+                {
+                    "profile_id": target.get("profile_id"),
+                    "disposable_kb_name": target.get("disposable_kb_name"),
+                    "dataset_id": dataset_id,
+                    "dataset_name": dataset_name if isinstance(dataset_name, str) else None,
+                }
+            )
+    return {
+        "status": status,
+        "target_count": target_count,
+        "ready_target_count": ready_target_count,
+        "pending_target_count": pending_target_count,
+        "invalid_target_count": invalid_target_count,
+        "ready_targets": ready_targets,
+    }
+
+
+def _cleanup_execution_status(cleanup_execution_report: Mapping[str, Any] | None) -> dict[str, Any]:
+    if cleanup_execution_report is None:
+        return {
+            "status": "missing",
+            "target_count": 0,
+            "deleted_target_count": 0,
+            "failed_target_count": 0,
+            "cleanup_executed": False,
+        }
+    summary = (
+        cleanup_execution_report.get("summary")
+        if isinstance(cleanup_execution_report.get("summary"), Mapping)
+        else {}
+    )
+    target_count = _int_value(summary.get("target_count"))
+    deleted_target_count = _int_value(summary.get("deleted_target_count") or summary.get("deleted_count") or summary.get("success_count"))
+    failed_target_count = _int_value(summary.get("failed_target_count") or summary.get("failed_count"))
+    cleanup_executed = bool(summary.get("cleanup_executed") is True or deleted_target_count)
+    if cleanup_execution_report.get("ok") is False or failed_target_count:
+        status = "failed"
+    elif cleanup_executed:
+        status = "executed"
+    else:
+        status = "not_executed"
+    return {
+        "status": status,
+        "target_count": target_count,
+        "deleted_target_count": deleted_target_count,
+        "failed_target_count": failed_target_count,
+        "cleanup_executed": cleanup_executed,
+    }
+
+
+def _post_cleanup_verification_status(cleanup_execution_report: Mapping[str, Any] | None, *, cleanup_executed: bool) -> dict[str, Any]:
+    if cleanup_execution_report is None:
+        return {"status": "pending_cleanup", "network_checked": False}
+    verification = cleanup_execution_report.get("post_cleanup_verification")
+    if isinstance(verification, Mapping):
+        payload = dict(verification)
+        payload.setdefault("status", "unknown")
+        payload.setdefault("network_checked", False)
+        return payload
+    summary = (
+        cleanup_execution_report.get("summary")
+        if isinstance(cleanup_execution_report.get("summary"), Mapping)
+        else {}
+    )
+    if summary.get("post_cleanup_verified") is True:
+        return {"status": "verified", "network_checked": True}
+    if cleanup_executed:
+        return {"status": "not_checked", "network_checked": False}
+    return {"status": "pending_cleanup", "network_checked": False}
+
+
+def _cleanup_execute_command(cleanup_plan_path: str | Path | None, ready_targets: list[Mapping[str, Any]]) -> list[str] | None:
+    if not cleanup_plan_path:
+        return None
+    command = [
+        "python3",
+        "scripts/build.py",
+        "optimize",
+        "cleanup-execute",
+        "--cleanup-plan",
+        str(cleanup_plan_path),
+        "--execute",
+    ]
+    for target in ready_targets:
+        dataset_id = target.get("dataset_id")
+        dataset_name = target.get("dataset_name")
+        if not isinstance(dataset_id, str) or not dataset_id:
+            continue
+        command.extend(["--confirm-dataset-id", dataset_id])
+        if isinstance(dataset_name, str) and dataset_name:
+            command.extend(["--confirm-kb-name", dataset_name])
+    return command
+
+
+def _cleanup_next_steps(
+    *,
+    plan_path: str | Path,
+    cleanup_plan_path: str | Path | None,
+    cleanup_lifecycle: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    cleanup_plan = cleanup_lifecycle.get("cleanup_plan") if isinstance(cleanup_lifecycle.get("cleanup_plan"), Mapping) else {}
+    cleanup_execution = (
+        cleanup_lifecycle.get("cleanup_execution")
+        if isinstance(cleanup_lifecycle.get("cleanup_execution"), Mapping)
+        else {}
+    )
+    ready_targets = cleanup_plan.get("ready_targets") if isinstance(cleanup_plan.get("ready_targets"), list) else []
+    default_cleanup_plan = cleanup_plan_path or "cleanup_plan.json"
+    return [
+        {
+            "name": "cleanup-plan",
+            "status": cleanup_plan.get("status", "missing"),
+            "mutation": False,
+            "enabled": True,
+            "command": [
+                "python3",
+                "scripts/build.py",
+                "optimize",
+                "cleanup-plan",
+                "--plan",
+                str(plan_path),
+                "--output",
+                str(default_cleanup_plan),
+            ],
+        },
+        {
+            "name": "readiness",
+            "status": "review",
+            "mutation": False,
+            "enabled": True,
+            "command": [
+                "python3",
+                "scripts/build.py",
+                "optimize",
+                "readiness",
+                "--plan",
+                str(plan_path),
+                "--cleanup-plan",
+                str(default_cleanup_plan),
+            ],
+        },
+        {
+            "name": "cleanup-execute",
+            "status": cleanup_execution.get("status", "missing"),
+            "mutation": True,
+            "requires_execute": True,
+            "enabled": False,
+            "command": _cleanup_execute_command(default_cleanup_plan, [target for target in ready_targets if isinstance(target, Mapping)]),
+        },
+        {
+            "name": "field-trial-record",
+            "status": "suggested",
+            "mutation": False,
+            "enabled": True,
+            "command_group": "record_sanitized_optimize_field_trial",
+        },
+    ]
+
+
+def _optimization_cleanup_lifecycle(
+    *,
+    plan: Mapping[str, Any],
+    plan_path: str | Path,
+    cleanup_plan_path: str | Path | None,
+    cleanup_plan: Mapping[str, Any] | None,
+    readiness_report_path: str | Path | None,
+    readiness_report: Mapping[str, Any] | None,
+    cleanup_execution_report_path: str | Path | None,
+    cleanup_execution_report: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    plan_summary = plan.get("summary") if isinstance(plan.get("summary"), Mapping) else {}
+    execution = plan.get("execution") if isinstance(plan.get("execution"), Mapping) else {}
+    execution_summary = execution.get("summary") if isinstance(execution.get("summary"), Mapping) else {}
+    cleanup_required_count = max(
+        _int_value(plan_summary.get("cleanup_required_count")),
+        _int_value(execution_summary.get("cleanup_required_count")),
+    )
+    cleanup_plan_status = _cleanup_plan_status(cleanup_plan)
+    cleanup_execution_status = _cleanup_execution_status(cleanup_execution_report)
+    cleanup_required = bool(cleanup_required_count or cleanup_plan_status["target_count"] or cleanup_execution_status["target_count"])
+    post_cleanup_verification = _post_cleanup_verification_status(
+        cleanup_execution_report,
+        cleanup_executed=bool(cleanup_execution_status["cleanup_executed"]),
+    )
+    if not cleanup_required:
+        status = "not_required"
+    elif cleanup_execution_status["status"] == "executed":
+        if post_cleanup_verification.get("status") in {"verified", "passed"}:
+            status = "complete"
+        else:
+            status = "cleanup_executed_unverified"
+    elif cleanup_execution_status["status"] == "failed":
+        status = "cleanup_failed"
+    elif cleanup_plan_status["status"] == "missing":
+        status = "cleanup_plan_missing"
+    else:
+        status = "cleanup_pending"
+    lifecycle = {
+        "status": status,
+        "cleanup_required": cleanup_required,
+        "cleanup_required_count": cleanup_required_count or cleanup_plan_status["target_count"],
+        "plan": {
+            "path": str(plan_path),
+            "mode": plan.get("mode"),
+            "execution_schema": execution.get("schema"),
+        },
+        "readiness": {
+            "path": str(readiness_report_path) if readiness_report_path else None,
+            "status": "missing" if readiness_report is None else "passed" if readiness_report.get("ok") is not False else "failed",
+        },
+        "cleanup_plan": {
+            "path": str(cleanup_plan_path) if cleanup_plan_path else None,
+            **cleanup_plan_status,
+        },
+        "cleanup_execution": {
+            "path": str(cleanup_execution_report_path) if cleanup_execution_report_path else None,
+            **cleanup_execution_status,
+        },
+        "post_cleanup_verification": post_cleanup_verification,
+    }
+    lifecycle["next_steps"] = _cleanup_next_steps(
+        plan_path=plan_path,
+        cleanup_plan_path=cleanup_plan_path,
+        cleanup_lifecycle=lifecycle,
+    )
+    return lifecycle
+
+
+def _field_trial_record_suggestion(
+    *,
+    plan: Mapping[str, Any],
+    results: list[Mapping[str, Any]],
+    decision_status: str,
+    recommendation: Mapping[str, Any],
+    cleanup_lifecycle: Mapping[str, Any],
+    benchmark_strength: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    execution = plan.get("execution") if isinstance(plan.get("execution"), Mapping) else {}
+    execution_summary = execution.get("summary") if isinstance(execution.get("summary"), Mapping) else {}
+    return {
+        "schema": "ragflow_field_trial_record_suggestion_v1",
+        "advisory": True,
+        "generated": True,
+        "script_owned_llm_calls": 0,
+        "workflow": "ragflow-kb-build optimize",
+        "run_id": plan.get("run_id"),
+        "candidate_count": len(results),
+        "validated_candidate_count": _int_value(execution_summary.get("validated_candidate_count")) or len(results),
+        "benchmark_validation_passed_count": _int_value(execution_summary.get("benchmark_validation_passed_count")),
+        "benchmark_strength_status": benchmark_strength.get("status") if benchmark_strength else None,
+        "decision_status": decision_status,
+        "recommended_profile_id": recommendation.get("profile_id"),
+        "cleanup_status": cleanup_lifecycle.get("status"),
+        "cleanup_required": bool(cleanup_lifecycle.get("cleanup_required")),
+        "cleanup_executed": bool(
+            (cleanup_lifecycle.get("cleanup_execution") if isinstance(cleanup_lifecycle.get("cleanup_execution"), Mapping) else {}).get(
+                "cleanup_executed"
+            )
+        ),
+        "post_cleanup_verification_status": (
+            cleanup_lifecycle.get("post_cleanup_verification")
+            if isinstance(cleanup_lifecycle.get("post_cleanup_verification"), Mapping)
+            else {}
+        ).get("status"),
+        "command_groups": [
+            "optimize_execute",
+            "optimize_summarize",
+            "optimize_cleanup_plan",
+            "optimize_cleanup_execute",
+            "field_trial_metrics",
+        ],
+    }
+
+
 def summarize_optimization_results(
     *,
     plan_path: str | Path,
     report_paths: Iterable[str | Path] | None = None,
+    cleanup_plan_path: str | Path | None = None,
+    readiness_report_path: str | Path | None = None,
+    cleanup_execution_report_path: str | Path | None = None,
     score_epsilon: float | None = None,
     min_score_delta: float | None = None,
 ) -> dict[str, Any]:
@@ -1885,6 +2247,27 @@ def summarize_optimization_results(
     if not isinstance(candidates, list) or not candidates:
         issues.append(OptimizationIssue("error", "optimization_plan_candidates_missing", "optimization plan has no candidates", "candidates"))
         candidates = []
+    cleanup_plan = _optional_report(
+        cleanup_plan_path,
+        label="optimization cleanup plan",
+        expected_schema=OPTIMIZATION_CLEANUP_PLAN_SCHEMA,
+        field="cleanup_plan",
+        issues=issues,
+    )
+    readiness_report = _optional_report(
+        readiness_report_path,
+        label="optimization live readiness report",
+        expected_schema=OPTIMIZATION_LIVE_READINESS_REPORT_SCHEMA,
+        field="readiness_report",
+        issues=issues,
+    )
+    cleanup_execution_report = _optional_report(
+        cleanup_execution_report_path,
+        label="optimization cleanup execution report",
+        expected_schema=OPTIMIZATION_CLEANUP_EXECUTION_REPORT_SCHEMA,
+        field="cleanup_execution_report",
+        issues=issues,
+    )
 
     explicit_reports = [Path(path) for path in report_paths or []]
     if explicit_reports and len(explicit_reports) > len(candidates):
@@ -2063,6 +2446,35 @@ def summarize_optimization_results(
     else:
         rationale = []
 
+    recommendation_payload = {
+        "decision_status": decision_status,
+        "profile_id": winner.get("profile_id") if winner else None,
+        "disposable_kb_name": winner.get("disposable_kb_name") if winner else None,
+        "score": winner.get("score") if winner else None,
+        "raw_score": winner.get("score") if winner else None,
+        "decision_score": winner.get("decision_score") if winner else None,
+        "co_winner_profile_ids": [item.get("profile_id") for item in co_winner_items],
+        "rationale": rationale,
+    }
+    cleanup_lifecycle = _optimization_cleanup_lifecycle(
+        plan=plan,
+        plan_path=plan_path,
+        cleanup_plan_path=cleanup_plan_path,
+        cleanup_plan=cleanup_plan,
+        readiness_report_path=readiness_report_path,
+        readiness_report=readiness_report,
+        cleanup_execution_report_path=cleanup_execution_report_path,
+        cleanup_execution_report=cleanup_execution_report,
+    )
+    field_trial_record_suggestion = _field_trial_record_suggestion(
+        plan=plan,
+        results=ranked,
+        decision_status=decision_status,
+        recommendation=recommendation_payload,
+        cleanup_lifecycle=cleanup_lifecycle,
+        benchmark_strength=benchmark_strength,
+    )
+
     issue_summary = _issue_counts(issues)
     diagnostic_report_count = sum(1 for item in diagnostics if item.get("report_available"))
     runtime_evidence_candidate_count = sum(
@@ -2112,6 +2524,10 @@ def summarize_optimization_results(
             "saturated_metric_count": len(metric_saturation["saturated_metrics"]),
             "co_winner_count": len(co_winner_items),
             "score_basis": "normalized_decision_score",
+            "cleanup_required": bool(cleanup_lifecycle["cleanup_required"]),
+            "cleanup_pending": cleanup_lifecycle["status"] in {"cleanup_plan_missing", "cleanup_pending", "cleanup_failed"},
+            "cleanup_executed": bool(cleanup_lifecycle["cleanup_execution"]["cleanup_executed"]),
+            "cleanup_status": cleanup_lifecycle["status"],
         },
         "benchmark_strength": benchmark_strength,
         "benchmark_artifact_followups": benchmark_artifact_followups,
@@ -2126,16 +2542,10 @@ def summarize_optimization_results(
             "cost_review_required": bool(cost_review_reasons),
             "cost_review_reasons": cost_review_reasons,
         },
-        "recommendation": {
-            "decision_status": decision_status,
-            "profile_id": winner.get("profile_id") if winner else None,
-            "disposable_kb_name": winner.get("disposable_kb_name") if winner else None,
-            "score": winner.get("score") if winner else None,
-            "raw_score": winner.get("score") if winner else None,
-            "decision_score": winner.get("decision_score") if winner else None,
-            "co_winner_profile_ids": [item.get("profile_id") for item in co_winner_items],
-            "rationale": rationale,
-        },
+        "recommendation": recommendation_payload,
+        "cleanup_lifecycle": cleanup_lifecycle,
+        "next_steps": cleanup_lifecycle["next_steps"],
+        "field_trial_record_suggestion": field_trial_record_suggestion,
         "winner": winner,
         "co_winners": _co_winner_summary(co_winner_items),
         "candidates": ranked,
@@ -2826,6 +3236,31 @@ def render_best_profile_markdown(results: Mapping[str, Any]) -> str:
             if not isinstance(item, Mapping):
                 continue
             lines.append(f"- `{item.get('code')}`: {item.get('recommendation') or item.get('reason')}")
+    cleanup_lifecycle = results.get("cleanup_lifecycle") if isinstance(results.get("cleanup_lifecycle"), Mapping) else {}
+    if cleanup_lifecycle:
+        cleanup_plan = cleanup_lifecycle.get("cleanup_plan") if isinstance(cleanup_lifecycle.get("cleanup_plan"), Mapping) else {}
+        cleanup_execution = (
+            cleanup_lifecycle.get("cleanup_execution")
+            if isinstance(cleanup_lifecycle.get("cleanup_execution"), Mapping)
+            else {}
+        )
+        verification = (
+            cleanup_lifecycle.get("post_cleanup_verification")
+            if isinstance(cleanup_lifecycle.get("post_cleanup_verification"), Mapping)
+            else {}
+        )
+        lines.extend(
+            [
+                "",
+                "## Cleanup Lifecycle",
+                "",
+                f"- Status: `{cleanup_lifecycle.get('status', '-')}`",
+                f"- Cleanup required: `{str(bool(cleanup_lifecycle.get('cleanup_required'))).lower()}`",
+                f"- Cleanup plan: `{cleanup_plan.get('status', 'missing')}`",
+                f"- Cleanup executed: `{cleanup_execution.get('status', 'missing')}`",
+                f"- Post-cleanup verification: `{verification.get('status', '-')}`",
+            ]
+        )
     lines.extend(
         [
             "",

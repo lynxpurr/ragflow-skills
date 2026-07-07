@@ -266,6 +266,62 @@ def _write_health_report(path: Path) -> None:
     )
 
 
+def _write_kb_manifest(path: Path, *, dataset_id: str = "0123456789abcdef", dataset_name: str = "kb:cleanup") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "version": "0.1",
+                "dataset": {"id": dataset_id, "name": dataset_name},
+                "documents": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_cleanup_execution_report(
+    path: Path,
+    *,
+    cleanup_plan: Path,
+    dataset_id: str = "0123456789abcdef",
+    dataset_name: str = "kb:cleanup",
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "schema": "ragflow_optimization_cleanup_execution_report_v1",
+                "cleanup_plan": str(cleanup_plan),
+                "execute": True,
+                "dry_run": False,
+                "mutation_allowed": True,
+                "requires_exact_confirmation": True,
+                "summary": {
+                    "target_count": 1,
+                    "deleted_target_count": 1,
+                    "failed_target_count": 0,
+                    "cleanup_executed": True,
+                    "post_cleanup_verified": False,
+                },
+                "post_cleanup_verification": {
+                    "status": "not_checked",
+                    "network_checked": False,
+                },
+                "results": [
+                    {
+                        "profile_id": "cleanup-profile",
+                        "status": "deleted",
+                        "target": {"dataset_id": dataset_id, "dataset_name": dataset_name},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 class OptimizationTests(unittest.TestCase):
     def test_load_candidate_profile_set_from_file_dir_and_recommendation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -864,6 +920,86 @@ class OptimizationTests(unittest.TestCase):
         self.assertIn("runtime_evidence_sidecar_invalid", issue_codes)
         self.assertIn("runtime_evidence_sidecar_schema_invalid", issue_codes)
         self.assertEqual(results["summary"]["runtime_evidence_candidate_count"], 0)
+
+    def test_summarize_optimization_results_tracks_cleanup_lifecycle_until_post_cleanup_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            _write_profile(profile, "cleanup-profile")
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[profile],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            _mark_benchmark_strength_promotable(plan)
+            candidate = plan["candidates"][0]
+            _write_validation_report(Path(candidate["artifacts"]["validation_report"]), mrr=1.0, hit_rate=1.0)
+            _write_kb_manifest(
+                Path(candidate["artifacts"]["kb_manifest"]),
+                dataset_id="0123456789abcdef",
+                dataset_name=candidate["disposable_kb_name"],
+            )
+            plan["mode"] = "execute-build-validate"
+            plan["mutation_allowed"] = True
+            plan["execution"] = {
+                "schema": "ragflow_optimization_execute_report_v1",
+                "summary": {
+                    "cleanup_required_count": 1,
+                    "cleanup_executed": False,
+                    "validated_candidate_count": 1,
+                    "benchmark_validation_passed_count": 1,
+                },
+            }
+            plan_path = root / "optimization_plan.json"
+            cleanup_path = root / "cleanup_plan.json"
+            cleanup_execution_path = root / "cleanup_execution_report.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            cleanup_plan = create_optimization_cleanup_plan(plan_path=plan_path)
+            cleanup_path.write_text(json.dumps(cleanup_plan), encoding="utf-8")
+
+            pending = summarize_optimization_results(plan_path=plan_path, cleanup_plan_path=cleanup_path)
+            _write_cleanup_execution_report(
+                cleanup_execution_path,
+                cleanup_plan=cleanup_path,
+                dataset_id="0123456789abcdef",
+                dataset_name=candidate["disposable_kb_name"],
+            )
+            cleaned = summarize_optimization_results(
+                plan_path=plan_path,
+                cleanup_plan_path=cleanup_path,
+                cleanup_execution_report_path=cleanup_execution_path,
+            )
+            rendered = render_best_profile_markdown(cleaned)
+
+        self.assertTrue(pending["cleanup_lifecycle"]["cleanup_required"])
+        self.assertEqual(pending["cleanup_lifecycle"]["status"], "cleanup_pending")
+        self.assertEqual(pending["cleanup_lifecycle"]["cleanup_plan"]["status"], "ready")
+        self.assertEqual(pending["cleanup_lifecycle"]["cleanup_execution"]["status"], "missing")
+        self.assertEqual(pending["summary"]["cleanup_pending"], True)
+        next_step_names = [step["name"] for step in pending["next_steps"]]
+        self.assertEqual(next_step_names, ["cleanup-plan", "readiness", "cleanup-execute", "field-trial-record"])
+        self.assertFalse(pending["next_steps"][2]["enabled"])
+        self.assertIn("--confirm-dataset-id", pending["next_steps"][2]["command"])
+        self.assertEqual(pending["field_trial_record_suggestion"]["cleanup_status"], "cleanup_pending")
+        self.assertEqual(pending["field_trial_record_suggestion"]["decision_status"], pending["decision"]["status"])
+
+        self.assertEqual(cleaned["cleanup_lifecycle"]["cleanup_execution"]["status"], "executed")
+        self.assertEqual(cleaned["cleanup_lifecycle"]["post_cleanup_verification"]["status"], "not_checked")
+        self.assertEqual(cleaned["cleanup_lifecycle"]["status"], "cleanup_executed_unverified")
+        self.assertEqual(cleaned["summary"]["cleanup_executed"], True)
+        self.assertIn("## Cleanup Lifecycle", rendered)
+        self.assertIn("cleanup_executed_unverified", rendered)
 
     def test_create_optimization_cleanup_plan_with_ready_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

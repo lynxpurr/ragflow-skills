@@ -301,13 +301,13 @@ to audit after explicit approval.
 
 ### Cleanup And Field-Trial Closure
 
-- [ ] Include cleanup-required, cleanup-plan, cleanup-executed, and post-cleanup
+- [x] Include cleanup-required, cleanup-plan, cleanup-executed, and post-cleanup
   verification status in optimize summaries when related artifacts exist.
-- [ ] Add a machine-readable next-step block for `cleanup-plan`, `readiness`, and
+- [x] Add a machine-readable next-step block for `cleanup-plan`, `readiness`, and
   `cleanup-execute` after live optimize execution.
-- [ ] Make cleanup execution reports consumable by `tools/field_trial_metrics.py`.
-- [ ] Add a sanitized field-trial record suggestion for optimize runs.
-- [ ] Add tests that distinguish complete optimization runs from validation-passed but
+- [x] Make cleanup execution reports consumable by `tools/field_trial_metrics.py`.
+- [x] Add a sanitized field-trial record suggestion for optimize runs.
+- [x] Add tests that distinguish complete optimization runs from validation-passed but
   cleanup-pending runs.
 
 ### Cross-Skill Documentation And Acceptance

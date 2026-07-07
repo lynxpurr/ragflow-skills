@@ -591,6 +591,7 @@ def _update_matrix_for_payload(
             summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
             if payload.get("ok") is not False and (
                 summary.get("cleanup_executed") is True
+                or summary.get("deleted_target_count")
                 or summary.get("deleted_count")
                 or summary.get("success_count")
             ):
@@ -729,6 +730,18 @@ def build_field_trial_metrics(
             "ok_count": 0,
             "failure_count": 0,
         },
+        "cleanup": {
+            "plan_count": 0,
+            "execution_count": 0,
+            "executed_count": 0,
+            "cleanup_required_count": 0,
+            "ready_target_count": 0,
+            "pending_target_count": 0,
+            "invalid_target_count": 0,
+            "deleted_target_count": 0,
+            "failed_target_count": 0,
+            "post_cleanup_unverified_count": 0,
+        },
         "field_trial_records": {
             "record_count": 0,
         },
@@ -854,6 +867,39 @@ def build_field_trial_metrics(
             else:
                 release_statuses["unknown"] += 1
 
+        if schema in {"ragflow_cleanup_plan_v1", "ragflow_optimization_cleanup_plan_v1"}:
+            summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
+            metrics["cleanup"]["plan_count"] += 1
+            metrics["cleanup"]["cleanup_required_count"] += _safe_int(summary.get("target_count"))
+            metrics["cleanup"]["ready_target_count"] += _safe_int(summary.get("ready_target_count"))
+            metrics["cleanup"]["pending_target_count"] += _safe_int(summary.get("pending_target_count"))
+            metrics["cleanup"]["invalid_target_count"] += _safe_int(summary.get("invalid_target_count"))
+
+        if schema in {"ragflow_cleanup_execution_report_v1", "ragflow_optimization_cleanup_execution_report_v1"}:
+            summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
+            verification = (
+                payload.get("post_cleanup_verification")
+                if isinstance(payload.get("post_cleanup_verification"), Mapping)
+                else {}
+            )
+            cleanup_executed = payload.get("ok") is not False and (
+                summary.get("cleanup_executed") is True
+                or summary.get("deleted_target_count")
+                or summary.get("deleted_count")
+                or summary.get("success_count")
+            )
+            metrics["cleanup"]["execution_count"] += 1
+            metrics["cleanup"]["executed_count"] += 1 if cleanup_executed else 0
+            metrics["cleanup"]["deleted_target_count"] += _safe_int(
+                summary.get("deleted_target_count") or summary.get("deleted_count") or summary.get("success_count")
+            )
+            metrics["cleanup"]["failed_target_count"] += _safe_int(
+                summary.get("failed_target_count") or summary.get("failed_count")
+            )
+            verification_status = str(verification.get("status") or "").lower()
+            if cleanup_executed and verification_status not in {"verified", "passed"}:
+                metrics["cleanup"]["post_cleanup_unverified_count"] += 1
+
         if "field_trial_record" in classes:
             metrics["field_trial_records"]["record_count"] += 1
             for trigger in _extract_triggers(payload):
@@ -912,6 +958,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     kb_build = metrics.get("kb_build", {}) if isinstance(metrics.get("kb_build"), Mapping) else {}
     query = metrics.get("query", {}) if isinstance(metrics.get("query"), Mapping) else {}
     release = metrics.get("release", {}) if isinstance(metrics.get("release"), Mapping) else {}
+    cleanup = metrics.get("cleanup", {}) if isinstance(metrics.get("cleanup"), Mapping) else {}
     matrix = (
         report.get("retirement_observation_matrix", {})
         if isinstance(report.get("retirement_observation_matrix"), Mapping)
@@ -957,6 +1004,13 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             release.get("report_count", 0),
             release.get("ok_count", 0),
             release.get("failure_count", 0),
+        ),
+        "| Cleanup | plans: `{}`, executions: `{}`, deleted targets: `{}`, pending targets: `{}`, unverified executions: `{}` |".format(
+            cleanup.get("plan_count", 0),
+            cleanup.get("execution_count", 0),
+            cleanup.get("deleted_target_count", 0),
+            cleanup.get("pending_target_count", 0),
+            cleanup.get("post_cleanup_unverified_count", 0),
         ),
         "",
         "## Retirement Observation Matrix",

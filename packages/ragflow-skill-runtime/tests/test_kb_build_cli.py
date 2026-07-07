@@ -6362,6 +6362,147 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["recommendation"]["co_winner_profile_ids"], ["a-baseline-profile", "z-enriched-profile"])
         self.assertIn("Decision status: `co_winners`", report_text)
 
+    def test_optimize_summarize_accepts_cleanup_lifecycle_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            validation_report = root / "validation_report.json"
+            validation_report.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "level": "benchmark",
+                        "metrics": {"pass_rate": 1.0, "average_chunks": 3.0},
+                        "benchmark": {
+                            "metrics": {
+                                "hit_rate": 1.0,
+                                "mrr": 1.0,
+                                "precision_at_k": 1.0,
+                                "recall_at_k": 1.0,
+                                "ndcg_at_k": 1.0,
+                                "map_at_k": 1.0,
+                                "strict_chunk_recall_at_k": 1.0,
+                                "expected_chunk_hit_rate": 1.0,
+                                "empty_result_rate": 0.0,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            plan_path = root / "optimization_plan.json"
+            cleanup_plan = root / "cleanup_plan.json"
+            cleanup_execution = root / "cleanup_execution_report.json"
+            output = root / "profile_experiment_results.json"
+            report_md = root / "best_profile_report.md"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "schema": "ragflow_optimization_plan_v1",
+                        "mode": "execute-build-validate",
+                        "run_id": "run1",
+                        "base_kb_name": "kb:optimize-cli",
+                        "summary": {"candidate_count": 1, "cleanup_required_count": 1, "cleanup_executed": False},
+                        "execution": {
+                            "schema": "ragflow_optimization_execute_report_v1",
+                            "summary": {"cleanup_required_count": 1, "cleanup_executed": False},
+                        },
+                        "inputs": {
+                            "benchmark": {
+                                "preflight": {
+                                    "benchmark_strength": {
+                                        "schema": "ragflow_benchmark_strength_v1",
+                                        "status": "promotable",
+                                        "summary": {},
+                                        "issue_codes": [],
+                                    }
+                                }
+                            }
+                        },
+                        "candidates": [
+                            {
+                                "profile_id": "cleanup-profile",
+                                "disposable_kb_name": "kb:optimize-cli__opt__run1__cleanup-profile",
+                                "profile": {"parser_config": {}},
+                                "artifacts": {"validation_report": str(validation_report)},
+                                "source": {"type": "test"},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            cleanup_plan.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "schema": "ragflow_optimization_cleanup_plan_v1",
+                        "summary": {"target_count": 1, "ready_target_count": 1, "pending_target_count": 0, "invalid_target_count": 0},
+                        "targets": [
+                            {
+                                "profile_id": "cleanup-profile",
+                                "disposable_kb_name": "kb:optimize-cli__opt__run1__cleanup-profile",
+                                "status": "ready",
+                                "target": {
+                                    "dataset_id": "ds-cleanup-cli",
+                                    "dataset_name": "kb:optimize-cli__opt__run1__cleanup-profile",
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            cleanup_execution.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "schema": "ragflow_optimization_cleanup_execution_report_v1",
+                        "summary": {
+                            "target_count": 1,
+                            "deleted_target_count": 1,
+                            "failed_target_count": 0,
+                            "cleanup_executed": True,
+                            "post_cleanup_verified": False,
+                        },
+                        "post_cleanup_verification": {"status": "not_checked", "network_checked": False},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "optimize",
+                    "summarize",
+                    "--plan",
+                    str(plan_path),
+                    "--cleanup-plan",
+                    str(cleanup_plan),
+                    "--cleanup-execution-report",
+                    str(cleanup_execution),
+                    "--output",
+                    str(output),
+                    "--report-md",
+                    str(report_md),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+            report_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["cleanup_lifecycle"]["status"], "cleanup_executed_unverified")
+        self.assertEqual(payload["cleanup_lifecycle"]["cleanup_execution"]["status"], "executed")
+        self.assertEqual(payload["cleanup_lifecycle"]["post_cleanup_verification"]["status"], "not_checked")
+        self.assertIn("Cleanup Lifecycle", report_text)
+
     def test_optimize_plan_only_checkpoint_resume_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
