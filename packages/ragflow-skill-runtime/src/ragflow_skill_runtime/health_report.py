@@ -16,6 +16,7 @@ from .kb_build import (
     parse_state_succeeded,
 )
 from .manifests import KbManifest, ManifestError, load_kb_manifest
+from .model_providers import MODEL_PROVIDER_PROBE_REPORT_SCHEMA
 from .parse_report import PARSE_REPORT_SCHEMA
 from .topology import KB_ACTIVATION_PLAN_SCHEMA
 
@@ -232,6 +233,107 @@ def _activation_summary(activation_plan: Mapping[str, Any] | None) -> dict[str, 
     }
 
 
+def _model_provider_probe_summary(probes: Iterable[Mapping[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    probe_list = [dict(probe) for probe in probes]
+    if not probe_list:
+        return (
+            {
+                "available": False,
+                "status": "not_available",
+                "source_count": 0,
+                "sources": [],
+                "available_endpoint_count": 0,
+                "provider_count": 0,
+                "model_count": 0,
+                "embedding_model_count": 0,
+                "rerank_model_count": 0,
+                "configured_adapter_count": 0,
+                "handled_empty_input_adapter_count": 0,
+                "expected_model_check_count": 0,
+                "missing_expected_model_count": 0,
+                "warning_count": 0,
+                "error_count": 0,
+                "issue_count": 0,
+                "runtime_partial_failure_statuses": {},
+                "expected_model_checks": [],
+                "issues": [],
+            },
+            [],
+        )
+
+    totals = Counter()
+    runtime_statuses: Counter[str] = Counter()
+    expected_checks: list[dict[str, Any]] = []
+    provider_issues: list[dict[str, Any]] = []
+    sources: list[str] = []
+    for probe in probe_list:
+        source = probe.get("_source_path")
+        if isinstance(source, str) and source:
+            sources.append(source)
+        summary = probe.get("summary", {}) if isinstance(probe.get("summary"), Mapping) else {}
+        for key in (
+            "available_endpoint_count",
+            "provider_count",
+            "model_count",
+            "embedding_model_count",
+            "rerank_model_count",
+            "configured_adapter_count",
+            "handled_empty_input_adapter_count",
+            "warning_count",
+            "error_count",
+        ):
+            totals[key] += _as_int(summary.get(key)) or 0
+        runtime_status = summary.get("runtime_partial_failure_status")
+        if isinstance(runtime_status, str) and runtime_status:
+            runtime_statuses[runtime_status] += 1
+        checks = probe.get("expected_model_checks", [])
+        if isinstance(checks, list):
+            expected_checks.extend(dict(check) for check in checks if isinstance(check, Mapping))
+        issues = probe.get("issues", [])
+        if isinstance(issues, list):
+            provider_issues.extend(dict(issue) for issue in issues if isinstance(issue, Mapping))
+
+    missing_expected = sum(1 for check in expected_checks if check.get("found") is False)
+    issue_count = len(provider_issues)
+    error_count = max(totals["error_count"], sum(1 for issue in provider_issues if issue.get("severity") == "error"))
+    warning_count = max(totals["warning_count"], sum(1 for issue in provider_issues if issue.get("severity") == "warning"))
+    status = "fail" if error_count else "review" if warning_count or missing_expected else "pass"
+    health_issues = [
+        _issue(
+            severity=str(issue.get("severity") or "info"),
+            code=f"model_provider_{issue.get('code') or 'issue'}",
+            message=str(issue.get("message") or "Model-provider probe reported an issue."),
+            recommendation=str(issue.get("recommendation") or "Review model-provider probe evidence before live parsing."),
+        )
+        for issue in provider_issues
+    ]
+
+    return (
+        {
+            "available": True,
+            "status": status,
+            "source_count": len(probe_list),
+            "sources": sources,
+            "available_endpoint_count": totals["available_endpoint_count"],
+            "provider_count": totals["provider_count"],
+            "model_count": totals["model_count"],
+            "embedding_model_count": totals["embedding_model_count"],
+            "rerank_model_count": totals["rerank_model_count"],
+            "configured_adapter_count": totals["configured_adapter_count"],
+            "handled_empty_input_adapter_count": totals["handled_empty_input_adapter_count"],
+            "expected_model_check_count": len(expected_checks),
+            "missing_expected_model_count": missing_expected,
+            "warning_count": warning_count,
+            "error_count": error_count,
+            "issue_count": issue_count,
+            "runtime_partial_failure_statuses": dict(sorted(runtime_statuses.items())),
+            "expected_model_checks": expected_checks,
+            "issues": provider_issues,
+        },
+        health_issues,
+    )
+
+
 def _kb_health_item(
     *,
     kb_manifest_path: str | Path,
@@ -435,6 +537,8 @@ def _global_recommendations(issues: Iterable[Mapping[str, Any]]) -> list[str]:
         recommendations.append("Use activation-plan and route tests as sidecars before editing user-owned routing config.")
     if "stale_count_fields" in codes:
         recommendations.append("Treat mismatched count fields as stale until fresh manifest/detail/list sidecars agree.")
+    if any(code.startswith("model_provider_") for code in codes):
+        recommendations.append("Review model-provider probe evidence before live parsing, validation, or rerank experiments.")
     if not recommendations:
         recommendations.append("Keep this health report beside parse-report, activation-plan, and validation artifacts.")
     return recommendations
@@ -445,6 +549,7 @@ def create_kb_health_report(
     kb_manifest_paths: Iterable[str | Path],
     parse_report_paths: Iterable[str | Path] | None = None,
     activation_plan_paths: Iterable[str | Path] | None = None,
+    model_provider_probe_paths: Iterable[str | Path] | None = None,
     min_documents: int = 1,
     min_chunks: int = 1,
     expected_embedding_models: Iterable[str] | None = None,
@@ -466,11 +571,17 @@ def create_kb_health_report(
         expected_schema=KB_ACTIVATION_PLAN_SCHEMA,
         label="activation plan",
     )
+    model_provider_probes = _load_schema_sidecars(
+        model_provider_probe_paths or [],
+        expected_schema=MODEL_PROVIDER_PROBE_REPORT_SCHEMA,
+        label="model-provider probe",
+    )
     parse_by_dataset = _index_by_dataset_id(parse_reports)
     activation_by_dataset = _index_by_dataset_id(activation_plans)
+    model_provider_probe, model_provider_issues = _model_provider_probe_summary(model_provider_probes)
 
     kb_items: list[dict[str, Any]] = []
-    issues: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = [*model_provider_issues]
     for manifest_path in manifest_path_list:
         kb_manifest = _load_kb_manifest(manifest_path)
         item, item_issues = _kb_health_item(
@@ -519,6 +630,7 @@ def create_kb_health_report(
             "kb_manifests": [str(path) for path in manifest_path_list],
             "parse_reports": [str(path) for path in (parse_report_paths or [])],
             "activation_plans": [str(path) for path in (activation_plan_paths or [])],
+            "model_provider_probes": [str(path) for path in (model_provider_probe_paths or [])],
             "min_documents": min_documents,
             "min_chunks": min_chunks,
             "expected_embedding_models": expected_models,
@@ -551,9 +663,12 @@ def create_kb_health_report(
                 for item in kb_items
                 if item.get("embedding_model_check", {}).get("rebuild_or_reparse_required")
             ),
+            "model_provider_probe_status": model_provider_probe["status"],
+            "model_provider_probe_issue_count": model_provider_probe["issue_count"],
             "issue_counts": dict(sorted(issue_counts.items())),
         },
         "embedding_model_distribution": embedding_distribution,
+        "model_provider_probe": model_provider_probe,
         "knowledge_bases": kb_items,
         "issues": issues,
         "recommendations": _global_recommendations(issues),
@@ -570,6 +685,7 @@ def render_kb_health_report_markdown(report: Mapping[str, Any]) -> str:
 
     summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
     distribution = report.get("embedding_model_distribution", [])
+    model_provider_probe = report.get("model_provider_probe", {}) if isinstance(report.get("model_provider_probe"), Mapping) else {}
     knowledge_bases = report.get("knowledge_bases", [])
     issues = report.get("issues", [])
     recommendations = report.get("recommendations", [])
@@ -626,6 +742,21 @@ def render_kb_health_report_markdown(report: Mapping[str, Any]) -> str:
             )
     else:
         lines.append("- No embedding model data.")
+
+    lines.extend(["", "## Model Provider Probe", ""])
+    if model_provider_probe.get("available"):
+        lines.extend(
+            [
+                f"- status: `{model_provider_probe.get('status', 'unknown')}`",
+                f"- provider count: {model_provider_probe.get('provider_count', 0)}",
+                f"- model count: {model_provider_probe.get('model_count', 0)}",
+                f"- embedding models: {model_provider_probe.get('embedding_model_count', 0)}",
+                f"- rerank models: {model_provider_probe.get('rerank_model_count', 0)}",
+                f"- missing expected models: {model_provider_probe.get('missing_expected_model_count', 0)}",
+            ]
+        )
+    else:
+        lines.append("- No model-provider probe sidecar supplied.")
 
     lines.extend(["", "## Issues", ""])
     if isinstance(issues, list) and issues:

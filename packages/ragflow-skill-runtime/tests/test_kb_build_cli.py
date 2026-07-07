@@ -922,6 +922,70 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(preflight["max_estimated_parent_chunk_tokens"], 960)
         self.assertEqual(preflight["issues"][0]["code"], "table_parent_chunk_profile_too_small")
 
+    def test_build_dry_run_recommends_activation_plan_after_build(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = Path(tmp) / "handoff"
+            docs_dir = handoff / "documents"
+            docs_dir.mkdir(parents=True)
+            (docs_dir / "sample.md").write_text("# Title\n\nBody\n", encoding="utf-8")
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [{"source_path": "source.pdf", "markdown_path": "documents/sample.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            retrieval_hints = handoff / "retrieval_hints.json"
+            retrieval_hints.write_text(
+                json.dumps({"schema": "ragflow_retrieval_hints_v1", "keyword_candidates": [{"term": "sample"}]}),
+                encoding="utf-8",
+            )
+            output = Path(tmp) / "run" / "kb_manifest.json"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "--doc-manifest",
+                    str(manifest),
+                    "--kb-name",
+                    "kb:test",
+                    "--profile",
+                    str(PROFILE_PATH),
+                    "--output",
+                    str(output),
+                    "--dry-run",
+                    "--json",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        activation = next(
+            item for item in payload["post_build_recommendations"] if item["id"] == "activation-plan"
+        )
+        command = activation["command"]
+        self.assertFalse(activation["mutates_ragflow"])
+        self.assertEqual(activation["recommended_when"], "after_build_manifest_exists")
+        self.assertIn("activation-plan", command)
+        self.assertIn("--kb-manifest", command)
+        self.assertIn(str(output), command)
+        self.assertIn("--doc-manifest", command)
+        self.assertIn(str(manifest), command)
+        self.assertIn("--profile", command)
+        self.assertIn(str(PROFILE_PATH), command)
+        self.assertIn("--retrieval-hints", command)
+        self.assertIn(str(retrieval_hints), command)
+
     def test_build_blocks_doc_manifest_with_blocked_quality_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             handoff = Path(tmp) / "handoff"
@@ -4797,6 +4861,101 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertNotIn(str(activation_plan), combined)
         self.assertIn("<redacted:private-host>", combined)
         self.assertIn("<redacted:config-path>", combined)
+
+    def test_health_report_consumes_model_provider_probe_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kb_manifest = root / "kb_manifest.json"
+            provider_probe = root / "model_provider_probe.json"
+            output = root / "kb_health_report.json"
+            report_md = root / "kb_health_report.md"
+            redaction_json = root / "kb_health_report.redaction.json"
+            fake_host = "providers.internal.local"
+            fake_url = f"http://{fake_host}:9380/model-providers"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "ragflow_base_url": fake_url,
+                        "dataset": {"id": "ds-provider-cli", "name": "kb:provider-cli"},
+                        "profile": {"id": "provider-cli-profile", "embedding_model": "bge-m3"},
+                        "documents": [
+                            {
+                                "document_id": "doc-provider-cli",
+                                "source_path": "source.md",
+                                "markdown_path": "documents/source.md",
+                                "status": "done",
+                                "chunk_count": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            provider_probe.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_model_provider_probe_report_v1",
+                        "ok": True,
+                        "summary": {
+                            "endpoint_count": 1,
+                            "available_endpoint_count": 1,
+                            "provider_count": 1,
+                            "model_count": 2,
+                            "embedding_model_count": 1,
+                            "rerank_model_count": 1,
+                            "configured_adapter_count": 0,
+                            "handled_empty_input_adapter_count": 0,
+                            "warning_count": 0,
+                            "error_count": 0,
+                            "runtime_partial_failure_status": "completed",
+                        },
+                        "expected_model_checks": [{"kind": "embedding", "model": "bge-m3", "found": True}],
+                        "endpoints": [{"path": "/model-providers", "status": "available", "url": fake_url}],
+                        "issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "health-report",
+                    "--kb-manifest",
+                    str(kb_manifest),
+                    "--model-provider-probe",
+                    str(provider_probe),
+                    "--report-json",
+                    str(output),
+                    "--report-md",
+                    str(report_md),
+                    "--redaction-report",
+                    str(redaction_json),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+            report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+            redaction_payload = json.loads(redaction_json.read_text(encoding="utf-8")) if redaction_json.exists() else {}
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(payload["schema"], "ragflow_kb_health_report_v1")
+        self.assertEqual(payload["model_provider_probe"]["status"], "pass")
+        self.assertEqual(payload["model_provider_probe"]["provider_count"], 1)
+        self.assertEqual(payload["summary"]["model_provider_probe_status"], "pass")
+        self.assertIn("Model Provider Probe", report_md_text)
+        combined = json.dumps(payload, ensure_ascii=False) + report_md_text + result.stdout
+        self.assertNotIn(fake_host, combined)
+        self.assertNotIn(str(provider_probe), combined)
+        self.assertIn("<redacted:config-path>", combined)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["summary"]["redaction_count"], 1)
 
     def test_optimize_plan_only_subcommand_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

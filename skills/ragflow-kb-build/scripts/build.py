@@ -246,6 +246,65 @@ def _source_hash_map(paths: list[str | None]) -> dict[str, str]:
     return hashes
 
 
+def _resolve_retrieval_hints_path(args: argparse.Namespace) -> Path | None:
+    retrieval_hints_path = Path(args.retrieval_hints) if args.retrieval_hints else None
+    if retrieval_hints_path is None and args.doc_manifest:
+        candidate_hints = Path(args.doc_manifest).parent / "retrieval_hints.json"
+        if candidate_hints.is_file():
+            retrieval_hints_path = candidate_hints
+    return retrieval_hints_path
+
+
+def _post_build_recommendations(
+    args: argparse.Namespace,
+    *,
+    kb_manifest_path: str | Path,
+    retrieval_hints_path: str | Path | None,
+) -> list[dict[str, Any]]:
+    activation_output = Path(kb_manifest_path).with_name("kb_activation_plan.json")
+    activation_report_md = Path(kb_manifest_path).with_name("kb_activation_plan.md")
+    command: list[str] = [
+        "python",
+        "scripts/build.py",
+        "activation-plan",
+        "--kb-manifest",
+        str(kb_manifest_path),
+    ]
+    missing_inputs: list[str] = []
+    if args.doc_manifest:
+        command.extend(["--doc-manifest", str(args.doc_manifest)])
+    else:
+        missing_inputs.append("doc_manifest")
+    if retrieval_hints_path:
+        command.extend(["--retrieval-hints", str(retrieval_hints_path)])
+    if args.profile:
+        command.extend(["--profile", str(args.profile)])
+    else:
+        missing_inputs.append("profile")
+    command.extend(["--output", str(activation_output), "--report-md", str(activation_report_md), "--json"])
+    return [
+        {
+            "id": "activation-plan",
+            "label": "Review KB activation readiness",
+            "recommended_when": "after_build_manifest_exists",
+            "mutates_ragflow": False,
+            "advisory_only": True,
+            "requires_artifacts": ["kb_manifest", "doc_manifest"],
+            "optional_artifacts": [
+                "retrieval_hints",
+                "route_config",
+                "ingest_plan",
+                "chunk_snapshot",
+                "route_tests",
+            ],
+            "missing_required_inputs": missing_inputs,
+            "command": command,
+            "expected_artifacts": [str(activation_output), str(activation_report_md)],
+            "purpose": "Check content, chunk, route, hint, profile, and route-test readiness before editing user-owned routing config.",
+        }
+    ]
+
+
 def _stable_digest(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -783,11 +842,7 @@ def _run(args: argparse.Namespace) -> int:
         if args.dry_run:
             table_parent_chunk_preflight = {"exists": False, "status": "not_available", "table_count": 0}
             retrieval_hints_payload = None
-            retrieval_hints_path = Path(args.retrieval_hints) if args.retrieval_hints else None
-            if retrieval_hints_path is None and args.doc_manifest:
-                candidate_hints = Path(args.doc_manifest).parent / "retrieval_hints.json"
-                if candidate_hints.is_file():
-                    retrieval_hints_path = candidate_hints
+            retrieval_hints_path = _resolve_retrieval_hints_path(args)
             if retrieval_hints_path:
                 loaded_hints = _read_json_file(retrieval_hints_path, label="retrieval hints")
                 if not isinstance(loaded_hints, Mapping):
@@ -825,6 +880,11 @@ def _run(args: argparse.Namespace) -> int:
                     "metadata_summary": metadata_summary,
                     "retrieval_hints_summary": summarize_retrieval_hints(retrieval_hints_payload),
                     "table_parent_chunk_preflight": table_parent_chunk_preflight,
+                    "post_build_recommendations": _post_build_recommendations(
+                        args,
+                        kb_manifest_path=args.output,
+                        retrieval_hints_path=retrieval_hints_path,
+                    ),
                 }
             )
             return 0
@@ -935,6 +995,11 @@ def _run(args: argparse.Namespace) -> int:
                 "embedding_model_check": embedding_model_check,
                 "runtime_partial_failure": runtime_partial_failure,
                 "runtime_metrics": runtime_metrics,
+                "post_build_recommendations": _post_build_recommendations(
+                    args,
+                    kb_manifest_path=output,
+                    retrieval_hints_path=_resolve_retrieval_hints_path(args),
+                ),
             }
         )
         return 0
@@ -2837,6 +2902,7 @@ def _sanitize_health_report(report: dict[str, Any], args: argparse.Namespace) ->
             *args.kb_manifest,
             *args.parse_report,
             *args.activation_plan,
+            *args.model_provider_probe,
             args.report_json,
             args.report_md,
             args.redaction_report,
@@ -2851,6 +2917,7 @@ def _run_health_report(args: argparse.Namespace) -> int:
             kb_manifest_paths=args.kb_manifest,
             parse_report_paths=args.parse_report,
             activation_plan_paths=args.activation_plan,
+            model_provider_probe_paths=args.model_provider_probe,
             min_documents=args.min_documents,
             min_chunks=args.min_chunks,
             expected_embedding_models=args.expected_embedding_model,
@@ -3641,6 +3708,12 @@ def build_health_report_parser() -> argparse.ArgumentParser:
     parser.add_argument("--kb-manifest", action="append", required=True, help="Local kb_manifest.json; may be repeated")
     parser.add_argument("--parse-report", action="append", default=[], help="Optional ragflow_parse_report_v1 JSON; may be repeated")
     parser.add_argument("--activation-plan", action="append", default=[], help="Optional kb_activation_plan_v1 JSON; may be repeated")
+    parser.add_argument(
+        "--model-provider-probe",
+        action="append",
+        default=[],
+        help="Optional ragflow_model_provider_probe_report_v1 JSON; may be repeated",
+    )
     parser.add_argument("--min-documents", type=int, default=1, help="Minimum documents before a KB is considered non-empty")
     parser.add_argument("--min-chunks", type=int, default=1, help="Minimum declared chunks before a KB is considered non-empty")
     parser.add_argument(

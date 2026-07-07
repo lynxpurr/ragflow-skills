@@ -174,6 +174,118 @@ def _hints_summary(retrieval_hints: Mapping[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _status_is_ready(value: Any) -> bool:
+    return str(value or "").strip().upper() in {"PASS", "READY", "OK", "DONE", "SUCCESS", "COMPLETED"}
+
+
+def _build_evidence_summary(
+    *,
+    kb_manifest: Mapping[str, Any] | None,
+    parse_report: Mapping[str, Any] | None,
+    activation_plan: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    documents = kb_manifest.get("documents", []) if isinstance(kb_manifest, Mapping) else []
+    documents = documents if isinstance(documents, list) else []
+    status_counts: dict[str, int] = {}
+    total_chunk_count = 0
+    zero_chunk_document_count = 0
+    for document in documents:
+        if not isinstance(document, Mapping):
+            continue
+        status = str(document.get("status") or document.get("run") or "unknown").lower()
+        status_counts[status] = status_counts.get(status, 0) + 1
+        chunk_count = _safe_int(document.get("chunk_count"), 0)
+        total_chunk_count += chunk_count
+        if chunk_count == 0:
+            zero_chunk_document_count += 1
+
+    dataset = kb_manifest.get("dataset", {}) if isinstance(kb_manifest, Mapping) else {}
+    dataset = dataset if isinstance(dataset, Mapping) else {}
+    parse_summary = parse_report.get("summary", {}) if isinstance(parse_report, Mapping) else {}
+    parse_summary = parse_summary if isinstance(parse_summary, Mapping) else {}
+    activation_summary = activation_plan.get("summary", {}) if isinstance(activation_plan, Mapping) else {}
+    activation_summary = activation_summary if isinstance(activation_summary, Mapping) else {}
+    activation_recommendation = activation_plan.get("recommendation") if isinstance(activation_plan, Mapping) else None
+    if isinstance(activation_recommendation, Mapping):
+        activation_action = activation_recommendation.get("action")
+    else:
+        activation_action = activation_summary.get("recommendation")
+
+    return {
+        "provided": bool(kb_manifest or parse_report or activation_plan),
+        "kb_manifest": {
+            "provided": kb_manifest is not None,
+            "dataset_id": dataset.get("id"),
+            "kb_name": dataset.get("name"),
+            "document_count": len(documents),
+            "total_chunk_count": total_chunk_count,
+            "zero_chunk_document_count": zero_chunk_document_count,
+            "status_counts": status_counts,
+        },
+        "parse_report": {
+            "provided": parse_report is not None,
+            "schema": parse_report.get("schema") if isinstance(parse_report, Mapping) else None,
+            "status": parse_report.get("status") if isinstance(parse_report, Mapping) else None,
+            "document_count": parse_summary.get("document_count"),
+            "zero_chunk_document_count": parse_summary.get("zero_chunk_document_count"),
+            "issue_count": len(parse_report.get("issues", []))
+            if isinstance(parse_report, Mapping) and isinstance(parse_report.get("issues"), list)
+            else 0,
+        },
+        "activation_plan": {
+            "provided": activation_plan is not None,
+            "schema": activation_plan.get("schema") if isinstance(activation_plan, Mapping) else None,
+            "status": activation_plan.get("status") if isinstance(activation_plan, Mapping) else None,
+            "recommendation": activation_action,
+            "issue_count": _safe_int(
+                activation_summary.get("issue_count"),
+                len(activation_plan.get("issues", []))
+                if isinstance(activation_plan, Mapping) and isinstance(activation_plan.get("issues"), list)
+                else 0,
+            ),
+        },
+    }
+
+
+def _build_evidence_issues(summary: Mapping[str, Any]) -> list[dict[str, str]]:
+    issues: list[dict[str, str]] = []
+    kb_manifest = summary.get("kb_manifest", {}) if isinstance(summary.get("kb_manifest"), Mapping) else {}
+    parse_report = summary.get("parse_report", {}) if isinstance(summary.get("parse_report"), Mapping) else {}
+    activation_plan = summary.get("activation_plan", {}) if isinstance(summary.get("activation_plan"), Mapping) else {}
+    zero_chunk_count = _safe_int(kb_manifest.get("zero_chunk_document_count"), 0)
+    if kb_manifest.get("provided") and zero_chunk_count:
+        issues.append(
+            _issue(
+                "warning",
+                "build_evidence_zero_chunk_documents",
+                "build evidence includes documents with zero chunks",
+                path="kb_manifest.documents",
+                recommendation="Review parse-report and chunk snapshots before applying assistant settings.",
+            )
+        )
+    if parse_report.get("provided") and not _status_is_ready(parse_report.get("status")):
+        issues.append(
+            _issue(
+                "warning",
+                "build_evidence_parse_not_ready",
+                "parse report status is not ready for assistant activation",
+                path="parse_report.status",
+                recommendation="Resolve parse-report warnings before running assistant validation.",
+            )
+        )
+    if activation_plan.get("provided") and not _status_is_ready(activation_plan.get("status")):
+        issues.append(
+            _issue(
+                "warning",
+                "build_evidence_activation_not_ready",
+                "activation plan status is not ready",
+                path="activation_plan.status",
+                recommendation="Review route activation warnings before applying assistant settings or tests.",
+            )
+        )
+    return issues
+
+
 def _expected_test_stages_from_hints(retrieval_hints: Mapping[str, Any] | None) -> set[str]:
     if retrieval_hints is None:
         return set(ASSISTANT_TEST_PLAN_CANONICAL_STAGES)
@@ -237,6 +349,9 @@ def review_assistant_test_plan(
     *,
     assistant_profile: Mapping[str, Any] | None = None,
     retrieval_hints: Mapping[str, Any] | None = None,
+    kb_manifest: Mapping[str, Any] | None = None,
+    parse_report: Mapping[str, Any] | None = None,
+    activation_plan: Mapping[str, Any] | None = None,
     inputs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Review a rich-handoff assistant test plan without running tests or mutating RAGFlow."""
@@ -249,6 +364,12 @@ def review_assistant_test_plan(
         raise AssistantReviewError(f"retrieval hints schema must be {RETRIEVAL_HINTS_SCHEMA}")
 
     issues: list[dict[str, str]] = []
+    build_summary = _build_evidence_summary(
+        kb_manifest=kb_manifest,
+        parse_report=parse_report,
+        activation_plan=activation_plan,
+    )
+    issues.extend(_build_evidence_issues(build_summary))
     raw_cases = assistant_test_plan.get("cases")
     if not isinstance(raw_cases, list):
         raw_cases = []
@@ -433,6 +554,7 @@ def review_assistant_test_plan(
             "declared_test_count": assistant_test_plan.get("test_count"),
         },
         "retrieval_hints_summary": _hints_summary(retrieval_hints),
+        "build_evidence_summary": build_summary,
         "summary": {
             "case_count": valid_case_count,
             "declared_test_count": assistant_test_plan.get("test_count"),
@@ -456,12 +578,14 @@ def review_assistant_test_plan(
                 "matched": not profile_id or not plan_profile or profile_id == plan_profile,
             },
             "offline_only": {"passed": True, "llm_calls": 0, "ragflow_calls": 0, "mutation": "none"},
+            "build_evidence": build_summary,
         },
         "issues": issues,
         "next_steps": [
             "Review each case before running it against a live assistant.",
             "Keep assistant validation execution in a user-owned harness with explicit credentials.",
             "Compare future assistant-test-plan reports by stable case IDs and stages.",
+            "Keep build evidence sidecars beside assistant review artifacts when available.",
         ],
     }
 
@@ -470,6 +594,9 @@ def recommend_assistant_profile(
     assistant_profile: Mapping[str, Any],
     *,
     retrieval_hints: Mapping[str, Any] | None = None,
+    kb_manifest: Mapping[str, Any] | None = None,
+    parse_report: Mapping[str, Any] | None = None,
+    activation_plan: Mapping[str, Any] | None = None,
     inputs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Recommend reviewable assistant retrieval settings without mutation."""
@@ -480,6 +607,12 @@ def recommend_assistant_profile(
         raise AssistantReviewError(f"retrieval hints schema must be {RETRIEVAL_HINTS_SCHEMA}")
 
     issues: list[dict[str, str]] = []
+    build_summary = _build_evidence_summary(
+        kb_manifest=kb_manifest,
+        parse_report=parse_report,
+        activation_plan=activation_plan,
+    )
+    issues.extend(_build_evidence_issues(build_summary))
     retrieval = assistant_profile.get("retrieval")
     if not isinstance(retrieval, Mapping):
         retrieval = {}
@@ -570,6 +703,7 @@ def recommend_assistant_profile(
             "status": assistant_profile.get("status"),
         },
         "retrieval_hints_summary": hints,
+        "build_evidence_summary": build_summary,
         "recommended_settings": recommended_settings,
         "recommendation": {
             "action": "review_before_applying",
@@ -583,6 +717,7 @@ def recommend_assistant_profile(
         "checks": {
             "profile_schema": {"passed": True, "expected": ASSISTANT_PROFILE_SCHEMA},
             "retrieval_hints": hints,
+            "build_evidence": build_summary,
             "evidence_policy": {
                 "require_evidence": require_evidence,
                 "require_citations": require_citations,
@@ -595,6 +730,7 @@ def recommend_assistant_profile(
             "Review recommended settings before changing any RAGFlow assistant configuration.",
             "Run offline assistant-test-plan review before live assistant validation.",
             "Keep this report beside assistant_profile.json and retrieval_hints.json.",
+            "Keep build evidence sidecars beside assistant review artifacts when available.",
         ],
     }
 
@@ -606,6 +742,11 @@ def render_assistant_profile_recommendation_markdown(report: Mapping[str, Any]) 
     settings = settings if isinstance(settings, Mapping) else {}
     hints = report.get("retrieval_hints_summary", {})
     hints = hints if isinstance(hints, Mapping) else {}
+    build = report.get("build_evidence_summary", {})
+    build = build if isinstance(build, Mapping) else {}
+    kb_build = build.get("kb_manifest", {}) if isinstance(build.get("kb_manifest"), Mapping) else {}
+    parse_build = build.get("parse_report", {}) if isinstance(build.get("parse_report"), Mapping) else {}
+    activation_build = build.get("activation_plan", {}) if isinstance(build.get("activation_plan"), Mapping) else {}
     lines = [
         "# RAGFlow Assistant Profile Recommendation",
         "",
@@ -627,6 +768,15 @@ def render_assistant_profile_recommendation_markdown(report: Mapping[str, Any]) 
         f"- numeric candidates: `{hints.get('numeric_count', 0)}`",
         f"- table artifacts: `{hints.get('table_artifact_count', 0)}`",
         f"- image artifacts: `{hints.get('image_artifact_count', 0)}`",
+        "",
+        "## Build Evidence",
+        "",
+        f"- provided: `{str(build.get('provided')).lower()}`",
+        f"- documents: `{kb_build.get('document_count', 0)}`",
+        f"- chunks: `{kb_build.get('total_chunk_count', 0)}`",
+        f"- zero_chunk_documents: `{kb_build.get('zero_chunk_document_count', 0)}`",
+        f"- parse_status: `{parse_build.get('status')}`",
+        f"- activation_status: `{activation_build.get('status')}`",
         "",
         "## Issues",
         "",
@@ -653,6 +803,11 @@ def render_assistant_test_plan_review_markdown(report: Mapping[str, Any]) -> str
     stage_coverage = stage_coverage if isinstance(stage_coverage, list) else []
     review_cases = report.get("review_cases", [])
     review_cases = review_cases if isinstance(review_cases, list) else []
+    build = report.get("build_evidence_summary", {})
+    build = build if isinstance(build, Mapping) else {}
+    kb_build = build.get("kb_manifest", {}) if isinstance(build.get("kb_manifest"), Mapping) else {}
+    parse_build = build.get("parse_report", {}) if isinstance(build.get("parse_report"), Mapping) else {}
+    activation_build = build.get("activation_plan", {}) if isinstance(build.get("activation_plan"), Mapping) else {}
     lines = [
         "# RAGFlow Assistant Test Plan Review",
         "",
@@ -674,6 +829,19 @@ def render_assistant_test_plan_review_markdown(report: Mapping[str, Any]) -> str
         marker = "present" if item.get("present") else "missing"
         expected = "expected" if item.get("expected_from_hints") else "optional"
         lines.append(f"- `{item.get('stage')}`: {marker}, count `{item.get('count', 0)}`, {expected}")
+    lines.extend(
+        [
+            "",
+            "## Build Evidence",
+            "",
+            f"- provided: `{str(build.get('provided')).lower()}`",
+            f"- documents: `{kb_build.get('document_count', 0)}`",
+            f"- chunks: `{kb_build.get('total_chunk_count', 0)}`",
+            f"- zero_chunk_documents: `{kb_build.get('zero_chunk_document_count', 0)}`",
+            f"- parse_status: `{parse_build.get('status')}`",
+            f"- activation_status: `{activation_build.get('status')}`",
+        ]
+    )
     lines.extend(["", "## Review Cases", ""])
     if not review_cases:
         lines.append("- None")

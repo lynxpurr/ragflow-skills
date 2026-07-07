@@ -222,6 +222,15 @@ def _read_json(path: str | Path) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def _read_optional_json_mapping(path: str | None, *, label: str) -> dict[str, Any] | None:
+    if not path:
+        return None
+    payload = _read_json(path)
+    if not isinstance(payload, dict):
+        raise AssistantReviewError(f"{label} must be a JSON object")
+    return payload
+
+
 def _read_query_vector(path: str | Path) -> list[float] | dict[str, Any]:
     payload = _read_json(path)
     if isinstance(payload, list):
@@ -1007,10 +1016,16 @@ def _sanitize_assistant_profile_recommendation_report(
     args: argparse.Namespace,
     assistant_profile: dict[str, Any],
     retrieval_hints: dict[str, Any] | None,
+    kb_manifest: dict[str, Any] | None,
+    parse_report: dict[str, Any] | None,
+    activation_plan: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     urls = [
         *_collect_urls(assistant_profile),
         *_collect_urls(retrieval_hints or {}),
+        *_collect_urls(kb_manifest or {}),
+        *_collect_urls(parse_report or {}),
+        *_collect_urls(activation_plan or {}),
         *_collect_urls(report),
     ]
     sanitized, redaction_report = sanitize_report_payload(
@@ -1019,6 +1034,9 @@ def _sanitize_assistant_profile_recommendation_report(
         config_paths=[
             args.assistant_profile,
             args.retrieval_hints,
+            args.kb_manifest,
+            args.parse_report,
+            args.activation_plan,
             args.report_json,
             args.report_md,
             args.redaction_report,
@@ -1031,12 +1049,21 @@ def _assistant_profile_recommend(args: argparse.Namespace) -> int:
     try:
         assistant_profile = load_assistant_profile(args.assistant_profile)
         retrieval_hints = load_retrieval_hints(args.retrieval_hints) if args.retrieval_hints else None
+        kb_manifest = _read_optional_json_mapping(args.kb_manifest, label="kb manifest")
+        parse_report = _read_optional_json_mapping(args.parse_report, label="parse report")
+        activation_plan = _read_optional_json_mapping(args.activation_plan, label="activation plan")
         report = recommend_assistant_profile(
             assistant_profile,
             retrieval_hints=retrieval_hints,
+            kb_manifest=kb_manifest,
+            parse_report=parse_report,
+            activation_plan=activation_plan,
             inputs={
                 "assistant_profile": args.assistant_profile,
                 "retrieval_hints": args.retrieval_hints,
+                "kb_manifest": args.kb_manifest,
+                "parse_report": args.parse_report,
+                "activation_plan": args.activation_plan,
             },
         )
     except (AssistantReviewError, OSError, RuntimeError) as exc:
@@ -1047,6 +1074,9 @@ def _assistant_profile_recommend(args: argparse.Namespace) -> int:
             args,
             assistant_profile,
             retrieval_hints,
+            kb_manifest,
+            parse_report,
+            activation_plan,
         )
         _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
@@ -1061,11 +1091,17 @@ def _sanitize_assistant_test_plan_review_report(
     assistant_test_plan: dict[str, Any],
     assistant_profile: dict[str, Any] | None,
     retrieval_hints: dict[str, Any] | None,
+    kb_manifest: dict[str, Any] | None,
+    parse_report: dict[str, Any] | None,
+    activation_plan: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     urls = [
         *_collect_urls(assistant_test_plan),
         *_collect_urls(assistant_profile or {}),
         *_collect_urls(retrieval_hints or {}),
+        *_collect_urls(kb_manifest or {}),
+        *_collect_urls(parse_report or {}),
+        *_collect_urls(activation_plan or {}),
         *_collect_urls(report),
     ]
     sanitized, redaction_report = sanitize_report_payload(
@@ -1075,6 +1111,9 @@ def _sanitize_assistant_test_plan_review_report(
             args.test_plan,
             args.assistant_profile,
             args.retrieval_hints,
+            args.kb_manifest,
+            args.parse_report,
+            args.activation_plan,
             args.report_json,
             args.report_md,
             args.redaction_report,
@@ -1088,14 +1127,23 @@ def _assistant_test_plan(args: argparse.Namespace) -> int:
         assistant_test_plan = load_assistant_test_plan(args.test_plan)
         assistant_profile = load_assistant_profile(args.assistant_profile) if args.assistant_profile else None
         retrieval_hints = load_retrieval_hints(args.retrieval_hints) if args.retrieval_hints else None
+        kb_manifest = _read_optional_json_mapping(args.kb_manifest, label="kb manifest")
+        parse_report = _read_optional_json_mapping(args.parse_report, label="parse report")
+        activation_plan = _read_optional_json_mapping(args.activation_plan, label="activation plan")
         report = review_assistant_test_plan(
             assistant_test_plan,
             assistant_profile=assistant_profile,
             retrieval_hints=retrieval_hints,
+            kb_manifest=kb_manifest,
+            parse_report=parse_report,
+            activation_plan=activation_plan,
             inputs={
                 "assistant_test_plan": args.test_plan,
                 "assistant_profile": args.assistant_profile,
                 "retrieval_hints": args.retrieval_hints,
+                "kb_manifest": args.kb_manifest,
+                "parse_report": args.parse_report,
+                "activation_plan": args.activation_plan,
             },
         )
     except (AssistantReviewError, OSError, RuntimeError) as exc:
@@ -1107,6 +1155,9 @@ def _assistant_test_plan(args: argparse.Namespace) -> int:
             assistant_test_plan,
             assistant_profile,
             retrieval_hints,
+            kb_manifest,
+            parse_report,
+            activation_plan,
         )
         _write_json(args.redaction_report, redaction_report)
     _write_json(args.report_json, report)
@@ -2392,6 +2443,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     assistant_profile_recommend.add_argument("--assistant-profile", required=True, help="assistant_profile.json")
     assistant_profile_recommend.add_argument("--retrieval-hints", help="Optional retrieval_hints.json")
+    assistant_profile_recommend.add_argument("--kb-manifest", help="Optional kb_manifest.json build evidence")
+    assistant_profile_recommend.add_argument("--parse-report", help="Optional parse_report.json build evidence")
+    assistant_profile_recommend.add_argument("--activation-plan", help="Optional kb_activation_plan.json build evidence")
     assistant_profile_recommend.add_argument("--report-json", help="Optional JSON report output path")
     assistant_profile_recommend.add_argument("--report-md", help="Optional Markdown report output path")
     assistant_profile_recommend.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
@@ -2404,6 +2458,9 @@ def build_parser() -> argparse.ArgumentParser:
     assistant_test_plan.add_argument("--test-plan", required=True, help="assistant_test_plan.json")
     assistant_test_plan.add_argument("--assistant-profile", help="Optional assistant_profile.json")
     assistant_test_plan.add_argument("--retrieval-hints", help="Optional retrieval_hints.json")
+    assistant_test_plan.add_argument("--kb-manifest", help="Optional kb_manifest.json build evidence")
+    assistant_test_plan.add_argument("--parse-report", help="Optional parse_report.json build evidence")
+    assistant_test_plan.add_argument("--activation-plan", help="Optional kb_activation_plan.json build evidence")
     assistant_test_plan.add_argument("--report-json", help="Optional JSON report output path")
     assistant_test_plan.add_argument("--report-md", help="Optional Markdown report output path")
     assistant_test_plan.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")

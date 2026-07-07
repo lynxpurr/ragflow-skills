@@ -81,6 +81,18 @@ Completed public offline work in the current implementation pass:
   evidence as either a known profile model or `unknown` with reason, while build and
   `health-report` expected-model checks warn when embedding drift implies rebuild or
   reparse risk.
+- `ragflow-kb-build health-report` now consumes sanitized
+  `ragflow_model_provider_probe_report_v1` sidecars offline, carrying provider/model,
+  adapter, expected-model, and probe issue evidence into KB health reports without
+  mutating RAGFlow.
+- `ragflow-kb-build` dry-run and live build JSON now emit
+  `post_build_recommendations` with a non-mutating `activation-plan` command template so
+  route-readiness review becomes a standard post-build step after `kb_manifest.json`
+  exists.
+- `ragflow-query assistant-profile recommend` and `assistant-test-plan` now accept
+  `kb_manifest.json`, `parse_report.json`, and `kb_activation_plan.json` sidecars so
+  assistant review artifacts can combine rich-handoff sidecars with build, parse, chunk,
+  and activation readiness evidence without mutating assistant settings.
 
 The live disposable Markdown-plus-image build remains gated. It must stay unchecked until
 the user explicitly approves live mutation and sanitized cleanup evidence is recorded.
@@ -475,9 +487,9 @@ All new live-capable features must use the same safety model:
 - [ ] Capture requested profile and effective parser config when the API exposes them.
 - [x] Record embedding model or `unknown` with reason in build and health reports.
 - [x] Warn when embedding model drift implies rebuild or reparse risk.
-- [ ] Connect model-provider probe evidence to health reports without requiring mutation.
-- [ ] Make `activation-plan` a standard post-build recommendation.
-- [ ] Generate assistant profile and assistant test plan review artifacts from build
+- [x] Connect model-provider probe evidence to health reports without requiring mutation.
+- [x] Make `activation-plan` a standard post-build recommendation.
+- [x] Generate assistant profile and assistant test plan review artifacts from build
   evidence as well as handoff sidecars.
 - [ ] Add route-activation checks for KB name, route hints, benchmark smoke queries, and
   retrieval thresholds.

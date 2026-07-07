@@ -3133,6 +3133,162 @@ class QueryCliTests(unittest.TestCase):
         self.assertNotIn(str(assistant_profile), combined)
         self.assertNotIn(str(retrieval_hints), combined)
 
+    def test_assistant_reviews_consume_build_evidence_sidecars(self) -> None:
+        module = load_query_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            assistant_profile = root / "assistant_profile.json"
+            retrieval_hints = root / "retrieval_hints.json"
+            test_plan = root / "assistant_test_plan.json"
+            kb_manifest = root / "kb_manifest.json"
+            parse_report = root / "parse_report.json"
+            activation_plan = root / "kb_activation_plan.json"
+            profile_report = root / "assistant_profile_recommendation.json"
+            test_plan_report = root / "assistant_test_plan_review.json"
+            assistant_profile.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_assistant_profile_v1",
+                        "profile_id": "build-evidence-review",
+                        "status": "review_required",
+                        "retrieval": {"top_k": 5, "require_evidence": True, "citation_format": "[n]"},
+                        "answer_policy": ["Say the source does not contain the answer when evidence is missing."],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            retrieval_hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "document_count": 2,
+                        "section_boundaries": [{"title": "Overview"}, {"title": "Specs"}],
+                        "keyword_candidates": [{"term": "build evidence"}],
+                        "question_candidates": [],
+                        "numeric_candidates": [{"value": "42"}],
+                        "table_artifacts": [],
+                        "image_artifacts": [],
+                        "quality_risks": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            test_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_assistant_test_plan_v1",
+                        "assistant_profile": "build-evidence-review",
+                        "status": "review_required",
+                        "test_count": 2,
+                        "cases": [
+                            {
+                                "id": "summary-001",
+                                "stage": "summary",
+                                "question": "Summarize the built KB evidence.",
+                                "expected_behavior": "answer from cited retrieved evidence",
+                            },
+                            {
+                                "id": "negative-001",
+                                "stage": "negative_boundary",
+                                "question": "What unsupported fact is missing?",
+                                "expected_behavior": "abstain when evidence is missing",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-assistant-build", "name": "kb:assistant-build"},
+                        "documents": [
+                            {"document_id": "doc-1", "status": "done", "chunk_count": 3},
+                            {"document_id": "doc-2", "status": "running", "chunk_count": 0},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            parse_report.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_parse_report_v1",
+                        "status": "REVIEW",
+                        "summary": {"document_count": 2, "zero_chunk_document_count": 1},
+                        "issues": [{"severity": "warning", "code": "zero_chunk_document"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            activation_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "kb_activation_plan_v1",
+                        "status": "REVIEW",
+                        "dataset": {"id": "ds-assistant-build", "name": "kb:assistant-build"},
+                        "summary": {"issue_count": 1, "recommendation": "review_before_activation"},
+                        "issues": [{"severity": "warning", "code": "route_test_missing"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            profile_stdout = io.StringIO()
+            with contextlib.redirect_stdout(profile_stdout):
+                profile_code = module.main(
+                    [
+                        "assistant-profile",
+                        "recommend",
+                        "--assistant-profile",
+                        str(assistant_profile),
+                        "--retrieval-hints",
+                        str(retrieval_hints),
+                        "--kb-manifest",
+                        str(kb_manifest),
+                        "--parse-report",
+                        str(parse_report),
+                        "--activation-plan",
+                        str(activation_plan),
+                        "--report-json",
+                        str(profile_report),
+                    ]
+                )
+            test_plan_stdout = io.StringIO()
+            with contextlib.redirect_stdout(test_plan_stdout):
+                test_plan_code = module.main(
+                    [
+                        "assistant-test-plan",
+                        "--test-plan",
+                        str(test_plan),
+                        "--assistant-profile",
+                        str(assistant_profile),
+                        "--retrieval-hints",
+                        str(retrieval_hints),
+                        "--kb-manifest",
+                        str(kb_manifest),
+                        "--parse-report",
+                        str(parse_report),
+                        "--activation-plan",
+                        str(activation_plan),
+                        "--report-json",
+                        str(test_plan_report),
+                    ]
+                )
+            profile_payload = json.loads(profile_report.read_text(encoding="utf-8")) if profile_report.exists() else {}
+            test_plan_payload = json.loads(test_plan_report.read_text(encoding="utf-8")) if test_plan_report.exists() else {}
+
+        self.assertEqual(profile_code, 0, profile_stdout.getvalue())
+        self.assertEqual(test_plan_code, 0, test_plan_stdout.getvalue())
+        self.assertEqual(profile_payload["build_evidence_summary"]["kb_manifest"]["document_count"], 2)
+        self.assertEqual(profile_payload["build_evidence_summary"]["kb_manifest"]["total_chunk_count"], 3)
+        self.assertEqual(profile_payload["build_evidence_summary"]["parse_report"]["status"], "REVIEW")
+        self.assertEqual(profile_payload["build_evidence_summary"]["activation_plan"]["status"], "REVIEW")
+        self.assertIn("build_evidence_parse_not_ready", {issue["code"] for issue in profile_payload["issues"]})
+        self.assertIn("build_evidence_activation_not_ready", {issue["code"] for issue in test_plan_payload["issues"]})
+        self.assertEqual(test_plan_payload["build_evidence_summary"]["kb_manifest"]["zero_chunk_document_count"], 1)
+
     def test_assistant_test_plan_command_writes_reports(self) -> None:
         module = load_query_module()
         with tempfile.TemporaryDirectory() as tmp:

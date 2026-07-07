@@ -173,6 +173,85 @@ class HealthReportTests(unittest.TestCase):
         self.assertEqual(report["inputs"]["expected_embedding_models"], ["bge-m3", "bge-large"])
         self.assertIn("Rebuild/reparse required: 1 KB(s)", markdown)
 
+    def test_health_report_consumes_model_provider_probe_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kb_manifest = root / "kb_manifest.json"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-provider", "name": "kb:provider"},
+                        "profile": {"id": "provider-profile", "embedding_model": "bge-m3"},
+                        "documents": [
+                            {
+                                "document_id": "doc-1",
+                                "source_path": "source.md",
+                                "markdown_path": "documents/source.md",
+                                "status": "done",
+                                "chunk_count": 3,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            provider_probe = root / "model_provider_probe.json"
+            provider_probe.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_model_provider_probe_report_v1",
+                        "ok": True,
+                        "summary": {
+                            "endpoint_count": 1,
+                            "available_endpoint_count": 1,
+                            "provider_count": 1,
+                            "model_count": 2,
+                            "embedding_model_count": 1,
+                            "rerank_model_count": 1,
+                            "configured_adapter_count": 1,
+                            "handled_empty_input_adapter_count": 1,
+                            "warning_count": 1,
+                            "error_count": 0,
+                            "runtime_partial_failure_status": "completed_with_warnings",
+                        },
+                        "expected_model_checks": [
+                            {"kind": "embedding", "model": "bge-m3", "found": True},
+                            {"kind": "rerank", "model": "missing-reranker", "found": False},
+                        ],
+                        "issues": [
+                            {
+                                "severity": "warning",
+                                "code": "rerank_model_not_registered",
+                                "message": "expected rerank model is not visible in provider probe: missing-reranker",
+                                "recommendation": "Confirm the model is registered in RAGFlow before validation.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = create_kb_health_report(
+                kb_manifest_paths=[kb_manifest],
+                model_provider_probe_paths=[provider_probe],
+            )
+            markdown = render_kb_health_report_markdown(report)
+
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["model_provider_probe"]["status"], "review")
+        self.assertEqual(report["model_provider_probe"]["source_count"], 1)
+        self.assertEqual(report["model_provider_probe"]["provider_count"], 1)
+        self.assertEqual(report["model_provider_probe"]["embedding_model_count"], 1)
+        self.assertEqual(report["model_provider_probe"]["rerank_model_count"], 1)
+        self.assertEqual(report["model_provider_probe"]["missing_expected_model_count"], 1)
+        self.assertEqual(report["summary"]["model_provider_probe_status"], "review")
+        self.assertEqual(report["summary"]["model_provider_probe_issue_count"], 1)
+        issue_codes = {issue["code"] for issue in report["issues"]}
+        self.assertIn("model_provider_rerank_model_not_registered", issue_codes)
+        self.assertIn("Model Provider Probe", markdown)
+        self.assertIn("missing expected models: 1", markdown)
+
     def test_health_report_rejects_wrong_parse_report_schema(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
