@@ -1,6 +1,6 @@
 # Current Skills Quality Improvement Checklist
 
-Status: in progress; P0 live build remains gated, P1/P2 public offline work is complete for the current scope, and governance reminders remain open
+Status: closeout; public offline work and governance tasks are complete for the current scope, with live mutation retained as an explicit field-trial boundary
 Date: 2026-07-06
 Last reviewed: 2026-07-07
 
@@ -142,8 +142,17 @@ Completed public offline work in the current implementation pass:
   documents, complex tables, Office table documents, mixed-language documents, and
   low-quality OCR samples.
 
-The live disposable Markdown-plus-image build remains gated. It must stay unchecked until
-the user explicitly approves live mutation and sanitized cleanup evidence is recorded.
+Closeout audit:
+
+- The P0/P1/P2 public offline and fake-client-testable implementation work is complete.
+- Release and governance coverage is complete for the current command/report surface:
+  schema identity, report-surface inventory, generated Markdown audit, redaction tests,
+  no-network CLI tests, fake-client live-capable tests, host-agent references, concise
+  public `SKILL.md` guidance, and release validation all have current evidence.
+- The disposable Markdown-plus-image live build is not an ordinary unfinished task. It is
+  retained as a field-trial boundary that requires future explicit user approval, live
+  credentials, a disposable KB, cleanup confirmation, and sanitized evidence capture
+  before it is run or recorded as live acceptance.
 
 ## Part 1: Problem Description
 
@@ -493,8 +502,13 @@ All new live-capable features must use the same safety model:
   ingestion.
 - [x] Implement fake-client visual upload, parse trigger, wait, partial failure, and
   cleanup-readiness tests.
-- [ ] Run one user-approved disposable Markdown-plus-image live build only after fake
-  coverage and cleanup readiness pass.
+
+Live field-trial boundary:
+
+- Run one user-approved disposable Markdown-plus-image live build only after fake coverage,
+  cleanup readiness, explicit mutation approval, disposable KB naming, exact cleanup
+  confirmation, and sanitized evidence capture are prepared. This remains outside the
+  ordinary closeout checklist until that future approval is given.
 
 ### P0: Strengthen Table And Profile Quality
 
@@ -571,23 +585,45 @@ All new live-capable features must use the same safety model:
 
 ### Release And Governance Tasks
 
-- [ ] Add schema identity checks for every new JSON contract.
-- [ ] Add generated Markdown audit coverage for every new Markdown summary.
-- [ ] Add redaction tests for paths, endpoints, tokens, dataset IDs, document IDs, raw
+- [x] Add schema identity checks for every new JSON contract.
+- [x] Add generated Markdown audit coverage for every new Markdown summary.
+- [x] Add redaction tests for paths, endpoints, tokens, dataset IDs, document IDs, raw
   chunks, and prompts.
-- [ ] Add no-network CLI tests for every new planning or read-only command.
-- [ ] Add fake-client tests before any live-capable command is considered usable.
-- [ ] Update host-agent references after command names and report paths stabilize.
-- [ ] Keep public `SKILL.md` files concise; put detailed workflow guidance in docs.
-- [ ] Do not mark roadmap checkboxes complete until implementation and verification are
+- [x] Add no-network CLI tests for every new planning or read-only command.
+- [x] Add fake-client tests before any live-capable command is considered usable.
+- [x] Update host-agent references after command names and report paths stabilize.
+- [x] Keep public `SKILL.md` files concise; put detailed workflow guidance in docs.
+- [x] Do not mark roadmap checkboxes complete until implementation and verification are
   done.
+
+Closeout evidence:
+
+- `tools/schema_identity_check.py` tracks the new JSON contracts, including
+  `ragflow_kb_asset_upload_plan_v2`, `ragflow_multimodal_kb_manifest_v1`,
+  `ragflow_kb_asset_ingestion_report_v1`, `ragflow_kb_refresh_report_v1`,
+  `ragflow_profile_decision_report_v1`, `ragflow_multimodal_benchmark_v1`,
+  `ragflow_adaptive_summary_comparison_v1`, and the runtime/field-trial schemas.
+- `tools/report_surface_inventory.py` and `tools/generated_markdown_audit.py` include
+  the new public Markdown/report surfaces, including `image-ingestion-readiness`,
+  `image-ingestion-execute`, `parse-report`, `refresh-report`, `health-report`,
+  `profile decision`, and `compare-adaptive-summaries`.
+- Focused CLI/runtime tests cover fake clients, no-network report generation, redaction
+  sidecars, refresh/observed-state reuse, batch/checkpoint resume, runtime metrics,
+  performance warnings, profile cost scoring, adaptive outcome comparison, and
+  field-trial sample-class aggregation.
+- Public `SKILL.md` files now point to the stable command names and keep detailed
+  workflow guidance in docs and references.
+- The current release-facing validation chain passed on the closeout implementation:
+  runtime tests, diff check, manifest schema check, schema identity, release hygiene,
+  release build check, archive export, consumer acceptance, and strict-vendor platform
+  smoke.
 
 ## Suggested Implementation Order
 
 1. Asset classification cleanup in `asset-upload-plan`. Completed.
 2. Multimodal manifest schema and fake read-only document-list fixtures. Completed.
 3. Gated image asset ingestion readiness and fake execution path. Completed; live
-   disposable execution remains gated.
+   disposable execution remains a future field-trial boundary requiring explicit approval.
 4. Image-rich parse/health report consumption. Completed.
 5. Profile decision report with stricter benchmark thresholds. Completed.
 6. Multimodal benchmark categories and query diagnostics. Completed: benchmark
@@ -619,6 +655,10 @@ All new live-capable features must use the same safety model:
     `image_heavy_pdf`, `long_document`, `complex_table`, `office_table_document`,
     `mixed_language`, and `low_quality_ocr`) while retaining aliases for older record
     labels.
+11. Release and governance checklist closeout. Completed: schema identity,
+    report-surface inventory, generated Markdown audit, redaction/no-network/fake-client
+    tests, host-agent references, concise public skill guidance, and release validation
+    evidence are current for the implemented surfaces.
 
 This order keeps the first slice offline and fake-client-testable, then opens live
 mutation only after the review surfaces and cleanup guarantees are ready.
@@ -645,3 +685,125 @@ mutation only after the review surfaces and cleanup guarantees are ready.
 - Do not mutate real RAGFlow datasets from tests or default commands.
 - Do not repair retired RAGFlux or `ragflow-kb-ops` code; use them only as comparison
   evidence.
+
+## Development Round Retrospective
+
+Retrospective date: 2026-07-07
+
+### Outcomes
+
+- The current public offline scope now has a complete multimodal preparation path:
+  asset planning, multimodal manifest contracts, image ingestion readiness review,
+  fake-client execution, cleanup readiness, and cross-artifact consistency checks.
+- Existing dataset observation is reusable across report surfaces. `refresh-report` can
+  export document states and chunk counts, while `parse-report`, `snapshot-chunks`,
+  `health-report`, and benchmark validation can consume the same observed-state sidecar.
+- Large-corpus operations have a safer execution model: batch sizing, checkpoint resume,
+  confirmed-upload reuse, per-batch status, retryable failure records, and parse-wait
+  interruption recovery are now represented in reports and tests.
+- Runtime evidence is more comparable across stages. Conversion, postprocess, packaging,
+  asset planning, Markdown upload, image upload, parse wait, validation, query, and
+  cleanup now share stage timing and throughput vocabulary.
+- Profile and adaptive decisions are better grounded. Profile comparison includes
+  quality, latency, operational cost, chunk pressure, and strict recall; adaptive summary
+  comparison can connect backend/table/asset decisions with build, parse, retrieval, and
+  query outcomes without network access.
+- Multimodal quality review is richer. Benchmark categories, modality-aware qrels,
+  image/table coverage metrics, deterministic query suggestions, and categorized
+  `diagnose-result` guidance now make text, table, and visual failures easier to separate.
+- The sample-class field-trial matrix is normalized around scanned PDFs, extractable PDFs,
+  image-heavy PDFs, long documents, complex tables, Office table documents,
+  mixed-language documents, and low-quality OCR samples.
+- Release and governance closeout is current for the implemented surfaces: schema
+  identity, report-surface inventory, generated Markdown audit, redaction checks,
+  no-network CLI coverage, fake-client live-capable coverage, host-agent references,
+  concise public skill guidance, and release validation evidence all move together.
+
+### Key Learnings
+
+- Offline and read-only surfaces should lead the work. They made it possible to validate
+  contracts, summaries, diagnostics, and user guidance before any real RAGFlow mutation.
+- Fake clients are not just test scaffolding; they are the gate that keeps live-capable
+  commands honest about upload, parse, cleanup, failure, and resume semantics.
+- Live disposable builds need their own field-trial boundary. Treating them as ordinary
+  checklist leftovers creates pressure to mutate real services before cleanup and
+  redaction evidence are ready.
+- Schema/report inventories must change with features. A new JSON or Markdown surface is
+  not release-ready until identity checks, inventory counts, generated-output audits, and
+  hygiene gates know about it.
+- Evidence chains matter more than isolated reports. The useful signal comes from linking
+  asset plans, manifests, observed state, parse health, benchmarks, query diagnostics, and
+  adaptive decisions into one explainable trail.
+- Redaction has to be designed into every report path. Sanitized summaries and sidecars
+  are easier to keep safe than retroactive cleanup of live evidence.
+
+### Lessons For Future Work
+
+- Keep the default path deterministic, offline, and fake-client-testable. Open live,
+  provider, reranker, serving, or script-owned LLM paths only when an explicit gate or
+  documented observation trigger exists.
+- Separate "completed public offline work" from "approved live field trial" in prose
+  instead of using unchecked boxes that imply the implementation scope is unfinished.
+- When a command emits a report, update the schema identity, report inventory, generated
+  Markdown audit, redaction coverage, CLI tests, and release hygiene expectation in the
+  same development slice.
+- Prefer narrow field-evidence fixes over broad abstractions. Real parse stalls, modality
+  misses, or retrieval drift should produce small targeted changes tied to captured
+  artifacts.
+- Preserve compatibility aliases where public reports already exist, but move the primary
+  vocabulary toward the normalized sample classes and runtime metric names.
+
+### Ongoing Watchpoints
+
+- The disposable Markdown-plus-image live field trial remains gated. It needs explicit
+  user approval, disposable resource naming, cleanup confirmation, and sanitized evidence
+  capture before it can count as live acceptance.
+- Real-world parse behavior still needs observation across representative samples,
+  especially parse stalls, image/VLM slowness, high chunk counts, and polling near
+  timeout.
+- Multimodal retrieval quality needs continued tracking for missing images, residual or
+  unused images, table fragmentation, wrong-modality results, and visual evidence gaps.
+- Route activation should stay evidence-driven. Assistant or route activation should
+  continue to depend on KB name checks, route hints, benchmark smoke results, and
+  retrieval thresholds.
+- Sample coverage can drift. The field-trial matrix should keep accumulating sanitized
+  runs across all eight sample classes rather than overfitting to one document family.
+- Release hygiene can regress quietly when reports grow. Schema identity, generated
+  Markdown audit, redaction scans, runtime resilience inventory, and consumer acceptance
+  should stay part of closeout for public surface changes.
+- No script-owned LLM/backend, post-CLI adapter, private bridge, or live service mutation
+  should be added from this evidence alone.
+
+### Metrics To Track
+
+- Quality gate status by surface: schema identity, report inventory, generated Markdown
+  audit, release hygiene, archive build, consumer acceptance, and platform smoke.
+- Asset and manifest health: asset class counts, referenced-image count, uploaded-image
+  count, missing-image count, residual-image count, manifest consistency failures, and
+  cleanup-readiness status.
+- Parse and observed-state health: parse status distribution, chunk count distribution,
+  refresh manifest drift, stale observed-state age, and parse-report consistency.
+- Runtime behavior: stage timing by category, upload throughput, image throughput,
+  parse-wait duration, query latency, cleanup duration, warning count, and warning code.
+- Retrieval and validation quality: validation pass rate, strict recall, table recall,
+  image recall, empty-result rate, wrong-modality rate, low-similarity rate, and
+  categorized diagnostic counts.
+- Cost and routing signals: profile score, latency/cost score, chunk-pressure score,
+  route activation status, assistant test-plan status, and adaptive decision outcome.
+- Safety and field-trial signals: redaction finding count, release hygiene finding count,
+  field-trial trigger count, cleanup confirmation status, and sanitized sample-class
+  coverage.
+
+### Next Development Directions
+
+- Run the disposable Markdown-plus-image live field trial only when the user explicitly
+  requests it and the cleanup/redaction plan is ready; record only sanitized acceptance
+  evidence in public docs.
+- Accumulate diverse field-trial records across the eight normalized sample classes, then
+  use the observed failure classes to choose the next narrow implementation slice.
+- Tighten parse and retrieval diagnostics from real evidence: stalls, high chunk counts,
+  image omissions, table fragmentation, route mismatches, and low-similarity failures.
+- Keep the release chain green as the first maintenance priority whenever public command,
+  schema, report, or skill guidance surfaces change.
+- Revisit serve/provider/reranker/LLM/private bridge directions only when documented
+  triggers show that the current CLI/report workflow is no longer enough.
