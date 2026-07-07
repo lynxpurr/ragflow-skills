@@ -11,15 +11,24 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .kb_build import (
+    BuildError,
     MULTIMODAL_KB_MANIFEST_SCHEMA,
     extract_document_id,
     extract_document_items,
     extract_document_name,
+    kb_refresh_report_document_status_payload,
+    load_kb_refresh_report,
     normalize_document_state,
     parse_state_failed,
     parse_state_succeeded,
+    summarize_kb_refresh_observed_state,
 )
 from .manifests import KbDocumentEntry, KbManifest, ManifestError, load_kb_manifest
+from .performance_warnings import (
+    chunk_count_performance_warnings,
+    performance_warning_report,
+    phase_timing_performance_warnings,
+)
 from .profiles import ChunkProfile, ProfileError, SUPPORTED_PARSER_KEYS, load_profile
 
 
@@ -166,6 +175,9 @@ def _extract_status_items(payload: Any) -> list[Mapping[str, Any]]:
         return [item for item in payload if isinstance(item, Mapping)]
     if not isinstance(payload, Mapping):
         return []
+    observed_documents = payload.get("observed_documents")
+    if isinstance(observed_documents, list):
+        return [item for item in observed_documents if isinstance(item, Mapping)]
     items = extract_document_items(payload)
     if items:
         return items
@@ -1032,6 +1044,7 @@ def create_parse_report(
     *,
     kb_manifest_path: str | Path,
     documents_json_path: str | Path | None = None,
+    observed_state_path: str | Path | None = None,
     multimodal_kb_manifest_path: str | Path | None = None,
     parse_log_paths: Iterable[str | Path] | None = None,
     profile_path: str | Path | None = None,
@@ -1043,10 +1056,13 @@ def create_parse_report(
         kb_manifest = load_kb_manifest(kb_manifest_path)
     except ManifestError as exc:
         raise ParseReportError(str(exc)) from exc
+    if documents_json_path and observed_state_path:
+        raise ParseReportError("use either --documents-json or --observed-state, not both")
 
     inputs = {
         "kb_manifest": str(kb_manifest_path),
         "documents_json": str(documents_json_path) if documents_json_path else None,
+        "observed_state": str(observed_state_path) if observed_state_path else None,
         "multimodal_kb_manifest": str(multimodal_kb_manifest_path) if multimodal_kb_manifest_path else None,
         "parse_logs": [str(path) for path in (parse_log_paths or [])],
         "profile": str(profile_path) if profile_path else None,
@@ -1054,6 +1070,8 @@ def create_parse_report(
     }
 
     multimodal_manifest = _load_multimodal_manifest(multimodal_kb_manifest_path) if multimodal_kb_manifest_path else None
+    observed_state_report: dict[str, Any] | None = None
+    observed_state_summary = {"available": False, "schema": None, "source": None, "summary": {}}
     documents_payload: Any = None
     document_status_index = None
     detail_counts = {"document_count": None, "chunk_count": None}
@@ -1062,6 +1080,22 @@ def create_parse_report(
     if documents_json_path:
         loaded = load_document_status_payload(documents_json_path)
         documents_payload = loaded["payload"]
+        document_status_index = _index_document_statuses(loaded["items"])
+        detail_counts = _extract_detail_counts(documents_payload)
+        api_effective_parser_config, api_effective_parser_config_source = _extract_effective_parser_config(
+            documents_payload
+        )
+    elif observed_state_path:
+        try:
+            observed_state_report = load_kb_refresh_report(observed_state_path)
+        except BuildError as exc:
+            raise ParseReportError(str(exc)) from exc
+        observed_state_summary = summarize_kb_refresh_observed_state(
+            observed_state_report,
+            dataset_id=kb_manifest.dataset.id,
+        )
+        documents_payload = kb_refresh_report_document_status_payload(observed_state_report)
+        loaded = load_document_status_payload(observed_state_path)
         document_status_index = _index_document_statuses(loaded["items"])
         detail_counts = _extract_detail_counts(documents_payload)
         api_effective_parser_config, api_effective_parser_config_source = _extract_effective_parser_config(
@@ -1109,6 +1143,15 @@ def create_parse_report(
         document_summary=document_summary,
         detail_counts=detail_counts,
     )
+    performance_warnings = performance_warning_report(
+        [
+            *phase_timing_performance_warnings(parse_log_summary.get("phase_timings") or []),
+            *chunk_count_performance_warnings(
+                total_chunk_count=document_summary.get("effective_chunk_total"),
+                documents=document_states,
+            ),
+        ]
+    )
 
     issues = []
     if not kb_manifest.documents:
@@ -1120,13 +1163,16 @@ def create_parse_report(
                 recommendation="Run parse-report after a build manifest with document IDs is available.",
             )
         )
-    if not documents_json_path:
+    if not documents_json_path and not observed_state_path:
         issues.append(
             _issue(
                 severity="info",
                 code="document_status_json_missing",
                 message="No document status JSON was supplied; report uses kb_manifest statuses only.",
-                recommendation="Provide --documents-json with a read-only exported document list for live-state comparison.",
+                recommendation=(
+                    "Provide --observed-state from refresh-report or --documents-json with a read-only "
+                    "exported document list for live-state comparison."
+                ),
             )
         )
     issues.extend(document_issues)
@@ -1135,6 +1181,7 @@ def create_parse_report(
     issues.extend(parser_settings["issues"])
     issues.extend(profile_visibility_issues)
     issues.extend(_issues_from_parse_logs(parse_log_summary))
+    issues.extend(performance_warnings["warnings"])
 
     issue_counts = Counter(str(issue.get("severity") or "info") for issue in issues)
     status = "FAIL" if issue_counts.get("error", 0) else "REVIEW" if issues else "PASS"
@@ -1168,17 +1215,24 @@ def create_parse_report(
             "thumbnail_document_count": multimodal_summary["thumbnail_document_count"],
             "vlm_observed_document_count": multimodal_summary["vlm_observed_document_count"],
             "visual_chunk_count": multimodal_summary["visual_chunk_count"],
+            "performance_warning_count": performance_warnings["summary"]["warning_count"],
             "issue_counts": dict(sorted(issue_counts.items())),
         },
         "document_states": document_states,
+        "observed_state": observed_state_summary,
         "multimodal_manifest": multimodal_summary,
         "chunk_consistency": chunk_consistency,
         "parser_settings": parser_settings,
         "profile_visibility": profile_visibility,
         "markdown_stats": markdown_stats,
         "parse_log_summary": parse_log_summary,
+        "performance_warnings": performance_warnings,
         "issues": issues,
-        "next_steps": _next_steps(issues, documents_json_supplied=bool(documents_json_path), parse_logs_supplied=bool(parse_log_list)),
+        "next_steps": _next_steps(
+            issues,
+            documents_json_supplied=bool(documents_json_path or observed_state_path),
+            parse_logs_supplied=bool(parse_log_list),
+        ),
     }
 
 

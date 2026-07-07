@@ -1,6 +1,6 @@
 # Current Skills Quality Improvement Checklist
 
-Status: in progress; P0 live build remains gated and P1 production readiness is partially complete
+Status: in progress; P0 live build remains gated, P1/P2 public offline work is complete for the current scope, and governance reminders remain open
 Date: 2026-07-06
 Last reviewed: 2026-07-07
 
@@ -99,6 +99,48 @@ Completed public offline work in the current implementation pass:
 - `ragflow-query route-activation-check` now verifies registered KB retrieval params and
   optional saved smoke/benchmark validation reports against reviewed retrieval thresholds
   before route activation.
+- `ragflow-kb-build refresh-report` now emits `ragflow_kb_refresh_report_v1` from a
+  read-only document-list call, exporting current document states, chunk counts, manifest
+  drift, unlinked observed documents, and sanitized Markdown/redaction sidecars without
+  upload, parse, cleanup, DB, Redis, Docker, or system-service mutation.
+- `ragflow-kb-build parse-report`, `snapshot-chunks`, `health-report`, and
+  `scripts/validate.py --level benchmark` now accept the same
+  `--observed-state` / `--refresh-report` sidecar from `refresh-report`, so parse,
+  chunk snapshot, health, and benchmark validation reports can share current
+  document-state and chunk-count evidence without live mutation.
+- `ragflow-kb-build` live Markdown builds and gated `image-ingestion-execute` now accept
+  `--batch-size`, trigger parse in bounded document-ID groups, record a shared
+  `batching` summary in live JSON outputs, and document the optional field in the public
+  `kb_manifest.json` schema/template without making it required.
+- The same `batching` block now records per-batch progress, uploaded document IDs,
+  parse trigger status, parse trigger attempts, failed batch counts, and retryable upload
+  or parse-trigger failures for live Markdown builds and visual asset ingestion.
+- Live Markdown builds and gated visual asset ingestion now support
+  `--checkpoint` / `--resume`, write incremental checkpoint state after dataset creation,
+  confirmed uploads, parse-trigger attempts, and parse-wait status, and skip
+  checkpoint-confirmed documents by default unless `--force-reupload-confirmed` is used.
+- `ragflow_runtime_metrics_v1` now includes optional per-stage `throughput` summaries,
+  and live Markdown builds plus gated visual asset ingestion record Markdown upload,
+  image upload, and parse-wait item rates in their JSON outputs.
+- `ragflow_runtime_metrics_v1` now also standardizes optional `stage_timings` with
+  `standard_stage`, `category`, status, duration, and workflow summary counts across
+  conversion/postprocess/packaging, asset planning, Markdown upload, image upload,
+  parse wait, validation, query, and cleanup surfaces.
+- `ragflow-kb-build parse-report` and gated visual asset ingestion now emit
+  `performance_warnings` for slow parse phases, slow image/VLM stages, high chunk counts,
+  and parse polling that reaches or approaches the configured timeout.
+- `ragflow-kb-build profile compare` and `profile decision` now include nested runtime
+  latency and operational cost evidence, derive per-query cost when query counts are
+  available, factor those penalties into candidate ranking, and render the cost fields in
+  Markdown reports.
+- `ragflow-doc-to-md compare-adaptive-summaries` now remains fully no-network while
+  comparing adaptive decisions with optional asset-plan, KB manifest, parse report,
+  validation, and saved query sidecars, so backend/table/profile/asset-policy decisions
+  can be tied to build, parse, retrieval, and query outcomes.
+- `tools/field_trial_metrics.py` now maintains the sanitized sample-class matrix for the
+  eight current quality classes: scanned PDFs, extractable PDFs, image-heavy PDFs, long
+  documents, complex tables, Office table documents, mixed-language documents, and
+  low-quality OCR samples.
 
 The live disposable Markdown-plus-image build remains gated. It must stay unchecked until
 the user explicitly approves live mutation and sanitized cleanup evidence is recorded.
@@ -499,31 +541,31 @@ All new live-capable features must use the same safety model:
   evidence as well as handoff sidecars.
 - [x] Add route-activation checks for KB name, route hints, benchmark smoke queries, and
   retrieval thresholds.
-- [ ] Define `ragflow_kb_refresh_report_v1`.
-- [ ] Add a read-only refresh command that exports current dataset document states and
+- [x] Define `ragflow_kb_refresh_report_v1`.
+- [x] Add a read-only refresh command that exports current dataset document states and
   chunk counts.
-- [ ] Let `parse-report`, `snapshot-chunks`, `health-report`, and benchmark validation
+- [x] Let `parse-report`, `snapshot-chunks`, `health-report`, and benchmark validation
   share a common observed-state input.
 
 ### P2: Scale, Performance, And Adaptive Feedback
 
-- [ ] Add optional batch sizing for Markdown build and asset ingestion.
-- [ ] Record per-batch progress, uploaded document IDs, parse trigger status, and retryable
+- [x] Add optional batch sizing for Markdown build and asset ingestion.
+- [x] Record per-batch progress, uploaded document IDs, parse trigger status, and retryable
   failures.
-- [ ] Support resume from a checkpoint after dataset creation, partial upload, parse
+- [x] Support resume from a checkpoint after dataset creation, partial upload, parse
   trigger, or parse wait interruption.
-- [ ] Ensure resume never re-uploads confirmed documents unless explicitly requested.
-- [ ] Standardize stage timing across conversion, postprocess, packaging, asset planning,
+- [x] Ensure resume never re-uploads confirmed documents unless explicitly requested.
+- [x] Standardize stage timing across conversion, postprocess, packaging, asset planning,
   Markdown upload, image upload, parse wait, validation, query, and cleanup.
-- [ ] Add per-document and per-image throughput metrics.
-- [ ] Add warning thresholds for slow parse, slow image/VLM processing, high chunk count,
+- [x] Add per-document and per-image throughput metrics.
+- [x] Add warning thresholds for slow parse, slow image/VLM processing, high chunk count,
   and polling near timeout.
-- [ ] Include latency and operational cost in profile comparison.
-- [ ] Record which adaptive decisions led to successful or failed parse and retrieval
+- [x] Include latency and operational cost in profile comparison.
+- [x] Record which adaptive decisions led to successful or failed parse and retrieval
   outcomes.
-- [ ] Add a no-network adaptive outcome summary comparing backend, table quality, chunk
+- [x] Add a no-network adaptive outcome summary comparing backend, table quality, chunk
   profile, asset policy, and build/query metrics.
-- [ ] Maintain a sanitized sample-class matrix for scanned PDFs, extractable PDFs,
+- [x] Maintain a sanitized sample-class matrix for scanned PDFs, extractable PDFs,
   image-heavy PDFs, long documents, complex tables, Office table documents, mixed-language
   documents, and low-quality OCR samples.
 
@@ -553,7 +595,30 @@ All new live-capable features must use the same safety model:
    image/table coverage metrics, `diagnose-result` class mapping, deterministic query
    suggestions, retrieval-hint build/profile consumption, and cross-artifact consistency
    checks.
-7. Batch/resume and performance telemetry expansion for larger corpora. Not started.
+7. Read-only KB refresh report and command. Completed: `refresh-report` exports current
+   document states and chunk counts from an existing dataset without mutation.
+8. Shared observed-state consumption. Completed: `parse-report`, `snapshot-chunks`,
+   `health-report`, and benchmark validation can all consume the same
+   `ragflow_kb_refresh_report_v1` sidecar through `--observed-state` /
+   `--refresh-report`.
+9. Batch/resume and performance telemetry expansion for larger corpora. Completed for
+   the current public offline/live-gated surfaces:
+   optional parse-trigger batch sizing is complete for Markdown build and visual asset
+   ingestion, per-batch progress/status/failure records are now emitted, and live
+   Markdown plus gated visual ingestion can resume from checkpoint without re-uploading
+   confirmed documents by default; live JSON outputs now include Markdown/image upload
+   and parse-wait throughput metrics. `parse-report` and gated visual ingestion now add
+   deterministic performance warning thresholds; `profile compare` / `profile decision`
+   now factor nested runtime latency and operational cost into ranking and Markdown
+   output; `compare-adaptive-summaries` now ties adaptive decisions to optional build,
+   parse, retrieval, and query outcome sidecars without network calls; standardized
+   `runtime_metrics.stage_timings` now carries comparable stage/category timing evidence
+   through conversion, asset planning, upload, parse wait, validation, query, and cleanup.
+10. Field-trial sample-class matrix. Completed: field-trial metrics now use the current
+    eight sanitized quality sample classes (`scanned_pdf`, `extractable_pdf`,
+    `image_heavy_pdf`, `long_document`, `complex_table`, `office_table_document`,
+    `mixed_language`, and `low_quality_ocr`) while retaining aliases for older record
+    labels.
 
 This order keeps the first slice offline and fake-client-testable, then opens live
 mutation only after the review surfaces and cleanup guarantees are ready.

@@ -29,6 +29,7 @@ from .retrieval import CHUNK_HASH_ALGORITHM, NormalizedChunk, normalize_chunk, n
 from .runtime_resilience import build_runtime_partial_failure_report
 from .handoff import CJK_PHRASE_RE, STOPWORDS, WORD_RE
 from .metadata_governance import lint_tagset_file, tagset_report_file
+from .kb_build import BuildError, KB_REFRESH_REPORT_SCHEMA, load_kb_refresh_report, summarize_kb_refresh_observed_state
 
 
 BENCHMARK_MANIFEST_SCHEMA = "ragflow_benchmark_manifest_v1"
@@ -2007,12 +2008,22 @@ def snapshot_chunks(
     name: str = "chunk-snapshot",
     description: str = "",
     include_content: bool = False,
+    observed_state_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Create a deterministic chunk snapshot from local chunks or validation output."""
 
     chunks, source_paths = _read_snapshot_input(input_path)
     if not chunks:
         raise BenchmarkGovernanceError("chunk snapshot input did not contain any chunks")
+    try:
+        observed_state_report = load_kb_refresh_report(observed_state_path) if observed_state_path else None
+    except BuildError as exc:
+        raise BenchmarkGovernanceError(str(exc)) from exc
+    observed_state = (
+        summarize_kb_refresh_observed_state(observed_state_report)
+        if observed_state_report
+        else {"available": False, "schema": KB_REFRESH_REPORT_SCHEMA, "source": None, "summary": {}}
+    )
 
     seen: set[str] = set()
     snapshot_items: list[dict[str, Any]] = []
@@ -2099,6 +2110,16 @@ def snapshot_chunks(
             "delimiter_visible_chunk_count": review["metrics"]["delimiter_visible_chunk_count"],
             "image_only_chunk_count": review["metrics"]["image_only_chunk_count"],
             "max_chunk_chars": review["metrics"]["max_chunk_chars"],
+            "observed_state_document_count": (
+                observed_state.get("summary", {}).get("observed_document_count", 0)
+                if isinstance(observed_state.get("summary"), Mapping)
+                else 0
+            ),
+            "observed_state_chunk_total": (
+                observed_state.get("summary", {}).get("observed_chunk_total")
+                if isinstance(observed_state.get("summary"), Mapping)
+                else None
+            ),
         }
     )
     return {
@@ -2106,6 +2127,7 @@ def snapshot_chunks(
         "schema": CHUNK_SNAPSHOT_REPORT_SCHEMA,
         "chunk_snapshot": str(output_path),
         "summary": report_summary,
+        "observed_state": observed_state,
         "runtime_partial_failure": runtime_partial_failure,
         "chunk_review": review,
         "document_coverage": document_coverage,

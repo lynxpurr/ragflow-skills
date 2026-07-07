@@ -355,8 +355,8 @@ def _render_profile_compare_markdown_from_payload(payload: dict[str, Any]) -> st
     lines = [
         "# RAGFlow Profile Compare Report",
         "",
-        "| rank | path | score | pass_rate | hit_rate | mrr | ndcg@k | empty_rate | latency_ms | parse_ms |",
-        "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| rank | path | score | pass_rate | hit_rate | mrr | ndcg@k | empty_rate | latency_ms | parse_ms | cost_usd | cost_per_query_usd | operational_cost |",
+        "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     candidates = payload.get("candidates", []) if isinstance(payload.get("candidates"), list) else []
     for index, item in enumerate(candidates, start=1):
@@ -368,7 +368,8 @@ def _render_profile_compare_markdown_from_payload(payload: dict[str, Any]) -> st
             f"{_as_float(metrics.get('pass_rate')):.4f} | {_as_float(metrics.get('hit_rate')):.4f} | "
             f"{_as_float(metrics.get('mrr')):.4f} | {_as_float(metrics.get('ndcg_at_k')):.4f} | "
             f"{_as_float(metrics.get('empty_result_rate')):.4f} | {_as_float(metrics.get('query_latency_ms')):.1f} | "
-            f"{_as_float(metrics.get('parse_time_ms')):.1f} |"
+            f"{_as_float(metrics.get('parse_time_ms')):.1f} | {_as_float(metrics.get('estimated_cost_usd')):.6f} | "
+            f"{_as_float(metrics.get('cost_per_query_usd')):.6f} | {_as_float(metrics.get('operational_cost_score')):.4f} |"
         )
     lines.append("")
     return "\n".join(lines)

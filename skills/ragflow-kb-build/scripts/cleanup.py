@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from typing import Any, Mapping
 
 
@@ -30,7 +31,7 @@ def bootstrap_runtime() -> None:
 
 bootstrap_runtime()
 
-from ragflow_skill_runtime import BuildError, RAGFlowClient, load_config, load_kb_manifest  # noqa: E402
+from ragflow_skill_runtime import BuildError, RAGFlowClient, build_runtime_metrics_summary, load_config, load_kb_manifest  # noqa: E402
 from ragflow_skill_runtime.config import ConfigError  # noqa: E402
 from ragflow_skill_runtime.manifests import ManifestError  # noqa: E402
 from _report_redaction import sanitize_cli_report  # noqa: E402
@@ -112,9 +113,22 @@ def _validate_delete_response(response: Any) -> None:
 
 def _run(args: argparse.Namespace) -> int:
     try:
+        stage_start = time.monotonic()
         dataset_id, dataset_name = _target(args)
         payload = _plan_payload(dataset_id=dataset_id, dataset_name=dataset_name, execute=args.execute)
         if not args.execute:
+            elapsed_ms = (time.monotonic() - stage_start) * 1000
+            payload["runtime_metrics"] = build_runtime_metrics_summary(
+                "ragflow_cleanup_preview",
+                stage_timings=[
+                    {
+                        "stage": "cleanup",
+                        "operation": "preview_cleanup_plan",
+                        "status": "success",
+                        "duration_ms": elapsed_ms,
+                    }
+                ],
+            )
             if args.redaction_report:
                 payload, redaction_report = sanitize_cli_report(
                     payload,
@@ -131,12 +145,25 @@ def _run(args: argparse.Namespace) -> int:
         _validate_confirmation(args, dataset_id=dataset_id, dataset_name=dataset_name)
         config = _load_config(args)
         client = RAGFlowClient(config)
+        delete_start = time.monotonic()
         delete_response = client.delete_dataset(dataset_id)
         _validate_delete_response(delete_response)
+        elapsed_ms = (time.monotonic() - delete_start) * 1000
         payload = {
             **payload,
             "dry_run": False,
             "delete_response": delete_response,
+            "runtime_metrics": build_runtime_metrics_summary(
+                "ragflow_cleanup_execute",
+                stage_timings=[
+                    {
+                        "stage": "cleanup",
+                        "operation": "delete_dataset",
+                        "status": "success",
+                        "duration_ms": elapsed_ms,
+                    }
+                ],
+            ),
         }
         if args.redaction_report:
             payload, redaction_report = sanitize_cli_report(

@@ -184,6 +184,7 @@ class RoutingTests(unittest.TestCase):
                         "name": "kb:activation",
                         "dataset_id": "ds-activation",
                         "hints": ["activation smoke", "route test"],
+                        "params": {"top_k": 3, "similarity_threshold": 0.25},
                     }
                 ],
             }

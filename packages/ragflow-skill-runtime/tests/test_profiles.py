@@ -202,6 +202,42 @@ class ProfileTests(unittest.TestCase):
         self.assertIn("Profile Compare", rendered)
         self.assertIn("latency_ms", rendered)
 
+    def test_compare_validation_reports_uses_latency_and_operational_cost_when_quality_ties(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            expensive = root / "expensive.json"
+            efficient = root / "efficient.json"
+            for path, latency_ms, total_cost in (
+                (expensive, 480.0, 0.48),
+                (efficient, 80.0, 0.02),
+            ):
+                path.write_text(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "level": "benchmark",
+                            "metrics": {"pass_rate": 0.9, "total": 40, "average_chunks": 4.0},
+                            "benchmark": {"metrics": {"hit_rate": 0.9, "mrr": 0.8, "ndcg_at_k": 0.85}},
+                            "runtime_metrics": {"latency_ms": {"average": latency_ms}},
+                            "cost_trace": {"estimated_total_usd": total_cost},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            report = compare_validation_reports([expensive, efficient])
+
+        self.assertEqual(report["winner"]["path"], str(efficient))
+        winner_metrics = report["winner"]["metrics"]
+        loser_metrics = report["candidates"][1]["metrics"]
+        self.assertEqual(winner_metrics["query_latency_ms"], 80.0)
+        self.assertEqual(winner_metrics["estimated_cost_usd"], 0.02)
+        self.assertEqual(winner_metrics["cost_per_query_usd"], 0.0005)
+        self.assertLess(winner_metrics["operational_cost_score"], loser_metrics["operational_cost_score"])
+        rendered = render_profile_compare_markdown(report)
+        self.assertIn("cost_usd", rendered)
+        self.assertIn("cost_per_query_usd", rendered)
+
     def test_profile_decision_classifies_apollo_evidence_as_insufficient_sample(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -305,6 +341,51 @@ class ProfileTests(unittest.TestCase):
         self.assertTrue(report["decision"]["default_change_allowed"])
         self.assertEqual(report["decision"]["recommended_profile_id"], "candidate-2048")
         self.assertGreaterEqual(report["summary"]["score_delta"], report["thresholds"]["minimum_score_delta"])
+
+    def test_profile_decision_uses_operational_cost_when_quality_ties(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            expensive = root / "expensive.json"
+            efficient = root / "efficient.json"
+            for path, profile_id, latency_ms, total_cost in (
+                (expensive, "expensive-2048", 500.0, 0.5),
+                (efficient, "efficient-1024", 90.0, 0.02),
+            ):
+                path.write_text(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "profile": {"id": profile_id},
+                            "metrics": {"pass_rate": 0.92, "total": 40, "average_chunks": 4.0},
+                            "benchmark": {
+                                "metrics": {
+                                    "hit_rate": 0.92,
+                                    "mrr": 0.88,
+                                    "ndcg_at_k": 0.9,
+                                    "strict_chunk_recall_at_k": 1.0,
+                                    "expected_chunk_hit_rate": 1.0,
+                                    "empty_result_rate": 0.0,
+                                }
+                            },
+                            "runtime_metrics": {"latency_ms": {"average": latency_ms}},
+                            "cost_trace": {"estimated_total_usd": total_cost},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            report = decide_profile_from_reports(
+                [expensive, efficient],
+                minimum_query_count=20,
+                minimum_score_delta=0.0,
+            )
+            markdown = render_profile_decision_markdown(report)
+
+        self.assertEqual(report["winner"]["profile_id"], "efficient-1024")
+        self.assertEqual(report["winner"]["metrics"]["estimated_cost_usd"], 0.02)
+        self.assertEqual(report["winner"]["metrics"]["cost_per_query_usd"], 0.0005)
+        self.assertIn("cost_usd", markdown)
+        self.assertIn("operational_cost", markdown)
 
     def test_plan_enrichment_experiments_expands_matrix(self) -> None:
         base = ChunkProfile.from_dict(

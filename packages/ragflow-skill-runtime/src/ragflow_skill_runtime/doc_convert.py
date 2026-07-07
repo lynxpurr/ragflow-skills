@@ -26,6 +26,7 @@ from typing import Any, Mapping
 from urllib import error, request
 from urllib.parse import unquote, urljoin, urlparse
 
+from .runtime_metrics import normalize_stage_timing
 from .runtime_resilience import build_runtime_partial_failure_report
 
 
@@ -3599,37 +3600,6 @@ def _coerce_duration_ms(value: Any) -> float | None:
     return round(parsed, 3)
 
 
-def _normalize_stage_timing(item: Mapping[str, Any]) -> dict[str, Any]:
-    stage = str(item.get("stage") or "unspecified").strip() or "unspecified"
-    operation = str(item.get("operation") or stage).strip() or stage
-    duration_ms = _coerce_duration_ms(item.get("duration_ms"))
-    timing_source = str(item.get("timing_source") or "monotonic_clock").strip() or "monotonic_clock"
-    normalized: dict[str, Any] = {
-        "stage": stage,
-        "operation": operation,
-        "status": str(item.get("status") or "unknown"),
-        "duration_ms": duration_ms,
-        "timing_source": timing_source,
-    }
-    for key in (
-        "backend",
-        "source_path",
-        "detail",
-        "included_in_stage",
-        "failure_class",
-    ):
-        value = item.get(key)
-        if value not in (None, ""):
-            normalized[key] = value
-    if "counts_toward_total" in item:
-        normalized["counts_toward_total"] = bool(item.get("counts_toward_total"))
-    else:
-        normalized["counts_toward_total"] = duration_ms is not None and not normalized.get("included_in_stage")
-    if item.get("derived_from_attempt"):
-        normalized["derived_from_attempt"] = True
-    return normalized
-
-
 def _asset_stage_timings_from_attempts(
     process_attempts: list[Mapping[str, Any]],
     remote_attempts: list[Mapping[str, Any]],
@@ -3640,7 +3610,7 @@ def _asset_stage_timings_from_attempts(
         if duration_ms is None:
             continue
         timings.append(
-            _normalize_stage_timing(
+            normalize_stage_timing(
                 {
                     "stage": "asset",
                     "operation": "local_asset_copy",
@@ -3660,7 +3630,7 @@ def _asset_stage_timings_from_attempts(
         if duration_ms is None:
             continue
         timings.append(
-            _normalize_stage_timing(
+            normalize_stage_timing(
                 {
                     "stage": "asset",
                     "operation": "remote_asset_materialization",
@@ -3836,7 +3806,7 @@ def _build_doc_runtime_performance(
     runtime_context: Mapping[str, Any] | None = None,
     slow_path_warnings: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    timings = [_normalize_stage_timing(item) for item in (stage_timings or []) if isinstance(item, Mapping)]
+    timings = [normalize_stage_timing(item) for item in (stage_timings or []) if isinstance(item, Mapping)]
     timings.extend(_asset_stage_timings_from_attempts(process_attempts, remote_attempts))
     failure_classification = _failure_classification(process_attempts, remote_attempts)
     counted_durations = [

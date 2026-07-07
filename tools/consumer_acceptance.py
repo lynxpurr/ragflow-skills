@@ -2646,6 +2646,7 @@ def _run_no_network_checks(
                         "name": "kb:consumer-topology",
                         "dataset_id": "ds-consumer-topology",
                         "hints": ["consumer", "topology", "activation"],
+                        "params": {"top_k": 3, "similarity_threshold": 0.25},
                     }
                 ],
             }
@@ -5055,11 +5056,13 @@ raise SystemExit(code)
                         "name": "kb:consumer-general",
                         "dataset_id": "ds-consumer-general",
                         "hints": ["consumer", "general"],
+                        "params": {"top_k": 3, "similarity_threshold": 0.25},
                     },
                     {
                         "name": "kb:consumer-technical",
                         "dataset_id": "ds-consumer-technical",
                         "hints": ["api", "runtime"],
+                        "params": {"top_k": 3, "similarity_threshold": 0.25},
                     },
                 ],
             }

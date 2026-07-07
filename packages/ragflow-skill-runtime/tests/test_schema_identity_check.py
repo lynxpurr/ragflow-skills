@@ -43,6 +43,7 @@ class SchemaIdentityCheckTests(unittest.TestCase):
         self.assertIn("multimodal_benchmark", keys)
         self.assertIn("validation_query_suggestions", keys)
         self.assertIn("kb_artifact_consistency_report", keys)
+        self.assertIn("kb_refresh_report", keys)
 
     def test_schema_identity_check_reports_missing_source_or_coverage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

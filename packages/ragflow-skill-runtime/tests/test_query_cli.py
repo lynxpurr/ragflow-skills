@@ -720,6 +720,9 @@ class QueryCliTests(unittest.TestCase):
         self.assertEqual(payload["runtime_partial_failure"]["schema"], "ragflow_runtime_partial_failure_report_v1")
         self.assertEqual(payload["runtime_partial_failure"]["summary"]["status"], "completed")
         self.assertEqual(payload["runtime_metrics"]["schema"], "ragflow_runtime_metrics_v1")
+        standard_stages = {item["standard_stage"] for item in payload["runtime_metrics"]["stage_timings"]}
+        self.assertIn("query", standard_stages)
+        self.assertIn("retrieval", standard_stages)
         self.assertEqual(payload["metadata"]["runtime_partial_failure_status"], "completed")
 
     def test_direct_mode_retries_retryable_retrieval_failure(self) -> None:

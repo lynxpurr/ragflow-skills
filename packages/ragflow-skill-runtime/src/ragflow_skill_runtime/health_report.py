@@ -9,11 +9,15 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .kb_build import (
+    BuildError,
+    KB_REFRESH_REPORT_SCHEMA,
     check_embedding_model_drift,
     describe_embedding_model,
+    load_kb_refresh_report,
     normalize_embedding_model_expectations,
     parse_state_failed,
     parse_state_succeeded,
+    summarize_kb_refresh_observed_state,
 )
 from .manifests import KbManifest, ManifestError, load_kb_manifest
 from .model_providers import MODEL_PROVIDER_PROBE_REPORT_SCHEMA
@@ -209,6 +213,44 @@ def _parse_summary(parse_report: Mapping[str, Any] | None, kb_manifest: KbManife
     }
 
 
+def _zero_chunk_observed_documents(observed_state: Mapping[str, Any] | None) -> int:
+    if not observed_state:
+        return 0
+    count = 0
+    for item in observed_state.get("observed_documents", []):
+        if not isinstance(item, Mapping):
+            continue
+        chunks = _as_int(item.get("chunk_count"))
+        if chunks == 0:
+            count += 1
+    return count
+
+
+def _parse_summary_from_observed_state(observed_state: Mapping[str, Any], kb_manifest: KbManifest) -> dict[str, Any]:
+    observed_summary = summarize_kb_refresh_observed_state(observed_state, dataset_id=kb_manifest.dataset.id)
+    summary = observed_summary.get("summary", {}) if isinstance(observed_summary.get("summary"), Mapping) else {}
+    return {
+        "available": True,
+        "status": observed_summary.get("status") or "UNKNOWN",
+        "failed_document_count": _as_int(summary.get("failed_document_count")) or 0,
+        "pending_document_count": _as_int(summary.get("in_progress_document_count")) or 0,
+        "zero_chunk_document_count": _zero_chunk_observed_documents(observed_state),
+        "chunk_mismatch_count": _as_int(summary.get("chunk_mismatch_count")) or 0,
+        "chunk_consistency_mismatch_count": _as_int(summary.get("chunk_mismatch_count")) or 0,
+        "expensive_setting_count": 0,
+        "parse_log_error_count": 0,
+        "visual_document_count": 0,
+        "thumbnail_document_count": 0,
+        "vlm_observed_document_count": 0,
+        "visual_chunk_count": 0,
+        "observed_document_count": _as_int(summary.get("observed_document_count")) or 0,
+        "observed_chunk_total": _as_int(summary.get("observed_chunk_total")),
+        "multimodal_manifest": None,
+        "source": observed_summary.get("source"),
+        "source_schema": KB_REFRESH_REPORT_SCHEMA,
+    }
+
+
 def _activation_summary(activation_plan: Mapping[str, Any] | None) -> dict[str, Any]:
     if not activation_plan:
         return {
@@ -339,6 +381,7 @@ def _kb_health_item(
     kb_manifest_path: str | Path,
     kb_manifest: KbManifest,
     parse_report: Mapping[str, Any] | None,
+    observed_state: Mapping[str, Any] | None,
     activation_plan: Mapping[str, Any] | None,
     min_documents: int,
     min_chunks: int,
@@ -351,7 +394,18 @@ def _kb_health_item(
     embedding_model_evidence = _embedding_model_evidence(kb_manifest)
     embedding_model = str(embedding_model_evidence.get("model") or "unknown")
     embedding_check = check_embedding_model_drift(embedding_model_evidence, expected_embedding_models)
-    parse = _parse_summary(parse_report, kb_manifest)
+    observed = (
+        summarize_kb_refresh_observed_state(observed_state, dataset_id=kb_manifest.dataset.id)
+        if observed_state
+        else {"available": False, "schema": KB_REFRESH_REPORT_SCHEMA, "source": None, "summary": {}}
+    )
+    parse = (
+        _parse_summary(parse_report, kb_manifest)
+        if parse_report
+        else _parse_summary_from_observed_state(observed_state, kb_manifest)
+        if observed_state
+        else _parse_summary(None, kb_manifest)
+    )
     activation = _activation_summary(activation_plan)
 
     risks: list[dict[str, Any]] = []
@@ -501,6 +555,7 @@ def _kb_health_item(
             "embedding_model_evidence": embedding_model_evidence,
             "embedding_model_check": embedding_check,
             "parse": parse,
+            "observed_state": observed,
             "route_activation": activation,
             "risk_count": len(risks),
             "risks": risks,
@@ -548,6 +603,7 @@ def create_kb_health_report(
     *,
     kb_manifest_paths: Iterable[str | Path],
     parse_report_paths: Iterable[str | Path] | None = None,
+    observed_state_paths: Iterable[str | Path] | None = None,
     activation_plan_paths: Iterable[str | Path] | None = None,
     model_provider_probe_paths: Iterable[str | Path] | None = None,
     min_documents: int = 1,
@@ -566,6 +622,10 @@ def create_kb_health_report(
 
     expected_models = _normalize_expected_models(expected_embedding_models)
     parse_reports = _load_schema_sidecars(parse_report_paths or [], expected_schema=PARSE_REPORT_SCHEMA, label="parse report")
+    try:
+        observed_states = [load_kb_refresh_report(path) for path in (observed_state_paths or [])]
+    except BuildError as exc:
+        raise HealthReportError(str(exc)) from exc
     activation_plans = _load_schema_sidecars(
         activation_plan_paths or [],
         expected_schema=KB_ACTIVATION_PLAN_SCHEMA,
@@ -577,6 +637,7 @@ def create_kb_health_report(
         label="model-provider probe",
     )
     parse_by_dataset = _index_by_dataset_id(parse_reports)
+    observed_by_dataset = _index_by_dataset_id(observed_states)
     activation_by_dataset = _index_by_dataset_id(activation_plans)
     model_provider_probe, model_provider_issues = _model_provider_probe_summary(model_provider_probes)
 
@@ -588,6 +649,7 @@ def create_kb_health_report(
             kb_manifest_path=manifest_path,
             kb_manifest=kb_manifest,
             parse_report=parse_by_dataset.get(kb_manifest.dataset.id),
+            observed_state=observed_by_dataset.get(kb_manifest.dataset.id),
             activation_plan=activation_by_dataset.get(kb_manifest.dataset.id),
             min_documents=min_documents,
             min_chunks=min_chunks,
@@ -629,6 +691,7 @@ def create_kb_health_report(
         "inputs": {
             "kb_manifests": [str(path) for path in manifest_path_list],
             "parse_reports": [str(path) for path in (parse_report_paths or [])],
+            "observed_states": [str(path) for path in (observed_state_paths or [])],
             "activation_plans": [str(path) for path in (activation_plan_paths or [])],
             "model_provider_probes": [str(path) for path in (model_provider_probe_paths or [])],
             "min_documents": min_documents,
@@ -654,6 +717,9 @@ def create_kb_health_report(
                 for item in kb_items
                 if item.get("parse", {}).get("failed_document_count", 0)
                 or item.get("parse", {}).get("pending_document_count", 0)
+            ),
+            "observed_state_source_count": sum(
+                1 for item in kb_items if item.get("observed_state", {}).get("available")
             ),
             "route_activation": dict(sorted(route_counts.items())),
             "embedding_model_count": len(known_models),

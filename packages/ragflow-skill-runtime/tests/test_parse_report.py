@@ -140,6 +140,58 @@ class ParseReportTests(unittest.TestCase):
         self.assertIn("RAGFlow Parse Report", markdown)
         self.assertIn("Execution Guard", markdown)
 
+    def test_parse_report_warns_for_slow_phases_and_high_chunk_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "large.md"
+            source.write_text("# Large\n\nLots of content.\n", encoding="utf-8")
+            kb_manifest = root / "kb_manifest.json"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-slow", "name": "kb:slow"},
+                        "profile": {"id": "large-profile"},
+                        "documents": [
+                            {
+                                "document_id": "doc-large",
+                                "source_path": str(source),
+                                "markdown_path": str(source),
+                                "status": "done",
+                                "chunk_count": 1200,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            documents_json = root / "documents.json"
+            documents_json.write_text(
+                json.dumps({"data": {"docs": [{"id": "doc-large", "name": "large.md", "run": "1", "chunk_count": 1200}]}}),
+                encoding="utf-8",
+            )
+            parse_log = root / "parse.log"
+            parse_log.write_text(
+                "parse phase finished in 65s\n"
+                "image vision phase finished in 35s\n",
+                encoding="utf-8",
+            )
+
+            report = create_parse_report(
+                kb_manifest_path=kb_manifest,
+                documents_json_path=documents_json,
+                parse_log_paths=[parse_log],
+            )
+
+        codes = {warning["code"] for warning in report["performance_warnings"]["warnings"]}
+        self.assertIn("slow_parse_phase", codes)
+        self.assertIn("slow_image_vlm_processing", codes)
+        self.assertIn("high_document_chunk_count", codes)
+        self.assertEqual(report["performance_warnings"]["thresholds"]["high_document_chunk_count"], 1000)
+        self.assertGreaterEqual(report["summary"]["performance_warning_count"], 3)
+        issue_codes = {issue["code"] for issue in report["issues"]}
+        self.assertTrue(codes.issubset(issue_codes))
+
     def test_parse_report_accepts_top_level_document_list(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -8,6 +8,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from typing import Any
 
 
@@ -32,18 +33,22 @@ bootstrap_runtime()
 from ragflow_skill_runtime import (  # noqa: E402
     RAGFlowClient,
     attach_benchmark_evaluation,
+    build_runtime_metrics_summary,
     load_benchmark_baseline,
     load_benchmark_gate,
     load_benchmark_qrels,
     load_chunk_snapshot,
     load_config,
+    load_kb_refresh_report,
     load_kb_manifest,
     load_validation_queries,
     render_markdown_report,
     run_retrieval_validation,
     smoke_query,
+    summarize_kb_refresh_observed_state,
     summarize_metadata_for_documents,
 )
+from ragflow_skill_runtime import BuildError  # noqa: E402
 from ragflow_skill_runtime.config import ConfigError  # noqa: E402
 from ragflow_skill_runtime.manifests import ManifestError  # noqa: E402
 from ragflow_skill_runtime.validation import ValidationError  # noqa: E402
@@ -221,6 +226,27 @@ def _render_markdown_from_payload(payload: dict[str, Any]) -> str:
                 "",
             ]
         )
+    observed_state = payload.get("observed_state") if isinstance(payload.get("observed_state"), dict) else None
+    if observed_state:
+        observed_summary = (
+            observed_state.get("summary")
+            if isinstance(observed_state.get("summary"), dict)
+            else {}
+        )
+        lines.extend(
+            [
+                "",
+                "## Observed State",
+                "",
+                f"- schema: `{observed_state.get('schema', '')}`",
+                f"- status: `{observed_state.get('status', '')}`",
+                f"- observed documents: `{observed_summary.get('observed_document_count', 0)}`",
+                f"- observed chunks: `{observed_summary.get('observed_chunk_total', '')}`",
+                f"- failed documents: `{observed_summary.get('failed_document_count', 0)}`",
+                f"- in-progress documents: `{observed_summary.get('in_progress_document_count', 0)}`",
+                "",
+            ]
+        )
     lines.append("")
     return "\n".join(lines)
 
@@ -248,6 +274,7 @@ def _run(args: argparse.Namespace) -> int:
 
         config = _load_config(args)
         client = RAGFlowClient(config)
+        stage_start = time.monotonic()
         report = run_retrieval_validation(
             client,
             level=args.level,
@@ -270,10 +297,31 @@ def _run(args: argparse.Namespace) -> int:
                 baseline_path=args.baseline_report,
                 chunk_snapshot=chunk_snapshot,
             )
+        elapsed_ms = (time.monotonic() - stage_start) * 1000
         payload = report.to_dict(max_chunks=args.max_report_chunks, include_raw=args.include_raw)
+        payload["runtime_metrics"] = build_runtime_metrics_summary(
+            "ragflow_validate",
+            stage_timings=[
+                {
+                    "stage": "validation",
+                    "operation": args.level,
+                    "status": "success" if report.ok else "failed",
+                    "duration_ms": elapsed_ms,
+                }
+            ],
+        )
         if metadata_summary:
             payload["metadata_summary"] = metadata_summary
-        markdown = _render_markdown_with_metadata(report, metadata_summary)
+        if args.observed_state:
+            try:
+                observed_report = load_kb_refresh_report(args.observed_state)
+            except BuildError as exc:
+                raise ValidationError(str(exc)) from exc
+            payload["observed_state"] = summarize_kb_refresh_observed_state(
+                observed_report,
+                dataset_id=manifest.dataset.id,
+            )
+        markdown = _render_markdown_from_payload(payload)
         if args.redaction_report:
             payload, redaction_report = sanitize_cli_report(
                 payload,
@@ -285,6 +333,7 @@ def _run(args: argparse.Namespace) -> int:
                     args.gate_config,
                     args.baseline_report,
                     args.chunk_snapshot,
+                    args.observed_state,
                     args.metadata,
                     args.config,
                 ],
@@ -296,6 +345,7 @@ def _run(args: argparse.Namespace) -> int:
                     args.gate_config,
                     args.baseline_report,
                     args.chunk_snapshot,
+                    args.observed_state,
                     args.metadata,
                     args.config,
                 ],
@@ -323,6 +373,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gate-config", help="Optional benchmark gate threshold JSON")
     parser.add_argument("--baseline-report", help="Optional previous benchmark report JSON")
     parser.add_argument("--chunk-snapshot", help="Optional ragflow_chunk_snapshot_v1 file for strict chunk recall")
+    parser.add_argument(
+        "--observed-state",
+        "--refresh-report",
+        dest="observed_state",
+        help="Optional ragflow_kb_refresh_report_v1 JSON used as shared observed-state evidence",
+    )
     parser.add_argument("--metric-cutoff", type=int, help="Metric cutoff for benchmark reports")
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--max-report-chunks", type=int, default=3)

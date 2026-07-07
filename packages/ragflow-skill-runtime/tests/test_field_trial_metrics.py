@@ -27,6 +27,40 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 class FieldTrialMetricsTests(unittest.TestCase):
+    def test_retirement_matrix_tracks_quality_improvement_sample_classes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run = root / "run-001"
+            expected_sample_types = [
+                "scanned_pdf",
+                "extractable_pdf",
+                "image_heavy_pdf",
+                "long_document",
+                "complex_table",
+                "office_table_document",
+                "mixed_language",
+                "low_quality_ocr",
+            ]
+            _write_json(
+                run / "field_trial_record.json",
+                {
+                    "schema": "ragflow_field_trial_record_v1",
+                    "workflow": "doc-to-md",
+                    "sample_types": expected_sample_types,
+                    "gated_trigger": "none",
+                },
+            )
+
+            report, _redaction = build_field_trial_metrics([run])
+
+        matrix = report["retirement_observation_matrix"]
+        self.assertEqual(matrix["expected_sample_types"], expected_sample_types)
+        self.assertEqual(matrix["summary"]["expected_sample_type_count"], 8)
+        self.assertEqual(matrix["summary"]["observed_expected_sample_type_count"], 8)
+        self.assertEqual(matrix["summary"]["missing_expected_sample_type_count"], 0)
+        for sample_type in expected_sample_types:
+            self.assertIn(sample_type, matrix["coverage"])
+
     def test_aggregates_core_field_trial_signals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -157,7 +191,7 @@ class FieldTrialMetricsTests(unittest.TestCase):
         self.assertEqual(matrix["schema"], RETIREMENT_MATRIX_SCHEMA)
         self.assertEqual(matrix["summary"]["observed_expected_sample_type_count"], 2)
         self.assertEqual(matrix["summary"]["missing_expected_sample_type_count"], 6)
-        scanned = matrix["coverage"]["scanned"]
+        scanned = matrix["coverage"]["scanned_pdf"]
         self.assertEqual(scanned["status"], "needs_review")
         self.assertEqual(scanned["signals"]["chunking"]["chunk_marker_count"], 9)
         self.assertEqual(scanned["signals"]["hints"]["table_artifact_count"], 1)
@@ -207,7 +241,7 @@ class FieldTrialMetricsTests(unittest.TestCase):
                 },
                 "retirement_assessment": {"status": "insufficient_samples"},
                 "coverage": {
-                    "scanned": {
+                    "scanned_pdf": {
                         "status": "passed",
                         "report_count": 2,
                         "signals": {
@@ -227,7 +261,7 @@ class FieldTrialMetricsTests(unittest.TestCase):
         self.assertIn("# RAGFlow Field Trial Metrics", text)
         self.assertIn("reports scanned: `2`", text)
         self.assertIn("## Retirement Observation Matrix", text)
-        self.assertIn("| `scanned` | `passed` | `2` |", text)
+        self.assertIn("| `scanned_pdf` | `passed` | `2` |", text)
         self.assertIn("`serve`", text)
 
     def test_cli_writes_json_markdown_and_redaction_sidecar(self) -> None:

@@ -37,16 +37,24 @@ def _read_json_mapping(path: str | Path) -> dict[str, Any]:
 
 def _optional_sidecars(root: Path) -> dict[str, dict[str, Any]]:
     sidecars: dict[str, dict[str, Any]] = {}
-    for key, name in (
-        ("runtime_report", "runtime_report.json"),
-        ("quality_report", "quality_report.json"),
-        ("postprocess_report", "postprocess_report.json"),
-        ("chunk_profile_report", "chunk_profile_report.json"),
-        ("ingest_readiness_report", "ingest_readiness_report.json"),
+    for key, names in (
+        ("runtime_report", ("runtime_report.json",)),
+        ("quality_report", ("quality_report.json",)),
+        ("postprocess_report", ("postprocess_report.json",)),
+        ("chunk_profile_report", ("chunk_profile_report.json",)),
+        ("ingest_readiness_report", ("ingest_readiness_report.json",)),
+        ("asset_upload_plan", ("asset_upload_plan.json", "asset-upload-plan.json")),
+        ("kb_build_report", ("kb_build_dry_run.json", "kb_build_report.json")),
+        ("kb_manifest", ("kb_manifest.json",)),
+        ("parse_report", ("parse_report.json",)),
+        ("validation_report", ("validation_benchmark.json", "validation_smoke.json", "validation_report.json")),
+        ("query_report", ("query_direct.json", "query_host_assisted.json", "query.json")),
     ):
-        path = root / name
-        if path.is_file():
-            sidecars[key] = _read_json_mapping(path)
+        for name in names:
+            path = root / name
+            if path.is_file():
+                sidecars[key] = _read_json_mapping(path)
+                break
     return sidecars
 
 
@@ -96,6 +104,23 @@ def _as_float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _optional_float(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_present(mapping: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = mapping.get(key)
+        if value is not None and value != "":
+            return value
+    return None
 
 
 def _quality_gate_status(
@@ -192,6 +217,116 @@ def _chunk_marker_stats(postprocess_report: Mapping[str, Any], chunk_profile_rep
     }
 
 
+def _asset_policy_stats(asset_upload_plan: Mapping[str, Any]) -> dict[str, Any]:
+    summary = _as_mapping(asset_upload_plan.get("summary"))
+    policy = _as_mapping(asset_upload_plan.get("policy"))
+    planned_upload_count = _as_int(
+        _first_present(
+            summary,
+            "planned_upload_count",
+            "planned_document_count",
+            "planned_visual_document_count",
+            "upload_count",
+        )
+    )
+    asset_policy = _first_present(policy, "default_upload_class", "upload_policy", "asset_policy") or _first_present(
+        summary,
+        "default_upload_class",
+        "upload_policy",
+        "asset_policy",
+    )
+    planned_classes = policy.get("planned_classes") or summary.get("planned_classes")
+    if asset_policy is None and isinstance(planned_classes, list) and planned_classes:
+        asset_policy = ",".join(str(item) for item in planned_classes)
+    return {
+        "asset_policy": str(asset_policy or "unknown"),
+        "planned_upload_count": planned_upload_count,
+    }
+
+
+def _runtime_average_latency_ms(report: Mapping[str, Any]) -> float | None:
+    runtime_metrics = _as_mapping(report.get("runtime_metrics"))
+    latency = _as_mapping(runtime_metrics.get("latency_ms"))
+    for key in ("average", "p50", "p95", "max"):
+        value = _optional_float(latency.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _build_query_outcome(sidecars: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    kb_build_report = _as_mapping(sidecars.get("kb_build_report"))
+    kb_manifest = _as_mapping(sidecars.get("kb_manifest"))
+    parse_report = _as_mapping(sidecars.get("parse_report"))
+    validation_report = _as_mapping(sidecars.get("validation_report"))
+    query_report = _as_mapping(sidecars.get("query_report"))
+
+    manifest_summary = _as_mapping(kb_manifest.get("summary"))
+    build_summary = _as_mapping(kb_build_report.get("summary"))
+    build_status = _first_present(manifest_summary, "status", "build_status", "ingest_readiness_status")
+    if build_status is None:
+        build_status = _first_present(build_summary, "status", "build_status", "ingest_readiness_status")
+    if build_status is None and kb_manifest:
+        build_status = "ready" if kb_manifest.get("ok", True) else "failed"
+
+    parse_summary = _as_mapping(parse_report.get("summary"))
+    parse_status = _first_present(parse_summary, "parse_status", "status")
+    if parse_status is None:
+        parse_status = _first_present(parse_report, "parse_status", "status")
+    if parse_status is None and parse_report:
+        if parse_report.get("ok") is True:
+            parse_status = "success"
+        elif parse_report.get("ok") is False:
+            parse_status = "failed"
+    parse_chunk_count = _as_int(
+        _first_present(parse_summary, "total_chunk_count", "chunk_count", "observed_chunk_count")
+        or _first_present(manifest_summary, "chunk_count", "total_chunk_count", "observed_chunk_count")
+    )
+
+    validation_metrics = _as_mapping(validation_report.get("metrics"))
+    validation_pass_rate = _optional_float(
+        _first_present(validation_metrics, "pass_rate", "success_rate", "strict_recall")
+    )
+    validation_query_count = _as_int(_first_present(validation_metrics, "total", "query_count", "case_count"))
+    validation_empty_result_rate = _optional_float(
+        _first_present(validation_metrics, "empty_result_rate", "empty_rate")
+    )
+    retrieval_status = _first_present(validation_report, "status", "retrieval_status")
+    if retrieval_status is None and validation_report:
+        if validation_report.get("ok") is True:
+            retrieval_status = "pass"
+        elif validation_report.get("ok") is False:
+            retrieval_status = "failed"
+        else:
+            retrieval_status = "review"
+
+    query_summary = _as_mapping(query_report.get("summary"))
+    query_results = query_report.get("results")
+    query_result_count = _as_int(_first_present(query_summary, "result_count", "results", "top_k_result_count"))
+    if query_result_count == 0 and isinstance(query_results, list):
+        query_result_count = len(query_results)
+    query_latency_ms = _optional_float(
+        _first_present(validation_metrics, "query_latency_ms", "average_query_latency_ms", "latency_ms")
+    )
+    if query_latency_ms is None:
+        query_latency_ms = _runtime_average_latency_ms(query_report)
+
+    return {
+        "build_query_sidecars_present": bool(
+            kb_build_report or kb_manifest or parse_report or validation_report or query_report
+        ),
+        "build_status": str(build_status or "unknown"),
+        "parse_status": str(parse_status or "unknown"),
+        "parse_chunk_count": parse_chunk_count,
+        "retrieval_status": str(retrieval_status or "unknown"),
+        "validation_pass_rate": validation_pass_rate,
+        "validation_query_count": validation_query_count,
+        "validation_empty_result_rate": validation_empty_result_rate,
+        "query_result_count": query_result_count,
+        "query_latency_ms": query_latency_ms,
+    }
+
+
 def _run_extract(label: str, path: str | Path) -> dict[str, Any]:
     root, features, decision, summary, sidecars = _load_run_bundle(path)
     feature_summary = _as_mapping(features.get("summary"))
@@ -208,6 +343,32 @@ def _run_extract(label: str, path: str | Path) -> dict[str, Any]:
     image_stats = _image_naming_stats(pipeline_result, runtime_report)
     quality_signals = _quality_signal_totals(pipeline_result, quality_report)
     chunk_stats = _chunk_marker_stats(postprocess_report, chunk_profile_report)
+    asset_stats = _asset_policy_stats(sidecars.get("asset_upload_plan", {}))
+    build_query_outcome = _build_query_outcome(sidecars)
+    decision_summary = {
+        "confidence": decision.get("confidence") or "unknown",
+        "primary_language": signals.get("primary_language") or "auto",
+        "inspected_primary_language": signals.get("inspected_primary_language") or "auto",
+        "language_source": signals.get("language_source") or "unknown",
+        "backend": recommendation.get("backend") or "auto",
+        "table_quality": recommendation.get("table_quality") or "standard",
+        "postprocess_profile": recommendation.get("postprocess_profile") or "none",
+        "mineru_fastapi_backend": recommendation.get("mineru_fastapi_backend") or "pipeline",
+        "mineru_asset_mode": recommendation.get("mineru_asset_mode") or "markdown_only",
+        "recommended_profile_id": profile.get("id") or profile.get("profile_id") or summary.get("recommended_profile_id"),
+    }
+    outcome = {
+        "pipeline_exit_code": summary.get("pipeline_exit_code"),
+        "quality_gate_status": _quality_gate_status(summary, pipeline_result, quality_report),
+        "ingest_readiness_status": summary.get("ingest_readiness_status") or ingest_readiness_report.get("status"),
+        "ingest_readiness_score": ingest_readiness_report.get("advisory_score") or ingest_summary.get("advisory_score"),
+        "post_conversion_profile_id": summary.get("post_conversion_profile_id"),
+        **image_stats,
+        **quality_signals,
+        **chunk_stats,
+        **asset_stats,
+        **build_query_outcome,
+    }
     return {
         "label": label,
         "root": str(root),
@@ -226,27 +387,18 @@ def _run_extract(label: str, path: str | Path) -> dict[str, Any]:
             "sample_html_table_count": _as_int(feature_summary.get("sample_html_table_count")),
             "sample_image_ref_count": _as_int(feature_summary.get("sample_image_ref_count")),
         },
-        "decision": {
-            "confidence": decision.get("confidence") or "unknown",
-            "primary_language": signals.get("primary_language") or "auto",
-            "inspected_primary_language": signals.get("inspected_primary_language") or "auto",
-            "language_source": signals.get("language_source") or "unknown",
-            "backend": recommendation.get("backend") or "auto",
-            "table_quality": recommendation.get("table_quality") or "standard",
-            "postprocess_profile": recommendation.get("postprocess_profile") or "none",
-            "mineru_fastapi_backend": recommendation.get("mineru_fastapi_backend") or "pipeline",
-            "mineru_asset_mode": recommendation.get("mineru_asset_mode") or "markdown_only",
-            "recommended_profile_id": profile.get("id") or profile.get("profile_id") or summary.get("recommended_profile_id"),
-        },
-        "outcome": {
-            "pipeline_exit_code": summary.get("pipeline_exit_code"),
-            "quality_gate_status": _quality_gate_status(summary, pipeline_result, quality_report),
-            "ingest_readiness_status": summary.get("ingest_readiness_status") or ingest_readiness_report.get("status"),
-            "ingest_readiness_score": ingest_readiness_report.get("advisory_score") or ingest_summary.get("advisory_score"),
-            "post_conversion_profile_id": summary.get("post_conversion_profile_id"),
-            **image_stats,
-            **quality_signals,
-            **chunk_stats,
+        "decision": decision_summary,
+        "outcome": outcome,
+        "decision_outcome": {
+            "backend": decision_summary["backend"],
+            "table_quality": decision_summary["table_quality"],
+            "chunk_profile": decision_summary["recommended_profile_id"],
+            "asset_mode": decision_summary["mineru_asset_mode"],
+            "asset_policy": outcome["asset_policy"],
+            "planned_upload_count": outcome["planned_upload_count"],
+            "build_status": outcome["build_status"],
+            "parse_status": outcome["parse_status"],
+            "retrieval_status": outcome["retrieval_status"],
         },
         "warning_codes": [
             str(item.get("code"))
@@ -371,6 +523,30 @@ def compare_adaptive_summary_runs(
             after["outcome"]["unbalanced_table_fragment_count"],
             "review",
         ),
+        (
+            "decision_outcome.asset_policy",
+            before["decision_outcome"]["asset_policy"],
+            after["decision_outcome"]["asset_policy"],
+            "review",
+        ),
+        (
+            "decision_outcome.build_status",
+            before["decision_outcome"]["build_status"],
+            after["decision_outcome"]["build_status"],
+            "warning",
+        ),
+        (
+            "decision_outcome.parse_status",
+            before["decision_outcome"]["parse_status"],
+            after["decision_outcome"]["parse_status"],
+            "warning",
+        ),
+        (
+            "decision_outcome.retrieval_status",
+            before["decision_outcome"]["retrieval_status"],
+            after["decision_outcome"]["retrieval_status"],
+            "warning",
+        ),
     )
     for field, before_value, after_value, severity in comparisons:
         item = _change(field=field, before=before_value, after=after_value, severity=severity)
@@ -384,6 +560,10 @@ def compare_adaptive_summary_runs(
         ("source.sample_image_ref_count", before["source"], after["source"], "sample_image_ref_count"),
         ("outcome.discovered_image_count", before["outcome"], after["outcome"], "discovered_image_count"),
         ("outcome.semantic_rename_count", before["outcome"], after["outcome"], "semantic_rename_count"),
+        ("outcome.planned_upload_count", before["outcome"], after["outcome"], "planned_upload_count"),
+        ("outcome.parse_chunk_count", before["outcome"], after["outcome"], "parse_chunk_count"),
+        ("outcome.validation_query_count", before["outcome"], after["outcome"], "validation_query_count"),
+        ("outcome.query_result_count", before["outcome"], after["outcome"], "query_result_count"),
     )
     for field, before_root, after_root, key in numeric_comparisons:
         item = _change(
@@ -393,6 +573,21 @@ def compare_adaptive_summary_runs(
             severity="info",
         )
         if item:
+            changes.append(item)
+
+    for field, key in (
+        ("outcome.validation_pass_rate", "validation_pass_rate"),
+        ("outcome.validation_empty_result_rate", "validation_empty_result_rate"),
+        ("outcome.query_latency_ms", "query_latency_ms"),
+    ):
+        item = _change(
+            field=field,
+            before=before["outcome"].get(key),
+            after=after["outcome"].get(key),
+            severity="review",
+        )
+        if item:
+            item["delta"] = _ratio_delta(before["outcome"].get(key), after["outcome"].get(key))
             changes.append(item)
 
     ratio_before = before["outcome"]["semantic_rename_ratio"]
@@ -454,6 +649,19 @@ def compare_adaptive_summary_runs(
                 or before["outcome"]["marker_inside_table_count"] != after["outcome"]["marker_inside_table_count"]
                 or before["outcome"]["unbalanced_table_fragment_count"] != after["outcome"]["unbalanced_table_fragment_count"]
             ),
+            "asset_policy_changed": before["decision_outcome"]["asset_policy"] != after["decision_outcome"]["asset_policy"],
+            "parse_outcome_changed": (
+                before["decision_outcome"]["parse_status"] != after["decision_outcome"]["parse_status"]
+                or before["outcome"]["parse_chunk_count"] != after["outcome"]["parse_chunk_count"]
+            ),
+            "retrieval_outcome_changed": (
+                before["decision_outcome"]["retrieval_status"] != after["decision_outcome"]["retrieval_status"]
+                or before["outcome"].get("validation_pass_rate") != after["outcome"].get("validation_pass_rate")
+                or before["outcome"]["query_result_count"] != after["outcome"]["query_result_count"]
+            ),
+            "build_query_metrics_compared": bool(
+                before["outcome"]["build_query_sidecars_present"] or after["outcome"]["build_query_sidecars_present"]
+            ),
             "image_naming_ratio_delta": _ratio_delta(ratio_before, ratio_after),
         },
         "baseline": before,
@@ -476,6 +684,8 @@ def render_adaptive_summary_comparison_markdown(report: Mapping[str, Any]) -> st
         f"- language source changed: `{summary.get('language_source_changed', False)}`",
         f"- backend changed: `{summary.get('backend_changed', False)}`",
         f"- quality gate changed: `{summary.get('quality_gate_changed', False)}`",
+        f"- parse outcome changed: `{summary.get('parse_outcome_changed', False)}`",
+        f"- retrieval outcome changed: `{summary.get('retrieval_outcome_changed', False)}`",
         f"- image naming ratio delta: `{summary.get('image_naming_ratio_delta')}`",
         "",
         "| Run | Language Source | Backend | FastAPI Backend | Profile | Quality Gate | Image Rename Ratio |",
@@ -493,6 +703,35 @@ def render_adaptive_summary_comparison_markdown(report: Mapping[str, Any]) -> st
                 decision.get("recommended_profile_id", "none"),
                 outcome.get("quality_gate_status", "unknown"),
                 outcome.get("semantic_rename_ratio"),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Build And Query Outcomes",
+            "",
+            "| Run | Backend | Table Quality | Chunk Profile | Asset Policy | Build | Parse | Retrieval | Pass Rate | Query Results | Query Latency Ms |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for item in (baseline, candidate):
+        decision_outcome = _as_mapping(item.get("decision_outcome"))
+        outcome = _as_mapping(item.get("outcome"))
+        pass_rate = outcome.get("validation_pass_rate")
+        query_latency = outcome.get("query_latency_ms")
+        lines.append(
+            "| `{}` | `{}` | `{}` | `{}` | `{}` | `{}` | `{}` | `{}` | `{}` | `{}` | `{}` |".format(
+                item.get("label", ""),
+                decision_outcome.get("backend", "unknown"),
+                decision_outcome.get("table_quality", "unknown"),
+                decision_outcome.get("chunk_profile", "unknown"),
+                decision_outcome.get("asset_policy", "unknown"),
+                decision_outcome.get("build_status", "unknown"),
+                decision_outcome.get("parse_status", "unknown"),
+                decision_outcome.get("retrieval_status", "unknown"),
+                "" if pass_rate is None else f"{_as_float(pass_rate):.4f}",
+                outcome.get("query_result_count", 0),
+                "" if query_latency is None else f"{_as_float(query_latency):.1f}",
             )
         )
     changes = report.get("changes") if isinstance(report.get("changes"), list) else []

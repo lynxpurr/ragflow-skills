@@ -72,6 +72,7 @@ Notes:
 - `--mode agentic --host-assisted` builds a deterministic `ragflow_agentic_plan_v1`, executes bounded sub-query retrieval, and returns evidence plus `ragflow_agentic_trace_v1` cost/latency data and `ragflow_host_synthesis_contract_v1` citation policy for host synthesis. It does not call an LLM or synthesize an answer.
 - `ask` returns deterministic evidence weights and can write `--trace-json` / `--trace-md` for host-agent debugging.
 - `ask --json` includes `retrieval_status` plus a `ragflow_retrieval_status_v1` report so hosts can distinguish `success`, `empty`, `low_quality`, `needs_refinement`, `clarification`, `rejected`, `error`, `timeout`, and `partial`.
+- `ask --json` and query traces include `runtime_metrics.stage_timings` for standardized retrieval and query duration evidence when retrieval runs.
 - Use `audit-citations` after host synthesis to check simple numeric citations like `[1]` against retrieved evidence.
 - Use `evaluate-answer` after host synthesis for deterministic offline answer checks: required citations, citation reachability, unsupported uncited statements, expected terms, cited evidence score, and no-evidence abstention behavior. It does not call an LLM evaluator.
 - Use `evaluator request` / `evaluator review` when a host-approved external LLM/RAGAS-style evaluator is needed. The scripts only package and review advisory evaluator artifacts; deterministic `evaluate-answer` remains the non-overridable gate.

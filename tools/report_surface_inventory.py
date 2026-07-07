@@ -159,6 +159,7 @@ KB_COVERED_COMMANDS = (
     "ragflow-kb-build optimize readiness",
     "ragflow-kb-build optimize summarize",
     "ragflow-kb-build parse-report",
+    "ragflow-kb-build refresh-report",
     "ragflow-kb-build probe",
     "ragflow-kb-build profile compare",
     "ragflow-kb-build profile decision",
@@ -368,6 +369,7 @@ def discover_public_commands(root: Path = ROOT) -> list[DiscoveredCommand]:
         (("ragflow-kb-build", "image-ingestion-readiness"), kb.build_image_ingestion_readiness_parser),
         (("ragflow-kb-build", "consistency-check"), kb.build_consistency_check_parser),
         (("ragflow-kb-build", "parse-report"), kb.build_parse_report_parser),
+        (("ragflow-kb-build", "refresh-report"), kb.build_refresh_report_parser),
         (("ragflow-kb-build", "health-report"), kb.build_health_report_parser),
     ):
         _record_parsers(

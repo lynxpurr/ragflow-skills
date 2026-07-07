@@ -43,6 +43,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     RetrievalError,
     RoutingError,
     audit_citations,
+    attach_stage_timings_to_runtime_metrics,
     build_agentic_execution_trace,
     build_agentic_plan,
     build_centroid_index,
@@ -688,6 +689,25 @@ def _ask(args: argparse.Namespace) -> int:
         evidence=evidence,
         intent_status=agentic_retrieval_status,
         partial=bool(retrieval_errors),
+    )
+    runtime_metrics = attach_stage_timings_to_runtime_metrics(
+        runtime_metrics,
+        [
+            {
+                "stage": "retrieval",
+                "operation": "retrieve",
+                "status": runtime_partial_failure["summary"]["status"],
+                "duration_ms": retrieval_duration_ms,
+                "document_count": retrieval_calls,
+                "counts_toward_total": False,
+            },
+            {
+                "stage": "query",
+                "operation": mode,
+                "status": status_report["status"],
+                "duration_ms": total_duration_ms,
+            },
+        ],
     )
     if agentic_plan:
         agentic_trace = build_agentic_execution_trace(

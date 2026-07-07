@@ -112,6 +112,14 @@ EXPECTED_IDENTITIES = (
         description="Offline consistency report across retrieval hints, asset upload plans, chunk profiles, and KB manifests.",
     ),
     SchemaIdentity(
+        key="kb_refresh_report",
+        group="kb_build",
+        identity="ragflow_kb_refresh_report_v1",
+        source_patterns=("ragflow_kb_refresh_report_v1", "KB_REFRESH_REPORT_SCHEMA"),
+        coverage_patterns=("ragflow_kb_refresh_report_v1", "refresh-report"),
+        description="Read-only KB refresh report exporting current server-observed document and chunk state.",
+    ),
+    SchemaIdentity(
         key="document_features",
         group="doc_convert",
         identity="ragflow_document_features_v1",

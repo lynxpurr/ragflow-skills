@@ -146,9 +146,10 @@ The tool is intentionally narrow:
 - it can consume explicit `ragflow_field_trial_record_v1` JSON records when a run wants to
   record a gated trigger such as `serve`, `private_bridge`, `remote_conversion`,
   `provider`, `reranker`, or `llm_backend`;
-- it now includes a `ragflow_retirement_observation_matrix_v1` summary for explicit
-  sample types such as scanned documents, long documents, papers, contracts, complex
-  tables, image-heavy sources, low-quality OCR, and multi-document handoffs;
+- it now includes a `ragflow_retirement_observation_matrix_v1` summary for the current
+  sanitized quality sample classes: scanned PDFs, extractable PDFs, image-heavy PDFs,
+  long documents, complex tables, Office table documents, mixed-language documents, and
+  low-quality OCR samples;
 - release hygiene schema identity checks cover both `ragflow_field_trial_metrics_v1` and
   `ragflow_retirement_observation_matrix_v1`;
 - it does not mark roadmap checkboxes, start services, upload reports, or inspect private

@@ -113,6 +113,56 @@ class FakeOptimizeBuildClient:
         return {"data": {"id": dataset_id, "deleted": True}}
 
 
+class FakeParseFailureBuildClient(FakeOptimizeBuildClient):
+    instances: list["FakeParseFailureBuildClient"] = []
+
+    def __init__(self, config):
+        super().__init__(config)
+        FakeParseFailureBuildClient.instances.append(self)
+
+    def trigger_parse(self, dataset_id, document_ids):
+        if len(self.parsed) >= 1:
+            raise RuntimeError("temporary parse trigger outage")
+        return super().trigger_parse(dataset_id, document_ids)
+
+
+class FakeCheckpointBuildClient:
+    instances: list["FakeCheckpointBuildClient"] = []
+    dataset_counter = 0
+    upload_counter = 0
+
+    def __init__(self, config):
+        self.config = config
+        self.created: list[tuple[str, dict[str, object]]] = []
+        self.uploads: list[tuple[str, str]] = []
+        self.parsed: list[tuple[str, list[str]]] = []
+        self.documents: dict[str, list[dict[str, object]]] = {}
+        FakeCheckpointBuildClient.instances.append(self)
+
+    def create_dataset(self, name, *, profile=None):
+        FakeCheckpointBuildClient.dataset_counter += 1
+        dataset_id = f"ds-checkpoint-{FakeCheckpointBuildClient.dataset_counter}"
+        self.created.append((str(name), dict(profile or {})))
+        self.documents[dataset_id] = []
+        return {"data": {"id": dataset_id}}
+
+    def upload_document(self, dataset_id, file_path):
+        FakeCheckpointBuildClient.upload_counter += 1
+        document_id = f"doc-checkpoint-{FakeCheckpointBuildClient.upload_counter}"
+        self.uploads.append((str(dataset_id), str(file_path)))
+        self.documents.setdefault(str(dataset_id), []).append(
+            {"id": document_id, "name": Path(file_path).name, "run": "DONE", "chunk_count": 1}
+        )
+        return {"data": [{"id": document_id}]}
+
+    def trigger_parse(self, dataset_id, document_ids):
+        self.parsed.append((str(dataset_id), list(document_ids)))
+        return {"data": {"document_ids": list(document_ids)}}
+
+    def list_documents(self, dataset_id, *, page=1, page_size=200):
+        return {"data": {"docs": self.documents.get(str(dataset_id), [])}}
+
+
 class FakeDeleteFailureClient:
     instances: list["FakeDeleteFailureClient"] = []
 
@@ -177,6 +227,106 @@ class FakeVisualIngestionClient:
 
     def list_documents(self, dataset_id, *, page=1, page_size=200):
         return {"data": {"docs": self.documents.get(str(dataset_id), [])}}
+
+
+class FakeVisualParseFailureClient(FakeVisualIngestionClient):
+    instances: list["FakeVisualParseFailureClient"] = []
+
+    def __init__(self, config):
+        super().__init__(config)
+        FakeVisualParseFailureClient.instances.append(self)
+
+    def trigger_parse(self, dataset_id, document_ids):
+        if len(self.parsed) >= 1:
+            raise RuntimeError("temporary visual parse trigger outage")
+        return super().trigger_parse(dataset_id, document_ids)
+
+
+class FakePendingVisualIngestionClient(FakeVisualIngestionClient):
+    instances: list["FakePendingVisualIngestionClient"] = []
+
+    def __init__(self, config):
+        super().__init__(config)
+        FakePendingVisualIngestionClient.instances.append(self)
+
+    def upload_document(self, dataset_id, file_path):
+        document_id = f"pending-visual-{len(self.uploads) + 1}"
+        name = Path(file_path).name
+        self.uploads.append((str(dataset_id), str(file_path)))
+        self.documents.setdefault(str(dataset_id), []).append(
+            {"id": document_id, "name": name, "run": "RUNNING", "progress": 0.5, "chunk_count": 0}
+        )
+        return {"data": [{"id": document_id}]}
+
+
+class FakeCheckpointVisualClient:
+    instances: list["FakeCheckpointVisualClient"] = []
+    upload_counter = 0
+
+    def __init__(self, config):
+        self.config = config
+        self.uploads: list[tuple[str, str]] = []
+        self.parsed: list[tuple[str, list[str]]] = []
+        self.documents: dict[str, list[dict[str, object]]] = {}
+        FakeCheckpointVisualClient.instances.append(self)
+
+    def upload_document(self, dataset_id, file_path):
+        FakeCheckpointVisualClient.upload_counter += 1
+        document_id = f"visual-checkpoint-{FakeCheckpointVisualClient.upload_counter}"
+        name = Path(file_path).name
+        self.uploads.append((str(dataset_id), str(file_path)))
+        self.documents.setdefault(str(dataset_id), []).append(
+            {"id": document_id, "name": name, "run": "DONE", "chunk_count": 2}
+        )
+        return {"data": [{"id": document_id}]}
+
+    def trigger_parse(self, dataset_id, document_ids):
+        self.parsed.append((str(dataset_id), list(document_ids)))
+        return {"data": {"document_ids": list(document_ids)}}
+
+    def list_documents(self, dataset_id, *, page=1, page_size=200):
+        return {"data": {"docs": self.documents.get(str(dataset_id), [])}}
+
+
+class FakeRefreshClient:
+    instances: list["FakeRefreshClient"] = []
+
+    def __init__(self, config):
+        self.config = config
+        self.list_calls: list[tuple[str, int, int]] = []
+        FakeRefreshClient.instances.append(self)
+
+    def list_documents(self, dataset_id, *, page=1, page_size=200):
+        self.list_calls.append((str(dataset_id), int(page), int(page_size)))
+        return {
+            "data": {
+                "docs": [
+                    {
+                        "id": "doc-md",
+                        "name": "source.md",
+                        "run": "DONE",
+                        "progress": 1,
+                        "chunk_count": 3,
+                    },
+                    {
+                        "id": "doc-extra",
+                        "name": "extra.png",
+                        "run": "RUNNING",
+                        "progress": 0.4,
+                        "chunk_count": 0,
+                        "thumbnail_url": "https://refresh.internal.local/thumbs/extra.png",
+                    },
+                    {
+                        "id": "doc-fail",
+                        "name": "failed.png",
+                        "run": "FAILED",
+                        "progress": -1,
+                        "chunk_count": 0,
+                        "message": "parse failed for visual document",
+                    },
+                ]
+            }
+        }
 
 
 class ModelProviderHandler(BaseHTTPRequestHandler):
@@ -791,12 +941,289 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["runtime_partial_failure"]["summary"]["status"], "completed")
         self.assertEqual(payload["runtime_metrics"]["schema"], "ragflow_runtime_metrics_v1")
         self.assertEqual(payload["runtime_metrics"]["counters"]["document_count"], 1)
+        stage_timings = payload["runtime_metrics"]["stage_timings"]
+        standard_stages = {item["standard_stage"] for item in stage_timings}
+        self.assertIn("markdown_upload", standard_stages)
+        self.assertIn("parse_wait", standard_stages)
+        self.assertTrue(all("category" in item for item in stage_timings))
+        markdown_upload = payload["runtime_metrics"]["throughput"]["markdown_upload"]
+        self.assertEqual(markdown_upload["unit"], "document")
+        self.assertEqual(markdown_upload["item_count"], 1)
+        self.assertGreaterEqual(markdown_upload["duration_ms"], 0.0)
+        self.assertIn("items_per_second", markdown_upload)
+        self.assertIn("ms_per_item", markdown_upload)
+        parse_wait = payload["runtime_metrics"]["throughput"]["parse_wait"]
+        self.assertEqual(parse_wait["unit"], "document")
+        self.assertEqual(parse_wait["item_count"], 1)
         self.assertEqual(payload["embedding_model"]["model"], "unknown")
         self.assertEqual(payload["embedding_model"]["reason"], "profile_embedding_model_missing")
         self.assertEqual(manifest["runtime_partial_failure"]["summary"]["status"], "completed")
         self.assertEqual(manifest["runtime_metrics"]["counters"]["parse_triggered"], 1)
+        self.assertEqual(manifest["runtime_metrics"]["throughput"]["markdown_upload"]["item_count"], 1)
+        self.assertIn("stage_timings", manifest["runtime_metrics"])
         self.assertEqual(manifest["embedding_model"]["model"], "unknown")
         self.assertEqual(manifest["embedding_model"]["reason"], "profile_embedding_model_missing")
+
+    def test_build_live_path_batches_markdown_parse_requests(self) -> None:
+        module = load_build_module()
+        FakeOptimizeBuildClient.instances = []
+        module.RAGFlowClient = FakeOptimizeBuildClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "docs"
+            input_dir.mkdir()
+            for name in ("a.md", "b.md", "c.md"):
+                (input_dir / name).write_text(f"# {name}\n\nKnown answer\n", encoding="utf-8")
+            output = root / "kb_manifest.json"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--input",
+                        str(input_dir),
+                        "--kb-name",
+                        "kb:test",
+                        "--profile",
+                        str(PROFILE_PATH),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "test-key",
+                        "--output",
+                        str(output),
+                        "--batch-size",
+                        "2",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            manifest = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(
+            FakeOptimizeBuildClient.instances[0].parsed,
+            [
+                ("ds-1", ["doc-ds-1-1", "doc-ds-1-2"]),
+                ("ds-1", ["doc-ds-1-3"]),
+            ],
+        )
+        self.assertEqual(payload["batching"]["requested_batch_size"], 2)
+        self.assertEqual(payload["batching"]["planned_document_count"], 3)
+        self.assertEqual(payload["batching"]["parse_batch_count"], 2)
+        self.assertEqual(payload["batching"]["retryable_failure_count"], 0)
+        self.assertEqual(
+            payload["batching"]["batches"],
+            [
+                {
+                    "batch_index": 1,
+                    "planned_document_count": 2,
+                    "uploaded_document_count": 2,
+                    "failed_document_count": 0,
+                    "uploaded_document_ids": ["doc-ds-1-1", "doc-ds-1-2"],
+                    "document_names": ["a.md", "b.md"],
+                    "upload_status": "uploaded",
+                    "parse_trigger_status": "success",
+                    "parse_triggered": True,
+                    "parse_response_observed": True,
+                    "retryable": False,
+                    "retryable_failure_count": 0,
+                    "retryable_failures": [],
+                },
+                {
+                    "batch_index": 2,
+                    "planned_document_count": 1,
+                    "uploaded_document_count": 1,
+                    "failed_document_count": 0,
+                    "uploaded_document_ids": ["doc-ds-1-3"],
+                    "document_names": ["c.md"],
+                    "upload_status": "uploaded",
+                    "parse_trigger_status": "success",
+                    "parse_triggered": True,
+                    "parse_response_observed": True,
+                    "retryable": False,
+                    "retryable_failure_count": 0,
+                    "retryable_failures": [],
+                },
+            ],
+        )
+        self.assertEqual(manifest["batching"]["parse_batch_count"], 2)
+        self.assertEqual(manifest["batching"]["batches"][0]["uploaded_document_ids"], ["doc-ds-1-1", "doc-ds-1-2"])
+
+    def test_build_live_path_records_retryable_parse_batch_failure(self) -> None:
+        module = load_build_module()
+        FakeOptimizeBuildClient.instances = []
+        FakeParseFailureBuildClient.instances = []
+        module.RAGFlowClient = FakeParseFailureBuildClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "docs"
+            input_dir.mkdir()
+            for name in ("a.md", "b.md", "c.md"):
+                (input_dir / name).write_text(f"# {name}\n\nKnown answer\n", encoding="utf-8")
+            output = root / "kb_manifest.json"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--input",
+                        str(input_dir),
+                        "--kb-name",
+                        "kb:test",
+                        "--profile",
+                        str(PROFILE_PATH),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "test-key",
+                        "--output",
+                        str(output),
+                        "--batch-size",
+                        "2",
+                        "--poll-interval",
+                        "0",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            manifest = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 1, stdout.getvalue())
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["status"], "partial_failure")
+        self.assertEqual(payload["batching"]["parse_batch_count"], 1)
+        self.assertEqual(payload["batching"]["parse_batch_attempt_count"], 2)
+        self.assertEqual(payload["batching"]["failed_batch_count"], 1)
+        self.assertEqual(payload["batching"]["retryable_failure_count"], 1)
+        self.assertEqual(payload["batching"]["batches"][0]["parse_trigger_status"], "success")
+        failed_batch = payload["batching"]["batches"][1]
+        self.assertEqual(failed_batch["uploaded_document_ids"], ["doc-ds-1-3"])
+        self.assertEqual(failed_batch["parse_trigger_status"], "failed")
+        self.assertTrue(failed_batch["retryable"])
+        self.assertEqual(failed_batch["retryable_failures"][0]["stage"], "parse_trigger")
+        self.assertIn("temporary parse trigger outage", failed_batch["retryable_failures"][0]["message"])
+        self.assertEqual(manifest["documents"][2]["status"], "parse_trigger_failed")
+        self.assertEqual(manifest["batching"]["retryable_failure_count"], 1)
+
+    def test_build_live_path_checkpoint_resume_skips_confirmed_markdown_documents(self) -> None:
+        module = load_build_module()
+        FakeCheckpointBuildClient.instances = []
+        FakeCheckpointBuildClient.dataset_counter = 0
+        FakeCheckpointBuildClient.upload_counter = 0
+        module.RAGFlowClient = FakeCheckpointBuildClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "docs"
+            input_dir.mkdir()
+            for name in ("a.md", "b.md"):
+                (input_dir / name).write_text(f"# {name}\n\nKnown answer\n", encoding="utf-8")
+            checkpoint = root / "kb_build.checkpoint.json"
+            first_output = root / "kb_manifest.first.json"
+            first_stdout = io.StringIO()
+            with contextlib.redirect_stdout(first_stdout):
+                first_code = module.main(
+                    [
+                        "--input",
+                        str(input_dir),
+                        "--kb-name",
+                        "kb:test",
+                        "--profile",
+                        str(PROFILE_PATH),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "test-key",
+                        "--output",
+                        str(first_output),
+                        "--checkpoint",
+                        str(checkpoint),
+                        "--no-wait",
+                        "--json",
+                    ]
+                )
+            first_payload = json.loads(first_stdout.getvalue())
+            first_checkpoint = json.loads(checkpoint.read_text(encoding="utf-8"))
+
+            (input_dir / "c.md").write_text("# c.md\n\nKnown answer\n", encoding="utf-8")
+            second_output = root / "kb_manifest.second.json"
+            second_stdout = io.StringIO()
+            with contextlib.redirect_stdout(second_stdout):
+                second_code = module.main(
+                    [
+                        "--input",
+                        str(input_dir),
+                        "--kb-name",
+                        "kb:test",
+                        "--profile",
+                        str(PROFILE_PATH),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "test-key",
+                        "--output",
+                        str(second_output),
+                        "--checkpoint",
+                        str(checkpoint),
+                        "--resume",
+                        "--no-wait",
+                        "--json",
+                    ]
+                )
+            second_payload = json.loads(second_stdout.getvalue())
+            second_manifest = json.loads(second_output.read_text(encoding="utf-8"))
+            second_checkpoint = json.loads(checkpoint.read_text(encoding="utf-8"))
+
+            force_output = root / "kb_manifest.force.json"
+            force_stdout = io.StringIO()
+            with contextlib.redirect_stdout(force_stdout):
+                force_code = module.main(
+                    [
+                        "--input",
+                        str(input_dir),
+                        "--kb-name",
+                        "kb:test",
+                        "--profile",
+                        str(PROFILE_PATH),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "test-key",
+                        "--output",
+                        str(force_output),
+                        "--checkpoint",
+                        str(checkpoint),
+                        "--resume",
+                        "--force-reupload-confirmed",
+                        "--no-wait",
+                        "--json",
+                    ]
+                )
+            force_payload = json.loads(force_stdout.getvalue())
+
+        self.assertEqual(first_code, 0, first_stdout.getvalue())
+        self.assertEqual(first_payload["checkpoint"]["enabled"], True)
+        self.assertEqual(first_checkpoint["schema"], "ragflow_kb_ingestion_checkpoint_v1")
+        self.assertEqual(first_checkpoint["operation"], "markdown_build")
+        self.assertEqual(first_checkpoint["dataset"]["id"], "ds-checkpoint-1")
+        self.assertEqual(len(first_checkpoint["uploaded_documents"]), 2)
+        self.assertEqual(second_code, 0, second_stdout.getvalue())
+        self.assertEqual(FakeCheckpointBuildClient.instances[1].created, [])
+        self.assertEqual(
+            [(dataset_id, Path(path).name) for dataset_id, path in FakeCheckpointBuildClient.instances[1].uploads],
+            [("ds-checkpoint-1", "c.md")],
+        )
+        self.assertEqual(FakeCheckpointBuildClient.instances[1].parsed, [("ds-checkpoint-1", ["doc-checkpoint-3"])])
+        self.assertEqual(second_payload["dataset_id"], "ds-checkpoint-1")
+        self.assertEqual(second_payload["checkpoint"]["resume"], True)
+        self.assertEqual(second_payload["checkpoint"]["skipped_upload_count"], 2)
+        self.assertEqual(second_payload["checkpoint"]["new_upload_count"], 1)
+        self.assertEqual([Path(item["markdown_path"]).name for item in second_manifest["documents"]], ["a.md", "b.md", "c.md"])
+        self.assertEqual(second_checkpoint["summary"]["uploaded_document_count"], 3)
+        self.assertEqual(force_code, 0, force_stdout.getvalue())
+        self.assertEqual(force_payload["checkpoint"]["force_reupload_confirmed"], True)
+        self.assertEqual(
+            [Path(path).name for _dataset_id, path in FakeCheckpointBuildClient.instances[2].uploads],
+            ["a.md", "b.md", "c.md"],
+        )
 
     def test_build_dry_run_accepts_doc_manifest_paths_relative_to_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1263,6 +1690,8 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(report_payload["summary"]["missing_image_count"], 0)
         self.assertFalse(report_payload["live_upload_enabled"])
         self.assertEqual(report_payload["ragflow_calls"], 0)
+        self.assertEqual(report_payload["runtime_metrics"]["schema"], "ragflow_runtime_metrics_v1")
+        self.assertEqual(report_payload["runtime_metrics"]["stage_timings"][0]["standard_stage"], "asset_planning")
         self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
         self.assertIn("# RAGFlow KB Asset Upload Plan", md_text)
         self.assertIn("Markdown image references", md_text)
@@ -1628,6 +2057,19 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["failed_visual_document_count"], 1)
         self.assertEqual(payload["runtime_partial_failure"]["status_counts"]["parsed"], 1)
         self.assertEqual(payload["runtime_partial_failure"]["status_counts"]["failed"], 1)
+        self.assertEqual(payload["runtime_metrics"]["schema"], "ragflow_runtime_metrics_v1")
+        standard_stages = {item["standard_stage"] for item in payload["runtime_metrics"]["stage_timings"]}
+        self.assertIn("image_upload", standard_stages)
+        self.assertIn("parse_wait", standard_stages)
+        image_upload = payload["runtime_metrics"]["throughput"]["image_upload"]
+        self.assertEqual(image_upload["unit"], "image")
+        self.assertEqual(image_upload["item_count"], 2)
+        self.assertGreaterEqual(image_upload["duration_ms"], 0.0)
+        self.assertIn("items_per_second", image_upload)
+        self.assertIn("ms_per_item", image_upload)
+        parse_wait = payload["runtime_metrics"]["throughput"]["parse_wait"]
+        self.assertEqual(parse_wait["unit"], "image")
+        self.assertEqual(parse_wait["item_count"], 2)
         self.assertTrue(payload["cleanup_readiness"]["required"])
         self.assertEqual(payload["cleanup_readiness"]["dataset_id"], "ds-visual")
         self.assertEqual(len(FakeVisualIngestionClient.instances[0].uploads), 2)
@@ -1636,6 +2078,580 @@ class KbBuildCliTests(unittest.TestCase):
         combined = json.dumps(payload, ensure_ascii=False) + stdout.getvalue()
         self.assertNotIn(str(asset_plan), combined)
         self.assertIn("<redacted:config-path>", combined)
+
+    def test_image_ingestion_execute_warns_when_polling_hits_timeout(self) -> None:
+        module = load_build_module()
+        FakePendingVisualIngestionClient.instances = []
+        module.RAGFlowClient = FakePendingVisualIngestionClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pending.png").write_bytes(b"pending")
+            asset_plan = root / "asset_upload_plan.json"
+            output = root / "image_ingestion_execute.json"
+            asset_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_kb_asset_upload_plan_v2",
+                        "handoff_root": str(root),
+                        "summary": {
+                            "planned_visual_upload_file_count": 1,
+                            "missing_image_asset_count": 0,
+                            "outside_handoff_image_count": 0,
+                        },
+                        "planned_visual_upload_files": [
+                            {"source_path": "pending.png", "asset_class": "markdown_referenced"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "image-ingestion-execute",
+                        "--execute",
+                        "--asset-upload-plan",
+                        str(asset_plan),
+                        "--dataset-id",
+                        "ds-visual",
+                        "--confirm-dataset-id",
+                        "ds-visual",
+                        "--confirm-planned-count",
+                        "1",
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "fake-key",
+                        "--report-json",
+                        str(output),
+                        "--parse-timeout",
+                        "0",
+                        "--poll-interval",
+                        "0",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 1, stdout.getvalue())
+        codes = {warning["code"] for warning in payload["performance_warnings"]["warnings"]}
+        self.assertIn("polling_near_timeout", codes)
+        self.assertEqual(payload["performance_warnings"]["summary"]["warning_count"], 1)
+        self.assertEqual(payload["summary"]["performance_warning_count"], 1)
+        self.assertEqual(payload["runtime_partial_failure"]["status_counts"]["pending"], 1)
+
+    def test_image_ingestion_execute_batches_parse_requests(self) -> None:
+        module = load_build_module()
+        FakeVisualIngestionClient.instances = []
+        module.RAGFlowClient = FakeVisualIngestionClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("one.png", "two.png", "three.png"):
+                (root / name).write_bytes(name.encode("utf-8"))
+            asset_plan = root / "asset_upload_plan.json"
+            output = root / "image_ingestion_execute.json"
+            asset_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_kb_asset_upload_plan_v2",
+                        "handoff_root": str(root),
+                        "summary": {
+                            "planned_visual_upload_file_count": 3,
+                            "missing_image_asset_count": 0,
+                            "outside_handoff_image_count": 0,
+                        },
+                        "planned_visual_upload_files": [
+                            {"source_path": "one.png", "asset_class": "markdown_referenced"},
+                            {"source_path": "two.png", "asset_class": "markdown_referenced"},
+                            {"source_path": "three.png", "asset_class": "markdown_referenced"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "image-ingestion-execute",
+                        "--execute",
+                        "--asset-upload-plan",
+                        str(asset_plan),
+                        "--dataset-id",
+                        "ds-visual",
+                        "--confirm-dataset-id",
+                        "ds-visual",
+                        "--confirm-planned-count",
+                        "3",
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "fake-key",
+                        "--report-json",
+                        str(output),
+                        "--batch-size",
+                        "2",
+                        "--poll-interval",
+                        "0",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(
+            FakeVisualIngestionClient.instances[0].parsed,
+            [
+                ("ds-visual", ["visual-1", "visual-2"]),
+                ("ds-visual", ["visual-3"]),
+            ],
+        )
+        self.assertEqual(payload["batching"]["requested_batch_size"], 2)
+        self.assertEqual(payload["batching"]["planned_document_count"], 3)
+        self.assertEqual(payload["batching"]["parse_batch_count"], 2)
+        self.assertEqual(payload["batching"]["retryable_failure_count"], 0)
+        self.assertEqual(payload["batching"]["batches"][0]["uploaded_document_ids"], ["visual-1", "visual-2"])
+        self.assertEqual(payload["batching"]["batches"][0]["parse_trigger_status"], "success")
+        self.assertEqual(payload["batching"]["batches"][1]["uploaded_document_ids"], ["visual-3"])
+        self.assertEqual(payload["batching"]["batches"][1]["parse_trigger_status"], "success")
+        self.assertEqual(payload["execution"]["parse_trigger_count"], 2)
+
+    def test_image_ingestion_execute_records_retryable_batch_failure(self) -> None:
+        module = load_build_module()
+        FakeVisualIngestionClient.instances = []
+        FakeVisualParseFailureClient.instances = []
+        module.RAGFlowClient = FakeVisualParseFailureClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("one.png", "two.png", "three.png"):
+                (root / name).write_bytes(name.encode("utf-8"))
+            asset_plan = root / "asset_upload_plan.json"
+            output = root / "image_ingestion_execute.json"
+            asset_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_kb_asset_upload_plan_v2",
+                        "handoff_root": str(root),
+                        "summary": {
+                            "planned_visual_upload_file_count": 3,
+                            "missing_image_asset_count": 0,
+                            "outside_handoff_image_count": 0,
+                        },
+                        "planned_visual_upload_files": [
+                            {"source_path": "one.png", "asset_class": "markdown_referenced"},
+                            {"source_path": "two.png", "asset_class": "markdown_referenced"},
+                            {"source_path": "three.png", "asset_class": "markdown_referenced"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "image-ingestion-execute",
+                        "--execute",
+                        "--asset-upload-plan",
+                        str(asset_plan),
+                        "--dataset-id",
+                        "ds-visual",
+                        "--confirm-dataset-id",
+                        "ds-visual",
+                        "--confirm-planned-count",
+                        "3",
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "fake-key",
+                        "--report-json",
+                        str(output),
+                        "--batch-size",
+                        "2",
+                        "--poll-interval",
+                        "0",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 1, stdout.getvalue())
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["status"], "partial_failure")
+        self.assertEqual(payload["execution"]["parse_trigger_count"], 1)
+        self.assertEqual(payload["execution"]["parse_trigger_attempt_count"], 2)
+        self.assertEqual(payload["batching"]["parse_batch_count"], 1)
+        self.assertEqual(payload["batching"]["parse_batch_attempt_count"], 2)
+        self.assertEqual(payload["batching"]["failed_batch_count"], 1)
+        self.assertEqual(payload["batching"]["retryable_failure_count"], 1)
+        self.assertEqual(payload["batching"]["batches"][0]["parse_trigger_status"], "success")
+        failed_batch = payload["batching"]["batches"][1]
+        self.assertEqual(failed_batch["uploaded_document_ids"], ["visual-3"])
+        self.assertEqual(failed_batch["parse_trigger_status"], "failed")
+        self.assertTrue(failed_batch["retryable"])
+        self.assertEqual(failed_batch["retryable_failures"][0]["stage"], "parse_trigger")
+        self.assertIn("temporary visual parse trigger outage", failed_batch["retryable_failures"][0]["message"])
+        failed_observed = next(item for item in payload["observed_visual_documents"] if item["document_id"] == "visual-3")
+        self.assertEqual(failed_observed["status"], "parse_trigger_failed")
+
+    def test_image_ingestion_execute_checkpoint_resume_skips_confirmed_visual_assets(self) -> None:
+        module = load_build_module()
+        FakeCheckpointVisualClient.instances = []
+        FakeCheckpointVisualClient.upload_counter = 0
+        module.RAGFlowClient = FakeCheckpointVisualClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("one.png", "two.png"):
+                (root / name).write_bytes(name.encode("utf-8"))
+            asset_plan = root / "asset_upload_plan.json"
+            output = root / "image_ingestion_execute.json"
+            checkpoint = root / "image_ingestion.checkpoint.json"
+            asset_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_kb_asset_upload_plan_v2",
+                        "handoff_root": str(root),
+                        "summary": {
+                            "planned_visual_upload_file_count": 2,
+                            "missing_image_asset_count": 0,
+                            "outside_handoff_image_count": 0,
+                        },
+                        "planned_visual_upload_files": [
+                            {"source_path": "one.png", "asset_class": "markdown_referenced"},
+                            {"source_path": "two.png", "asset_class": "markdown_referenced"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            checkpoint.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_kb_ingestion_checkpoint_v1",
+                        "operation": "image_ingestion_execute",
+                        "dataset": {"id": "ds-visual", "name": None},
+                        "uploaded_documents": [
+                            {
+                                "kind": "visual",
+                                "source_key": str((root / "one.png").resolve()),
+                                "source_path": "one.png",
+                                "name": "one.png",
+                                "document_id": "visual-existing-1",
+                                "upload_status": "uploaded",
+                                "parse_trigger_status": "success",
+                                "parse_triggered": True,
+                            }
+                        ],
+                        "summary": {"uploaded_document_count": 1},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "image-ingestion-execute",
+                        "--execute",
+                        "--asset-upload-plan",
+                        str(asset_plan),
+                        "--dataset-id",
+                        "ds-visual",
+                        "--confirm-dataset-id",
+                        "ds-visual",
+                        "--confirm-planned-count",
+                        "2",
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "fake-key",
+                        "--report-json",
+                        str(output),
+                        "--checkpoint",
+                        str(checkpoint),
+                        "--resume",
+                        "--no-wait",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            checkpoint_payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(
+            [(dataset_id, Path(path).name) for dataset_id, path in FakeCheckpointVisualClient.instances[0].uploads],
+            [("ds-visual", "two.png")],
+        )
+        self.assertEqual(FakeCheckpointVisualClient.instances[0].parsed, [("ds-visual", ["visual-checkpoint-1"])])
+        self.assertEqual(payload["summary"]["uploaded_visual_document_count"], 2)
+        self.assertEqual(payload["execution"]["upload_call_count"], 1)
+        self.assertEqual(payload["checkpoint"]["resume"], True)
+        self.assertEqual(payload["checkpoint"]["skipped_upload_count"], 1)
+        self.assertEqual(payload["checkpoint"]["new_upload_count"], 1)
+        self.assertEqual(payload["cleanup_readiness"]["uploaded_document_ids"], ["visual-existing-1", "visual-checkpoint-1"])
+        self.assertEqual(checkpoint_payload["schema"], "ragflow_kb_ingestion_checkpoint_v1")
+        self.assertEqual(checkpoint_payload["operation"], "image_ingestion_execute")
+        self.assertEqual(checkpoint_payload["summary"]["uploaded_document_count"], 2)
+
+    def test_refresh_report_subcommand_uses_read_only_document_list(self) -> None:
+        module = load_build_module()
+        FakeRefreshClient.instances = []
+        module.RAGFlowClient = FakeRefreshClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kb_manifest = root / "kb_manifest.json"
+            output = root / "kb_refresh_report.json"
+            report_md = root / "kb_refresh_report.md"
+            redaction_json = root / "kb_refresh_report.redaction.json"
+            fake_host = "refresh.internal.local"
+            fake_secret = "fake-refresh-secret"
+            fake_url = f"https://{fake_host}/ragflow?token={fake_secret}"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "ragflow_base_url": fake_url,
+                        "dataset": {"id": "ds-refresh", "name": f"kb:{fake_url}"},
+                        "documents": [
+                            {
+                                "document_id": "doc-md",
+                                "source_path": "source.pdf",
+                                "markdown_path": "documents/source.md",
+                                "status": "done",
+                                "chunk_count": 1,
+                            },
+                            {
+                                "document_id": "doc-missing",
+                                "source_path": "missing.pdf",
+                                "markdown_path": "documents/missing.md",
+                                "status": "done",
+                                "chunk_count": 4,
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "refresh-report",
+                        "--kb-manifest",
+                        str(kb_manifest),
+                        "--base-url",
+                        fake_url,
+                        "--api-key",
+                        fake_secret,
+                        "--report-json",
+                        str(output),
+                        "--report-md",
+                        str(report_md),
+                        "--redaction-report",
+                        str(redaction_json),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+            report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+            redaction_payload = json.loads(redaction_json.read_text(encoding="utf-8")) if redaction_json.exists() else {}
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertIn("ragflow_kb_refresh_report_v1", stdout.getvalue())
+        self.assertEqual(payload["schema"], "ragflow_kb_refresh_report_v1")
+        self.assertTrue(payload["advisory_only"])
+        self.assertEqual(payload["mutation"], "none")
+        self.assertEqual(payload["execution"]["ragflow_calls"], 1)
+        self.assertEqual(payload["execution"]["list_documents_call_count"], 1)
+        self.assertEqual(payload["dataset"]["id"], "ds-refresh")
+        self.assertEqual(payload["summary"]["manifest_document_count"], 2)
+        self.assertEqual(payload["summary"]["observed_document_count"], 3)
+        self.assertEqual(payload["summary"]["matched_document_count"], 1)
+        self.assertEqual(payload["summary"]["missing_manifest_document_count"], 1)
+        self.assertEqual(payload["summary"]["extra_observed_document_count"], 2)
+        self.assertEqual(payload["summary"]["manifest_chunk_total"], 5)
+        self.assertEqual(payload["summary"]["observed_chunk_total"], 3)
+        self.assertEqual(payload["summary"]["chunk_mismatch_count"], 1)
+        self.assertEqual(payload["summary"]["failed_document_count"], 1)
+        self.assertEqual(payload["summary"]["in_progress_document_count"], 1)
+        self.assertEqual(FakeRefreshClient.instances[0].list_calls, [("ds-refresh", 1, 200)])
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+        self.assertGreaterEqual(redaction_payload["summary"]["redaction_count"], 3)
+        self.assertIn("RAGFlow KB Refresh Report", report_md_text)
+        self.assertIn("Missing manifest documents", report_md_text)
+        issue_codes = {issue["code"] for issue in payload["issues"]}
+        self.assertIn("manifest_document_missing_observed_state", issue_codes)
+        self.assertIn("document_chunk_count_mismatch", issue_codes)
+        self.assertIn("observed_document_not_in_manifest", issue_codes)
+        combined = json.dumps(payload, ensure_ascii=False) + report_md_text + stdout.getvalue()
+        self.assertNotIn(fake_host, combined)
+        self.assertNotIn(fake_secret, combined)
+        self.assertNotIn(str(kb_manifest), combined)
+        self.assertIn("<redacted:private-host>", combined)
+        self.assertIn("<redacted:config-path>", combined)
+
+    def test_parse_report_consumes_refresh_report_as_observed_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kb_manifest = root / "kb_manifest.json"
+            refresh_report = root / "kb_refresh_report.json"
+            output = root / "parse_report.json"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-observed", "name": "kb:observed"},
+                        "documents": [
+                            {
+                                "document_id": "doc-observed",
+                                "source_path": "source.md",
+                                "markdown_path": "documents/source.md",
+                                "status": "done",
+                                "chunk_count": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            refresh_report.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "schema": "ragflow_kb_refresh_report_v1",
+                        "status": "PASS",
+                        "dataset": {"id": "ds-observed", "name": "kb:observed"},
+                        "summary": {
+                            "observed_document_count": 1,
+                            "matched_document_count": 1,
+                            "observed_chunk_total": 2,
+                            "failed_document_count": 0,
+                            "in_progress_document_count": 0,
+                            "chunk_mismatch_count": 0,
+                        },
+                        "observed_documents": [
+                            {
+                                "document_id": "doc-observed",
+                                "name": "source.md",
+                                "status": "done",
+                                "chunk_count": 2,
+                                "progress": 1,
+                            }
+                        ],
+                        "issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "parse-report",
+                    "--kb-manifest",
+                    str(kb_manifest),
+                    "--observed-state",
+                    str(refresh_report),
+                    "--report-json",
+                    str(output),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(payload["summary"]["matched_status_document_count"], 1)
+        self.assertEqual(payload["summary"]["observed_chunk_total"], 2)
+        self.assertEqual(payload["inputs"]["observed_state"], str(refresh_report))
+        self.assertEqual(payload["observed_state"]["schema"], "ragflow_kb_refresh_report_v1")
+        issue_codes = {issue["code"] for issue in payload["issues"]}
+        self.assertNotIn("document_status_json_missing", issue_codes)
+
+    def test_snapshot_chunks_records_shared_observed_state_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chunk_input = root / "chunks.json"
+            chunk_snapshot = root / "chunk_snapshot.json"
+            report_json = root / "snapshot_report.json"
+            refresh_report = root / "kb_refresh_report.json"
+            chunk_input.write_text(
+                json.dumps(
+                    {
+                        "chunks": [
+                            {
+                                "content": "Observed state chunk body",
+                                "document_name": "source.md",
+                                "document_id": "doc-observed",
+                                "dataset_id": "ds-observed",
+                                "chunk_id": "chunk-1",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            refresh_report.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "schema": "ragflow_kb_refresh_report_v1",
+                        "status": "PASS",
+                        "dataset": {"id": "ds-observed", "name": "kb:observed"},
+                        "summary": {
+                            "observed_document_count": 1,
+                            "observed_chunk_total": 1,
+                            "failed_document_count": 0,
+                            "in_progress_document_count": 0,
+                            "chunk_mismatch_count": 0,
+                        },
+                        "observed_documents": [
+                            {
+                                "document_id": "doc-observed",
+                                "name": "source.md",
+                                "status": "done",
+                                "chunk_count": 1,
+                            }
+                        ],
+                        "issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "snapshot-chunks",
+                    "--input",
+                    str(chunk_input),
+                    "--output",
+                    str(chunk_snapshot),
+                    "--observed-state",
+                    str(refresh_report),
+                    "--report-json",
+                    str(report_json),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(report_json.read_text(encoding="utf-8")) if report_json.exists() else {}
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(payload["schema"], "ragflow_chunk_snapshot_report_v1")
+        self.assertEqual(payload["observed_state"]["schema"], "ragflow_kb_refresh_report_v1")
+        self.assertEqual(payload["observed_state"]["summary"]["observed_chunk_total"], 1)
+        self.assertEqual(payload["summary"]["observed_state_document_count"], 1)
 
     def test_metadata_governance_subcommands_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4862,6 +5878,90 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("<redacted:private-host>", combined)
         self.assertIn("<redacted:config-path>", combined)
 
+    def test_health_report_consumes_refresh_report_as_observed_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kb_manifest = root / "kb_manifest.json"
+            refresh_report = root / "kb_refresh_report.json"
+            output = root / "kb_health_report.json"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-health-observed", "name": "kb:health-observed"},
+                        "profile": {"id": "health-observed-profile", "embedding_model": "bge-m3"},
+                        "documents": [
+                            {
+                                "document_id": "doc-health-observed",
+                                "source_path": "source.md",
+                                "markdown_path": "documents/source.md",
+                                "status": "done",
+                                "chunk_count": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            refresh_report.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "schema": "ragflow_kb_refresh_report_v1",
+                        "status": "PASS",
+                        "dataset": {"id": "ds-health-observed", "name": "kb:health-observed"},
+                        "summary": {
+                            "observed_document_count": 1,
+                            "matched_document_count": 1,
+                            "observed_chunk_total": 2,
+                            "failed_document_count": 0,
+                            "in_progress_document_count": 0,
+                            "chunk_mismatch_count": 0,
+                        },
+                        "observed_documents": [
+                            {
+                                "document_id": "doc-health-observed",
+                                "name": "source.md",
+                                "status": "done",
+                                "chunk_count": 2,
+                            }
+                        ],
+                        "issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "health-report",
+                    "--kb-manifest",
+                    str(kb_manifest),
+                    "--observed-state",
+                    str(refresh_report),
+                    "--expected-embedding-model",
+                    "bge-m3",
+                    "--report-json",
+                    str(output),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(payload["inputs"]["observed_states"], [str(refresh_report)])
+        self.assertEqual(payload["summary"]["observed_state_source_count"], 1)
+        self.assertEqual(payload["knowledge_bases"][0]["observed_state"]["schema"], "ragflow_kb_refresh_report_v1")
+        self.assertEqual(payload["knowledge_bases"][0]["observed_state"]["summary"]["observed_chunk_total"], 2)
+        issue_codes = {issue["code"] for issue in payload["issues"]}
+        self.assertNotIn("parse_report_missing", issue_codes)
+
     def test_health_report_consumes_model_provider_probe_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -6743,6 +7843,8 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertTrue(payload["dry_run"])
         self.assertEqual(payload["schema"], "ragflow_cleanup_plan_v1")
         self.assertEqual(file_payload["required_confirmation"]["confirm_dataset_id"], "0123456789abcdef")
+        self.assertEqual(file_payload["runtime_metrics"]["schema"], "ragflow_runtime_metrics_v1")
+        self.assertEqual(file_payload["runtime_metrics"]["stage_timings"][0]["standard_stage"], "cleanup")
 
     def test_append_and_cleanup_plan_redaction_sidecars(self) -> None:
         append_secret = "append-secret"
@@ -7039,8 +8141,10 @@ class KbBuildCliTests(unittest.TestCase):
                 json.dumps(
                     {
                         "ok": True,
-                        "metrics": {"pass_rate": 0.8},
+                        "metrics": {"pass_rate": 0.8, "total": 20},
                         "benchmark": {"metrics": {"hit_rate": 0.5, "mrr": 0.4, "ndcg_at_k": 0.4}},
+                        "runtime_metrics": {"latency_ms": {"average": 250.0}},
+                        "cost_trace": {"estimated_total_usd": 0.2},
                     }
                 ),
                 encoding="utf-8",
@@ -7049,8 +8153,10 @@ class KbBuildCliTests(unittest.TestCase):
                 json.dumps(
                     {
                         "ok": True,
-                        "metrics": {"pass_rate": 1.0},
+                        "metrics": {"pass_rate": 1.0, "total": 20},
                         "benchmark": {"metrics": {"hit_rate": 1.0, "mrr": 0.8, "ndcg_at_k": 0.8}},
+                        "runtime_metrics": {"latency_ms": {"average": 100.0}},
+                        "cost_trace": {"estimated_total_usd": 0.04},
                     }
                 ),
                 encoding="utf-8",
@@ -7077,7 +8183,10 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["winner"]["path"], str(second))
+        self.assertEqual(payload["winner"]["metrics"]["estimated_cost_usd"], 0.04)
+        self.assertEqual(payload["winner"]["metrics"]["cost_per_query_usd"], 0.002)
         self.assertIn("Profile Compare", compare_report_text)
+        self.assertIn("cost_usd", compare_report_text)
 
     def test_profile_decision_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7593,6 +8702,8 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["metrics"]["pass_rate"], 1.0)
         self.assertEqual(payload["metrics"]["runtime_partial_failure_status"], "completed")
         self.assertEqual(payload["runtime_partial_failure"]["summary"]["status"], "completed")
+        self.assertEqual(payload["runtime_metrics"]["schema"], "ragflow_runtime_metrics_v1")
+        self.assertEqual(payload["runtime_metrics"]["stage_timings"][0]["standard_stage"], "validation")
         self.assertTrue(payload["metadata_summary"]["ok"])
         self.assertEqual(payload["metadata_summary"]["tag_count"], 1)
         self.assertIn("q1", report_text)
@@ -7782,6 +8893,120 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertTrue(payload["benchmark"]["gate"]["ok"])
         self.assertEqual(payload["benchmark"]["baseline"]["delta"]["mrr"], 0.5)
         self.assertIn("## Benchmark", report_text)
+
+    def test_validate_benchmark_records_refresh_report_observed_state(self) -> None:
+        module = load_validate_module()
+        module.RAGFlowClient = FakeValidationClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "kb_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-1", "name": "kb:test"},
+                        "documents": [
+                            {
+                                "document_id": "doc-observed",
+                                "source_path": "source.md",
+                                "markdown_path": "documents/source.md",
+                                "status": "done",
+                                "chunk_count": 1,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            queries = root / "queries.json"
+            queries.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {
+                                "id": "q1",
+                                "question": "Known",
+                                "expected_terms": ["known term"],
+                                "expected_documents": ["source.md"],
+                                "metadata": {"type": "fact"},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            qrels = root / "qrels.json"
+            qrels.write_text(
+                json.dumps(
+                    {
+                        "qrels": [
+                            {
+                                "query_id": "q1",
+                                "expected_documents": ["source.md"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            refresh_report = root / "kb_refresh_report.json"
+            refresh_report.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "schema": "ragflow_kb_refresh_report_v1",
+                        "status": "PASS",
+                        "dataset": {"id": "ds-1", "name": "kb:test"},
+                        "summary": {
+                            "observed_document_count": 1,
+                            "matched_document_count": 1,
+                            "observed_chunk_total": 1,
+                            "failed_document_count": 0,
+                            "in_progress_document_count": 0,
+                            "chunk_mismatch_count": 0,
+                        },
+                        "observed_documents": [
+                            {
+                                "document_id": "doc-observed",
+                                "name": "source.md",
+                                "status": "done",
+                                "chunk_count": 1,
+                            }
+                        ],
+                        "issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report_md = root / "benchmark.md"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--kb-manifest",
+                        str(manifest),
+                        "--level",
+                        "benchmark",
+                        "--queries",
+                        str(queries),
+                        "--qrels",
+                        str(qrels),
+                        "--observed-state",
+                        str(refresh_report),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--report-md",
+                        str(report_md),
+                    ]
+                )
+            report_text = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        payload = json.loads(stdout.getvalue())
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["observed_state"]["schema"], "ragflow_kb_refresh_report_v1")
+        self.assertEqual(payload["observed_state"]["summary"]["observed_chunk_total"], 1)
+        self.assertIn("Observed State", report_text)
 
 
 if __name__ == "__main__":

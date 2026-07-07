@@ -26,6 +26,49 @@
     "rebuild_or_reparse_required": false,
     "reason": null
   },
+  "batching": {
+    "enabled": true,
+    "requested_batch_size": 25,
+    "effective_batch_size": 25,
+    "planned_document_count": 1,
+    "planned_batch_count": 1,
+    "uploaded_document_count": 1,
+    "parse_batch_count": 1,
+    "parse_batch_attempt_count": 1,
+    "parse_document_count": 1,
+    "failed_batch_count": 0,
+    "retryable_failure_count": 0,
+    "batches": [
+      {
+        "batch_index": 1,
+        "planned_document_count": 1,
+        "uploaded_document_count": 1,
+        "failed_document_count": 0,
+        "uploaded_document_ids": [
+          "example-document-id"
+        ],
+        "document_names": [
+          "source.md"
+        ],
+        "upload_status": "uploaded",
+        "parse_trigger_status": "success",
+        "parse_triggered": true,
+        "parse_response_observed": true,
+        "retryable": false,
+        "retryable_failure_count": 0,
+        "retryable_failures": []
+      }
+    ]
+  },
+  "checkpoint": {
+    "enabled": true,
+    "path": "./run/kb_build.checkpoint.json",
+    "resume": false,
+    "force_reupload_confirmed": false,
+    "skipped_upload_count": 0,
+    "new_upload_count": 1,
+    "total_confirmed_upload_count": 1
+  },
   "documents": [
     {
       "document_id": "example-document-id",

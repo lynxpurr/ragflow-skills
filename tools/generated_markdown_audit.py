@@ -52,6 +52,7 @@ SANITIZED_MARKDOWN_VERIFIED_COMMANDS = (
     "ragflow-kb-build optimize readiness",
     "ragflow-kb-build optimize summarize",
     "ragflow-kb-build parse-report",
+    "ragflow-kb-build refresh-report",
     "ragflow-kb-build probe",
     "ragflow-kb-build profile compare",
     "ragflow-kb-build profile decision",

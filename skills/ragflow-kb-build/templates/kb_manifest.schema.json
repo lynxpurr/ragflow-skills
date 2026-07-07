@@ -121,6 +121,186 @@
         }
       }
     },
+    "batching": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "requested_batch_size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "effective_batch_size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "planned_document_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "planned_batch_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "uploaded_document_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "parse_batch_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "parse_batch_attempt_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "parse_document_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed_batch_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retryable_failure_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "batches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "batch_index": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "planned_document_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "uploaded_document_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failed_document_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "uploaded_document_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "document_names": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "upload_status": {
+                "type": "string"
+              },
+              "parse_trigger_status": {
+                "type": "string"
+              },
+              "parse_triggered": {
+                "type": "boolean"
+              },
+              "parse_response_observed": {
+                "type": "boolean"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "retryable_failure_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "retryable_failures": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "stage": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "document_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "document_names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "checkpoint": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resume": {
+          "type": "boolean"
+        },
+        "force_reupload_confirmed": {
+          "type": "boolean"
+        },
+        "skipped_upload_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "new_upload_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_confirmed_upload_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
     "documents": {
       "type": "array",
       "items": {

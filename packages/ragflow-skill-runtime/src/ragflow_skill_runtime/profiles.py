@@ -460,6 +460,16 @@ def _first_number(mappings: list[Mapping[str, Any]], *keys: str) -> float | None
     return None
 
 
+def _mapping_from(mapping: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    value = mapping.get(key)
+    return value if isinstance(value, Mapping) else {}
+
+
+def _runtime_latency_average_ms(runtime_metrics: Mapping[str, Any]) -> float | None:
+    latency = _mapping_from(runtime_metrics, "latency_ms")
+    return _number_from(latency, "average", "p50", "p95", "max")
+
+
 def _empty_result_rate(metrics: Mapping[str, Any], benchmark_metrics: Mapping[str, Any]) -> float:
     direct = _first_number([benchmark_metrics, metrics], "empty_result_rate", "empty_rate")
     if direct is not None:
@@ -477,20 +487,29 @@ def _report_score(report: Mapping[str, Any]) -> tuple[float, dict[str, Any]]:
     benchmark_metrics = benchmark.get("metrics") if isinstance(benchmark.get("metrics"), Mapping) else {}
     metadata = report.get("metadata") if isinstance(report.get("metadata"), Mapping) else {}
     timing = report.get("timing") if isinstance(report.get("timing"), Mapping) else {}
+    runtime_metrics = report.get("runtime_metrics") if isinstance(report.get("runtime_metrics"), Mapping) else {}
+    cost = report.get("cost") if isinstance(report.get("cost"), Mapping) else {}
+    cost_trace = report.get("cost_trace") if isinstance(report.get("cost_trace"), Mapping) else {}
+    runtime_cost = _mapping_from(runtime_metrics, "cost")
+    runtime_cost_trace = _mapping_from(runtime_metrics, "cost_trace")
     pass_rate = _number_from(metrics, "pass_rate") or 0.0
     mrr = _number_from(benchmark_metrics, "mrr") or 0.0
     ndcg = _number_from(benchmark_metrics, "ndcg_at_k") or 0.0
     hit_rate = _number_from(benchmark_metrics, "hit_rate") or 0.0
     empty_rate = _empty_result_rate(metrics, benchmark_metrics)
     average_chunks = _number_from(metrics, "average_chunks", "avg_chunks") or 0.0
+    query_count = _query_count_from_report(report)
     query_latency_ms = _first_number(
-        [benchmark_metrics, metrics, timing, metadata],
+        [benchmark_metrics, metrics, timing, metadata, runtime_metrics],
         "query_latency_ms",
         "average_query_latency_ms",
         "avg_query_latency_ms",
         "latency_ms",
         "duration_ms",
-    ) or 0.0
+    )
+    if query_latency_ms is None:
+        query_latency_ms = _runtime_latency_average_ms(runtime_metrics)
+    query_latency_ms = query_latency_ms or 0.0
     parse_time_ms = _first_number(
         [metrics, timing, metadata],
         "parse_time_ms",
@@ -498,8 +517,37 @@ def _report_score(report: Mapping[str, Any]) -> tuple[float, dict[str, Any]]:
         "average_parse_time_ms",
         "avg_parse_time_ms",
     ) or 0.0
+    cost_sources = [benchmark_metrics, metrics, timing, metadata, cost, cost_trace, runtime_cost, runtime_cost_trace]
+    estimated_cost_usd = _first_number(
+        cost_sources,
+        "estimated_cost_usd",
+        "cost_usd",
+        "total_cost_usd",
+        "estimated_total_usd",
+        "total_estimated_usd",
+    ) or 0.0
+    cost_per_query_usd = _first_number(
+        cost_sources,
+        "cost_per_query_usd",
+        "estimated_cost_per_query_usd",
+    )
+    if cost_per_query_usd is None and estimated_cost_usd > 0.0 and query_count > 0:
+        cost_per_query_usd = estimated_cost_usd / query_count
+    cost_per_query_usd = cost_per_query_usd or 0.0
+    latency_penalty = min(query_latency_ms / 10000.0, 0.05)
+    cost_penalty = min(cost_per_query_usd * 20.0, 0.05)
+    if cost_penalty == 0.0 and estimated_cost_usd > 0.0 and query_count <= 0:
+        cost_penalty = min(estimated_cost_usd * 0.1, 0.05)
     benchmark_quality = (hit_rate + mrr + ndcg) / 3
-    score = (pass_rate * 0.38) + (hit_rate * 0.25) + (mrr * 0.20) + (ndcg * 0.12) - (empty_rate * 0.05)
+    score = (
+        (pass_rate * 0.38)
+        + (hit_rate * 0.25)
+        + (mrr * 0.20)
+        + (ndcg * 0.12)
+        - (empty_rate * 0.05)
+        - latency_penalty
+        - cost_penalty
+    )
     return score, {
         "pass_rate": pass_rate,
         "hit_rate": hit_rate,
@@ -507,9 +555,15 @@ def _report_score(report: Mapping[str, Any]) -> tuple[float, dict[str, Any]]:
         "ndcg_at_k": ndcg,
         "empty_result_rate": empty_rate,
         "average_chunks": average_chunks,
+        "query_count": query_count,
         "query_latency_ms": query_latency_ms,
         "parse_time_ms": parse_time_ms,
         "benchmark_quality_score": benchmark_quality,
+        "estimated_cost_usd": estimated_cost_usd,
+        "cost_per_query_usd": cost_per_query_usd,
+        "latency_penalty": latency_penalty,
+        "cost_penalty": cost_penalty,
+        "operational_cost_score": latency_penalty + cost_penalty,
         "score": score,
     }
 
@@ -1076,8 +1130,8 @@ def render_profile_compare_markdown(report: Mapping[str, Any]) -> str:
     lines = [
         "# RAGFlow Profile Compare Report",
         "",
-        "| rank | path | score | pass_rate | hit_rate | mrr | ndcg@k | empty_rate | latency_ms | parse_ms |",
-        "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| rank | path | score | pass_rate | hit_rate | mrr | ndcg@k | empty_rate | latency_ms | parse_ms | cost_usd | cost_per_query_usd | operational_cost |",
+        "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for index, item in enumerate(report.get("candidates", []), start=1):
         metrics = item.get("metrics", {})
@@ -1086,7 +1140,8 @@ def render_profile_compare_markdown(report: Mapping[str, Any]) -> str:
             f"{metrics.get('pass_rate', 0):.4f} | {metrics.get('hit_rate', 0):.4f} | "
             f"{metrics.get('mrr', 0):.4f} | {metrics.get('ndcg_at_k', 0):.4f} | "
             f"{metrics.get('empty_result_rate', 0):.4f} | {metrics.get('query_latency_ms', 0):.1f} | "
-            f"{metrics.get('parse_time_ms', 0):.1f} |"
+            f"{metrics.get('parse_time_ms', 0):.1f} | {metrics.get('estimated_cost_usd', 0):.6f} | "
+            f"{metrics.get('cost_per_query_usd', 0):.6f} | {metrics.get('operational_cost_score', 0):.4f} |"
         )
     lines.append("")
     return "\n".join(lines)
@@ -1107,8 +1162,8 @@ def render_profile_decision_markdown(report: Mapping[str, Any]) -> str:
         f"- max_query_count: `{summary.get('max_query_count', 0)}`",
         f"- score_delta: `{summary.get('score_delta', 0)}`",
         "",
-        "| rank | profile | decision_score | pass_rate | strict_recall | expected_hit | table_recall | image_recall | empty_rate | latency_ms | chunks |",
-        "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| rank | profile | decision_score | pass_rate | strict_recall | expected_hit | table_recall | image_recall | empty_rate | latency_ms | chunks | cost_usd | operational_cost |",
+        "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for index, item in enumerate(report.get("candidates", []), start=1):
         if not isinstance(item, Mapping):
@@ -1125,7 +1180,9 @@ def render_profile_decision_markdown(report: Mapping[str, Any]) -> str:
             f"{image_recall} | "
             f"{float(metrics.get('empty_result_rate', 0.0) or 0.0):.4f} | "
             f"{float(metrics.get('query_latency_ms', 0.0) or 0.0):.1f} | "
-            f"{float(metrics.get('average_chunks', 0.0) or 0.0):.1f} |"
+            f"{float(metrics.get('average_chunks', 0.0) or 0.0):.1f} | "
+            f"{float(metrics.get('estimated_cost_usd', 0.0) or 0.0):.6f} | "
+            f"{float(metrics.get('operational_cost_score', 0.0) or 0.0):.4f} |"
         )
     issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
     lines.extend(["", "## Issues", ""])

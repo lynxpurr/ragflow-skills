@@ -128,6 +128,75 @@ def _write_run(
     )
 
 
+def _write_adaptive_outcome_sidecars(
+    root: Path,
+    *,
+    build_status: str,
+    parse_status: str,
+    retrieval_status: str,
+    planned_upload_count: int,
+    chunk_count: int,
+    validation_pass_rate: float,
+    query_result_count: int,
+    query_latency_ms: float,
+) -> None:
+    _write_json(
+        root / "asset_upload_plan.json",
+        {
+            "schema": "ragflow_kb_asset_upload_plan_v2",
+            "summary": {
+                "planned_upload_count": planned_upload_count,
+                "referenced_image_count": planned_upload_count,
+            },
+            "policy": {"default_upload_class": "markdown_referenced"},
+        },
+    )
+    _write_json(
+        root / "kb_manifest.json",
+        {
+            "schema": "ragflow_multimodal_kb_manifest_v1",
+            "summary": {
+                "status": build_status,
+                "document_count": 1,
+                "chunk_count": chunk_count,
+            },
+        },
+    )
+    _write_json(
+        root / "parse_report.json",
+        {
+            "schema": "ragflow_parse_report_v1",
+            "ok": parse_status == "success",
+            "summary": {
+                "parse_status": parse_status,
+                "total_chunk_count": chunk_count,
+            },
+        },
+    )
+    _write_json(
+        root / "validation_benchmark.json",
+        {
+            "schema": "ragflow_validation_report_v1",
+            "ok": retrieval_status == "pass",
+            "metrics": {
+                "pass_rate": validation_pass_rate,
+                "total": 8,
+                "empty_result_rate": 0.0 if retrieval_status == "pass" else 0.25,
+                "query_latency_ms": query_latency_ms,
+            },
+        },
+    )
+    _write_json(
+        root / "query_direct.json",
+        {
+            "schema": "ragflow_query_result_v1",
+            "ok": query_result_count > 0,
+            "summary": {"result_count": query_result_count},
+            "runtime_metrics": {"latency_ms": {"average": query_latency_ms}},
+        },
+    )
+
+
 class AdaptiveSummaryComparisonTests(unittest.TestCase):
     def test_compare_adaptive_summary_runs_highlights_regression_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -172,6 +241,76 @@ class AdaptiveSummaryComparisonTests(unittest.TestCase):
         self.assertIn("outcome.chunk_profile_marker_count", fields)
         self.assertIn("outcome.semantic_rename_ratio", fields)
         self.assertIn("RAGFlow Adaptive Summary Comparison", markdown)
+
+    def test_compare_adaptive_summary_runs_records_decision_build_and_query_outcomes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline = root / "baseline"
+            candidate = root / "candidate"
+            _write_run(
+                baseline,
+                primary_language="zh",
+                language_source="inspect_source",
+                fastapi_backend="hybrid-auto-engine",
+                profile_id="table-atomic-zh-4096",
+                quality_status="PASS",
+                marker_count=24,
+                image_count=15,
+                renamed_count=15,
+            )
+            _write_adaptive_outcome_sidecars(
+                baseline,
+                build_status="ready",
+                parse_status="success",
+                retrieval_status="pass",
+                planned_upload_count=15,
+                chunk_count=128,
+                validation_pass_rate=1.0,
+                query_result_count=5,
+                query_latency_ms=90.0,
+            )
+            _write_run(
+                candidate,
+                primary_language="zh",
+                language_source="inspect_source",
+                fastapi_backend="pipeline",
+                profile_id="default-zh-512",
+                quality_status="PASS_WITH_REVIEW",
+                marker_count=8,
+                image_count=3,
+                renamed_count=1,
+            )
+            _write_adaptive_outcome_sidecars(
+                candidate,
+                build_status="review",
+                parse_status="failed",
+                retrieval_status="failed",
+                planned_upload_count=3,
+                chunk_count=0,
+                validation_pass_rate=0.25,
+                query_result_count=0,
+                query_latency_ms=240.0,
+            )
+
+            report = compare_adaptive_summary_runs(baseline=baseline, candidate=candidate)
+            markdown = render_adaptive_summary_comparison_markdown(report)
+
+        self.assertTrue(report["summary"]["parse_outcome_changed"])
+        self.assertTrue(report["summary"]["retrieval_outcome_changed"])
+        self.assertTrue(report["summary"]["build_query_metrics_compared"])
+        self.assertEqual(report["baseline"]["decision_outcome"]["backend"], "mineru-fastapi")
+        self.assertEqual(report["baseline"]["decision_outcome"]["table_quality"], "standard")
+        self.assertEqual(report["baseline"]["decision_outcome"]["chunk_profile"], "table-atomic-zh-4096")
+        self.assertEqual(report["baseline"]["decision_outcome"]["asset_policy"], "markdown_referenced")
+        self.assertEqual(report["baseline"]["decision_outcome"]["parse_status"], "success")
+        self.assertEqual(report["baseline"]["decision_outcome"]["retrieval_status"], "pass")
+        self.assertEqual(report["candidate"]["decision_outcome"]["parse_status"], "failed")
+        self.assertEqual(report["candidate"]["outcome"]["validation_pass_rate"], 0.25)
+        fields = {change["field"] for change in report["changes"]}
+        self.assertIn("decision_outcome.parse_status", fields)
+        self.assertIn("decision_outcome.retrieval_status", fields)
+        self.assertIn("outcome.validation_pass_rate", fields)
+        self.assertIn("Build And Query Outcomes", markdown)
 
 
 if __name__ == "__main__":

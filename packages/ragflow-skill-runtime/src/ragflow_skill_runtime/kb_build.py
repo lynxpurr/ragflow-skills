@@ -13,12 +13,13 @@ import time
 from typing import Any, Mapping
 import zipfile
 
-from .manifests import DocManifest, KbDocumentEntry
+from .manifests import DocManifest, KbDocumentEntry, KbManifest, ManifestError, load_kb_manifest
 from .profiles import ChunkProfile, ProfileError, load_profile
 
 KB_ASSET_UPLOAD_PLAN_SCHEMA = "ragflow_kb_asset_upload_plan_v2"
 KB_ASSET_INGESTION_REPORT_SCHEMA = "ragflow_kb_asset_ingestion_report_v1"
 KB_ARTIFACT_CONSISTENCY_REPORT_SCHEMA = "ragflow_kb_artifact_consistency_report_v1"
+KB_REFRESH_REPORT_SCHEMA = "ragflow_kb_refresh_report_v1"
 MULTIMODAL_KB_MANIFEST_SCHEMA = "ragflow_multimodal_kb_manifest_v1"
 RETRIEVAL_HINTS_SCHEMA = "ragflow_retrieval_hints_v1"
 CHUNK_PROFILE_REPORT_SCHEMA = "ragflow_chunk_profile_report_v1"
@@ -1736,6 +1737,362 @@ def parse_state_failed(state: Mapping[str, Any]) -> bool:
         or (isinstance(progress, (int, float)) and progress < 0)
         or _message_indicates_failure(str(state.get("progress_msg", "")))
     )
+
+
+def _refresh_match_keys(document: KbDocumentEntry) -> list[str]:
+    keys: list[str] = []
+    for value in (document.document_id, document.markdown_path, document.source_path):
+        if not value:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        keys.append(text)
+        name = Path(text).name
+        if name and name != text:
+            keys.append(name)
+    return [key.casefold() for key in keys if key]
+
+
+def _observed_state_lookup(states: Mapping[str, Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
+    lookup: dict[str, Mapping[str, Any]] = {}
+    for document_id, state in states.items():
+        for value in (document_id, state.get("document_id"), state.get("name")):
+            if not isinstance(value, str) or not value.strip():
+                continue
+            lookup.setdefault(value.strip().casefold(), state)
+            name = Path(value.strip()).name
+            if name:
+                lookup.setdefault(name.casefold(), state)
+    return lookup
+
+
+def _refresh_state_label(state: Mapping[str, Any]) -> str:
+    if parse_state_failed(state):
+        return "failed"
+    if parse_state_succeeded(state):
+        return "succeeded"
+    status = str(state.get("status") or "").strip()
+    return "in_progress" if status else "unknown"
+
+
+def _refresh_next_steps(issues: list[Mapping[str, Any]]) -> list[str]:
+    codes = {str(issue.get("code") or "") for issue in issues}
+    steps: list[str] = []
+    if "manifest_document_missing_observed_state" in codes:
+        steps.append("Export a fresh refresh report before using the manifest for parse, health, or benchmark decisions.")
+    if "document_chunk_count_mismatch" in codes:
+        steps.append("Treat manifest chunk counts as stale until a refreshed manifest or parse report agrees with server-observed counts.")
+    if {"observed_document_parse_failed", "observed_document_in_progress"} & codes:
+        steps.append("Review failed or still-running documents before marking this KB production-ready.")
+    if "observed_document_not_in_manifest" in codes:
+        steps.append("Decide whether unlinked observed documents should be added to the manifest chain or cleaned up.")
+    if not steps:
+        steps.append("Keep this read-only refresh report with the KB evidence chain for later parse, health, and benchmark checks.")
+    return steps
+
+
+def load_kb_refresh_report(path: str | Path) -> dict[str, Any]:
+    """Load and validate a read-only KB refresh report sidecar."""
+
+    source = Path(path)
+    payload = _read_json_mapping(source, label="KB refresh report")
+    if payload.get("schema") != KB_REFRESH_REPORT_SCHEMA:
+        raise BuildError(f"KB refresh report schema must be {KB_REFRESH_REPORT_SCHEMA}: {source}")
+    payload["_source_path"] = str(source)
+    return payload
+
+
+def kb_refresh_report_document_status_payload(report: Mapping[str, Any]) -> dict[str, Any]:
+    """Convert a refresh report into a document-list shape parse-report can consume."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    observed_documents = [
+        dict(item)
+        for item in report.get("observed_documents", [])
+        if isinstance(item, Mapping)
+    ]
+    return {
+        "schema": KB_REFRESH_REPORT_SCHEMA,
+        "dataset": dict(report.get("dataset", {})) if isinstance(report.get("dataset"), Mapping) else {},
+        "data": {
+            "docs": observed_documents,
+            "doc_count": _as_int(summary.get("observed_document_count")),
+            "chunk_count": _as_int(summary.get("observed_chunk_total")),
+        },
+    }
+
+
+def summarize_kb_refresh_observed_state(
+    report: Mapping[str, Any],
+    *,
+    dataset_id: str | None = None,
+) -> dict[str, Any]:
+    """Return a compact common observed-state block for downstream reports."""
+
+    dataset = dict(report.get("dataset", {})) if isinstance(report.get("dataset"), Mapping) else {}
+    observed_dataset_id = str(dataset.get("id") or "")
+    dataset_matches = None if not dataset_id else observed_dataset_id == str(dataset_id)
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    issues = [dict(item) for item in report.get("issues", []) if isinstance(item, Mapping)]
+    compact_summary = {
+        "observed_document_count": _as_int(summary.get("observed_document_count")) or 0,
+        "matched_document_count": _as_int(summary.get("matched_document_count")) or 0,
+        "missing_manifest_document_count": _as_int(summary.get("missing_manifest_document_count")) or 0,
+        "extra_observed_document_count": _as_int(summary.get("extra_observed_document_count")) or 0,
+        "observed_chunk_total": _as_int(summary.get("observed_chunk_total")),
+        "observed_chunk_document_count": _as_int(summary.get("observed_chunk_document_count")) or 0,
+        "chunk_mismatch_count": _as_int(summary.get("chunk_mismatch_count")) or 0,
+        "failed_document_count": _as_int(summary.get("failed_document_count")) or 0,
+        "in_progress_document_count": _as_int(summary.get("in_progress_document_count")) or 0,
+        "warning_count": _as_int(summary.get("warning_count")) or 0,
+        "error_count": _as_int(summary.get("error_count")) or 0,
+    }
+    return {
+        "available": True,
+        "schema": KB_REFRESH_REPORT_SCHEMA,
+        "source": str(report.get("_source_path") or ""),
+        "status": report.get("status", "UNKNOWN"),
+        "ok": bool(report.get("ok", True)),
+        "dataset": dataset,
+        "dataset_matches": dataset_matches,
+        "summary": compact_summary,
+        "issue_codes": sorted({str(issue.get("code") or "") for issue in issues if issue.get("code")}),
+    }
+
+
+def create_kb_refresh_report(
+    *,
+    kb_manifest_path: str | Path,
+    document_list_response: Any,
+    page: int = 1,
+    page_size: int = 200,
+) -> dict[str, Any]:
+    """Create a read-only report of current RAGFlow document and chunk state."""
+
+    try:
+        kb_manifest = load_kb_manifest(kb_manifest_path)
+    except ManifestError as exc:
+        raise BuildError(str(exc)) from exc
+
+    observed_states = extract_document_states(document_list_response)
+    observed_lookup = _observed_state_lookup(observed_states)
+    matched_observed_ids: set[str] = set()
+    manifest_documents: list[dict[str, Any]] = []
+    issues: list[dict[str, str]] = []
+    manifest_chunk_total = 0
+    observed_chunk_total = 0
+    observed_chunk_document_count = 0
+    chunk_mismatch_count = 0
+    matched_document_count = 0
+
+    for document in kb_manifest.documents:
+        manifest_chunks = _as_int(document.chunk_count)
+        if manifest_chunks is not None:
+            manifest_chunk_total += manifest_chunks
+        observed: Mapping[str, Any] | None = None
+        for key in _refresh_match_keys(document):
+            candidate = observed_lookup.get(key)
+            if candidate:
+                observed = candidate
+                break
+        if observed:
+            matched_document_count += 1
+            observed_id = observed.get("document_id")
+            if isinstance(observed_id, str) and observed_id:
+                matched_observed_ids.add(observed_id)
+        observed_chunks = _as_int(observed.get("chunk_count")) if observed else None
+        document_issue_codes: list[str] = []
+        if not observed:
+            document_issue_codes.append("manifest_document_missing_observed_state")
+            issues.append(
+                _issue(
+                    severity="warning",
+                    code="manifest_document_missing_observed_state",
+                    message=f"Manifest document {document.document_id} was not found in the read-only RAGFlow document list.",
+                    recommendation="Run refresh-report again after confirming the dataset ID, or regenerate the manifest from current server state.",
+                )
+            )
+        elif manifest_chunks is not None and observed_chunks is not None and manifest_chunks != observed_chunks:
+            chunk_mismatch_count += 1
+            document_issue_codes.append("document_chunk_count_mismatch")
+            issues.append(
+                _issue(
+                    severity="warning",
+                    code="document_chunk_count_mismatch",
+                    message=(
+                        f"Manifest document {document.document_id} chunk_count={manifest_chunks} differs "
+                        f"from observed chunk_count={observed_chunks}."
+                    ),
+                    recommendation="Refresh downstream parse, health, and benchmark sidecars before trusting chunk totals.",
+                )
+            )
+
+        manifest_documents.append(
+            {
+                "document_id": document.document_id,
+                "source_path": document.source_path,
+                "markdown_path": document.markdown_path,
+                "manifest_status": document.status,
+                "manifest_chunk_count": manifest_chunks,
+                "observed_status": observed.get("status") if observed else None,
+                "observed_chunk_count": observed_chunks,
+                "observed_state": _compact_observed_state(observed) if observed else None,
+                "issues": document_issue_codes,
+            }
+        )
+
+    observed_documents = list(observed_states.values())
+    status_counts: dict[str, int] = {}
+    refresh_state_counts = {"succeeded": 0, "failed": 0, "in_progress": 0, "unknown": 0}
+    extra_observed_documents: list[dict[str, Any]] = []
+    for state in observed_documents:
+        status = str(state.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        refresh_label = _refresh_state_label(state)
+        refresh_state_counts[refresh_label] = refresh_state_counts.get(refresh_label, 0) + 1
+        chunks = _as_int(state.get("chunk_count"))
+        if chunks is not None:
+            observed_chunk_document_count += 1
+            observed_chunk_total += chunks
+        document_id = str(state.get("document_id") or "")
+        if document_id and document_id not in matched_observed_ids:
+            extra_observed_documents.append(_compact_observed_state(state) or dict(state))
+            issues.append(
+                _issue(
+                    severity="warning",
+                    code="observed_document_not_in_manifest",
+                    message=f"Observed document {document_id} is not linked from the KB manifest.",
+                    recommendation="Review whether this document is an intentional visual/manual upload or stale server-side residue.",
+                )
+            )
+        if refresh_label == "failed":
+            issues.append(
+                _issue(
+                    severity="warning",
+                    code="observed_document_parse_failed",
+                    message=f"Observed document {document_id or state.get('name') or 'unknown'} is in a failed parse state.",
+                    recommendation="Inspect RAGFlow progress details before retrying parse or refreshing the manifest.",
+                )
+            )
+        elif refresh_label in {"in_progress", "unknown"}:
+            issues.append(
+                _issue(
+                    severity="warning",
+                    code="observed_document_in_progress",
+                    message=f"Observed document {document_id or state.get('name') or 'unknown'} is not completed yet.",
+                    recommendation="Wait for parse completion or rerun refresh-report before production activation.",
+                )
+            )
+
+    missing_manifest_count = len(kb_manifest.documents) - matched_document_count
+    warning_count = sum(1 for issue in issues if issue["severity"] == "warning")
+    error_count = sum(1 for issue in issues if issue["severity"] == "error")
+    status = "FAIL" if error_count else "REVIEW" if warning_count else "PASS"
+
+    return {
+        "ok": error_count == 0,
+        "schema": KB_REFRESH_REPORT_SCHEMA,
+        "created_at": _now(),
+        "status": status,
+        "advisory_only": True,
+        "mutation": "none",
+        "execution": {
+            "status": "completed",
+            "ragflow_calls": 1,
+            "list_documents_call_count": 1,
+            "document_list_page": page,
+            "document_list_page_size": page_size,
+            "db_calls": 0,
+            "redis_calls": 0,
+            "docker_calls": 0,
+            "system_service_calls": 0,
+        },
+        "inputs": {
+            "kb_manifest": str(kb_manifest_path),
+            "document_list_source": "ragflow_client.list_documents",
+            "page": page,
+            "page_size": page_size,
+        },
+        "dataset": {
+            "id": kb_manifest.dataset.id,
+            "name": kb_manifest.dataset.name,
+            "ragflow_base_url": kb_manifest.ragflow_base_url,
+        },
+        "summary": {
+            "manifest_document_count": len(kb_manifest.documents),
+            "observed_document_count": len(observed_documents),
+            "matched_document_count": matched_document_count,
+            "missing_manifest_document_count": missing_manifest_count,
+            "extra_observed_document_count": len(extra_observed_documents),
+            "manifest_chunk_total": manifest_chunk_total,
+            "observed_chunk_total": observed_chunk_total if observed_chunk_document_count or observed_documents else None,
+            "observed_chunk_document_count": observed_chunk_document_count,
+            "chunk_mismatch_count": chunk_mismatch_count,
+            "succeeded_document_count": refresh_state_counts.get("succeeded", 0),
+            "failed_document_count": refresh_state_counts.get("failed", 0),
+            "in_progress_document_count": refresh_state_counts.get("in_progress", 0) + refresh_state_counts.get("unknown", 0),
+            "status_counts": dict(sorted(status_counts.items())),
+            "issue_count": len(issues),
+            "warning_count": warning_count,
+            "error_count": error_count,
+        },
+        "manifest_documents": manifest_documents,
+        "observed_documents": [_compact_observed_state(state) or dict(state) for state in observed_documents],
+        "extra_observed_documents": extra_observed_documents,
+        "issues": issues,
+        "next_steps": _refresh_next_steps(issues),
+    }
+
+
+def render_kb_refresh_report_markdown(report: Mapping[str, Any]) -> str:
+    """Render a concise Markdown summary for a read-only KB refresh report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    dataset = report.get("dataset", {}) if isinstance(report.get("dataset"), Mapping) else {}
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    missing = [
+        item
+        for item in report.get("manifest_documents", [])
+        if isinstance(item, Mapping) and "manifest_document_missing_observed_state" in (item.get("issues") or [])
+    ]
+    lines = [
+        "# RAGFlow KB Refresh Report",
+        "",
+        f"- schema: `{report.get('schema', KB_REFRESH_REPORT_SCHEMA)}`",
+        f"- status: `{report.get('status', 'unknown')}`",
+        f"- mutation: `{report.get('mutation', 'none')}`",
+        f"- dataset: `{dataset.get('name', '')}` (`{dataset.get('id', '')}`)",
+        f"- manifest documents: `{summary.get('manifest_document_count', 0)}`",
+        f"- observed documents: `{summary.get('observed_document_count', 0)}`",
+        f"- matched documents: `{summary.get('matched_document_count', 0)}`",
+        f"- missing manifest documents: `{summary.get('missing_manifest_document_count', 0)}`",
+        f"- extra observed documents: `{summary.get('extra_observed_document_count', 0)}`",
+        f"- chunk mismatches: `{summary.get('chunk_mismatch_count', 0)}`",
+        f"- failed documents: `{summary.get('failed_document_count', 0)}`",
+        f"- in-progress documents: `{summary.get('in_progress_document_count', 0)}`",
+        "",
+        "## Missing manifest documents",
+        "",
+    ]
+    if missing:
+        for item in missing[:20]:
+            lines.append(f"- `{item.get('document_id', '')}` `{item.get('markdown_path', '')}`")
+    else:
+        lines.append("- None.")
+    lines.extend(["", "## Issues", ""])
+    if issues:
+        for issue in issues[:30]:
+            if isinstance(issue, Mapping):
+                lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    else:
+        lines.append("- No issues found.")
+    next_steps = report.get("next_steps") if isinstance(report.get("next_steps"), list) else []
+    if next_steps:
+        lines.extend(["", "## Next Steps", ""])
+        for step in next_steps:
+            lines.append(f"- {step}")
+    return "\n".join(lines) + "\n"
 
 
 def _profile_manifest_dict(profile: ChunkProfile | Mapping[str, Any]) -> dict[str, Any]:

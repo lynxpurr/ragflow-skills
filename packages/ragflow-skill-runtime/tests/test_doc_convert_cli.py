@@ -725,6 +725,7 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
         self.assertGreaterEqual(redaction_payload["summary"]["redaction_count"], 1)
         self.assertIn("RAGFlow Adaptive Summary Comparison", markdown)
+        self.assertIn("Build And Query Outcomes", markdown)
         self.assertNotIn(str(root), combined)
         self.assertIn("<redacted:config-path>", combined)
 
@@ -870,6 +871,9 @@ class DocConvertCliTests(unittest.TestCase):
         performance = runtime_report["performance"]
         stage_names = {item["stage"] for item in performance["stage_timings"]}
         self.assertTrue({"conversion", "postprocess", "package", "hints", "ingest_plan"}.issubset(stage_names))
+        standard_stages = {item["standard_stage"] for item in performance["stage_timings"]}
+        self.assertTrue({"conversion", "postprocess", "packaging"}.issubset(standard_stages))
+        self.assertTrue(all("category" in item for item in performance["stage_timings"]))
         self.assertEqual(performance["runtime_context"]["configured_backend"], "mineru-cli")
         self.assertEqual(performance["runtime_context"]["pipeline_mode"], "formal_ingest")
         self.assertFalse(performance["runtime_context"]["persistent_mineru_reused"])
@@ -2274,6 +2278,7 @@ class DocConvertCliTests(unittest.TestCase):
             for item in runtime_report["performance"]["stage_timings"]
             if item["stage"] == "asset" and item["operation"] == "remote_asset_materialization"
         )
+        self.assertEqual(asset_timing["standard_stage"], "asset_planning")
         self.assertEqual(asset_timing["included_in_stage"], "conversion")
         self.assertFalse(asset_timing["counts_toward_total"])
         self.assertIsNotNone(asset_timing["duration_ms"])

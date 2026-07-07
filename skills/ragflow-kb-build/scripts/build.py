@@ -37,6 +37,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     attach_benchmark_evaluation,
     build_runtime_metrics_summary,
     build_runtime_partial_failure_report,
+    throughput_summary,
     create_grounded_qa_suggestion_request,
     create_apollo_table_qa_judge_request,
     create_kb_asset_ingestion_readiness_report,
@@ -68,15 +69,20 @@ from ragflow_skill_runtime import (  # noqa: E402
     map_grounded_qa_evidence,
     merge_metadata_payloads,
     normalize_embedding_model_expectations,
+    chunk_count_performance_warnings,
+    performance_warning_report,
+    polling_performance_warnings,
     probe_model_providers,
     configured_private_hosts_from_urls,
     create_kb_activation_plan,
     create_kb_health_report,
+    create_kb_refresh_report,
     create_kb_split_plan,
     create_kb_topology_advice,
     create_parse_report,
     render_handoff_inspection_markdown,
     render_kb_health_report_markdown,
+    render_kb_refresh_report_markdown,
     render_markdown_report,
     render_governance_markdown,
     render_model_provider_probe_markdown,
@@ -110,6 +116,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     delta_benchmark_reports,
     summarize_metadata_for_documents,
     summarize_retrieval_hints,
+    stage_duration_performance_warnings,
     export_tagset_file,
     evaluate_apollo_table_qa_results,
     tagset_report_file,
@@ -128,6 +135,7 @@ from ragflow_skill_runtime.health_report import HealthReportError  # noqa: E402
 from ragflow_skill_runtime.kb_build import (  # noqa: E402
     KB_ASSET_INGESTION_REPORT_SCHEMA,
     KB_ASSET_UPLOAD_PLAN_SCHEMA,
+    KB_REFRESH_REPORT_SCHEMA,
     extract_dataset_id,
     extract_document_states,
     extract_uploaded_document_id,
@@ -147,6 +155,7 @@ _URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 _ASSIGNMENT_SECRET_VALUE_RE = re.compile(
     r"(?i)\b(?:api[_-]?key|token|secret|password|authorization)\s*[:=]\s*([^\s,;\"']+)"
 )
+KB_INGESTION_CHECKPOINT_SCHEMA = "ragflow_kb_ingestion_checkpoint_v1"
 OPTIMIZATION_PLAN_CHECKPOINT_SCHEMA = "ragflow_optimization_plan_checkpoint_v1"
 OPTIMIZATION_COMMAND_MANIFEST_SCHEMA = "ragflow_optimization_command_manifest_v1"
 OPTIMIZATION_CLEANUP_EXECUTION_REPORT_SCHEMA = "ragflow_optimization_cleanup_execution_report_v1"
@@ -213,6 +222,267 @@ def _write_text_file(path: str | None, text: str) -> None:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _validate_optional_batch_size(value: int | None, *, label: str) -> None:
+    if value is not None and value <= 0:
+        raise BuildError(f"{label} batch_size must be positive")
+
+
+def _batch_values(values: list[str], batch_size: int | None) -> list[list[str]]:
+    if not values:
+        return []
+    effective_size = batch_size if batch_size is not None else len(values)
+    return [values[index : index + effective_size] for index in range(0, len(values), effective_size)]
+
+
+def _new_batch_record(index: int, items: list[Mapping[str, Any]]) -> dict[str, Any]:
+    uploaded_document_ids = [
+        str(item.get("document_id"))
+        for item in items
+        if item.get("document_id") is not None and str(item.get("document_id"))
+    ]
+    document_names = [str(item.get("name") or item.get("source_path") or item.get("document_id") or "") for item in items]
+    failed_items = [
+        item
+        for item in items
+        if str(item.get("upload_status") or "uploaded") not in {"uploaded", "success"}
+    ]
+    retryable_failures = [
+        {
+            "stage": "upload",
+            "message": str(item.get("error") or "upload failed"),
+            "retryable": True,
+            "document_ids": [],
+            "document_names": [str(item.get("name") or item.get("source_path") or "")],
+        }
+        for item in failed_items
+    ]
+    if failed_items and uploaded_document_ids:
+        upload_status = "partial_failure"
+    elif failed_items:
+        upload_status = "failed"
+    else:
+        upload_status = "uploaded"
+    return {
+        "batch_index": index,
+        "planned_document_count": len(items),
+        "uploaded_document_count": len(uploaded_document_ids),
+        "failed_document_count": len(failed_items),
+        "uploaded_document_ids": uploaded_document_ids,
+        "document_names": document_names,
+        "upload_status": upload_status,
+        "parse_trigger_status": "pending" if uploaded_document_ids else "skipped",
+        "parse_triggered": False,
+        "parse_response_observed": False,
+        "retryable": bool(retryable_failures),
+        "retryable_failure_count": len(retryable_failures),
+        "retryable_failures": retryable_failures,
+    }
+
+
+def _batch_records(items: list[Mapping[str, Any]], batch_size: int | None) -> list[dict[str, Any]]:
+    if not items:
+        return []
+    effective_size = batch_size if batch_size is not None else len(items)
+    return [
+        _new_batch_record(index + 1, list(items[offset : offset + effective_size]))
+        for index, offset in enumerate(range(0, len(items), effective_size))
+    ]
+
+
+def _checkpoint_source_key(path: str | Path) -> str:
+    try:
+        return str(Path(path).resolve())
+    except OSError:
+        return str(path)
+
+
+def _read_ingestion_checkpoint(path: str | Path, *, operation: str) -> dict[str, Any]:
+    payload = _read_json_file(path, label="ingestion checkpoint")
+    if not isinstance(payload, dict):
+        raise BuildError("ingestion checkpoint must be a JSON object")
+    if payload.get("schema") != KB_INGESTION_CHECKPOINT_SCHEMA:
+        raise BuildError(f"ingestion checkpoint schema must be {KB_INGESTION_CHECKPOINT_SCHEMA}")
+    if payload.get("operation") != operation:
+        raise BuildError(f"ingestion checkpoint operation must be {operation}")
+    if not isinstance(payload.get("uploaded_documents", []), list):
+        raise BuildError("ingestion checkpoint uploaded_documents must be a list")
+    return payload
+
+
+def _checkpoint_dataset_id(checkpoint: Mapping[str, Any]) -> str:
+    dataset = checkpoint.get("dataset")
+    if not isinstance(dataset, Mapping):
+        raise BuildError("ingestion checkpoint dataset must be an object")
+    dataset_id = dataset.get("id")
+    if not isinstance(dataset_id, str) or not dataset_id:
+        raise BuildError("ingestion checkpoint dataset.id is required for resume")
+    return dataset_id
+
+
+def _checkpoint_uploaded_map(checkpoint: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    records: dict[str, dict[str, Any]] = {}
+    for item in checkpoint.get("uploaded_documents", []):
+        if not isinstance(item, Mapping):
+            continue
+        document_id = item.get("document_id")
+        if not isinstance(document_id, str) or not document_id:
+            continue
+        if str(item.get("upload_status") or "uploaded") not in {"uploaded", "success"}:
+            continue
+        key = item.get("source_key") or item.get("source_path")
+        if isinstance(key, str) and key:
+            records[key] = dict(item)
+    return records
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _checkpoint_report(
+    *,
+    checkpoint_path: str | None,
+    resume: bool,
+    force_reupload_confirmed: bool,
+    skipped_upload_count: int,
+    new_upload_count: int,
+    total_confirmed_upload_count: int,
+) -> dict[str, Any]:
+    return {
+        "enabled": bool(checkpoint_path),
+        "path": str(checkpoint_path) if checkpoint_path else None,
+        "resume": bool(resume),
+        "force_reupload_confirmed": bool(force_reupload_confirmed),
+        "skipped_upload_count": skipped_upload_count,
+        "new_upload_count": new_upload_count,
+        "total_confirmed_upload_count": total_confirmed_upload_count,
+    }
+
+
+def _write_ingestion_checkpoint(
+    checkpoint_path: str | None,
+    *,
+    operation: str,
+    dataset_id: str,
+    dataset_name: str | None,
+    records: Mapping[str, Mapping[str, Any]],
+    created_at: str | None = None,
+) -> dict[str, Any] | None:
+    if not checkpoint_path:
+        return None
+    uploaded_documents = [dict(record) for _key, record in sorted(records.items())]
+    now = _utc_now()
+    payload = {
+        "schema": KB_INGESTION_CHECKPOINT_SCHEMA,
+        "created_at": created_at or now,
+        "updated_at": now,
+        "operation": operation,
+        "dataset": {"id": dataset_id, "name": dataset_name},
+        "uploaded_documents": uploaded_documents,
+        "summary": {
+            "uploaded_document_count": sum(
+                1
+                for record in uploaded_documents
+                if record.get("document_id") and str(record.get("upload_status") or "uploaded") in {"uploaded", "success"}
+            ),
+            "parse_triggered_document_count": sum(
+                1 for record in uploaded_documents if str(record.get("parse_trigger_status") or "") == "success"
+            ),
+            "parse_waited_document_count": sum(
+                1 for record in uploaded_documents if str(record.get("parse_wait_status") or "") == "success"
+            ),
+        },
+    }
+    _write_json_file(checkpoint_path, payload)
+    return payload
+
+
+def _mark_batch_parse_skipped(batch: dict[str, Any]) -> None:
+    batch["parse_trigger_status"] = "skipped"
+    batch["parse_triggered"] = False
+    batch["parse_response_observed"] = False
+
+
+def _mark_batch_parse_success(batch: dict[str, Any], response: Any) -> None:
+    batch["parse_trigger_status"] = "success"
+    batch["parse_triggered"] = True
+    batch["parse_response_observed"] = response is not None
+
+
+def _mark_batch_parse_failure(batch: dict[str, Any], exc: Exception) -> None:
+    batch["parse_trigger_status"] = "failed"
+    batch["parse_triggered"] = False
+    batch["parse_response_observed"] = False
+    failures = list(batch.get("retryable_failures") or [])
+    failures.append(
+        {
+            "stage": "parse_trigger",
+            "message": str(exc),
+            "retryable": True,
+            "document_ids": list(batch.get("uploaded_document_ids") or []),
+            "document_names": list(batch.get("document_names") or []),
+        }
+    )
+    batch["retryable_failures"] = failures
+    batch["retryable"] = bool(failures)
+    batch["retryable_failure_count"] = len(failures)
+
+
+def _batching_summary(
+    *,
+    requested_batch_size: int | None,
+    planned_document_count: int,
+    uploaded_document_count: int,
+    parse_batch_count: int,
+    parse_document_count: int,
+    batches: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    batch_records = list(batches or [])
+    parse_batch_attempt_count = (
+        sum(
+            1
+            for batch in batch_records
+            if str(batch.get("parse_trigger_status") or "") in {"success", "failed"}
+        )
+        if batch_records
+        else parse_batch_count
+    )
+    failed_batch_count = sum(
+        1
+        for batch in batch_records
+        if str(batch.get("parse_trigger_status") or "") == "failed"
+        or str(batch.get("upload_status") or "") in {"failed", "partial_failure"}
+    )
+    retryable_failure_count = sum(int(batch.get("retryable_failure_count") or 0) for batch in batch_records)
+    effective_batch_size = requested_batch_size if requested_batch_size is not None else (
+        planned_document_count if planned_document_count > 0 else None
+    )
+    planned_batch_count = (
+        len(_batch_values([""] * planned_document_count, requested_batch_size))
+        if planned_document_count > 0
+        else 0
+    )
+    return {
+        "enabled": requested_batch_size is not None,
+        "requested_batch_size": requested_batch_size,
+        "effective_batch_size": effective_batch_size,
+        "planned_document_count": planned_document_count,
+        "planned_batch_count": planned_batch_count,
+        "uploaded_document_count": uploaded_document_count,
+        "parse_batch_count": parse_batch_count,
+        "parse_batch_attempt_count": parse_batch_attempt_count,
+        "parse_document_count": parse_document_count,
+        "failed_batch_count": failed_batch_count,
+        "retryable_failure_count": retryable_failure_count,
+        "batches": batch_records,
+    }
 
 
 def _sha256_file(path: Path) -> str:
@@ -823,8 +1093,16 @@ def _sanitize_governance_report(
 
 def _run(args: argparse.Namespace) -> int:
     try:
+        _validate_optional_batch_size(args.batch_size, label="build")
+        if args.resume and not args.checkpoint:
+            raise BuildError("build --resume requires --checkpoint")
+        if args.force_reupload_confirmed and not args.resume:
+            raise BuildError("build --force-reupload-confirmed requires --resume")
+        if args.dry_run and args.resume:
+            raise BuildError("build --resume is only supported for live builds")
         stage_results: list[dict[str, Any]] = []
         stage_latency_ms: list[float] = []
+        stage_timings: list[dict[str, Any]] = []
         profile = load_profile(args.profile)
         expected_embedding_models = normalize_embedding_model_expectations(args.expected_embedding_model)
         embedding_model = describe_embedding_model(profile)
@@ -880,6 +1158,13 @@ def _run(args: argparse.Namespace) -> int:
                     "metadata_summary": metadata_summary,
                     "retrieval_hints_summary": summarize_retrieval_hints(retrieval_hints_payload),
                     "table_parent_chunk_preflight": table_parent_chunk_preflight,
+                    "batching": _batching_summary(
+                        requested_batch_size=args.batch_size,
+                        planned_document_count=len(docs),
+                        uploaded_document_count=0,
+                        parse_batch_count=0,
+                        parse_document_count=0,
+                    ),
                     "post_build_recommendations": _post_build_recommendations(
                         args,
                         kb_manifest_path=args.output,
@@ -891,60 +1176,289 @@ def _run(args: argparse.Namespace) -> int:
 
         config = _load_config(args)
         client = RAGFlowClient(config)
-        stage_start = datetime.now(timezone.utc)
-        dataset_response = client.create_dataset(args.kb_name, profile=profile.to_dataset_payload())
-        stage_latency_ms.append((datetime.now(timezone.utc) - stage_start).total_seconds() * 1000)
-        dataset_id = extract_dataset_id(dataset_response)
-        stage_results.append({"label": "create_dataset", "status": "success"})
+        checkpoint_payload: dict[str, Any] | None = None
+        checkpoint_created_at: str | None = None
+        checkpoint_records: dict[str, dict[str, Any]] = {}
+        confirmed_uploads: dict[str, dict[str, Any]] = {}
+        checkpoint_skipped_upload_count = 0
+        checkpoint_new_upload_count = 0
+        if args.resume:
+            checkpoint_payload = _read_ingestion_checkpoint(args.checkpoint, operation="markdown_build")
+            checkpoint_created_at = str(checkpoint_payload.get("created_at") or "") or None
+            checkpoint_dataset = checkpoint_payload.get("dataset") if isinstance(checkpoint_payload.get("dataset"), Mapping) else {}
+            checkpoint_kb_name = checkpoint_dataset.get("name") if isinstance(checkpoint_dataset, Mapping) else None
+            if checkpoint_kb_name and checkpoint_kb_name != args.kb_name:
+                raise BuildError("ingestion checkpoint dataset.name does not match --kb-name")
+            dataset_id = _checkpoint_dataset_id(checkpoint_payload)
+            confirmed_uploads = _checkpoint_uploaded_map(checkpoint_payload)
+            stage_results.append({"label": "create_dataset", "status": "skipped"})
+        else:
+            stage_start = datetime.now(timezone.utc)
+            dataset_response = client.create_dataset(args.kb_name, profile=profile.to_dataset_payload())
+            elapsed_ms = (datetime.now(timezone.utc) - stage_start).total_seconds() * 1000
+            stage_latency_ms.append(elapsed_ms)
+            stage_timings.append(
+                {
+                    "stage": "create_dataset",
+                    "operation": "create_dataset",
+                    "status": "success",
+                    "duration_ms": elapsed_ms,
+                }
+            )
+            dataset_id = extract_dataset_id(dataset_response)
+            stage_results.append({"label": "create_dataset", "status": "success"})
+            _write_ingestion_checkpoint(
+                args.checkpoint,
+                operation="markdown_build",
+                dataset_id=dataset_id,
+                dataset_name=args.kb_name,
+                records=checkpoint_records,
+            )
 
         uploaded = []
         document_ids: list[str] = []
+        parse_items: list[dict[str, Any]] = []
+        parse_success_document_ids: list[str] = []
+        markdown_upload_duration_ms = 0.0
+        markdown_upload_count = 0
+        parse_wait_duration_ms = 0.0
+        parse_wait_document_count = 0
         for doc in docs:
+            source_key = _checkpoint_source_key(doc.path)
+            confirmed = confirmed_uploads.get(source_key) if not args.force_reupload_confirmed else None
+            if confirmed:
+                document_id = str(confirmed["document_id"])
+                status = str(confirmed.get("status") or "uploaded")
+                chunk_count = _optional_int(confirmed.get("chunk_count"))
+                document_ids.append(document_id)
+                uploaded.append((doc, document_id, status, chunk_count))
+                checkpoint_records[source_key] = {
+                    **confirmed,
+                    "kind": "markdown",
+                    "source_key": source_key,
+                    "source_path": str(doc.path),
+                    "name": doc.path.name,
+                    "document_id": document_id,
+                    "upload_status": "uploaded",
+                    "checkpoint_resumed": True,
+                }
+                checkpoint_skipped_upload_count += 1
+                parse_trigger_status = str(confirmed.get("parse_trigger_status") or "")
+                parse_wait_status = str(confirmed.get("parse_wait_status") or "")
+                if args.no_parse:
+                    checkpoint_records[source_key]["parse_trigger_status"] = "skipped"
+                    checkpoint_records[source_key]["parse_wait_status"] = "skipped"
+                elif parse_trigger_status == "success":
+                    if not args.no_wait and parse_wait_status != "success":
+                        parse_success_document_ids.append(document_id)
+                else:
+                    parse_items.append(
+                        {
+                            "name": doc.path.name,
+                            "source_key": source_key,
+                            "source_path": str(doc.path),
+                            "document_id": document_id,
+                            "upload_status": "uploaded",
+                        }
+                    )
+                continue
             stage_start = datetime.now(timezone.utc)
             response = client.upload_document(dataset_id, doc.path)
-            stage_latency_ms.append((datetime.now(timezone.utc) - stage_start).total_seconds() * 1000)
+            elapsed_ms = (datetime.now(timezone.utc) - stage_start).total_seconds() * 1000
+            stage_latency_ms.append(elapsed_ms)
             document_id = extract_uploaded_document_id(response)
+            stage_timings.append(
+                {
+                    "stage": "markdown_upload",
+                    "operation": "upload_document",
+                    "status": "success",
+                    "duration_ms": elapsed_ms,
+                    "document_id": document_id,
+                    "document_count": 1,
+                }
+            )
+            markdown_upload_duration_ms += elapsed_ms
+            markdown_upload_count += 1
             document_ids.append(document_id)
             uploaded.append((doc, document_id, "uploaded", None))
+            item = {
+                "name": doc.path.name,
+                "source_key": source_key,
+                "source_path": str(doc.path),
+                "document_id": document_id,
+                "upload_status": "uploaded",
+            }
+            parse_items.append(item)
+            checkpoint_records[source_key] = {
+                "kind": "markdown",
+                "source_key": source_key,
+                "source_path": str(doc.path),
+                "name": doc.path.name,
+                "document_id": document_id,
+                "upload_status": "uploaded",
+                "status": "uploaded",
+                "chunk_count": None,
+                "parse_trigger_status": "skipped" if args.no_parse else "pending",
+                "parse_triggered": False,
+                "parse_wait_status": "skipped" if args.no_parse or args.no_wait else "pending",
+            }
+            checkpoint_new_upload_count += 1
             stage_results.append({"label": f"upload:{doc.path.name}", "status": "success"})
+            _write_ingestion_checkpoint(
+                args.checkpoint,
+                operation="markdown_build",
+                dataset_id=dataset_id,
+                dataset_name=args.kb_name,
+                records=checkpoint_records,
+                created_at=checkpoint_created_at,
+            )
 
         parse_response = None
+        parse_responses: list[Any] = []
+        parse_errors: list[str] = []
+        parse_failed_document_ids: set[str] = set()
+        batch_records = _batch_records(parse_items, args.batch_size)
         live_states = {}
-        if document_ids and not args.no_parse:
-            stage_start = datetime.now(timezone.utc)
-            parse_response = client.trigger_parse(dataset_id, document_ids)
-            stage_latency_ms.append((datetime.now(timezone.utc) - stage_start).total_seconds() * 1000)
-            stage_results.append({"label": "trigger_parse", "status": "success"})
-            if not args.no_wait:
+        if (parse_items or parse_success_document_ids) and not args.no_parse:
+            if not parse_items:
+                stage_results.append({"label": "trigger_parse", "status": "skipped"})
+            for batch in batch_records:
+                parse_batch = list(batch.get("uploaded_document_ids") or [])
+                if not parse_batch:
+                    _mark_batch_parse_skipped(batch)
+                    continue
+                stage_start = datetime.now(timezone.utc)
+                parse_trigger_status = "success"
+                try:
+                    response = client.trigger_parse(dataset_id, parse_batch)
+                    parse_responses.append(response)
+                    parse_success_document_ids.extend(parse_batch)
+                    _mark_batch_parse_success(batch, response)
+                    for record in checkpoint_records.values():
+                        if record.get("document_id") in parse_batch:
+                            record["parse_trigger_status"] = "success"
+                            record["parse_triggered"] = True
+                            if args.no_wait:
+                                record["parse_wait_status"] = "skipped"
+                    stage_results.append({"label": f"trigger_parse:{batch['batch_index']}", "status": "success"})
+                except Exception as exc:
+                    parse_trigger_status = "error"
+                    parse_errors.append(str(exc))
+                    parse_failed_document_ids.update(parse_batch)
+                    _mark_batch_parse_failure(batch, exc)
+                    for record in checkpoint_records.values():
+                        if record.get("document_id") in parse_batch:
+                            record["parse_trigger_status"] = "failed"
+                            record["parse_triggered"] = False
+                            record["parse_wait_status"] = "skipped"
+                    stage_results.append({"label": f"trigger_parse:{batch['batch_index']}", "status": "error"})
+                    _write_ingestion_checkpoint(
+                        args.checkpoint,
+                        operation="markdown_build",
+                        dataset_id=dataset_id,
+                        dataset_name=args.kb_name,
+                        records=checkpoint_records,
+                        created_at=checkpoint_created_at,
+                    )
+                    break
+                finally:
+                    elapsed_ms = (datetime.now(timezone.utc) - stage_start).total_seconds() * 1000
+                    stage_latency_ms.append(elapsed_ms)
+                    stage_timings.append(
+                        {
+                            "stage": "trigger_parse",
+                            "operation": "trigger_parse",
+                            "status": parse_trigger_status,
+                            "duration_ms": elapsed_ms,
+                            "batch_index": batch.get("batch_index"),
+                            "document_count": len(parse_batch),
+                        }
+                    )
+                    _write_ingestion_checkpoint(
+                        args.checkpoint,
+                        operation="markdown_build",
+                        dataset_id=dataset_id,
+                        dataset_name=args.kb_name,
+                        records=checkpoint_records,
+                        created_at=checkpoint_created_at,
+                    )
+            parse_response = parse_responses[0] if len(parse_responses) == 1 else parse_responses
+            if not args.no_wait and parse_success_document_ids:
                 stage_start = datetime.now(timezone.utc)
                 live_states = wait_for_document_states(
                     client,
                     dataset_id=dataset_id,
-                    document_ids=document_ids,
+                    document_ids=parse_success_document_ids,
                     timeout=args.parse_timeout,
                     poll_interval=args.poll_interval,
                 )
-                stage_latency_ms.append((datetime.now(timezone.utc) - stage_start).total_seconds() * 1000)
+                elapsed_ms = (datetime.now(timezone.utc) - stage_start).total_seconds() * 1000
+                stage_latency_ms.append(elapsed_ms)
+                parse_wait_duration_ms += elapsed_ms
+                parse_wait_document_count += len(parse_success_document_ids)
                 failed_states = [
                     str(item.get("status") or "")
                     for item in live_states.values()
                     if isinstance(item, Mapping) and str(item.get("status") or "").lower() not in {"done", "parsed", "success"}
                 ]
-                stage_results.append({"label": "wait_parse", "status": "warning" if failed_states else "success"})
+                parse_wait_status = "warning" if failed_states else "success"
+                stage_results.append({"label": "wait_parse", "status": parse_wait_status})
+                stage_timings.append(
+                    {
+                        "stage": "parse_wait",
+                        "operation": "wait_for_document_states",
+                        "status": parse_wait_status,
+                        "duration_ms": elapsed_ms,
+                        "document_count": len(parse_success_document_ids),
+                    }
+                )
                 uploaded = [
                     (
                         doc,
                         document_id,
-                        live_states.get(document_id, {}).get("status", status),
-                        live_states.get(document_id, {}).get("chunk_count", chunk_count),
+                        "parse_trigger_failed"
+                        if document_id in parse_failed_document_ids
+                        else live_states.get(document_id, {}).get("status", status),
+                        None
+                        if document_id in parse_failed_document_ids
+                        else live_states.get(document_id, {}).get("chunk_count", chunk_count),
                     )
                     for doc, document_id, status, chunk_count in uploaded
                 ]
+                for doc, document_id, status, chunk_count in uploaded:
+                    record = checkpoint_records.get(_checkpoint_source_key(doc.path))
+                    if record is None:
+                        continue
+                    record["status"] = status
+                    record["chunk_count"] = chunk_count
+                    if document_id in parse_failed_document_ids:
+                        record["parse_wait_status"] = "skipped"
+                    elif document_id in live_states:
+                        record["parse_wait_status"] = "success"
             else:
+                if args.no_wait:
+                    for record in checkpoint_records.values():
+                        if str(record.get("parse_trigger_status") or "") == "success":
+                            record["parse_wait_status"] = "skipped"
                 stage_results.append({"label": "wait_parse", "status": "skipped"})
         else:
+            for batch in batch_records:
+                _mark_batch_parse_skipped(batch)
+            if args.no_parse:
+                for record in checkpoint_records.values():
+                    record["parse_trigger_status"] = "skipped"
+                    record["parse_wait_status"] = "skipped"
             stage_results.append({"label": "trigger_parse", "status": "skipped"})
             stage_results.append({"label": "wait_parse", "status": "skipped"})
+
+        _write_ingestion_checkpoint(
+            args.checkpoint,
+            operation="markdown_build",
+            dataset_id=dataset_id,
+            dataset_name=args.kb_name,
+            records=checkpoint_records,
+            created_at=checkpoint_created_at,
+        )
 
         runtime_partial_failure = build_runtime_partial_failure_report(
             "ragflow_kb_build_live",
@@ -960,11 +1474,52 @@ def _run(args: argparse.Namespace) -> int:
             counters={
                 "stage_count": len(stage_results),
                 "document_count": len(uploaded),
-                "parse_triggered": 1 if document_ids and not args.no_parse else 0,
+                "parse_triggered": 1 if parse_responses else 0,
+                "parse_trigger_count": len(parse_responses),
+                "parse_trigger_attempt_count": sum(
+                    1
+                    for batch in batch_records
+                    if str(batch.get("parse_trigger_status") or "") in {"success", "failed"}
+                ),
+                "retryable_failure_count": sum(int(batch.get("retryable_failure_count") or 0) for batch in batch_records),
                 "parse_waited": 1 if document_ids and not args.no_parse and not args.no_wait else 0,
             },
             latency_samples_ms=stage_latency_ms,
+            stage_timings=stage_timings,
+            throughput={
+                **(
+                    {
+                        "markdown_upload": throughput_summary(
+                            item_count=markdown_upload_count,
+                            duration_ms=markdown_upload_duration_ms,
+                            unit="document",
+                        )
+                    }
+                    if markdown_upload_count
+                    else {}
+                ),
+                **(
+                    {
+                        "parse_wait": throughput_summary(
+                            item_count=parse_wait_document_count,
+                            duration_ms=parse_wait_duration_ms,
+                            unit="document",
+                        )
+                    }
+                    if parse_wait_document_count
+                    else {}
+                ),
+            },
         )
+        batching = _batching_summary(
+            requested_batch_size=args.batch_size,
+            planned_document_count=len(docs),
+            uploaded_document_count=len(uploaded),
+            parse_batch_count=len(parse_responses),
+            parse_document_count=len(parse_success_document_ids),
+            batches=batch_records,
+        )
+        build_ok = int(runtime_partial_failure["summary"].get("failure_count") or 0) == 0
 
         payload = make_kb_manifest_payload(
             base_url=config.base_url,
@@ -978,23 +1533,37 @@ def _run(args: argparse.Namespace) -> int:
             payload["metadata_summary"] = metadata_summary
         payload["runtime_partial_failure"] = runtime_partial_failure
         payload["runtime_metrics"] = runtime_metrics
+        payload["batching"] = batching
+        payload["checkpoint"] = _checkpoint_report(
+            checkpoint_path=args.checkpoint,
+            resume=args.resume,
+            force_reupload_confirmed=args.force_reupload_confirmed,
+            skipped_upload_count=checkpoint_skipped_upload_count,
+            new_upload_count=checkpoint_new_upload_count,
+            total_confirmed_upload_count=len(uploaded),
+        )
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
         _dump_json(
             {
-                "ok": True,
+                "ok": build_ok,
+                "status": "completed" if build_ok else "partial_failure",
                 "kb_manifest": str(output),
                 "dataset_id": dataset_id,
                 "document_count": len(uploaded),
-                "parse_triggered": not args.no_parse,
+                "parse_triggered": bool(parse_responses),
                 "parse_waited": not args.no_parse and not args.no_wait,
                 "parse_response": parse_response,
+                "parse_responses": parse_responses,
+                "parse_errors": parse_errors,
                 "embedding_model": embedding_model,
                 "embedding_model_check": embedding_model_check,
                 "runtime_partial_failure": runtime_partial_failure,
                 "runtime_metrics": runtime_metrics,
+                "batching": batching,
+                "checkpoint": payload["checkpoint"],
                 "post_build_recommendations": _post_build_recommendations(
                     args,
                     kb_manifest_path=output,
@@ -1002,7 +1571,7 @@ def _run(args: argparse.Namespace) -> int:
                 ),
             }
         )
-        return 0
+        return 0 if build_ok else 1
     except (BuildError, ConfigError, ProfileError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=args.json)
 
@@ -1037,12 +1606,25 @@ def _run_inspect_handoff(args: argparse.Namespace) -> int:
 
 def _run_asset_upload_plan(args: argparse.Namespace) -> int:
     try:
+        stage_start = datetime.now(timezone.utc)
         report = create_kb_asset_upload_plan(
             doc_manifest_path=args.doc_manifest,
             include_sidecars=not args.no_sidecars,
         )
         if args.package_zip:
             report["package_zip"] = write_kb_asset_upload_zip(report, output_path=args.package_zip)
+        elapsed_ms = (datetime.now(timezone.utc) - stage_start).total_seconds() * 1000
+        report["runtime_metrics"] = build_runtime_metrics_summary(
+            "ragflow_kb_asset_upload_plan",
+            stage_timings=[
+                {
+                    "stage": "asset_upload_plan",
+                    "operation": "create_asset_upload_plan",
+                    "status": "success",
+                    "duration_ms": elapsed_ms,
+                }
+            ],
+        )
         if args.redaction_report:
             report, redaction_report = _sanitize_governance_report(
                 report,
@@ -1172,11 +1754,16 @@ def _poll_uploaded_visual_states(
 
 def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
     try:
+        _validate_optional_batch_size(args.batch_size, label="image ingestion")
         if not args.execute:
             return _error(
                 "image-ingestion-execute requires --execute after reviewing image-ingestion-readiness",
                 json_output=args.json,
             )
+        if args.resume and not args.checkpoint:
+            raise BuildError("image-ingestion-execute --resume requires --checkpoint")
+        if args.force_reupload_confirmed and not args.resume:
+            raise BuildError("image-ingestion-execute --force-reupload-confirmed requires --resume")
 
         asset_plan = _read_json_file(args.asset_upload_plan, label="asset_upload_plan")
         if not isinstance(asset_plan, Mapping):
@@ -1211,72 +1798,271 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
 
         config = _load_config(args)
         client = RAGFlowClient(config)
+        checkpoint_payload: dict[str, Any] | None = None
+        checkpoint_created_at: str | None = None
+        checkpoint_records: dict[str, dict[str, Any]] = {}
+        confirmed_uploads: dict[str, dict[str, Any]] = {}
+        checkpoint_skipped_upload_count = 0
+        checkpoint_new_upload_count = 0
+        if args.resume:
+            checkpoint_payload = _read_ingestion_checkpoint(args.checkpoint, operation="image_ingestion_execute")
+            checkpoint_created_at = str(checkpoint_payload.get("created_at") or "") or None
+            checkpoint_dataset_id = _checkpoint_dataset_id(checkpoint_payload)
+            if checkpoint_dataset_id != args.dataset_id:
+                raise BuildError("ingestion checkpoint dataset.id does not match --dataset-id")
+            confirmed_uploads = _checkpoint_uploaded_map(checkpoint_payload)
         ragflow_calls = 0
+        upload_call_count = 0
         upload_records: list[dict[str, Any]] = []
         uploaded_document_ids: list[str] = []
+        parse_success_document_ids: list[str] = []
+        parse_items: list[dict[str, Any]] = []
+        stage_latency_ms: list[float] = []
+        stage_timings: list[dict[str, Any]] = []
+        image_upload_duration_ms = 0.0
+        parse_wait_duration_ms = 0.0
+        parse_wait_image_count = 0
 
         for asset in resolved_assets:
             source_path = str(asset["source_path"])
             resolved_path = asset["resolved_path"]
+            source_key = _checkpoint_source_key(resolved_path)
+            confirmed = confirmed_uploads.get(source_key) if not args.force_reupload_confirmed else None
+            if confirmed:
+                document_id = str(confirmed["document_id"])
+                record = {
+                    **confirmed,
+                    "kind": "visual",
+                    "source_key": source_key,
+                    "source_path": source_path,
+                    "name": Path(source_path).name,
+                    "asset_class": asset.get("asset_class"),
+                    "sha256": asset.get("sha256"),
+                    "mime_type": asset.get("mime_type"),
+                    "document_id": document_id,
+                    "upload_status": "uploaded",
+                    "checkpoint_resumed": True,
+                }
+                uploaded_document_ids.append(document_id)
+                upload_records.append(record)
+                checkpoint_records[source_key] = dict(record)
+                checkpoint_skipped_upload_count += 1
+                parse_trigger_status = str(confirmed.get("parse_trigger_status") or "")
+                parse_wait_status = str(confirmed.get("parse_wait_status") or "")
+                if args.no_parse:
+                    checkpoint_records[source_key]["parse_trigger_status"] = "skipped"
+                    checkpoint_records[source_key]["parse_wait_status"] = "skipped"
+                elif parse_trigger_status == "success":
+                    if not args.no_wait and parse_wait_status != "success":
+                        parse_success_document_ids.append(document_id)
+                else:
+                    parse_items.append(record)
+                continue
             try:
                 ragflow_calls += 1
+                upload_call_count += 1
+                stage_start = datetime.now(timezone.utc)
                 upload_response = client.upload_document(args.dataset_id, resolved_path)
+                elapsed_ms = (datetime.now(timezone.utc) - stage_start).total_seconds() * 1000
+                stage_latency_ms.append(elapsed_ms)
+                image_upload_duration_ms += elapsed_ms
                 document_id = extract_uploaded_document_id(upload_response)
-                uploaded_document_ids.append(document_id)
-                upload_records.append(
+                stage_timings.append(
                     {
-                        "source_path": source_path,
-                        "name": Path(source_path).name,
-                        "asset_class": asset.get("asset_class"),
-                        "sha256": asset.get("sha256"),
-                        "mime_type": asset.get("mime_type"),
+                        "stage": "image_upload",
+                        "operation": "upload_document",
+                        "status": "success",
+                        "duration_ms": elapsed_ms,
                         "document_id": document_id,
-                        "upload_status": "uploaded",
+                        "document_count": 1,
                     }
                 )
+                uploaded_document_ids.append(document_id)
+                record = {
+                    "kind": "visual",
+                    "source_key": source_key,
+                    "source_path": source_path,
+                    "name": Path(source_path).name,
+                    "asset_class": asset.get("asset_class"),
+                    "sha256": asset.get("sha256"),
+                    "mime_type": asset.get("mime_type"),
+                    "document_id": document_id,
+                    "upload_status": "uploaded",
+                    "parse_trigger_status": "skipped" if args.no_parse else "pending",
+                    "parse_triggered": False,
+                    "parse_wait_status": "skipped" if args.no_parse or args.no_wait else "pending",
+                }
+                upload_records.append(record)
+                parse_items.append(record)
+                checkpoint_records[source_key] = dict(record)
+                checkpoint_new_upload_count += 1
+                _write_ingestion_checkpoint(
+                    args.checkpoint,
+                    operation="image_ingestion_execute",
+                    dataset_id=args.dataset_id,
+                    dataset_name=None,
+                    records=checkpoint_records,
+                    created_at=checkpoint_created_at,
+                )
             except Exception as exc:  # pragma: no cover - covered through CLI behavior with fake clients as needed
-                upload_records.append(
+                elapsed_ms = (datetime.now(timezone.utc) - stage_start).total_seconds() * 1000
+                stage_latency_ms.append(elapsed_ms)
+                image_upload_duration_ms += elapsed_ms
+                stage_timings.append(
                     {
-                        "source_path": source_path,
-                        "name": Path(source_path).name,
-                        "asset_class": asset.get("asset_class"),
-                        "sha256": asset.get("sha256"),
-                        "mime_type": asset.get("mime_type"),
-                        "document_id": None,
-                        "upload_status": "upload_failed",
-                        "error": str(exc),
+                        "stage": "image_upload",
+                        "operation": "upload_document",
+                        "status": "error",
+                        "duration_ms": elapsed_ms,
+                        "detail": str(exc),
+                        "document_count": 1,
                     }
+                )
+                record = {
+                    "kind": "visual",
+                    "source_key": source_key,
+                    "source_path": source_path,
+                    "name": Path(source_path).name,
+                    "asset_class": asset.get("asset_class"),
+                    "sha256": asset.get("sha256"),
+                    "mime_type": asset.get("mime_type"),
+                    "document_id": None,
+                    "upload_status": "upload_failed",
+                    "error": str(exc),
+                }
+                upload_records.append(record)
+                checkpoint_records[source_key] = dict(record)
+                _write_ingestion_checkpoint(
+                    args.checkpoint,
+                    operation="image_ingestion_execute",
+                    dataset_id=args.dataset_id,
+                    dataset_name=None,
+                    records=checkpoint_records,
+                    created_at=checkpoint_created_at,
                 )
 
         parse_response: Any = None
+        parse_responses: list[Any] = []
+        parse_errors: list[str] = []
+        parse_failed_document_ids: set[str] = set()
+        batch_records = _batch_records(parse_items, args.batch_size)
         parse_error: str | None = None
         parse_triggered = False
-        if uploaded_document_ids and not args.no_parse:
-            try:
-                ragflow_calls += 1
-                parse_response = client.trigger_parse(args.dataset_id, uploaded_document_ids)
-                parse_triggered = True
-            except Exception as exc:  # pragma: no cover - retained to preserve cleanup evidence after live uploads
-                parse_error = str(exc)
+        if (parse_items or parse_success_document_ids) and not args.no_parse:
+            for batch in batch_records:
+                parse_batch = list(batch.get("uploaded_document_ids") or [])
+                if not parse_batch:
+                    _mark_batch_parse_skipped(batch)
+                    continue
+                stage_start = datetime.now(timezone.utc)
+                parse_trigger_status = "success"
+                try:
+                    ragflow_calls += 1
+                    response = client.trigger_parse(args.dataset_id, parse_batch)
+                    parse_responses.append(response)
+                    parse_success_document_ids.extend(parse_batch)
+                    _mark_batch_parse_success(batch, response)
+                    for record in checkpoint_records.values():
+                        if record.get("document_id") in parse_batch:
+                            record["parse_trigger_status"] = "success"
+                            record["parse_triggered"] = True
+                            if args.no_wait:
+                                record["parse_wait_status"] = "skipped"
+                    parse_triggered = True
+                except Exception as exc:  # pragma: no cover - retained to preserve cleanup evidence after live uploads
+                    parse_trigger_status = "error"
+                    parse_error = str(exc)
+                    parse_errors.append(parse_error)
+                    parse_failed_document_ids.update(parse_batch)
+                    _mark_batch_parse_failure(batch, exc)
+                    for record in checkpoint_records.values():
+                        if record.get("document_id") in parse_batch:
+                            record["parse_trigger_status"] = "failed"
+                            record["parse_triggered"] = False
+                            record["parse_wait_status"] = "skipped"
+                    _write_ingestion_checkpoint(
+                        args.checkpoint,
+                        operation="image_ingestion_execute",
+                        dataset_id=args.dataset_id,
+                        dataset_name=None,
+                        records=checkpoint_records,
+                        created_at=checkpoint_created_at,
+                    )
+                    break
+                finally:
+                    elapsed_ms = (datetime.now(timezone.utc) - stage_start).total_seconds() * 1000
+                    stage_latency_ms.append(elapsed_ms)
+                    stage_timings.append(
+                        {
+                            "stage": "trigger_parse",
+                            "operation": "trigger_parse",
+                            "status": parse_trigger_status,
+                            "duration_ms": elapsed_ms,
+                            "batch_index": batch.get("batch_index"),
+                            "document_count": len(parse_batch),
+                        }
+                    )
+                    _write_ingestion_checkpoint(
+                        args.checkpoint,
+                        operation="image_ingestion_execute",
+                        dataset_id=args.dataset_id,
+                        dataset_name=None,
+                        records=checkpoint_records,
+                        created_at=checkpoint_created_at,
+                    )
+            parse_response = parse_responses[0] if len(parse_responses) == 1 else parse_responses
+        else:
+            for batch in batch_records:
+                _mark_batch_parse_skipped(batch)
+            if args.no_parse:
+                for record in checkpoint_records.values():
+                    record["parse_trigger_status"] = "skipped"
+                    record["parse_wait_status"] = "skipped"
 
         observed_states: dict[str, dict[str, Any]] = {}
         document_list_response: Any = None
         poll_count = 0
         wait_error: str | None = None
         wait_performed = False
-        if uploaded_document_ids and parse_error is None and not args.no_wait:
+        if parse_success_document_ids and not args.no_wait:
+            stage_start = datetime.now(timezone.utc)
             try:
                 observed_states, document_list_response, poll_count = _poll_uploaded_visual_states(
                     client,
                     dataset_id=args.dataset_id,
-                    document_ids=uploaded_document_ids,
+                    document_ids=parse_success_document_ids,
                     timeout=float(args.parse_timeout),
                     poll_interval=float(args.poll_interval),
                 )
                 ragflow_calls += poll_count
                 wait_performed = True
+                elapsed_ms = (datetime.now(timezone.utc) - stage_start).total_seconds() * 1000
+                stage_latency_ms.append(elapsed_ms)
+                parse_wait_duration_ms += elapsed_ms
+                parse_wait_image_count += len(parse_success_document_ids)
+                stage_timings.append(
+                    {
+                        "stage": "parse_wait",
+                        "operation": "poll_uploaded_visual_states",
+                        "status": "success",
+                        "duration_ms": elapsed_ms,
+                        "document_count": len(parse_success_document_ids),
+                    }
+                )
             except Exception as exc:  # pragma: no cover - retained to preserve cleanup evidence after live uploads
                 wait_error = str(exc)
+                elapsed_ms = (datetime.now(timezone.utc) - stage_start).total_seconds() * 1000
+                stage_latency_ms.append(elapsed_ms)
+                stage_timings.append(
+                    {
+                        "stage": "parse_wait",
+                        "operation": "poll_uploaded_visual_states",
+                        "status": "error",
+                        "duration_ms": elapsed_ms,
+                        "detail": wait_error,
+                        "document_count": len(parse_success_document_ids),
+                    }
+                )
 
         runtime_items: list[dict[str, Any]] = []
         observed_documents: list[dict[str, Any]] = []
@@ -1285,7 +2071,7 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
             if record.get("upload_status") != "uploaded":
                 status = "upload_failed"
                 state: Mapping[str, Any] | None = None
-            elif parse_error:
+            elif document_id in parse_failed_document_ids:
                 status = "parse_trigger_failed"
                 state = None
             elif args.no_parse:
@@ -1300,6 +2086,21 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
             else:
                 state = observed_states.get(str(document_id)) if document_id else None
                 status = _state_label_for_uploaded_visual(state)
+            checkpoint_record = checkpoint_records.get(str(record.get("source_key") or ""))
+            if checkpoint_record is not None:
+                checkpoint_record["status"] = status
+                checkpoint_record["chunk_count"] = state.get("chunk_count") if isinstance(state, Mapping) else None
+                if status == "parsed":
+                    checkpoint_record["parse_wait_status"] = "success"
+                elif status == "not_checked":
+                    checkpoint_record["parse_wait_status"] = "skipped"
+                elif status == "not_parsed":
+                    checkpoint_record["parse_trigger_status"] = "skipped"
+                    checkpoint_record["parse_wait_status"] = "skipped"
+                elif status in {"failed", "missing", "pending"}:
+                    checkpoint_record["parse_wait_status"] = status
+                elif status in {"upload_failed", "parse_trigger_failed", "wait_failed"}:
+                    checkpoint_record["parse_wait_status"] = "failed" if status == "wait_failed" else "skipped"
             runtime_items.append({"label": record.get("name"), "status": status, "document_id": document_id})
             observed_documents.append(
                 {
@@ -1312,6 +2113,15 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
                     "progress_msg": state.get("progress_msg") if isinstance(state, Mapping) else None,
                 }
             )
+
+        _write_ingestion_checkpoint(
+            args.checkpoint,
+            operation="image_ingestion_execute",
+            dataset_id=args.dataset_id,
+            dataset_name=None,
+            records=checkpoint_records,
+            created_at=checkpoint_created_at,
+        )
 
         runtime_partial_failure = build_runtime_partial_failure_report(
             "image_ingestion_execute",
@@ -1328,6 +2138,84 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
         )
         parsed_count = int(status_counts.get("parsed", 0) or 0)
         ok = failed_count == 0
+        batching = _batching_summary(
+            requested_batch_size=args.batch_size,
+            planned_document_count=planned_count,
+            uploaded_document_count=len(uploaded_document_ids),
+            parse_batch_count=len(parse_responses),
+            parse_document_count=len(parse_success_document_ids),
+            batches=batch_records,
+        )
+        runtime_metrics = build_runtime_metrics_summary(
+            "image_ingestion_execute",
+            counters={
+                "planned_visual_upload_file_count": planned_count,
+                "uploaded_visual_document_count": len(uploaded_document_ids),
+                "upload_call_count": upload_call_count,
+                "parse_triggered": 1 if parse_triggered else 0,
+                "parse_trigger_count": len(parse_responses),
+                "parse_trigger_attempt_count": sum(
+                    1
+                    for batch in batch_records
+                    if str(batch.get("parse_trigger_status") or "") in {"success", "failed"}
+                ),
+                "retryable_failure_count": sum(int(batch.get("retryable_failure_count") or 0) for batch in batch_records),
+                "parse_waited": 1 if wait_performed else 0,
+                "document_list_poll_count": poll_count,
+                "failed_visual_document_count": failed_count,
+            },
+            latency_samples_ms=stage_latency_ms,
+            stage_timings=stage_timings,
+            throughput={
+                **(
+                    {
+                        "image_upload": throughput_summary(
+                            item_count=upload_call_count,
+                            duration_ms=image_upload_duration_ms,
+                            unit="image",
+                        )
+                    }
+                    if upload_call_count
+                    else {}
+                ),
+                **(
+                    {
+                        "parse_wait": throughput_summary(
+                            item_count=parse_wait_image_count,
+                            duration_ms=parse_wait_duration_ms,
+                            unit="image",
+                        )
+                    }
+                    if parse_wait_image_count
+                    else {}
+                ),
+            },
+        )
+        performance_warnings = performance_warning_report(
+            [
+                *stage_duration_performance_warnings(
+                    stage="image_parse_wait",
+                    duration_ms=parse_wait_duration_ms,
+                    item_count=parse_wait_image_count,
+                    visual_or_vlm=True,
+                ),
+                *chunk_count_performance_warnings(
+                    total_chunk_count=sum(
+                        int(item.get("chunk_count") or 0)
+                        for item in observed_documents
+                        if isinstance(item.get("chunk_count"), int)
+                    ),
+                    documents=observed_documents,
+                ),
+                *polling_performance_warnings(
+                    timeout_seconds=args.parse_timeout,
+                    elapsed_ms=parse_wait_duration_ms,
+                    poll_count=poll_count,
+                    pending_count=int(status_counts.get("pending", 0) or 0),
+                    wait_performed=wait_performed,
+                ),
+            ]
+        )
         report = {
             "ok": ok,
             "schema": KB_ASSET_INGESTION_REPORT_SCHEMA,
@@ -1346,8 +2234,14 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
             "execution": {
                 "status": "completed" if ok else "partial_failure",
                 "ragflow_calls": ragflow_calls,
-                "upload_call_count": len(upload_records),
+                "upload_call_count": upload_call_count,
                 "parse_triggered": parse_triggered,
+                "parse_trigger_count": len(parse_responses),
+                "parse_trigger_attempt_count": sum(
+                    1
+                    for batch in batch_records
+                    if str(batch.get("parse_trigger_status") or "") in {"success", "failed"}
+                ),
                 "wait_performed": wait_performed,
                 "document_list_poll_count": poll_count,
                 "db_calls": 0,
@@ -1365,11 +2259,25 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
                 "pending_visual_document_count": int(status_counts.get("pending", 0) or 0),
                 "missing_visual_document_count": int(status_counts.get("missing", 0) or 0),
                 "runtime_partial_failure_status": runtime_partial_failure["summary"]["status"],
+                "performance_warning_count": performance_warnings["summary"]["warning_count"],
             },
             "uploaded_visual_documents": upload_records,
             "observed_visual_documents": observed_documents,
             "document_list_response_observed": document_list_response is not None,
             "parse_response": parse_response,
+            "parse_responses": parse_responses,
+            "parse_errors": parse_errors,
+            "batching": batching,
+            "runtime_metrics": runtime_metrics,
+            "performance_warnings": performance_warnings,
+            "checkpoint": _checkpoint_report(
+                checkpoint_path=args.checkpoint,
+                resume=args.resume,
+                force_reupload_confirmed=args.force_reupload_confirmed,
+                skipped_upload_count=checkpoint_skipped_upload_count,
+                new_upload_count=checkpoint_new_upload_count,
+                total_confirmed_upload_count=len(uploaded_document_ids),
+            ),
             "runtime_partial_failure": runtime_partial_failure,
             "cleanup_readiness": {
                 "required": bool(upload_records),
@@ -1384,7 +2292,7 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
             report, redaction_report = _sanitize_governance_report(
                 report,
                 args,
-                input_paths=[args.asset_upload_plan, args.config],
+                input_paths=[args.asset_upload_plan, args.config, args.checkpoint],
                 output_paths=[args.report_json, args.redaction_report],
                 extra_secret_literals=[args.api_key] if args.api_key else None,
             )
@@ -1801,13 +2709,14 @@ def _run_snapshot_chunks(args: argparse.Namespace) -> int:
             name=args.name,
             description=args.description or "",
             include_content=args.include_content,
+            observed_state_path=args.observed_state,
         )
         if args.redaction_report:
             report, redaction_report = _sanitize_benchmark_report(
                 report,
                 args,
-                input_paths=[args.input, args.output],
-                context_json_paths=[args.input],
+                input_paths=[args.input, args.output, args.observed_state],
+                context_json_paths=[args.input, args.observed_state],
             )
             _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
@@ -2860,6 +3769,7 @@ def _sanitize_parse_report(report: dict[str, Any], args: argparse.Namespace) -> 
         config_paths=[
             args.kb_manifest,
             args.documents_json,
+            args.observed_state,
             args.multimodal_kb_manifest,
             *args.parse_log,
             args.profile,
@@ -2877,6 +3787,7 @@ def _run_parse_report(args: argparse.Namespace) -> int:
         report = create_parse_report(
             kb_manifest_path=args.kb_manifest,
             documents_json_path=args.documents_json,
+            observed_state_path=args.observed_state,
             multimodal_kb_manifest_path=args.multimodal_kb_manifest,
             parse_log_paths=args.parse_log,
             profile_path=args.profile,
@@ -2893,6 +3804,39 @@ def _run_parse_report(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_refresh_report(args: argparse.Namespace) -> int:
+    try:
+        kb_manifest = load_kb_manifest(args.kb_manifest)
+        config = _load_config(args)
+        client = RAGFlowClient(config)
+        document_list_response = client.list_documents(
+            kb_manifest.dataset.id,
+            page=args.page,
+            page_size=args.page_size,
+        )
+        report = create_kb_refresh_report(
+            kb_manifest_path=args.kb_manifest,
+            document_list_response=document_list_response,
+            page=args.page,
+            page_size=args.page_size,
+        )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[args.kb_manifest, args.config],
+                output_paths=[args.report_json, args.report_md, args.redaction_report],
+                extra_secret_literals=[args.api_key] if args.api_key else None,
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_kb_refresh_report_markdown(report))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (BuildError, ConfigError, ManifestError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _sanitize_health_report(report: dict[str, Any], args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
     urls = [*_collect_urls(report)]
     sanitized, redaction_report = sanitize_report_payload(
@@ -2901,6 +3845,7 @@ def _sanitize_health_report(report: dict[str, Any], args: argparse.Namespace) ->
         config_paths=[
             *args.kb_manifest,
             *args.parse_report,
+            *args.observed_state,
             *args.activation_plan,
             *args.model_provider_probe,
             args.report_json,
@@ -2916,6 +3861,7 @@ def _run_health_report(args: argparse.Namespace) -> int:
         report = create_kb_health_report(
             kb_manifest_paths=args.kb_manifest,
             parse_report_paths=args.parse_report,
+            observed_state_paths=args.observed_state,
             activation_plan_paths=args.activation_plan,
             model_provider_probe_paths=args.model_provider_probe,
             min_documents=args.min_documents,
@@ -3041,6 +3987,14 @@ def build_image_ingestion_execute_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-wait", action="store_true", help="Do not read document states after triggering parse")
     parser.add_argument("--parse-timeout", type=float, default=300.0, help="Maximum seconds to wait for parsed or failed visual states")
     parser.add_argument("--poll-interval", type=float, default=2.0, help="Seconds between document-list polls")
+    parser.add_argument("--batch-size", type=int, help="Maximum uploaded visual document IDs per parse trigger")
+    parser.add_argument("--checkpoint", help="Checkpoint path for resumable visual-document ingestion")
+    parser.add_argument("--resume", action="store_true", help="Resume visual-document ingestion from an existing checkpoint")
+    parser.add_argument(
+        "--force-reupload-confirmed",
+        action="store_true",
+        help="With --resume, re-upload documents already confirmed in the checkpoint",
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     return parser
 
@@ -3185,6 +4139,12 @@ def build_snapshot_chunks_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Create a stable chunk snapshot from local chunks or validation output")
     parser.add_argument("--input", required=True, help="Input validation/retrieval JSON report, Markdown file, or Markdown directory")
     parser.add_argument("--output", required=True, help="Output ragflow_chunk_snapshot_v1 JSON")
+    parser.add_argument(
+        "--observed-state",
+        "--refresh-report",
+        dest="observed_state",
+        help="Optional ragflow_kb_refresh_report_v1 JSON used as shared observed-state evidence",
+    )
     parser.add_argument("--name", default="chunk-snapshot", help="Chunk snapshot name")
     parser.add_argument("--description", help="Optional chunk snapshot description")
     parser.add_argument("--include-content", action="store_true", help="Include full chunk content in the snapshot")
@@ -3685,6 +4645,12 @@ def build_parse_report_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Create an offline parser performance and parse-state report")
     parser.add_argument("--kb-manifest", required=True, help="Local kb_manifest.json for the built KB")
     parser.add_argument("--documents-json", help="Optional user-supplied RAGFlow document list/status JSON")
+    parser.add_argument(
+        "--observed-state",
+        "--refresh-report",
+        dest="observed_state",
+        help="Optional ragflow_kb_refresh_report_v1 JSON used as shared observed-state evidence",
+    )
     parser.add_argument("--multimodal-kb-manifest", help="Optional ragflow_multimodal_kb_manifest_v1 JSON")
     parser.add_argument("--parse-log", action="append", default=[], help="Optional parser progress log; may be repeated")
     parser.add_argument("--profile", help="Optional chunk profile JSON/YAML to review parser settings")
@@ -3703,10 +4669,40 @@ def build_parse_report_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_refresh_report_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Export current RAGFlow document states without mutating the KB")
+    parser.add_argument("--kb-manifest", required=True, help="Local kb_manifest.json for the built KB")
+    parser.add_argument("--config", help="Runtime config file")
+    parser.add_argument("--base-url", help="RAGFlow base URL")
+    parser.add_argument("--api-key", help="RAGFlow API key")
+    parser.add_argument("--page", type=int, default=1, help="RAGFlow document-list page to read")
+    parser.add_argument("--page-size", type=int, default=200, help="RAGFlow document-list page size")
+    parser.add_argument(
+        "--report-json",
+        "--output",
+        dest="report_json",
+        default="kb_refresh_report.json",
+        help=f"Output {KB_REFRESH_REPORT_SCHEMA} JSON",
+    )
+    parser.add_argument("--report-md", help="Optional KB refresh Markdown path")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    parser.set_defaults(func=_run_refresh_report)
+    return parser
+
+
 def build_health_report_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Create an offline aggregate KB health report")
     parser.add_argument("--kb-manifest", action="append", required=True, help="Local kb_manifest.json; may be repeated")
     parser.add_argument("--parse-report", action="append", default=[], help="Optional ragflow_parse_report_v1 JSON; may be repeated")
+    parser.add_argument(
+        "--observed-state",
+        "--refresh-report",
+        dest="observed_state",
+        action="append",
+        default=[],
+        help="Optional ragflow_kb_refresh_report_v1 JSON; may be repeated",
+    )
     parser.add_argument("--activation-plan", action="append", default=[], help="Optional kb_activation_plan_v1 JSON; may be repeated")
     parser.add_argument(
         "--model-provider-probe",
@@ -3760,6 +4756,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-blocked", action="store_true", help="Allow upload when doc_manifest quality_gate.status is BLOCKED")
     parser.add_argument("--parse-timeout", type=float, default=300.0, help="Maximum seconds to wait for parse completion")
     parser.add_argument("--poll-interval", type=float, default=2.0, help="Polling interval in seconds while waiting for parse completion")
+    parser.add_argument("--batch-size", type=int, help="Maximum uploaded Markdown document IDs per parse trigger")
+    parser.add_argument("--checkpoint", help="Checkpoint path for resumable live Markdown builds")
+    parser.add_argument("--resume", action="store_true", help="Resume a live Markdown build from an existing checkpoint")
+    parser.add_argument(
+        "--force-reupload-confirmed",
+        action="store_true",
+        help="With --resume, re-upload documents already confirmed in the checkpoint",
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     return parser
 
@@ -3812,6 +4816,9 @@ def main(argv: list[str] | None = None) -> int:
         if command == "parse-report":
             parse_report_args = build_parse_report_parser().parse_args(command_args)
             return parse_report_args.func(parse_report_args)
+        if command == "refresh-report":
+            refresh_report_args = build_refresh_report_parser().parse_args(command_args)
+            return refresh_report_args.func(refresh_report_args)
         if command == "health-report":
             health_report_args = build_health_report_parser().parse_args(command_args)
             return health_report_args.func(health_report_args)

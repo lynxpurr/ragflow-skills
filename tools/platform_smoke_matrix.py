@@ -3081,6 +3081,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
                         "name": "kb:platform-smoke",
                         "dataset_id": "ds-platform-smoke",
                         "hints": ["platform", "smoke", "activation"],
+                        "params": {"top_k": 3, "similarity_threshold": 0.25},
                     }
                 ],
             }
@@ -4347,11 +4348,13 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
                         "name": "kb:platform-general",
                         "dataset_id": "ds-platform-general",
                         "hints": ["general", "platform"],
+                        "params": {"top_k": 3, "similarity_threshold": 0.25},
                     },
                     {
                         "name": "kb:platform-technical",
                         "dataset_id": "ds-platform-technical",
                         "hints": ["known term", "runtime"],
+                        "params": {"top_k": 3, "similarity_threshold": 0.25},
                     },
                 ],
             },
