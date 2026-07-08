@@ -1,0 +1,13 @@
+{
+  "profile_id": "bge-m3-zh-512",
+  "chunk_method": "naive",
+  "chunk_size": 512,
+  "chunk_overlap": 64,
+  "embedding_model": "bge-m3",
+  "parser_config": {
+    "chunk_token_num": 512,
+    "auto_keywords": 0,
+    "auto_questions": 0,
+    "__language__": "Chinese"
+  }
+}

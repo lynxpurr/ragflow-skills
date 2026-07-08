@@ -346,15 +346,16 @@ def _render_profile_lint_markdown_from_payload(payload: dict[str, Any]) -> str:
         f"- Warnings: `{_as_int(summary.get('warnings'))}`",
         f"- Infos: `{_as_int(summary.get('infos'))}`",
         "",
-        "| severity | code | field | message |",
-        "|---|---|---|---|",
+        "| severity | code | field | message | recommendation |",
+        "|---|---|---|---|---|",
     ]
     for issue in payload.get("issues", []) if isinstance(payload.get("issues"), list) else []:
         if not isinstance(issue, dict):
             continue
         lines.append(
             f"| {issue.get('severity', '')} | `{issue.get('code', '')}` | "
-            f"{issue.get('field') or '-'} | {issue.get('message', '')} |"
+            f"{issue.get('field') or '-'} | {issue.get('message', '')} | "
+            f"{issue.get('recommendation') or '-'} |"
         )
     lines.append("")
     return "\n".join(lines)

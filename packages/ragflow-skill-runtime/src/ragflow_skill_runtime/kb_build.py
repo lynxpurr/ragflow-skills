@@ -133,7 +133,7 @@ def describe_embedding_model(profile: ChunkProfile | Mapping[str, Any] | None) -
         }
     return {
         "model": "unknown",
-        "status": "unknown",
+        "status": "not_configured",
         "source": "profile.embedding_model",
         "reason": "profile_embedding_model_missing",
     }
@@ -161,15 +161,21 @@ def check_embedding_model_drift(
             "matches_expected": None,
             "rebuild_or_reparse_required": False,
             "reason": reason,
+            "recommendation": (
+                "Pass --expected-embedding-model to compare the selected profile against the deployment embedding model."
+                if observed_model != "unknown"
+                else "Use a model-specific profile template or set profile.embedding_model before checking embedding drift."
+            ),
         }
     if observed_model == "unknown":
         return {
-            "status": "unknown",
+            "status": "not_configured",
             "observed_model": observed_model,
             "expected_models": expected_models,
             "matches_expected": None,
             "rebuild_or_reparse_required": False,
             "reason": reason,
+            "recommendation": "Use a model-specific profile template or set profile.embedding_model before checking embedding drift.",
         }
 
     expected_keys = {model.casefold() for model in expected_models}
@@ -181,6 +187,7 @@ def check_embedding_model_drift(
         "matches_expected": matches,
         "rebuild_or_reparse_required": not matches,
         "reason": None if matches else "embedding_model_expected_mismatch",
+        "recommendation": None if matches else "Rebuild or re-parse the KB with a profile that uses the expected embedding model.",
     }
 
 

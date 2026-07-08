@@ -330,21 +330,21 @@ Likely files to modify:
 
 ### P2: Embedding Template Strategy
 
-- [ ] Decide whether generic templates stay model-neutral or become opinionated defaults.
-- [ ] If model-neutral templates remain, add explicit model-specific template variants or
+- [x] Decide whether generic templates stay model-neutral or become opinionated defaults.
+- [x] If model-neutral templates remain, add explicit model-specific template variants or
   examples.
-- [ ] Update profile lint or dry-run guidance so missing `embedding_model` is visible but
+- [x] Update profile lint or dry-run guidance so missing `embedding_model` is visible but
   not confused with mismatch.
-- [ ] Add tests for not-configured, match, mismatch, and model-specific template paths.
-- [ ] Update public skill guidance with the recommended template choice.
+- [x] Add tests for not-configured, match, mismatch, and model-specific template paths.
+- [x] Update public skill guidance with the recommended template choice.
 
 ### P2: Operator Ergonomics
 
-- [ ] Inline candidate benchmark metrics in optimize execute results while keeping the
+- [x] Inline candidate benchmark metrics in optimize execute results while keeping the
   full validation report path.
-- [ ] Add a safe readiness-derived cleanup confirmation mode if it can preserve explicit
+- [x] Add a safe readiness-derived cleanup confirmation mode if it can preserve explicit
   user review.
-- [ ] Add tests that the convenience mode refuses to run without `--execute` and without
+- [x] Add tests that the convenience mode refuses to run without `--execute` and without
   a valid readiness artifact.
 - [ ] Track doc-to-md backend override failures only if they reproduce in a focused
   rerun; keep them outside this KB-build quality round unless they affect handoff
@@ -401,11 +401,25 @@ Completed in the current implementation slice:
 - Optimize summaries now carry candidate-local strict-evidence metrics into the
   `strict_evidence` component and Markdown rationale without adding them to the promotion
   score.
+- Generic public profiles remain model-neutral for portability, while explicit
+  `bge-m3-en-768.json` and `bge-m3-zh-512.json` templates make embedding-model checks easy
+  for common bge-m3 deployments.
+- Profile lint now emits an info-level `embedding_model_not_configured` finding for
+  model-neutral profiles, and dry-run/build embedding checks report missing profile models
+  as `not_configured` rather than `mismatch`.
+- Optimize execute validation results now inline a compact `benchmark_metrics` block with
+  candidate hit-rate, strict, expected-term, and table-term metrics while preserving the
+  retained full `validation_report` and Markdown report paths.
+- `optimize cleanup-execute` can consume a reviewed live-readiness artifact through
+  `--readiness-report`, but only when `--execute` is present, the readiness report is
+  `ok=true`, the cleanup plan path matches, and cleanup confirmations were exact.
+- Focused CLI coverage verifies readiness-derived cleanup confirmation succeeds for a
+  reviewed artifact and refuses both missing `--execute` and invalid readiness artifacts.
 
 Not yet implemented:
 
-- Template strategy that makes embedding-model checking easy without reducing public
-  portability.
+- Reproduced doc-to-md backend override failure tracking, only if a focused rerun proves
+  it affects KB-build handoff contracts.
 
 ## Validation Evidence / Residual Gated Work
 
@@ -422,6 +436,18 @@ Focused validation for the candidate-specific strict evidence slice:
 
 ```bash
 python3 -m pytest packages/ragflow-skill-runtime/tests/test_validation.py packages/ragflow-skill-runtime/tests/test_optimization.py packages/ragflow-skill-runtime/tests/test_kb_build_cli.py -q
+```
+
+Focused validation for the embedding template strategy slice:
+
+```bash
+python3 -m pytest packages/ragflow-skill-runtime/tests/test_profiles.py packages/ragflow-skill-runtime/tests/test_kb_build_cli.py packages/ragflow-skill-runtime/tests/test_health_report.py packages/ragflow-skill-runtime/tests/test_kb_build.py -q
+```
+
+Focused validation for the operator ergonomics slice:
+
+```bash
+python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py -q
 ```
 
 Broader validation before closing a code round:

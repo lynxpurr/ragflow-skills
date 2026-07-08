@@ -904,6 +904,80 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertTrue(payload["embedding_model_check"]["rebuild_or_reparse_required"])
         self.assertEqual(payload["embedding_model_check"]["expected_models"], ["bge-m3"])
 
+    def test_build_dry_run_reports_generic_embedding_model_not_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "docs"
+            input_dir.mkdir()
+            (input_dir / "sample.md").write_text("# Title\n\nBody\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "--input",
+                    str(input_dir),
+                    "--kb-name",
+                    "kb:test",
+                    "--profile",
+                    str(PROFILE_PATH),
+                    "--expected-embedding-model",
+                    "bge-m3",
+                    "--dry-run",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["embedding_model"]["model"], "unknown")
+        self.assertEqual(payload["embedding_model"]["status"], "not_configured")
+        self.assertEqual(payload["embedding_model"]["reason"], "profile_embedding_model_missing")
+        self.assertEqual(payload["embedding_model_check"]["status"], "not_configured")
+        self.assertFalse(payload["embedding_model_check"]["rebuild_or_reparse_required"])
+        self.assertEqual(payload["embedding_model_check"]["expected_models"], ["bge-m3"])
+        self.assertIn("model-specific", payload["embedding_model_check"]["recommendation"])
+
+    def test_build_dry_run_model_specific_template_matches_expected_embedding_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "docs"
+            input_dir.mkdir()
+            (input_dir / "sample.md").write_text("# Title\n\nBody\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "--input",
+                    str(input_dir),
+                    "--kb-name",
+                    "kb:test",
+                    "--profile",
+                    str(ROOT / "skills" / "ragflow-kb-build" / "templates" / "bge-m3-en-768.json"),
+                    "--expected-embedding-model",
+                    "bge-m3",
+                    "--dry-run",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["embedding_model"]["model"], "bge-m3")
+        self.assertEqual(payload["embedding_model"]["status"], "known")
+        self.assertEqual(payload["embedding_model_check"]["status"], "match")
+        self.assertTrue(payload["embedding_model_check"]["matches_expected"])
+        self.assertFalse(payload["embedding_model_check"]["rebuild_or_reparse_required"])
+
     def test_build_live_path_reports_runtime_resilience_with_fake_client(self) -> None:
         module = load_build_module()
         FakeOptimizeBuildClient.instances = []
@@ -7123,6 +7197,9 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["execution"]["summary"]["validated_candidate_count"], 1)
         self.assertEqual(payload["execution"]["summary"]["benchmark_validation_passed_count"], 1)
         self.assertEqual(payload["execution"]["validation_results"][0]["validation_report"], str(validation_report))
+        self.assertEqual(payload["execution"]["validation_results"][0]["benchmark_metrics"]["query_count"], 1)
+        self.assertEqual(payload["execution"]["validation_results"][0]["benchmark_metrics"]["hit_rate"], 1.0)
+        self.assertEqual(payload["execution"]["validation_results"][0]["benchmark_metrics"]["expected_term_recall_at_k"], 1.0)
         self.assertTrue(validation_payload["ok"])
         self.assertEqual(validation_payload["level"], "benchmark")
         self.assertEqual(validation_payload["benchmark"]["schema"], "ragflow_benchmark_report_v1")
@@ -7411,6 +7488,194 @@ class KbBuildCliTests(unittest.TestCase):
 
         self.assertEqual(code, 2, stdout.getvalue())
         self.assertIn("confirmations must exactly match", json.loads(stdout.getvalue())["error"])
+        self.assertEqual(FakeOptimizeBuildClient.instances, [])
+
+    def test_optimize_cleanup_execute_uses_reviewed_readiness_confirmations_with_fake_client(self) -> None:
+        module = load_build_module()
+        FakeOptimizeBuildClient.instances = []
+        module.RAGFlowClient = FakeOptimizeBuildClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cleanup_plan = root / "cleanup_plan.json"
+            readiness_report = root / "optimization_live_readiness_report.json"
+            output = root / "cleanup_execution_report.json"
+            cleanup_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_optimization_cleanup_plan_v1",
+                        "targets": [
+                            {
+                                "profile_id": "candidate-a",
+                                "disposable_kb_name": "kb:cleanup-a",
+                                "status": "ready",
+                                "target": {"dataset_id": "ds-cleanup-a", "dataset_name": "kb:cleanup-a"},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            readiness_report.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_optimization_live_readiness_report_v1",
+                        "ok": True,
+                        "cleanup_plan": str(cleanup_plan),
+                        "cleanup": {
+                            "state": "ready_targets",
+                            "confirmation_exact": True,
+                            "ready_target_count": 1,
+                            "ready_targets": [
+                                {
+                                    "profile_id": "candidate-a",
+                                    "disposable_kb_name": "kb:cleanup-a",
+                                    "dataset_id": "ds-cleanup-a",
+                                    "dataset_name": "kb:cleanup-a",
+                                }
+                            ],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "optimize",
+                        "cleanup-execute",
+                        "--cleanup-plan",
+                        str(cleanup_plan),
+                        "--readiness-report",
+                        str(readiness_report),
+                        "--output",
+                        str(output),
+                        "--execute",
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "fake-key",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(payload["summary"]["deleted_target_count"], 1)
+        self.assertEqual(payload["confirmation"]["source"], "readiness_report")
+        self.assertEqual(payload["confirmation"]["readiness_report"], str(readiness_report))
+        self.assertEqual(FakeOptimizeBuildClient.instances[0].deleted, ["ds-cleanup-a"])
+
+    def test_optimize_cleanup_execute_readiness_confirmation_still_requires_execute(self) -> None:
+        module = load_build_module()
+        FakeOptimizeBuildClient.instances = []
+        module.RAGFlowClient = FakeOptimizeBuildClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cleanup_plan = root / "cleanup_plan.json"
+            readiness_report = root / "optimization_live_readiness_report.json"
+            cleanup_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_optimization_cleanup_plan_v1",
+                        "targets": [
+                            {
+                                "profile_id": "candidate-a",
+                                "disposable_kb_name": "kb:cleanup-a",
+                                "status": "ready",
+                                "target": {"dataset_id": "ds-cleanup-a", "dataset_name": "kb:cleanup-a"},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            readiness_report.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_optimization_live_readiness_report_v1",
+                        "ok": True,
+                        "cleanup_plan": str(cleanup_plan),
+                        "cleanup": {
+                            "confirmation_exact": True,
+                            "ready_targets": [{"dataset_id": "ds-cleanup-a", "dataset_name": "kb:cleanup-a"}],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "optimize",
+                        "cleanup-execute",
+                        "--cleanup-plan",
+                        str(cleanup_plan),
+                        "--readiness-report",
+                        str(readiness_report),
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(code, 2, stdout.getvalue())
+        self.assertIn("requires --execute", json.loads(stdout.getvalue())["error"])
+        self.assertEqual(FakeOptimizeBuildClient.instances, [])
+
+    def test_optimize_cleanup_execute_rejects_invalid_readiness_confirmation_artifact(self) -> None:
+        module = load_build_module()
+        FakeOptimizeBuildClient.instances = []
+        module.RAGFlowClient = FakeOptimizeBuildClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cleanup_plan = root / "cleanup_plan.json"
+            readiness_report = root / "optimization_live_readiness_report.json"
+            cleanup_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_optimization_cleanup_plan_v1",
+                        "targets": [
+                            {
+                                "profile_id": "candidate-a",
+                                "disposable_kb_name": "kb:cleanup-a",
+                                "status": "ready",
+                                "target": {"dataset_id": "ds-cleanup-a", "dataset_name": "kb:cleanup-a"},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            readiness_report.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_optimization_live_readiness_report_v1",
+                        "ok": False,
+                        "cleanup_plan": str(cleanup_plan),
+                        "cleanup": {
+                            "confirmation_exact": False,
+                            "ready_targets": [{"dataset_id": "ds-cleanup-a", "dataset_name": "kb:cleanup-a"}],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "optimize",
+                        "cleanup-execute",
+                        "--cleanup-plan",
+                        str(cleanup_plan),
+                        "--readiness-report",
+                        str(readiness_report),
+                        "--execute",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(code, 2, stdout.getvalue())
+        self.assertIn("readiness report must have ok=true", json.loads(stdout.getvalue())["error"])
         self.assertEqual(FakeOptimizeBuildClient.instances, [])
 
     def test_optimize_cleanup_execute_deletes_ready_targets_with_fake_client(self) -> None:

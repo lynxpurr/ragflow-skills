@@ -23,6 +23,9 @@ from ragflow_skill_runtime.profiles import (
     render_profile_lint_markdown,
 )
 
+ROOT = Path(__file__).resolve().parents[3]
+KB_BUILD_TEMPLATES = ROOT / "skills" / "ragflow-kb-build" / "templates"
+
 
 class ProfileTests(unittest.TestCase):
     def test_load_profile_from_json(self) -> None:
@@ -126,6 +129,51 @@ class ProfileTests(unittest.TestCase):
         self.assertIn("unsupported_parser_key", codes)
         self.assertIn("internal_parser_metadata", codes)
         self.assertIn("custom", render_profile_lint_markdown(report))
+
+    def test_lint_profile_reports_model_neutral_embedding_guidance(self) -> None:
+        profile = ChunkProfile.from_dict(
+            {
+                "profile_id": "default-en-768",
+                "chunk_size": 768,
+                "chunk_overlap": 96,
+                "parser_config": {
+                    "chunk_token_num": 768,
+                    "auto_keywords": 0,
+                    "auto_questions": 0,
+                    "__language__": "English",
+                },
+            }
+        )
+
+        report = lint_profile(profile)
+        payload = report.to_dict()
+        issue = next(item for item in payload["issues"] if item["code"] == "embedding_model_not_configured")
+        markdown = render_profile_lint_markdown(report)
+
+        self.assertTrue(report.ok)
+        self.assertEqual(issue["severity"], "info")
+        self.assertEqual(issue["field"], "embedding_model")
+        self.assertIn("model-neutral", issue["message"])
+        self.assertIn("model-specific template", issue["recommendation"])
+        self.assertIn("embedding_model_not_configured", markdown)
+        self.assertIn("model-specific template", markdown)
+
+    def test_public_templates_keep_generic_neutral_and_add_bge_m3_variants(self) -> None:
+        generic_en = load_profile(KB_BUILD_TEMPLATES / "default-en-768.json")
+        generic_zh = load_profile(KB_BUILD_TEMPLATES / "default-zh-512.json")
+        bge_en = load_profile(KB_BUILD_TEMPLATES / "bge-m3-en-768.json")
+        bge_zh = load_profile(KB_BUILD_TEMPLATES / "bge-m3-zh-512.json")
+
+        self.assertIsNone(generic_en.embedding_model)
+        self.assertIsNone(generic_zh.embedding_model)
+        self.assertEqual(bge_en.embedding_model, "bge-m3")
+        self.assertEqual(bge_zh.embedding_model, "bge-m3")
+        self.assertEqual(bge_en.profile_id, "bge-m3-en-768")
+        self.assertEqual(bge_zh.profile_id, "bge-m3-zh-512")
+        self.assertNotIn(
+            "embedding_model_not_configured",
+            {issue.code for issue in lint_profile(bge_en).issues},
+        )
 
     def test_explain_profile_filters_api_payload(self) -> None:
         profile = ChunkProfile.from_dict(

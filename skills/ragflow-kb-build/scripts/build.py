@@ -159,6 +159,7 @@ KB_INGESTION_CHECKPOINT_SCHEMA = "ragflow_kb_ingestion_checkpoint_v1"
 OPTIMIZATION_PLAN_CHECKPOINT_SCHEMA = "ragflow_optimization_plan_checkpoint_v1"
 OPTIMIZATION_COMMAND_MANIFEST_SCHEMA = "ragflow_optimization_command_manifest_v1"
 OPTIMIZATION_CLEANUP_EXECUTION_REPORT_SCHEMA = "ragflow_optimization_cleanup_execution_report_v1"
+OPTIMIZATION_LIVE_READINESS_REPORT_SCHEMA = "ragflow_optimization_live_readiness_report_v1"
 
 
 def _dump_json(data: Any) -> None:
@@ -934,6 +935,29 @@ def _validate_candidate_benchmark(
     _write_text_file(report_md_path, render_markdown_report(report))
     benchmark = payload.get("benchmark") if isinstance(payload.get("benchmark"), Mapping) else {}
     metrics = benchmark.get("metrics") if isinstance(benchmark.get("metrics"), Mapping) else {}
+    benchmark_metric_keys = (
+        "query_count",
+        "hit_rate",
+        "mrr",
+        "precision_at_k",
+        "recall_at_k",
+        "ndcg_at_k",
+        "map_at_k",
+        "strict_chunk_recall_at_k",
+        "expected_chunk_hit_rate",
+        "candidate_snapshot_expected_chunk_recall_at_k",
+        "candidate_snapshot_expected_chunk_hit_rate",
+        "expected_term_recall_at_k",
+        "expected_term_hit_rate",
+        "table_term_recall_at_k",
+        "table_term_hit_rate",
+        "empty_result_rate",
+    )
+    benchmark_metrics = {
+        key: metrics[key]
+        for key in benchmark_metric_keys
+        if isinstance(metrics.get(key), (int, float))
+    }
     return {
         "profile_id": candidate.get("profile_id"),
         "disposable_kb_name": candidate.get("disposable_kb_name"),
@@ -941,6 +965,7 @@ def _validate_candidate_benchmark(
         "validation_report_md": report_md_path,
         "ok": bool(payload.get("ok")),
         "query_count": int(metrics.get("query_count") or 0),
+        "benchmark_metrics": benchmark_metrics,
         "metrics": {
             key: metrics[key]
             for key in (
@@ -3536,12 +3561,51 @@ def _cleanup_target_key(dataset_id: str, dataset_name: str | None) -> tuple[str,
     return dataset_id, dataset_name or None
 
 
+def _same_cleanup_plan_path(left: str | Path, right: str | Path) -> bool:
+    return Path(left).expanduser().resolve(strict=False) == Path(right).expanduser().resolve(strict=False)
+
+
 def _confirmed_cleanup_keys(args: argparse.Namespace) -> set[tuple[str, str | None]]:
     dataset_ids = list(args.confirm_dataset_id or [])
     kb_names = list(args.confirm_kb_name or [])
     if len(dataset_ids) != len(kb_names):
         raise BuildError("cleanup-execute requires matching repeated --confirm-dataset-id and --confirm-kb-name values")
     return {_cleanup_target_key(dataset_id, kb_name) for dataset_id, kb_name in zip(dataset_ids, kb_names, strict=True)}
+
+
+def _readiness_confirmed_cleanup_keys(args: argparse.Namespace) -> set[tuple[str, str | None]]:
+    if not getattr(args, "readiness_report", None):
+        return set()
+    readiness = _read_json_file(args.readiness_report, label="optimization live readiness report")
+    if not isinstance(readiness, Mapping):
+        raise BuildError("cleanup-execute readiness report must be a JSON object")
+    if readiness.get("schema") != OPTIMIZATION_LIVE_READINESS_REPORT_SCHEMA:
+        raise BuildError(f"cleanup-execute readiness report must have schema {OPTIMIZATION_LIVE_READINESS_REPORT_SCHEMA}")
+    if readiness.get("ok") is not True:
+        raise BuildError("cleanup-execute readiness report must have ok=true")
+    readiness_cleanup_plan = readiness.get("cleanup_plan")
+    if not isinstance(readiness_cleanup_plan, str) or not readiness_cleanup_plan:
+        raise BuildError("cleanup-execute readiness report must record cleanup_plan")
+    if not _same_cleanup_plan_path(readiness_cleanup_plan, args.cleanup_plan):
+        raise BuildError("cleanup-execute readiness report cleanup_plan must match --cleanup-plan")
+    cleanup = readiness.get("cleanup") if isinstance(readiness.get("cleanup"), Mapping) else {}
+    if cleanup.get("confirmation_exact") is not True:
+        raise BuildError("cleanup-execute readiness report must have cleanup.confirmation_exact=true")
+    ready_targets = cleanup.get("ready_targets") if isinstance(cleanup.get("ready_targets"), list) else []
+    keys = set()
+    for index, target in enumerate(ready_targets):
+        if not isinstance(target, Mapping):
+            raise BuildError(f"cleanup-execute readiness report cleanup.ready_targets[{index}] must be an object")
+        dataset_id = target.get("dataset_id")
+        dataset_name = target.get("dataset_name")
+        if not isinstance(dataset_id, str) or not dataset_id:
+            raise BuildError(f"cleanup-execute readiness report cleanup.ready_targets[{index}] is missing dataset_id")
+        if dataset_name is not None and not isinstance(dataset_name, str):
+            raise BuildError(f"cleanup-execute readiness report cleanup.ready_targets[{index}].dataset_name must be a string when present")
+        keys.add(_cleanup_target_key(dataset_id, dataset_name))
+    if not keys:
+        raise BuildError("cleanup-execute readiness report does not contain ready cleanup confirmations")
+    return keys
 
 
 def _ready_cleanup_targets(cleanup_plan: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -3579,11 +3643,13 @@ def _ready_cleanup_targets(cleanup_plan: Mapping[str, Any]) -> list[dict[str, An
     return ready
 
 
-def _require_cleanup_execute_confirmation(args: argparse.Namespace, ready_targets: list[Mapping[str, Any]]) -> None:
+def _require_cleanup_execute_confirmation(args: argparse.Namespace, ready_targets: list[Mapping[str, Any]]) -> dict[str, Any]:
     if not args.execute:
         raise BuildError("cleanup-execute requires --execute")
     if not ready_targets:
         raise BuildError("cleanup-execute requires at least one ready cleanup target")
+    explicit_confirmed = _confirmed_cleanup_keys(args)
+    readiness_confirmed = _readiness_confirmed_cleanup_keys(args)
     expected = {
         _cleanup_target_key(
             str(target["target"]["dataset_id"]),
@@ -3591,7 +3657,7 @@ def _require_cleanup_execute_confirmation(args: argparse.Namespace, ready_target
         )
         for target in ready_targets
     }
-    confirmed = _confirmed_cleanup_keys(args)
+    confirmed = explicit_confirmed | readiness_confirmed
     if confirmed != expected:
         missing = sorted(expected - confirmed)
         extra = sorted(confirmed - expected)
@@ -3601,6 +3667,19 @@ def _require_cleanup_execute_confirmation(args: argparse.Namespace, ready_target
         if extra:
             details.append("unexpected confirmations: " + ", ".join(f"{dataset_id}:{kb_name or ''}" for dataset_id, kb_name in extra))
         raise BuildError("cleanup-execute confirmations must exactly match ready targets" + (f" ({'; '.join(details)})" if details else ""))
+    if readiness_confirmed and explicit_confirmed:
+        source = "explicit_and_readiness_report"
+    elif readiness_confirmed:
+        source = "readiness_report"
+    else:
+        source = "explicit"
+    return {
+        "source": source,
+        "confirmed_target_count": len(confirmed),
+        "explicit_confirmation_count": len(explicit_confirmed),
+        "readiness_confirmation_count": len(readiness_confirmed),
+        "readiness_report": args.readiness_report if readiness_confirmed else None,
+    }
 
 
 def _validate_delete_response(response: Any, *, dataset_id: str) -> None:
@@ -3619,7 +3698,7 @@ def _run_optimize_cleanup_execute(args: argparse.Namespace) -> int:
         if not isinstance(cleanup_plan, Mapping):
             raise BuildError("cleanup-execute cleanup plan must be a JSON object")
         ready_targets = _ready_cleanup_targets(cleanup_plan)
-        _require_cleanup_execute_confirmation(args, ready_targets)
+        confirmation = _require_cleanup_execute_confirmation(args, ready_targets)
         config = _load_config(args)
         client = RAGFlowClient(config)
         results = []
@@ -3644,6 +3723,7 @@ def _run_optimize_cleanup_execute(args: argparse.Namespace) -> int:
             "dry_run": False,
             "mutation_allowed": True,
             "requires_exact_confirmation": True,
+            "confirmation": confirmation,
             "summary": {
                 "target_count": len(ready_targets),
                 "deleted_target_count": len(results),
@@ -4591,6 +4671,7 @@ def build_optimize_cleanup_execute_parser() -> argparse.ArgumentParser:
     parser.add_argument("--execute", action="store_true", help="Actually delete every ready target in the cleanup plan")
     parser.add_argument("--confirm-dataset-id", action="append", default=[], help="Required with --execute; repeat once per ready target")
     parser.add_argument("--confirm-kb-name", action="append", default=[], help="Required with --execute; repeat once per ready target in the same order")
+    parser.add_argument("--readiness-report", help="Use exact cleanup confirmations from a reviewed live readiness report")
     parser.add_argument("--config", help="Runtime config file")
     parser.add_argument("--base-url", help="RAGFlow base URL")
     parser.add_argument("--api-key", help="RAGFlow API key")

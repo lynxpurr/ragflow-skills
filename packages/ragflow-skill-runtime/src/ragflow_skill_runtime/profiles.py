@@ -241,6 +241,20 @@ def lint_profile(profile: ChunkProfile) -> ProfileLintReport:
             )
         )
 
+    if not profile.embedding_model:
+        issues.append(
+            ProfileIssue(
+                severity="info",
+                code="embedding_model_not_configured",
+                field="embedding_model",
+                message="profile is model-neutral and does not declare an embedding_model",
+                recommendation=(
+                    "Keep generic templates model-neutral for portability, or use a model-specific template "
+                    "when validating an expected embedding model."
+                ),
+            )
+        )
+
     overlap_ratio = profile.chunk_overlap / profile.chunk_size
     if overlap_ratio < 0.05:
         issues.append(
@@ -1324,12 +1338,13 @@ def render_profile_lint_markdown(report: ProfileLintReport) -> str:
         f"- Warnings: `{summary['warnings']}`",
         f"- Infos: `{summary['infos']}`",
         "",
-        "| severity | code | field | message |",
-        "|---|---|---|---|",
+        "| severity | code | field | message | recommendation |",
+        "|---|---|---|---|---|",
     ]
     for issue in report.issues:
         lines.append(
-            f"| {issue.severity} | `{issue.code}` | {issue.field or '-'} | {issue.message} |"
+            f"| {issue.severity} | `{issue.code}` | {issue.field or '-'} | "
+            f"{issue.message} | {issue.recommendation or '-'} |"
         )
     lines.append("")
     return "\n".join(lines)
