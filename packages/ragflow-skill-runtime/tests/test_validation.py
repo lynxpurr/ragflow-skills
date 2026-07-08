@@ -375,6 +375,199 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(benchmark["per_query"][0]["matched_expected_chunks"], 1)
         self.assertTrue(benchmark["gate"]["ok"])
 
+    def test_benchmark_reports_expected_term_metrics_when_strict_chunk_hash_misses(self) -> None:
+        chunks = normalize_retrieval_response(
+            {
+                "data": {
+                    "chunks": [
+                        {
+                            "content": "<table><tr><td>alpha revenue</td></tr></table>",
+                            "document_name": "source.md",
+                            "chunk_id": "candidate-chunk-1",
+                        },
+                        {
+                            "content": "<table><tr><td>beta margin</td></tr></table>",
+                            "document_name": "source.md",
+                            "chunk_id": "candidate-chunk-2",
+                        },
+                    ]
+                }
+            }
+        )
+        report = ValidationReport(
+            level="benchmark",
+            dataset_id="ds-1",
+            dataset_name="kb:test",
+            cases=[
+                ValidationCaseResult(
+                    query=ValidationQuery(
+                        id="q-table",
+                        question="Which table values?",
+                        expected_terms=["alpha revenue", "beta margin"],
+                        metadata={"benchmark_category": "table_value"},
+                    ),
+                    passed=True,
+                    chunk_count=len(chunks),
+                    chunks=chunks,
+                )
+            ],
+        )
+
+        benchmarked = attach_benchmark_evaluation(
+            report,
+            qrels={
+                "q-table": [
+                    *load_benchmark_qrels_inline(
+                        [
+                            {
+                                "query_id": "q-table",
+                                "document": "source.md",
+                                "expected_modality": "table",
+                                "benchmark_category": "table_value",
+                            }
+                        ]
+                    )["q-table"],
+                    *load_benchmark_qrels_dict_item("sha256:missing-reference", field="expected_chunk"),
+                ]
+            },
+            cutoff=3,
+        )
+        benchmark = benchmarked.to_dict()["benchmark"]
+        metrics = benchmark["metrics"]
+        per_query = benchmark["per_query"][0]
+        markdown = render_markdown_report(benchmarked)
+
+        self.assertEqual(per_query["strict_chunk_recall_at_k"], 0.0)
+        self.assertEqual(per_query["expected_chunk_hit_rate"], 0.0)
+        self.assertEqual(per_query["expected_term_recall_at_k"], 1.0)
+        self.assertEqual(per_query["expected_term_hit_rate"], 1.0)
+        self.assertEqual(per_query["expected_term_count"], 2)
+        self.assertEqual(per_query["matched_expected_terms"], 2)
+        self.assertEqual(per_query["table_term_recall_at_k"], 1.0)
+        self.assertEqual(per_query["table_term_hit_rate"], 1.0)
+        self.assertEqual(metrics["strict_chunk_recall_at_k"], 0.0)
+        self.assertEqual(metrics["expected_term_recall_at_k"], 1.0)
+        self.assertEqual(metrics["expected_term_hit_rate"], 1.0)
+        self.assertEqual(metrics["expected_term_count"], 2)
+        self.assertEqual(metrics["matched_expected_terms"], 2)
+        self.assertEqual(metrics["table_term_recall_at_k"], 1.0)
+        self.assertEqual(metrics["table_term_hit_rate"], 1.0)
+        self.assertIn("Strict chunk recall@k", markdown)
+        self.assertIn("Expected term recall@k", markdown)
+        self.assertIn("Table term recall@k", markdown)
+
+    def test_benchmark_expected_term_metrics_cover_text_mixed_and_missing_cases(self) -> None:
+        text_chunks = normalize_retrieval_response(
+            {"data": {"chunks": [{"content": "plain alpha fact", "document_name": "source.md"}]}}
+        )
+        mixed_chunks = normalize_retrieval_response(
+            {
+                "data": {
+                    "chunks": [
+                        {"content": "<table><tr><td>table value</td></tr></table>", "document_name": "source.md"},
+                        {"content": "caption evidence", "document_name": "diagram.png", "metadata": {"modality": "image"}},
+                    ]
+                }
+            }
+        )
+        missing_chunks = normalize_retrieval_response(
+            {"data": {"chunks": [{"content": "<table><tr><td>present value</td></tr></table>", "document_name": "source.md"}]}}
+        )
+        report = ValidationReport(
+            level="benchmark",
+            dataset_id="ds-1",
+            dataset_name="kb:test",
+            cases=[
+                ValidationCaseResult(
+                    query=ValidationQuery(
+                        id="q-text",
+                        question="Which text fact?",
+                        expected_terms=["plain alpha"],
+                        metadata={"benchmark_category": "text_fact"},
+                    ),
+                    passed=True,
+                    chunk_count=len(text_chunks),
+                    chunks=text_chunks,
+                ),
+                ValidationCaseResult(
+                    query=ValidationQuery(
+                        id="q-mixed",
+                        question="Which mixed evidence?",
+                        expected_terms=["table value", "caption evidence"],
+                        metadata={"benchmark_category": "mixed_table_plus_image"},
+                    ),
+                    passed=True,
+                    chunk_count=len(mixed_chunks),
+                    chunks=mixed_chunks,
+                ),
+                ValidationCaseResult(
+                    query=ValidationQuery(
+                        id="q-missing",
+                        question="Which missing table value?",
+                        expected_terms=["present value", "absent value"],
+                        metadata={"benchmark_category": "table_value"},
+                    ),
+                    passed=False,
+                    chunk_count=len(missing_chunks),
+                    chunks=missing_chunks,
+                ),
+            ],
+        )
+
+        benchmarked = attach_benchmark_evaluation(
+            report,
+            qrels={
+                "q-text": load_benchmark_qrels_inline(
+                    [
+                        {
+                            "query_id": "q-text",
+                            "document": "source.md",
+                            "expected_modality": "text",
+                            "benchmark_category": "text_fact",
+                        }
+                    ]
+                )["q-text"],
+                "q-mixed": load_benchmark_qrels_inline(
+                    [
+                        {
+                            "query_id": "q-mixed",
+                            "document": "source.md",
+                            "expected_modality": "mixed",
+                            "benchmark_category": "mixed_table_plus_image",
+                        }
+                    ]
+                )["q-mixed"],
+                "q-missing": load_benchmark_qrels_inline(
+                    [
+                        {
+                            "query_id": "q-missing",
+                            "document": "source.md",
+                            "expected_modality": "table",
+                            "benchmark_category": "table_value",
+                        }
+                    ]
+                )["q-missing"],
+            },
+            cutoff=3,
+        )
+        benchmark = benchmarked.to_dict()["benchmark"]
+        metrics = benchmark["metrics"]
+        by_id = {item["id"]: item for item in benchmark["per_query"]}
+
+        self.assertNotIn("table_term_recall_at_k", by_id["q-text"])
+        self.assertEqual(by_id["q-mixed"]["expected_term_recall_at_k"], 1.0)
+        self.assertEqual(by_id["q-mixed"]["table_term_recall_at_k"], 1.0)
+        self.assertEqual(by_id["q-missing"]["expected_term_recall_at_k"], 0.5)
+        self.assertEqual(by_id["q-missing"]["expected_term_hit_rate"], 0.0)
+        self.assertEqual(metrics["expected_term_query_count"], 3)
+        self.assertAlmostEqual(metrics["expected_term_recall_at_k"], (1.0 + 1.0 + 0.5) / 3)
+        self.assertAlmostEqual(metrics["expected_term_hit_rate"], (1.0 + 1.0 + 0.0) / 3)
+        self.assertEqual(metrics["expected_term_count"], 5)
+        self.assertEqual(metrics["matched_expected_terms"], 4)
+        self.assertEqual(metrics["table_term_query_count"], 2)
+        self.assertAlmostEqual(metrics["table_term_recall_at_k"], (1.0 + 0.5) / 2)
+        self.assertAlmostEqual(metrics["table_term_hit_rate"], (1.0 + 0.0) / 2)
+
     def test_benchmark_reports_pollution_and_tag_metrics(self) -> None:
         chunks = normalize_retrieval_response(
             {
@@ -575,6 +768,55 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(benchmark["per_query"][0]["result_modality_distribution"], {"image": 1, "text": 1})
         self.assertIn("Multimodal", markdown)
         self.assertIn("Image recall@k", markdown)
+
+    def test_benchmark_classifies_markdown_table_markup_as_table_modality(self) -> None:
+        table_chunks = normalize_retrieval_response(
+            {
+                "data": {
+                    "chunks": [
+                        {
+                            "content": "<table><tr><td>42</td></tr></table>",
+                            "document_name": "source.md",
+                        }
+                    ]
+                }
+            }
+        )
+        report = ValidationReport(
+            level="benchmark",
+            dataset_id="ds-1",
+            dataset_name="kb:test",
+            cases=[
+                ValidationCaseResult(
+                    query=ValidationQuery(id="q-table", question="Which value?", metadata={"benchmark_category": "table_value"}),
+                    passed=True,
+                    chunk_count=len(table_chunks),
+                    chunks=table_chunks,
+                )
+            ],
+        )
+
+        benchmarked = attach_benchmark_evaluation(
+            report,
+            qrels={
+                "q-table": load_benchmark_qrels_inline(
+                    [
+                        {
+                            "query_id": "q-table",
+                            "document": "source.md",
+                            "expected_modality": "table",
+                            "benchmark_category": "table_value",
+                        }
+                    ]
+                )["q-table"]
+            },
+            cutoff=2,
+        )
+        benchmark = benchmarked.to_dict()["benchmark"]
+
+        self.assertEqual(benchmark["metrics"]["table_recall_at_k"], 1.0)
+        self.assertEqual(benchmark["per_query"][0]["table_result_count"], 1)
+        self.assertEqual(benchmark["per_query"][0]["result_modality_distribution"], {"table": 1})
 
     def test_benchmark_gate_failure_marks_report_failed(self) -> None:
         report = run_retrieval_validation(

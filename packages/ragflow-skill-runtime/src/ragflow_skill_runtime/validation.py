@@ -33,6 +33,12 @@ STRICT_CHUNK_METRIC_KEYS = (
     "expected_chunk_hit_rate",
     "expected_evidence_rank",
 )
+EXPECTED_TERM_METRIC_KEYS = (
+    "expected_term_recall_at_k",
+    "expected_term_hit_rate",
+    "table_term_recall_at_k",
+    "table_term_hit_rate",
+)
 POLLUTION_METRIC_KEYS = (
     "wrong_document_rate",
     "tag_pollution_rate",
@@ -47,7 +53,13 @@ MULTIMODAL_METRIC_KEYS = (
     "table_recall_at_k",
     "table_recall",
 )
-BENCHMARK_METRIC_KEYS = METRIC_KEYS + STRICT_CHUNK_METRIC_KEYS + POLLUTION_METRIC_KEYS + MULTIMODAL_METRIC_KEYS
+BENCHMARK_METRIC_KEYS = (
+    METRIC_KEYS
+    + STRICT_CHUNK_METRIC_KEYS
+    + EXPECTED_TERM_METRIC_KEYS
+    + POLLUTION_METRIC_KEYS
+    + MULTIMODAL_METRIC_KEYS
+)
 CHUNK_SNAPSHOT_SCHEMA = "ragflow_chunk_snapshot_v1"
 MULTIMODAL_BENCHMARK_SCHEMA = "ragflow_multimodal_benchmark_v1"
 MULTIMODAL_BENCHMARK_CATEGORIES = (
@@ -993,10 +1005,10 @@ def _chunk_modality(chunk: NormalizedChunk) -> str:
     document_name = (chunk.document_name or "").casefold()
     if document_name.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff")):
         return "image"
-    if document_name.endswith((".md", ".markdown", ".txt")):
-        return "text"
     if "<table" in (chunk.content or "").casefold():
         return "table"
+    if document_name.endswith((".md", ".markdown", ".txt")):
+        return "text"
     return "unknown"
 
 
@@ -1159,6 +1171,49 @@ def _tag_pollution_metrics(
     return metrics
 
 
+def _benchmark_expected_term_hits(expected_terms: list[str], chunks: list[NormalizedChunk]) -> list[str]:
+    joined_text = re.sub(r"\s+", " ", _joined_chunk_text(chunks)).strip()
+    hits: list[str] = []
+    for term in expected_terms:
+        normalized = re.sub(r"\s+", " ", term.strip().casefold()).strip()
+        if normalized and normalized in joined_text:
+            hits.append(term)
+    return hits
+
+
+def _query_expected_term_metrics(
+    case: ValidationCaseResult,
+    ranked_chunks: list[NormalizedChunk],
+    *,
+    expected_modalities: set[str],
+) -> dict[str, float | int]:
+    expected_terms = [term for term in case.query.expected_terms if term.strip()]
+    if not expected_terms:
+        return {}
+
+    matched_terms = _benchmark_expected_term_hits(expected_terms, ranked_chunks)
+    expected_count = len(expected_terms)
+    matched_count = len(matched_terms)
+    recall = matched_count / expected_count
+    hit_rate = 1.0 if matched_count == expected_count else 0.0
+    metrics: dict[str, float | int] = {
+        "expected_term_recall_at_k": recall,
+        "expected_term_hit_rate": hit_rate,
+        "expected_term_count": expected_count,
+        "matched_expected_terms": matched_count,
+    }
+    if "table" in expected_modalities:
+        metrics.update(
+            {
+                "table_term_recall_at_k": recall,
+                "table_term_hit_rate": hit_rate,
+                "table_expected_term_count": expected_count,
+                "matched_table_expected_terms": matched_count,
+            }
+        )
+    return metrics
+
+
 def _query_benchmark_metrics(
     case: ValidationCaseResult,
     qrels: list[BenchmarkQrel],
@@ -1231,6 +1286,11 @@ def _query_benchmark_metrics(
         }
     document_metrics = _document_pollution_metrics(case, positive_qrels, ranked_chunks)
     tag_metrics = _tag_pollution_metrics(case, positive_qrels, ranked_chunks)
+    expected_term_metrics = _query_expected_term_metrics(
+        case,
+        ranked_chunks,
+        expected_modalities=expected_modalities,
+    )
     multimodal_metrics = _query_multimodal_metrics(
         expected_modalities=expected_modalities,
         qrels=ranking_qrels,
@@ -1258,6 +1318,7 @@ def _query_benchmark_metrics(
         "matched_targets": len(unique_hits),
         "first_relevant_rank": first_relevant_rank,
         **strict_metrics,
+        **expected_term_metrics,
         **document_metrics,
         **tag_metrics,
         **multimodal_metrics,
@@ -1350,11 +1411,15 @@ def _aggregate_query_metrics(per_query: list[dict[str, Any]]) -> dict[str, float
     metrics: dict[str, float | int] = {"query_count": len(per_query)}
     for key in METRIC_KEYS:
         metrics[key] = _average([float(item[key]) for item in per_query])
-    for key in STRICT_CHUNK_METRIC_KEYS + POLLUTION_METRIC_KEYS:
+    for key in STRICT_CHUNK_METRIC_KEYS + EXPECTED_TERM_METRIC_KEYS + POLLUTION_METRIC_KEYS:
         values = [float(item[key]) for item in per_query if isinstance(item.get(key), (int, float))]
         if values:
             metrics[key] = _average(values)
-            if key == "wrong_document_rate":
+            if key == "expected_term_recall_at_k":
+                metrics["expected_term_query_count"] = len(values)
+            elif key == "table_term_recall_at_k":
+                metrics["table_term_query_count"] = len(values)
+            elif key == "wrong_document_rate":
                 metrics["document_scope_query_count"] = len(values)
             elif key == "tag_pollution_rate":
                 metrics["tag_scope_query_count"] = len(values)
@@ -1400,6 +1465,10 @@ def _aggregate_query_metrics(per_query: list[dict[str, Any]]) -> dict[str, float
         "wrong_document_count",
         "expected_tag_count",
         "matched_expected_tags",
+        "expected_term_count",
+        "matched_expected_terms",
+        "table_expected_term_count",
+        "matched_table_expected_terms",
         "tagged_chunk_count",
         "polluted_tagged_chunk_count",
         "unexpected_tag_count",
@@ -1766,6 +1835,22 @@ def render_markdown_report(report: ValidationReport) -> str:
                     f"- Strict chunk recall@k: `{float(benchmark.metrics['strict_chunk_recall_at_k']):.4f}`",
                     f"- Expected chunk hit rate: `{float(benchmark.metrics['expected_chunk_hit_rate']):.2%}`",
                     f"- Expected evidence rank: `{float(benchmark.metrics['expected_evidence_rank']):.4f}`",
+                    "- Strict chunk recall uses exact chunk IDs or stable content hashes; expected term metrics are semantic content evidence.",
+                ]
+            )
+        if "expected_term_recall_at_k" in benchmark.metrics:
+            lines.extend(
+                [
+                    f"- Expected term recall@k: `{float(benchmark.metrics['expected_term_recall_at_k']):.4f}`",
+                    f"- Expected term hit rate: `{float(benchmark.metrics['expected_term_hit_rate']):.2%}`",
+                    f"- Expected terms matched: `{int(benchmark.metrics.get('matched_expected_terms', 0))}/{int(benchmark.metrics.get('expected_term_count', 0))}`",
+                ]
+            )
+        if "table_term_recall_at_k" in benchmark.metrics:
+            lines.extend(
+                [
+                    f"- Table term recall@k: `{float(benchmark.metrics['table_term_recall_at_k']):.4f}`",
+                    f"- Table term hit rate: `{float(benchmark.metrics['table_term_hit_rate']):.2%}`",
                 ]
             )
         lines.extend(
