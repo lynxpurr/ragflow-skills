@@ -18,6 +18,7 @@ from .benchmark_governance import (
 )
 from .config import ConfigError, read_config_file
 from .diagnostics import DIAGNOSTIC_REPORT_SCHEMA, diagnose_kb_manifest
+from .handoff import HandoffError, make_doc_ingest_readiness_payload
 from .health_report import HEALTH_REPORT_SCHEMA
 from .kb_build import KB_REFRESH_REPORT_SCHEMA
 from .manifests import ManifestError, load_kb_manifest
@@ -391,6 +392,39 @@ def _candidate_artifacts(artifact_dir: str | Path, profile_id: str) -> dict[str,
     }
 
 
+def _candidate_table_parent_chunk_preflight_from_handoff(
+    *,
+    doc_manifest_path: str | Path | None,
+    selected_profile: Mapping[str, Any],
+    issues: list[OptimizationIssue],
+    field: str,
+) -> dict[str, Any] | None:
+    if not doc_manifest_path:
+        return None
+    manifest_path = Path(doc_manifest_path)
+    try:
+        readiness = make_doc_ingest_readiness_payload(
+            handoff_root=manifest_path.parent,
+            doc_manifest_name=manifest_path.name,
+            selected_profile=selected_profile,
+        )
+    except (HandoffError, OSError, RuntimeError, ValueError) as exc:
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                "table_parent_chunk_preflight_unavailable",
+                f"table parent chunk preflight could not be computed: {exc}",
+                field,
+            )
+        )
+        return None
+    checks = readiness.get("checks") if isinstance(readiness.get("checks"), Mapping) else {}
+    preflight = checks.get("table_parent_chunk_preflight")
+    if isinstance(preflight, Mapping):
+        return dict(preflight)
+    return None
+
+
 def _build_command(
     *,
     doc_manifest_path: str | Path | None,
@@ -621,40 +655,47 @@ def create_optimization_plan(
             top_k=top_k,
             metric_cutoff=metric_cutoff,
         )
-        plan_candidates.append(
-            {
-                **candidate,
-                "disposable_kb_name": disposable_name,
-                "artifacts": candidate_artifacts,
-                "commands": {
-                    "write_generated_profile": None if candidate.get("path") else ["write-json", candidate_artifacts["profile"]],
-                    "build": None,
-                    "validate": validate_command,
-                    "diagnose": [
-                        "python3",
-                        "scripts/diagnose.py",
-                        "--kb-manifest",
-                        candidate_artifacts["kb_manifest"],
-                        "--report-json",
-                        candidate_artifacts["diagnostic_report"],
-                    ],
-                    "cleanup_preview": [
-                        "python3",
-                        "scripts/cleanup.py",
-                        "--kb-manifest",
-                        candidate_artifacts["kb_manifest"],
-                        "--output",
-                        candidate_artifacts["cleanup_plan"],
-                    ],
-                },
-                "mutation_commands": {
-                    "build": _disabled_mutation_command(
-                        build_command,
-                        reason="Disposable KB creation is disabled in plan-only output and requires optimize --execute.",
-                    )
-                },
-            }
+        plan_candidate = {
+            **candidate,
+            "disposable_kb_name": disposable_name,
+            "artifacts": candidate_artifacts,
+            "commands": {
+                "write_generated_profile": None if candidate.get("path") else ["write-json", candidate_artifacts["profile"]],
+                "build": None,
+                "validate": validate_command,
+                "diagnose": [
+                    "python3",
+                    "scripts/diagnose.py",
+                    "--kb-manifest",
+                    candidate_artifacts["kb_manifest"],
+                    "--report-json",
+                    candidate_artifacts["diagnostic_report"],
+                ],
+                "cleanup_preview": [
+                    "python3",
+                    "scripts/cleanup.py",
+                    "--kb-manifest",
+                    candidate_artifacts["kb_manifest"],
+                    "--output",
+                    candidate_artifacts["cleanup_plan"],
+                ],
+            },
+            "mutation_commands": {
+                "build": _disabled_mutation_command(
+                    build_command,
+                    reason="Disposable KB creation is disabled in plan-only output and requires optimize --execute.",
+                )
+            },
+        }
+        table_parent_chunk_preflight = _candidate_table_parent_chunk_preflight_from_handoff(
+            doc_manifest_path=doc_manifest_path,
+            selected_profile=candidate.get("profile") if isinstance(candidate.get("profile"), Mapping) else {},
+            issues=issues,
+            field=f"candidates[{index}].table_parent_chunk_preflight",
         )
+        if table_parent_chunk_preflight is not None:
+            plan_candidate["table_parent_chunk_preflight"] = table_parent_chunk_preflight
+        plan_candidates.append(plan_candidate)
 
     issue_summary = _issue_counts(issues)
     return {
@@ -810,6 +851,11 @@ def _validation_report_metrics(report: Mapping[str, Any]) -> dict[str, Any]:
         "map_at_k": _metric_value(benchmark_metrics, "map_at_k"),
         "strict_chunk_recall_at_k": _metric_value(benchmark_metrics, "strict_chunk_recall_at_k"),
         "expected_chunk_hit_rate": _metric_value(benchmark_metrics, "expected_chunk_hit_rate"),
+        "expected_term_recall_at_k": _metric_value(benchmark_metrics, "expected_term_recall_at_k"),
+        "expected_term_hit_rate": _metric_value(benchmark_metrics, "expected_term_hit_rate"),
+        "table_term_recall_at_k": _metric_value(benchmark_metrics, "table_term_recall_at_k"),
+        "table_term_hit_rate": _metric_value(benchmark_metrics, "table_term_hit_rate"),
+        "table_term_recall_observed": "table_term_recall_at_k" in benchmark_metrics,
         "empty_result_rate": _empty_result_rate(top_metrics, benchmark_metrics),
         "average_chunks": _metric_first([top_metrics], "average_chunks", "avg_chunks"),
         "query_latency_ms": query_latency_ms,
@@ -853,6 +899,13 @@ def _validation_diagnostic_reasons(report: Mapping[str, Any]) -> list[str]:
     if isinstance(empty_rate, (int, float)) and not isinstance(empty_rate, bool) and empty_rate > 0:
         reasons.append("empty_retrieval")
     return sorted(set(reasons))
+
+
+def _candidate_table_parent_chunk_preflight(candidate: Mapping[str, Any]) -> dict[str, Any] | None:
+    preflight = candidate.get("table_parent_chunk_preflight")
+    if isinstance(preflight, Mapping):
+        return dict(preflight)
+    return None
 
 
 def _diagnostic_command(candidate: Mapping[str, Any]) -> list[str] | None:
@@ -1300,6 +1353,8 @@ def _result_tradeoffs(result: Mapping[str, Any], winner: Mapping[str, Any]) -> l
 def _recommendation_rationale(winner: Mapping[str, Any], ranked: list[Mapping[str, Any]]) -> list[str]:
     metrics = winner.get("metrics") if isinstance(winner.get("metrics"), Mapping) else {}
     decision_score = winner.get("decision_score") if isinstance(winner.get("decision_score"), Mapping) else {}
+    components = decision_score.get("components") if isinstance(decision_score.get("components"), Mapping) else {}
+    table_atomicity = components.get("table_atomicity") if isinstance(components.get("table_atomicity"), Mapping) else {}
     rationale = [
         "Selected "
         f"`{winner.get('profile_id')}` because it has the highest normalized decision score "
@@ -1311,6 +1366,26 @@ def _recommendation_rationale(winner: Mapping[str, Any], ranked: list[Mapping[st
         rationale.append("It ties or leads ranking quality by MRR.")
     if metrics.get("strict_chunk_recall_at_k", 0.0) > 0:
         rationale.append("It preserves expected-chunk evidence according to strict chunk recall.")
+    if metrics.get("table_term_recall_observed") and metrics.get("table_term_recall_at_k", 0.0) > 0:
+        rationale.append(f"Table term recall@k is {metrics.get('table_term_recall_at_k', 0.0):.4f}, so semantic table evidence is present.")
+    if table_atomicity.get("status") == "pass":
+        rationale.append("Table atomicity preflight passed for the selected profile.")
+    elif table_atomicity.get("status") == "risk":
+        rationale.append("Selected profile has table atomicity risk; review table fragmentation before promotion.")
+    risk_ids = [
+        item.get("profile_id")
+        for item in ranked
+        if isinstance(item.get("decision_score"), Mapping)
+        and isinstance(item["decision_score"].get("components"), Mapping)
+        and isinstance(item["decision_score"]["components"].get("table_atomicity"), Mapping)
+        and item["decision_score"]["components"]["table_atomicity"].get("status") == "risk"
+    ]
+    if risk_ids and winner.get("profile_id") not in risk_ids:
+        rationale.append(
+            "Table atomicity risk penalized lower-capacity candidate(s): "
+            + ", ".join(f"`{profile_id}`" for profile_id in risk_ids)
+            + "."
+        )
     if metrics.get("empty_result_rate", 0.0) == 0:
         rationale.append("It did not produce empty retrievals in the provided benchmark report.")
     return rationale
@@ -1623,6 +1698,90 @@ def _decision_context_warning_component(result: Mapping[str, Any]) -> tuple[dict
     )
 
 
+def _table_atomicity_issue_codes(preflight: Mapping[str, Any]) -> list[str]:
+    issues = preflight.get("issues") if isinstance(preflight.get("issues"), list) else []
+    codes = [
+        str(issue.get("code"))
+        for issue in issues
+        if isinstance(issue, Mapping) and isinstance(issue.get("code"), str) and issue.get("code")
+    ]
+    return sorted(set(codes))
+
+
+def _decision_table_atomicity_component(result: Mapping[str, Any]) -> tuple[dict[str, Any], float]:
+    preflight = (
+        result.get("table_parent_chunk_preflight")
+        if isinstance(result.get("table_parent_chunk_preflight"), Mapping)
+        else None
+    )
+    if not preflight:
+        return (
+            {
+                "status": "unknown",
+                "evidence_status": "unknown",
+                "score": 1.0,
+                "penalty": 0.0,
+                "table_count": 0,
+            },
+            0.0,
+        )
+
+    table_count = _int_value(preflight.get("table_count"))
+    exists = bool(preflight.get("exists")) or table_count > 0
+    if not exists:
+        return (
+            {
+                "status": "unknown",
+                "evidence_status": "unknown",
+                "score": 1.0,
+                "penalty": 0.0,
+                "table_count": table_count,
+            },
+            0.0,
+        )
+
+    selected_tokens_raw = preflight.get("selected_profile_chunk_tokens")
+    selected_tokens = (
+        int(selected_tokens_raw)
+        if isinstance(selected_tokens_raw, (int, float)) and not isinstance(selected_tokens_raw, bool)
+        else None
+    )
+    max_estimate = _int_value(preflight.get("max_estimated_parent_chunk_tokens"))
+    issue_codes = _table_atomicity_issue_codes(preflight)
+    issue_risk = bool(issue_codes) and (
+        "table_parent_chunk_profile_too_small" in issue_codes
+        or str(preflight.get("status", "")).lower() in {"review", "risk", "warning", "failed"}
+    )
+    capacity_risk = selected_tokens is not None and max_estimate > selected_tokens
+    if selected_tokens is None:
+        status = "available"
+        penalty = 0.0
+        score = 1.0
+    elif issue_risk or capacity_risk:
+        status = "risk"
+        penalty = 0.03
+        score = 0.0
+    else:
+        status = "pass"
+        penalty = 0.0
+        score = 1.0
+
+    return (
+        {
+            "status": status,
+            "evidence_status": "available",
+            "score": _round_score(score),
+            "penalty": _round_score(penalty),
+            "table_count": table_count,
+            "selected_profile_chunk_tokens": selected_tokens,
+            "max_estimated_parent_chunk_tokens": max_estimate,
+            "max_recommended_min_parent_chunk_tokens": _int_value(preflight.get("max_recommended_min_parent_chunk_tokens")),
+            "issue_codes": issue_codes,
+        },
+        penalty,
+    )
+
+
 def _decision_score_for_result(
     result: Mapping[str, Any],
     *,
@@ -1653,7 +1812,8 @@ def _decision_score_for_result(
     )
     modality, modality_penalty = _decision_modality_component(benchmark_strength)
     context, context_penalty = _decision_context_warning_component(result)
-    final_score = _clamp01(pre_cost_score - cost_penalty - modality_penalty - context_penalty)
+    table_atomicity, table_atomicity_penalty = _decision_table_atomicity_component(result)
+    final_score = _clamp01(pre_cost_score - cost_penalty - modality_penalty - context_penalty - table_atomicity_penalty)
 
     return {
         "basis": "normalized_decision_score",
@@ -1667,6 +1827,7 @@ def _decision_score_for_result(
             "cost_penalty": 0.14,
             "modality_coverage_penalty": 0.02,
             "context_warning_penalty": 0.05,
+            "table_atomicity_penalty": 0.03,
         },
         "components": {
             "quality": {
@@ -1695,6 +1856,7 @@ def _decision_score_for_result(
             },
             "cost": cost,
             "context_warnings": context,
+            "table_atomicity": table_atomicity,
         },
     }
 
@@ -2371,22 +2533,24 @@ def summarize_optimization_results(
                 }
             )
         runtime_evidence = _candidate_runtime_evidence(candidate, issues=issues, field=f"candidates[{index}].artifacts")
-        results.append(
-            {
-                "profile_id": candidate.get("profile_id"),
-                "disposable_kb_name": candidate.get("disposable_kb_name"),
-                "profile": candidate.get("profile", {}),
-                "report_path": str(report_path),
-                "ok": bool(report.get("ok")),
-                "dataset": report.get("dataset", {}),
-                "metrics": metrics,
-                "score": metrics["score"],
-                "diagnostics": diagnostic,
-                "runtime_evidence": runtime_evidence,
-                "source": candidate.get("source", {}),
-                "candidate_index": index,
-            }
-        )
+        result = {
+            "profile_id": candidate.get("profile_id"),
+            "disposable_kb_name": candidate.get("disposable_kb_name"),
+            "profile": candidate.get("profile", {}),
+            "report_path": str(report_path),
+            "ok": bool(report.get("ok")),
+            "dataset": report.get("dataset", {}),
+            "metrics": metrics,
+            "score": metrics["score"],
+            "diagnostics": diagnostic,
+            "runtime_evidence": runtime_evidence,
+            "source": candidate.get("source", {}),
+            "candidate_index": index,
+        }
+        table_parent_chunk_preflight = _candidate_table_parent_chunk_preflight(candidate)
+        if table_parent_chunk_preflight is not None:
+            result["table_parent_chunk_preflight"] = table_parent_chunk_preflight
+        results.append(result)
 
     if not results:
         issues.append(OptimizationIssue("error", "validation_reports_missing", "no usable validation reports were found", "reports"))
@@ -3266,8 +3430,8 @@ def render_best_profile_markdown(results: Mapping[str, Any]) -> str:
             "",
             "## Ranking",
             "",
-            "| rank | profile | decision_score | raw_score | hit_rate | mrr | ndcg@k | strict_chunk_recall | empty_rate | latency_ms | parse_ms |",
-            "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            "| rank | profile | decision_score | raw_score | hit_rate | mrr | ndcg@k | strict_chunk_recall | table_term_recall | empty_rate | latency_ms | parse_ms |",
+            "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for candidate in results.get("candidates", []) if isinstance(results.get("candidates"), list) else []:
@@ -3280,6 +3444,7 @@ def render_best_profile_markdown(results: Mapping[str, Any]) -> str:
             f"{metrics.get('score', 0.0):.4f} | "
             f"{metrics.get('hit_rate', 0.0):.4f} | {metrics.get('mrr', 0.0):.4f} | "
             f"{metrics.get('ndcg_at_k', 0.0):.4f} | {metrics.get('strict_chunk_recall_at_k', 0.0):.4f} | "
+            f"{metrics.get('table_term_recall_at_k', 0.0):.4f} | "
             f"{metrics.get('empty_result_rate', 0.0):.4f} | {metrics.get('query_latency_ms', 0.0):.1f} | "
             f"{metrics.get('parse_time_ms', 0.0):.1f} |"
         )
@@ -3308,6 +3473,35 @@ def render_best_profile_markdown(results: Mapping[str, Any]) -> str:
             f"{modality.get('score', 0.0):.4f} | {empty.get('score', 0.0):.4f} | {cost.get('score', 0.0):.4f} | "
             f"`{cost.get('status', '-')}` | {context.get('warning_count', 0)} |"
         )
+    table_atomicity_rows = []
+    for candidate in results.get("candidates", []) if isinstance(results.get("candidates"), list) else []:
+        if not isinstance(candidate, Mapping):
+            continue
+        decision_score = candidate.get("decision_score") if isinstance(candidate.get("decision_score"), Mapping) else {}
+        components = decision_score.get("components") if isinstance(decision_score.get("components"), Mapping) else {}
+        table_atomicity = components.get("table_atomicity") if isinstance(components.get("table_atomicity"), Mapping) else {}
+        if table_atomicity:
+            table_atomicity_rows.append((candidate, table_atomicity))
+    if table_atomicity_rows:
+        lines.extend(
+            [
+                "",
+                "## Table Atomicity",
+                "",
+                "| profile | status | evidence | selected_chunk_tokens | max_table_parent_tokens | penalty | issues |",
+                "|---|---|---|---:|---:|---:|---|",
+            ]
+        )
+        for candidate, table_atomicity in table_atomicity_rows:
+            issue_codes = table_atomicity.get("issue_codes") if isinstance(table_atomicity.get("issue_codes"), list) else []
+            lines.append(
+                f"| `{candidate.get('profile_id')}` | `{table_atomicity.get('status', '-')}` | "
+                f"`{table_atomicity.get('evidence_status', '-')}` | "
+                f"{table_atomicity.get('selected_profile_chunk_tokens') or 0} | "
+                f"{table_atomicity.get('max_estimated_parent_chunk_tokens') or 0} | "
+                f"{table_atomicity.get('penalty', 0.0):.4f} | "
+                f"{', '.join(str(code) for code in issue_codes) or '-'} |"
+            )
     lines.extend(["", "## Tradeoffs", ""])
     for candidate in results.get("candidates", []) if isinstance(results.get("candidates"), list) else []:
         if not isinstance(candidate, Mapping):

@@ -702,10 +702,157 @@ class OptimizationTests(unittest.TestCase):
         for candidate in results["candidates"]:
             self.assertEqual(
                 set(candidate["decision_score"]["components"]),
-                {"quality", "strict_evidence", "modality_coverage", "empty_result_risk", "cost", "context_warnings"},
+                {"quality", "strict_evidence", "modality_coverage", "empty_result_risk", "cost", "context_warnings", "table_atomicity"},
             )
+            self.assertEqual(candidate["decision_score"]["components"]["table_atomicity"]["status"], "unknown")
         self.assertIn("decision_score", rendered)
         self.assertIn("raw_score", rendered)
+
+    def test_summarize_optimization_results_demotes_table_atomicity_risk_when_ir_metrics_are_saturated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\n<table><tr><td>Known answer</td></tr></table>\n", encoding="utf-8")
+            small = root / "small.json"
+            safe = root / "safe.json"
+            _write_profile(small, "small-profile", chunk_size=256)
+            _write_profile(safe, "safe-profile", chunk_size=1024)
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[small, safe],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            _mark_benchmark_strength_promotable(plan)
+            for candidate in plan["candidates"]:
+                risky = candidate["profile_id"] == "small-profile"
+                candidate["table_parent_chunk_preflight"] = {
+                    "exists": True,
+                    "status": "review" if risky else "ready",
+                    "selected_profile_id": candidate["profile_id"],
+                    "selected_profile_chunk_tokens": 256 if risky else 1024,
+                    "table_count": 1,
+                    "max_estimated_parent_chunk_tokens": 960,
+                    "max_recommended_min_parent_chunk_tokens": 1024,
+                    "issues": [
+                        {
+                            "severity": "warning",
+                            "code": "table_parent_chunk_profile_too_small",
+                            "message": "selected profile chunk_token_num is smaller than at least one estimated table block",
+                        }
+                    ]
+                    if risky
+                    else [],
+                }
+            plan_path = root / "optimization_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            for candidate in plan["candidates"]:
+                report_path = Path(candidate["artifacts"]["validation_report"])
+                _write_validation_report(report_path, mrr=1.0, hit_rate=1.0, query_latency_ms=100.0, parse_time_ms=200.0)
+                payload = json.loads(report_path.read_text(encoding="utf-8"))
+                payload["benchmark"]["metrics"].update(
+                    {
+                        "expected_term_recall_at_k": 1.0,
+                        "expected_term_hit_rate": 1.0,
+                        "table_term_recall_at_k": 1.0,
+                        "table_term_hit_rate": 1.0,
+                    }
+                )
+                report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            results = summarize_optimization_results(plan_path=plan_path)
+            rendered = render_best_profile_markdown(results)
+
+        small_result = next(candidate for candidate in results["candidates"] if candidate["profile_id"] == "small-profile")
+        safe_result = next(candidate for candidate in results["candidates"] if candidate["profile_id"] == "safe-profile")
+
+        self.assertEqual(results["recommendation"]["profile_id"], "safe-profile")
+        self.assertEqual(small_result["decision_score"]["components"]["table_atomicity"]["status"], "risk")
+        self.assertEqual(safe_result["decision_score"]["components"]["table_atomicity"]["status"], "pass")
+        self.assertGreater(
+            small_result["decision_score"]["components"]["table_atomicity"]["penalty"],
+            safe_result["decision_score"]["components"]["table_atomicity"]["penalty"],
+        )
+        self.assertEqual(small_result["table_parent_chunk_preflight"]["status"], "review")
+        self.assertEqual(safe_result["table_parent_chunk_preflight"]["status"], "ready")
+        self.assertIn("table atomicity", " ".join(results["recommendation"]["rationale"]).lower())
+        self.assertIn("Table atomicity", rendered)
+        self.assertIn("Table term recall", rendered)
+
+    def test_create_optimization_plan_carries_table_parent_chunk_preflight_per_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            handoff = root / "handoff"
+            docs_dir = handoff / "documents"
+            docs_dir.mkdir(parents=True)
+            markdown = docs_dir / "sample.md"
+            markdown.write_text("# Table\n\n<table><tr><td>Known answer</td></tr></table>\n", encoding="utf-8")
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [{"source_path": "source.pdf", "markdown_path": "documents/sample.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (handoff / "retrieval_hints.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "table_artifacts": [
+                            {
+                                "source": "html_table",
+                                "document": "documents/sample.md",
+                                "row_count": 20,
+                                "column_count": 12,
+                                "cell_count": 240,
+                                "estimated_parent_chunk_tokens": 960,
+                                "recommended_min_parent_chunk_tokens": 1024,
+                                "table_atomic_target_tokens": 4096,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            small = root / "small.json"
+            safe = root / "safe.json"
+            _write_profile(small, "small-profile", chunk_size=256)
+            _write_profile(safe, "safe-profile", chunk_size=1024)
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[markdown],
+                doc_manifest_path=manifest,
+                profile_paths=[small, safe],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+
+        by_id = {candidate["profile_id"]: candidate["table_parent_chunk_preflight"] for candidate in plan["candidates"]}
+        self.assertEqual(by_id["small-profile"]["status"], "review")
+        self.assertEqual(by_id["small-profile"]["selected_profile_chunk_tokens"], 256)
+        self.assertEqual(by_id["small-profile"]["max_estimated_parent_chunk_tokens"], 960)
+        self.assertEqual(by_id["small-profile"]["issues"][0]["code"], "table_parent_chunk_profile_too_small")
+        self.assertEqual(by_id["safe-profile"]["status"], "ready")
+        self.assertEqual(by_id["safe-profile"]["selected_profile_chunk_tokens"], 1024)
 
     def test_summarize_optimization_results_marks_missing_decision_cost_signals_unknown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

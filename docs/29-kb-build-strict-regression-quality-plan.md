@@ -277,15 +277,15 @@ Likely files to modify:
 
 ### P0: Optimize Decision Evidence
 
-- [ ] Add a fixture plan or candidate artifact that carries
+- [x] Add a fixture plan or candidate artifact that carries
   `table_parent_chunk_preflight` into optimize summarization.
-- [ ] Add a table atomicity decision component with `available`, `unknown`, `pass`, and
+- [x] Add a table atomicity decision component with `available`, `unknown`, `pass`, and
   `risk` states.
-- [ ] Penalize or warn on profiles whose selected chunk capacity is below estimated
+- [x] Penalize or warn on profiles whose selected chunk capacity is below estimated
   parent-table size.
-- [ ] Surface table atomicity status in `decision_score.components`.
-- [ ] Add Markdown rationale for table risk and semantic table evidence.
-- [ ] Add tests where a smaller profile wins saturated IR metrics but is demoted or kept
+- [x] Surface table atomicity status in `decision_score.components`.
+- [x] Add Markdown rationale for table risk and semantic table evidence.
+- [x] Add tests where a smaller profile wins saturated IR metrics but is demoted or kept
   as a co-winner because table atomicity evidence is risky.
 
 ### P0/P1: Cleanup Lifecycle Closure
@@ -372,10 +372,16 @@ Completed in the current implementation slice:
 - Table-expected queries emit table-term semantic metrics, and generated Markdown reports
   show both exact strict evidence and semantic term evidence.
 - Focused tests cover text-only, table, mixed, and missing-term expected-term cases.
+- Optimize plans carry candidate-specific `table_parent_chunk_preflight` evidence when a
+  rich handoff can be checked against candidate profiles.
+- Optimize summaries include a table atomicity decision-score component and conservatively
+  penalize risky profiles whose selected chunk capacity is below estimated parent-table
+  size.
+- Best-profile Markdown rationale now surfaces table atomicity risk and semantic table
+  evidence alongside retrieval metrics.
 
 Not yet implemented:
 
-- Table atomicity penalty in optimize scoring.
 - Post-cleanup read-back as a machine-readable artifact.
 - Template strategy that makes embedding-model checking easy without reducing public
   portability.
