@@ -9368,6 +9368,105 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["benchmark"]["baseline"]["delta"]["mrr"], 0.5)
         self.assertIn("## Benchmark", report_text)
 
+    def test_validate_benchmark_markdown_reports_candidate_snapshot_expected_chunk_matches(self) -> None:
+        module = load_validate_module()
+        module.RAGFlowClient = FakeValidationClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "kb_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-1", "name": "kb:test"},
+                        "documents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            queries = root / "queries.json"
+            queries.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {
+                                "id": "q1",
+                                "question": "Known",
+                                "expected_terms": ["known term"],
+                                "expected_documents": ["source.md"],
+                                "metadata": {"type": "fact"},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            qrels = root / "qrels.json"
+            qrels.write_text(
+                json.dumps(
+                    {
+                        "qrels": [
+                            {"query_id": "q1", "document": "source.md"},
+                            {
+                                "query_id": "q1",
+                                "field": "expected_chunk",
+                                "target": "sha256:reference-boundary-hash",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            candidate_hash = "sha256:" + hashlib.sha256("Known includes known term".encode("utf-8")).hexdigest()
+            chunk_snapshot = root / "candidate_chunk_snapshot.json"
+            chunk_snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "chunks": [
+                            {
+                                "stable_hash": candidate_hash,
+                                "document_name": "source.md",
+                                "content": "Known includes known term",
+                                "aliases": [candidate_hash],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report_md = root / "benchmark.md"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--kb-manifest",
+                        str(manifest),
+                        "--level",
+                        "benchmark",
+                        "--queries",
+                        str(queries),
+                        "--qrels",
+                        str(qrels),
+                        "--chunk-snapshot",
+                        str(chunk_snapshot),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--report-md",
+                        str(report_md),
+                    ]
+                )
+            report_text = report_md.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        payload = json.loads(stdout.getvalue())
+        metrics = payload["benchmark"]["metrics"]
+        self.assertEqual(metrics["strict_chunk_recall_at_k"], 0.0)
+        self.assertEqual(metrics["candidate_snapshot_expected_chunk_recall_at_k"], 1.0)
+        self.assertEqual(metrics["matched_candidate_snapshot_expected_chunks"], 1)
+        self.assertIn("Candidate snapshot expected chunk recall@k", report_text)
+        self.assertIn("Candidate snapshot expected chunks matched", report_text)
+
     def test_validate_benchmark_records_refresh_report_observed_state(self) -> None:
         module = load_validate_module()
         module.RAGFlowClient = FakeValidationClient

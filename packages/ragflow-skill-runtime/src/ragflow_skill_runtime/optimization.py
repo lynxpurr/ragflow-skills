@@ -851,6 +851,22 @@ def _validation_report_metrics(report: Mapping[str, Any]) -> dict[str, Any]:
         "map_at_k": _metric_value(benchmark_metrics, "map_at_k"),
         "strict_chunk_recall_at_k": _metric_value(benchmark_metrics, "strict_chunk_recall_at_k"),
         "expected_chunk_hit_rate": _metric_value(benchmark_metrics, "expected_chunk_hit_rate"),
+        "candidate_snapshot_expected_chunk_recall_at_k": _metric_value(
+            benchmark_metrics,
+            "candidate_snapshot_expected_chunk_recall_at_k",
+        ),
+        "candidate_snapshot_expected_chunk_hit_rate": _metric_value(
+            benchmark_metrics,
+            "candidate_snapshot_expected_chunk_hit_rate",
+        ),
+        "candidate_snapshot_expected_chunk_count": _metric_value(
+            benchmark_metrics,
+            "candidate_snapshot_expected_chunk_count",
+        ),
+        "matched_candidate_snapshot_expected_chunks": _metric_value(
+            benchmark_metrics,
+            "matched_candidate_snapshot_expected_chunks",
+        ),
         "expected_term_recall_at_k": _metric_value(benchmark_metrics, "expected_term_recall_at_k"),
         "expected_term_hit_rate": _metric_value(benchmark_metrics, "expected_term_hit_rate"),
         "table_term_recall_at_k": _metric_value(benchmark_metrics, "table_term_recall_at_k"),
@@ -1366,6 +1382,12 @@ def _recommendation_rationale(winner: Mapping[str, Any], ranked: list[Mapping[st
         rationale.append("It ties or leads ranking quality by MRR.")
     if metrics.get("strict_chunk_recall_at_k", 0.0) > 0:
         rationale.append("It preserves expected-chunk evidence according to strict chunk recall.")
+    if metrics.get("candidate_snapshot_expected_chunk_recall_at_k", 0.0) > 0:
+        rationale.append(
+            "Candidate-local expected chunk recall@k is "
+            f"{metrics.get('candidate_snapshot_expected_chunk_recall_at_k', 0.0):.4f}; "
+            "this advisory evidence maps expected terms to the candidate's own chunk boundaries separately from exact reference-snapshot matches."
+        )
     if metrics.get("table_term_recall_observed") and metrics.get("table_term_recall_at_k", 0.0) > 0:
         rationale.append(f"Table term recall@k is {metrics.get('table_term_recall_at_k', 0.0):.4f}, so semantic table evidence is present.")
     if table_atomicity.get("status") == "pass":
@@ -1444,6 +1466,21 @@ def _benchmark_artifact_followups(benchmark_strength: Mapping[str, Any] | None) 
             }
         )
     target_document_count = summary.get("target_document_count")
+    single_document_only = (
+        "single_target_document" in issue_codes
+        and isinstance(target_document_count, int)
+        and target_document_count <= 1
+    )
+    if issue_codes == {"single_target_document"} or single_document_only:
+        followups.append(
+            {
+                "code": "add_multi_document_or_negative_cases",
+                "severity": "warning",
+                "reason": "Benchmark qrels cover only one target document.",
+                "recommendation": "Add multi-document or negative cases before treating an optimized profile as promotable.",
+            }
+        )
+        return followups
     if isinstance(target_document_count, int) and target_document_count <= 1:
         followups.append(
             {
@@ -1797,6 +1834,8 @@ def _decision_score_for_result(
     ndcg = _clamp01(metrics.get("ndcg_at_k"))
     strict_recall = _clamp01(metrics.get("strict_chunk_recall_at_k"))
     expected_hit = _clamp01(metrics.get("expected_chunk_hit_rate"))
+    candidate_snapshot_recall = _clamp01(metrics.get("candidate_snapshot_expected_chunk_recall_at_k"))
+    candidate_snapshot_hit = _clamp01(metrics.get("candidate_snapshot_expected_chunk_hit_rate"))
     empty_rate = _clamp01(metrics.get("empty_result_rate"))
 
     quality_weighted = (pass_rate * 0.30) + (hit_rate * 0.20) + (mrr * 0.20) + (ndcg * 0.15)
@@ -1846,6 +1885,9 @@ def _decision_score_for_result(
                 "metrics": {
                     "strict_chunk_recall_at_k": _round_score(strict_recall),
                     "expected_chunk_hit_rate": _round_score(expected_hit),
+                    "candidate_snapshot_expected_chunk_recall_at_k": _round_score(candidate_snapshot_recall),
+                    "candidate_snapshot_expected_chunk_hit_rate": _round_score(candidate_snapshot_hit),
+                    "candidate_snapshot_advisory": candidate_snapshot_recall > 0 or candidate_snapshot_hit > 0,
                 },
             },
             "modality_coverage": modality,
@@ -3455,8 +3497,8 @@ def render_best_profile_markdown(results: Mapping[str, Any]) -> str:
             "",
             "## Ranking",
             "",
-            "| rank | profile | decision_score | raw_score | hit_rate | mrr | ndcg@k | strict_chunk_recall | table_term_recall | empty_rate | latency_ms | parse_ms |",
-            "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            "| rank | profile | decision_score | raw_score | hit_rate | mrr | ndcg@k | strict_chunk_recall | candidate_local_chunk_recall | table_term_recall | empty_rate | latency_ms | parse_ms |",
+            "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for candidate in results.get("candidates", []) if isinstance(results.get("candidates"), list) else []:
@@ -3469,6 +3511,7 @@ def render_best_profile_markdown(results: Mapping[str, Any]) -> str:
             f"{metrics.get('score', 0.0):.4f} | "
             f"{metrics.get('hit_rate', 0.0):.4f} | {metrics.get('mrr', 0.0):.4f} | "
             f"{metrics.get('ndcg_at_k', 0.0):.4f} | {metrics.get('strict_chunk_recall_at_k', 0.0):.4f} | "
+            f"{metrics.get('candidate_snapshot_expected_chunk_recall_at_k', 0.0):.4f} | "
             f"{metrics.get('table_term_recall_at_k', 0.0):.4f} | "
             f"{metrics.get('empty_result_rate', 0.0):.4f} | {metrics.get('query_latency_ms', 0.0):.1f} | "
             f"{metrics.get('parse_time_ms', 0.0):.1f} |"

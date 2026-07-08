@@ -375,6 +375,92 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(benchmark["per_query"][0]["matched_expected_chunks"], 1)
         self.assertTrue(benchmark["gate"]["ok"])
 
+    def test_benchmark_without_gate_reports_not_configured_status(self) -> None:
+        report = run_retrieval_validation(
+            FakeValidationClient(),
+            level="benchmark",
+            dataset_id="ds-1",
+            dataset_name="kb:test",
+            queries=[ValidationQuery(id="q1", question="Known")],
+            top_k=3,
+        )
+
+        benchmarked = attach_benchmark_evaluation(
+            report,
+            qrels={"q1": load_benchmark_qrels_dict_item("source.md")},
+            cutoff=3,
+        )
+        payload = benchmarked.to_dict()
+        gate = payload["benchmark"]["gate"]
+
+        self.assertTrue(benchmarked.ok)
+        self.assertEqual(gate["status"], "not_configured")
+        self.assertFalse(gate["configured"])
+        self.assertTrue(gate["ok"])
+        self.assertIsNone(gate["failure_type"])
+        self.assertEqual(gate["checks"], [])
+        self.assertEqual(payload["status"]["failure_type"], None)
+        self.assertEqual(payload["status"]["benchmark_gate_status"], "not_configured")
+
+    def test_benchmark_gate_status_reports_passed_and_strict_threshold_failure(self) -> None:
+        chunks = normalize_retrieval_response(
+            {
+                "data": {
+                    "chunks": [
+                        {
+                            "content": "Expected evidence body",
+                            "document_name": "source.md",
+                            "chunk_id": "live-chunk-2",
+                        }
+                    ]
+                }
+            }
+        )
+        report = ValidationReport(
+            level="benchmark",
+            dataset_id="ds-1",
+            dataset_name="kb:test",
+            cases=[
+                ValidationCaseResult(
+                    query=ValidationQuery(id="q1", question="Known"),
+                    passed=True,
+                    chunk_count=len(chunks),
+                    chunks=chunks,
+                )
+            ],
+        )
+
+        passed = attach_benchmark_evaluation(
+            report,
+            qrels={"q1": load_benchmark_qrels_dict_item("source.md")},
+            cutoff=3,
+            gate=BenchmarkGate(min_hit_rate=1.0),
+        )
+        failed = attach_benchmark_evaluation(
+            report,
+            qrels={
+                "q1": [
+                    *load_benchmark_qrels_dict_item("source.md"),
+                    *load_benchmark_qrels_dict_item("missing-stable-hash", field="expected_chunk"),
+                ]
+            },
+            cutoff=3,
+            gate=BenchmarkGate(min_strict_chunk_recall_at_k=1.0),
+        )
+
+        passed_gate = passed.to_dict()["benchmark"]["gate"]
+        failed_payload = failed.to_dict()
+        failed_gate = failed_payload["benchmark"]["gate"]
+
+        self.assertEqual(passed_gate["status"], "passed")
+        self.assertTrue(passed_gate["configured"])
+        self.assertIsNone(passed_gate["failure_type"])
+        self.assertEqual(failed_gate["status"], "failed")
+        self.assertEqual(failed_gate["failure_type"], "threshold")
+        self.assertEqual(failed_gate["failed_metrics"], ["strict_chunk_recall_at_k"])
+        self.assertEqual(failed_payload["status"]["failure_type"], "gate_threshold")
+        self.assertEqual(failed_payload["status"]["benchmark_gate_status"], "failed")
+
     def test_benchmark_reports_expected_term_metrics_when_strict_chunk_hash_misses(self) -> None:
         chunks = normalize_retrieval_response(
             {
@@ -455,6 +541,148 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("Strict chunk recall@k", markdown)
         self.assertIn("Expected term recall@k", markdown)
         self.assertIn("Table term recall@k", markdown)
+
+    def test_benchmark_reports_candidate_snapshot_expected_chunk_matches_when_boundaries_differ(self) -> None:
+        chunks = normalize_retrieval_response(
+            {
+                "data": {
+                    "chunks": [
+                        {
+                            "content": "Same source table first candidate chunk has alpha revenue",
+                            "document_name": "source.md",
+                            "chunk_id": "candidate-chunk-1",
+                        },
+                        {
+                            "content": "Same source table second candidate chunk has beta margin",
+                            "document_name": "source.md",
+                            "chunk_id": "candidate-chunk-2",
+                        },
+                    ]
+                }
+            }
+        )
+        report = ValidationReport(
+            level="benchmark",
+            dataset_id="ds-1",
+            dataset_name="kb:test",
+            cases=[
+                ValidationCaseResult(
+                    query=ValidationQuery(
+                        id="q-table",
+                        question="Which table values?",
+                        expected_terms=["alpha revenue", "beta margin"],
+                        metadata={"benchmark_category": "table_value"},
+                    ),
+                    passed=True,
+                    chunk_count=len(chunks),
+                    chunks=chunks,
+                )
+            ],
+        )
+        candidate_snapshot = {
+            "schema": CHUNK_SNAPSHOT_SCHEMA,
+            "chunks": [
+                {
+                    "stable_hash": stable_chunk_hash(chunks[0]),
+                    "chunk_id": "candidate-chunk-1",
+                    "content": chunks[0].content,
+                    "aliases": [stable_chunk_hash(chunks[0]), "candidate-chunk-1"],
+                },
+                {
+                    "stable_hash": stable_chunk_hash(chunks[1]),
+                    "chunk_id": "candidate-chunk-2",
+                    "content": chunks[1].content,
+                    "aliases": [stable_chunk_hash(chunks[1]), "candidate-chunk-2"],
+                },
+            ],
+        }
+
+        benchmarked = attach_benchmark_evaluation(
+            report,
+            qrels={
+                "q-table": [
+                    *load_benchmark_qrels_dict_item("source.md"),
+                    *load_benchmark_qrels_dict_item("sha256:reference-boundary-hash", field="expected_chunk"),
+                ]
+            },
+            cutoff=3,
+            chunk_snapshot=candidate_snapshot,
+        )
+        benchmark = benchmarked.to_dict()["benchmark"]
+        metrics = benchmark["metrics"]
+        per_query = benchmark["per_query"][0]
+        markdown = render_markdown_report(benchmarked)
+
+        self.assertEqual(per_query["strict_chunk_recall_at_k"], 0.0)
+        self.assertEqual(per_query["matched_expected_chunks"], 0)
+        self.assertEqual(per_query["candidate_snapshot_expected_chunk_recall_at_k"], 1.0)
+        self.assertEqual(per_query["candidate_snapshot_expected_chunk_hit_rate"], 1.0)
+        self.assertEqual(per_query["candidate_snapshot_expected_chunk_count"], 2)
+        self.assertEqual(per_query["matched_candidate_snapshot_expected_chunks"], 2)
+        self.assertEqual(metrics["strict_chunk_recall_at_k"], 0.0)
+        self.assertEqual(metrics["candidate_snapshot_expected_chunk_recall_at_k"], 1.0)
+        self.assertEqual(metrics["candidate_snapshot_expected_chunk_hit_rate"], 1.0)
+        self.assertEqual(metrics["candidate_snapshot_expected_chunk_count"], 2)
+        self.assertEqual(metrics["matched_candidate_snapshot_expected_chunks"], 2)
+        self.assertIn("Strict chunk recall@k", markdown)
+        self.assertIn("Candidate snapshot expected chunk recall@k", markdown)
+
+    def test_benchmark_gate_can_fail_expected_and_table_term_thresholds(self) -> None:
+        chunks = normalize_retrieval_response(
+            {"data": {"chunks": [{"content": "<table><tr><td>present value</td></tr></table>", "document_name": "source.md"}]}}
+        )
+        report = ValidationReport(
+            level="benchmark",
+            dataset_id="ds-1",
+            dataset_name="kb:test",
+            cases=[
+                ValidationCaseResult(
+                    query=ValidationQuery(
+                        id="q-table",
+                        question="Which table value?",
+                        expected_terms=["present value", "absent value"],
+                        metadata={"benchmark_category": "table_value"},
+                    ),
+                    passed=False,
+                    chunk_count=len(chunks),
+                    chunks=chunks,
+                )
+            ],
+        )
+
+        benchmarked = attach_benchmark_evaluation(
+            report,
+            qrels={
+                "q-table": load_benchmark_qrels_inline(
+                    [
+                        {
+                            "query_id": "q-table",
+                            "document": "source.md",
+                            "expected_modality": "table",
+                            "benchmark_category": "table_value",
+                        }
+                    ]
+                )["q-table"]
+            },
+            cutoff=3,
+            gate=BenchmarkGate(
+                min_expected_term_recall_at_k=1.0,
+                min_table_term_recall_at_k=1.0,
+            ),
+        )
+        payload = benchmarked.to_dict()
+        gate = payload["benchmark"]["gate"]
+
+        self.assertFalse(benchmarked.ok)
+        self.assertEqual(gate["status"], "failed")
+        self.assertEqual(gate["failure_type"], "threshold")
+        self.assertEqual(
+            gate["failed_metrics"],
+            ["expected_term_recall_at_k", "table_term_recall_at_k"],
+        )
+        self.assertEqual(gate["thresholds"]["min_expected_term_recall_at_k"], 1.0)
+        self.assertEqual(gate["thresholds"]["min_table_term_recall_at_k"], 1.0)
+        self.assertEqual(payload["status"]["failure_type"], "case_and_gate_threshold")
 
     def test_benchmark_expected_term_metrics_cover_text_mixed_and_missing_cases(self) -> None:
         text_chunks = normalize_retrieval_response(
@@ -837,16 +1065,61 @@ class ValidationTests(unittest.TestCase):
         self.assertFalse(benchmarked.ok)
         self.assertFalse(benchmarked.benchmark.gate["ok"])
 
+    def test_validation_status_distinguishes_case_failure_from_gate_failure(self) -> None:
+        case_failure = run_retrieval_validation(
+            FakeValidationClient(),
+            level="benchmark",
+            dataset_id="ds-1",
+            dataset_name="kb:test",
+            queries=[ValidationQuery(id="q1", question="Known", expected_terms=["not returned"])],
+            top_k=3,
+        )
+        case_failure = attach_benchmark_evaluation(
+            case_failure,
+            qrels={"q1": load_benchmark_qrels_dict_item("source.md")},
+            cutoff=3,
+        )
+        gate_failure = run_retrieval_validation(
+            FakeValidationClient(),
+            level="benchmark",
+            dataset_id="ds-1",
+            dataset_name="kb:test",
+            queries=[ValidationQuery(id="q1", question="Known")],
+            top_k=3,
+        )
+        gate_failure = attach_benchmark_evaluation(
+            gate_failure,
+            qrels={"q1": load_benchmark_qrels_dict_item("missing.md")},
+            cutoff=3,
+            gate=BenchmarkGate(min_hit_rate=1.0),
+        )
+
+        self.assertEqual(case_failure.to_dict()["status"]["failure_type"], "case")
+        self.assertEqual(case_failure.to_dict()["status"]["benchmark_gate_status"], "not_configured")
+        self.assertEqual(gate_failure.to_dict()["status"]["failure_type"], "gate_threshold")
+        self.assertEqual(gate_failure.to_dict()["status"]["benchmark_gate_status"], "failed")
+
     def test_load_benchmark_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "gate.json"
             path.write_text(
-                json.dumps({"thresholds": {"min_hit_rate": 0.8, "max_mrr_drop": 0.1}}),
+                json.dumps(
+                    {
+                        "thresholds": {
+                            "min_hit_rate": 0.8,
+                            "min_expected_term_recall_at_k": 0.9,
+                            "min_table_term_recall_at_k": 0.7,
+                            "max_mrr_drop": 0.1,
+                        }
+                    }
+                ),
                 encoding="utf-8",
             )
             gate = load_benchmark_gate(path)
 
         self.assertEqual(gate.min_hit_rate, 0.8)
+        self.assertEqual(gate.min_expected_term_recall_at_k, 0.9)
+        self.assertEqual(gate.min_table_term_recall_at_k, 0.7)
         self.assertEqual(gate.max_mrr_drop, 0.1)
 
 

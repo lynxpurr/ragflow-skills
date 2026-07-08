@@ -4905,7 +4905,18 @@ def render_benchmark_governance_markdown(report: Mapping[str, Any], *, title: st
             )
     gate = report.get("gate")
     if isinstance(gate, Mapping) and isinstance(gate.get("checks"), list):
-        lines.extend(["", "## Gate", "", "| metric | actual | operator | threshold | status |", "| --- | ---: | --- | ---: | --- |"])
+        lines.extend(
+            [
+                "",
+                "## Gate",
+                "",
+                f"- Status: `{gate.get('status', 'unknown')}`",
+                f"- Configured: `{str(bool(gate.get('configured'))).lower()}`",
+                "",
+                "| metric | actual | operator | threshold | status |",
+                "| --- | ---: | --- | ---: | --- |",
+            ]
+        )
         for check in gate["checks"]:
             if not isinstance(check, Mapping):
                 continue

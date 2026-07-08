@@ -33,6 +33,10 @@ STRICT_CHUNK_METRIC_KEYS = (
     "expected_chunk_hit_rate",
     "expected_evidence_rank",
 )
+CANDIDATE_SNAPSHOT_METRIC_KEYS = (
+    "candidate_snapshot_expected_chunk_recall_at_k",
+    "candidate_snapshot_expected_chunk_hit_rate",
+)
 EXPECTED_TERM_METRIC_KEYS = (
     "expected_term_recall_at_k",
     "expected_term_hit_rate",
@@ -56,6 +60,7 @@ MULTIMODAL_METRIC_KEYS = (
 BENCHMARK_METRIC_KEYS = (
     METRIC_KEYS
     + STRICT_CHUNK_METRIC_KEYS
+    + CANDIDATE_SNAPSHOT_METRIC_KEYS
     + EXPECTED_TERM_METRIC_KEYS
     + POLLUTION_METRIC_KEYS
     + MULTIMODAL_METRIC_KEYS
@@ -241,6 +246,8 @@ class BenchmarkGate:
     min_map_at_k: float | None = None
     min_strict_chunk_recall_at_k: float | None = None
     min_expected_chunk_hit_rate: float | None = None
+    min_expected_term_recall_at_k: float | None = None
+    min_table_term_recall_at_k: float | None = None
     max_expected_evidence_rank: float | None = None
     max_empty_result_rate: float | None = None
     max_hit_rate_drop: float | None = None
@@ -270,6 +277,14 @@ class BenchmarkGate:
                 raw.get("min_expected_chunk_hit_rate"),
                 field_name="min_expected_chunk_hit_rate",
             ),
+            min_expected_term_recall_at_k=_metric_or_none(
+                raw.get("min_expected_term_recall_at_k"),
+                field_name="min_expected_term_recall_at_k",
+            ),
+            min_table_term_recall_at_k=_metric_or_none(
+                raw.get("min_table_term_recall_at_k"),
+                field_name="min_table_term_recall_at_k",
+            ),
             max_expected_evidence_rank=_metric_or_none(
                 raw.get("max_expected_evidence_rank"),
                 field_name="max_expected_evidence_rank",
@@ -295,6 +310,8 @@ class BenchmarkGate:
                 "min_map_at_k": self.min_map_at_k,
                 "min_strict_chunk_recall_at_k": self.min_strict_chunk_recall_at_k,
                 "min_expected_chunk_hit_rate": self.min_expected_chunk_hit_rate,
+                "min_expected_term_recall_at_k": self.min_expected_term_recall_at_k,
+                "min_table_term_recall_at_k": self.min_table_term_recall_at_k,
                 "max_expected_evidence_rank": self.max_expected_evidence_rank,
                 "max_empty_result_rate": self.max_empty_result_rate,
                 "max_hit_rate_drop": self.max_hit_rate_drop,
@@ -430,9 +447,32 @@ class ValidationReport:
             "runtime_skipped_count": runtime_partial_summary["skipped_count"],
         }
 
+    def status(self) -> dict[str, Any]:
+        case_failure_count = sum(1 for case in self.cases if not case.passed)
+        gate = self.benchmark.gate if self.benchmark and isinstance(self.benchmark.gate, Mapping) else None
+        gate_configured = bool(gate.get("configured")) if gate else False
+        gate_failed = bool(gate and gate_configured and not gate.get("ok", True))
+        if case_failure_count and gate_failed:
+            failure_type = "case_and_gate_threshold"
+        elif case_failure_count:
+            failure_type = "case"
+        elif gate_failed:
+            failure_type = "gate_threshold"
+        else:
+            failure_type = None
+        return {
+            "ok": self.ok,
+            "case_status": "failed" if case_failure_count else "passed",
+            "case_failure_count": case_failure_count,
+            "benchmark_gate_configured": gate_configured,
+            "benchmark_gate_status": gate.get("status", "unknown") if gate else "not_applicable",
+            "failure_type": failure_type,
+        }
+
     def to_dict(self, *, max_chunks: int = 3, include_raw: bool = False) -> dict[str, Any]:
         return {
             "ok": self.ok,
+            "status": self.status(),
             "level": self.level,
             "dataset": {"id": self.dataset_id, "name": self.dataset_name},
             "metrics": self.metrics(),
@@ -752,6 +792,65 @@ def _snapshot_alias_index(chunk_snapshot: Mapping[str, Any] | None) -> dict[str,
         for alias in aliases:
             index[alias] = set(aliases)
     return index
+
+
+def _snapshot_chunk_text(item: Mapping[str, Any]) -> str:
+    for key in ("content", "content_preview", "text", "page_content"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def _snapshot_chunk_aliases(item: Mapping[str, Any], chunk: NormalizedChunk) -> set[str]:
+    aliases: set[str] = set()
+    for key in ("stable_hash", "content_sha256", "chunk_id", "source_chunk_id", "id"):
+        value = item.get(key)
+        if isinstance(value, str):
+            aliases.update(_chunk_reference_variants(value))
+    raw_aliases = item.get("aliases")
+    if isinstance(raw_aliases, list):
+        for alias in raw_aliases:
+            if isinstance(alias, str):
+                aliases.update(_chunk_reference_variants(alias))
+    aliases.update(_chunk_tokens(chunk))
+    return aliases
+
+
+def _snapshot_chunk_key(aliases: set[str]) -> str:
+    prefixed = sorted(alias for alias in aliases if alias.startswith("sha256:"))
+    if prefixed:
+        return prefixed[0]
+    return sorted(aliases)[0] if aliases else ""
+
+
+def _candidate_snapshot_chunks(chunk_snapshot: Mapping[str, Any] | None) -> list[tuple[str, set[str], NormalizedChunk]]:
+    if not chunk_snapshot:
+        return []
+    raw_chunks = chunk_snapshot.get("chunks") if isinstance(chunk_snapshot, Mapping) else None
+    if not isinstance(raw_chunks, list):
+        return []
+
+    chunks: list[tuple[str, set[str], NormalizedChunk]] = []
+    for item in raw_chunks:
+        if not isinstance(item, Mapping):
+            continue
+        text = _snapshot_chunk_text(item)
+        if not text:
+            continue
+        chunk = NormalizedChunk(
+            content=text,
+            document_name=item.get("document_name") if isinstance(item.get("document_name"), str) else None,
+            document_id=item.get("document_id") if isinstance(item.get("document_id"), str) else None,
+            dataset_id=item.get("dataset_id") if isinstance(item.get("dataset_id"), str) else None,
+            chunk_id=item.get("chunk_id") if isinstance(item.get("chunk_id"), str) else None,
+            raw=dict(item),
+        )
+        aliases = _snapshot_chunk_aliases(item, chunk)
+        key = _snapshot_chunk_key(aliases)
+        if key:
+            chunks.append((key, aliases, chunk))
+    return chunks
 
 
 def _expected_chunk_aliases(qrel: BenchmarkQrel, snapshot_index: Mapping[str, set[str]]) -> set[str]:
@@ -1214,12 +1313,61 @@ def _query_expected_term_metrics(
     return metrics
 
 
+def _candidate_snapshot_expected_chunk_metrics(
+    case: ValidationCaseResult,
+    ranked_chunks: list[NormalizedChunk],
+    *,
+    expected_chunk_qrels: list[BenchmarkQrel],
+    chunk_snapshot: Mapping[str, Any] | None,
+) -> dict[str, float | int]:
+    expected_terms = [term for term in case.query.expected_terms if term.strip()]
+    if not expected_terms or not expected_chunk_qrels:
+        return {}
+
+    candidate_chunks = _candidate_snapshot_chunks(chunk_snapshot)
+    if not candidate_chunks:
+        return {}
+
+    expected_candidate_chunks: list[tuple[str, set[str], set[str]]] = []
+    mapped_terms: set[str] = set()
+    for key, aliases, chunk in candidate_chunks:
+        term_hits = set(_benchmark_expected_term_hits(expected_terms, [chunk]))
+        if not term_hits:
+            continue
+        expected_candidate_chunks.append((key, aliases, term_hits))
+        mapped_terms.update(term_hits)
+
+    if not expected_candidate_chunks:
+        return {}
+
+    ranked_token_sets = [_chunk_tokens(chunk) for chunk in ranked_chunks]
+    matched_candidate_chunks: set[str] = set()
+    matched_terms: set[str] = set()
+    for key, aliases, term_hits in expected_candidate_chunks:
+        if not any(tokens & aliases for tokens in ranked_token_sets):
+            continue
+        matched_candidate_chunks.add(key)
+        matched_terms.update(term_hits)
+
+    candidate_count = len(expected_candidate_chunks)
+    matched_count = len(matched_candidate_chunks)
+    return {
+        "candidate_snapshot_expected_chunk_recall_at_k": matched_count / candidate_count,
+        "candidate_snapshot_expected_chunk_hit_rate": 1.0 if matched_count == candidate_count else 0.0,
+        "candidate_snapshot_expected_chunk_count": candidate_count,
+        "matched_candidate_snapshot_expected_chunks": matched_count,
+        "candidate_snapshot_expected_term_count": len(mapped_terms),
+        "matched_candidate_snapshot_expected_terms": len(matched_terms),
+    }
+
+
 def _query_benchmark_metrics(
     case: ValidationCaseResult,
     qrels: list[BenchmarkQrel],
     *,
     cutoff: int,
     snapshot_index: Mapping[str, set[str]],
+    chunk_snapshot: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     if cutoff <= 0:
         raise ValidationError("benchmark cutoff must be positive")
@@ -1291,6 +1439,12 @@ def _query_benchmark_metrics(
         ranked_chunks,
         expected_modalities=expected_modalities,
     )
+    candidate_snapshot_metrics = _candidate_snapshot_expected_chunk_metrics(
+        case,
+        ranked_chunks,
+        expected_chunk_qrels=expected_chunk_qrels,
+        chunk_snapshot=chunk_snapshot,
+    )
     multimodal_metrics = _query_multimodal_metrics(
         expected_modalities=expected_modalities,
         qrels=ranking_qrels,
@@ -1318,6 +1472,7 @@ def _query_benchmark_metrics(
         "matched_targets": len(unique_hits),
         "first_relevant_rank": first_relevant_rank,
         **strict_metrics,
+        **candidate_snapshot_metrics,
         **expected_term_metrics,
         **document_metrics,
         **tag_metrics,
@@ -1411,12 +1566,14 @@ def _aggregate_query_metrics(per_query: list[dict[str, Any]]) -> dict[str, float
     metrics: dict[str, float | int] = {"query_count": len(per_query)}
     for key in METRIC_KEYS:
         metrics[key] = _average([float(item[key]) for item in per_query])
-    for key in STRICT_CHUNK_METRIC_KEYS + EXPECTED_TERM_METRIC_KEYS + POLLUTION_METRIC_KEYS:
+    for key in STRICT_CHUNK_METRIC_KEYS + CANDIDATE_SNAPSHOT_METRIC_KEYS + EXPECTED_TERM_METRIC_KEYS + POLLUTION_METRIC_KEYS:
         values = [float(item[key]) for item in per_query if isinstance(item.get(key), (int, float))]
         if values:
             metrics[key] = _average(values)
             if key == "expected_term_recall_at_k":
                 metrics["expected_term_query_count"] = len(values)
+            elif key == "candidate_snapshot_expected_chunk_recall_at_k":
+                metrics["candidate_snapshot_expected_chunk_query_count"] = len(values)
             elif key == "table_term_recall_at_k":
                 metrics["table_term_query_count"] = len(values)
             elif key == "wrong_document_rate":
@@ -1460,6 +1617,18 @@ def _aggregate_query_metrics(per_query: list[dict[str, Any]]) -> dict[str, float
             for item in per_query
             if isinstance(item.get("expected_chunk_count"), int)
         )
+    candidate_snapshot_counts = [
+        int(item["candidate_snapshot_expected_chunk_count"])
+        for item in per_query
+        if isinstance(item.get("candidate_snapshot_expected_chunk_count"), int)
+    ]
+    if candidate_snapshot_counts:
+        metrics["candidate_snapshot_expected_chunk_count"] = sum(candidate_snapshot_counts)
+        metrics["matched_candidate_snapshot_expected_chunks"] = sum(
+            int(item.get("matched_candidate_snapshot_expected_chunks", 0))
+            for item in per_query
+            if isinstance(item.get("candidate_snapshot_expected_chunk_count"), int)
+        )
     for key in (
         "document_scored_chunk_count",
         "wrong_document_count",
@@ -1467,6 +1636,8 @@ def _aggregate_query_metrics(per_query: list[dict[str, Any]]) -> dict[str, float
         "matched_expected_tags",
         "expected_term_count",
         "matched_expected_terms",
+        "candidate_snapshot_expected_term_count",
+        "matched_candidate_snapshot_expected_terms",
         "table_expected_term_count",
         "matched_table_expected_terms",
         "tagged_chunk_count",
@@ -1581,7 +1752,15 @@ def evaluate_benchmark_gate(
     """Evaluate benchmark metrics against optional threshold config."""
 
     if gate is None:
-        return None
+        return {
+            "ok": True,
+            "configured": False,
+            "status": "not_configured",
+            "failure_type": None,
+            "failed_metrics": [],
+            "thresholds": {},
+            "checks": [],
+        }
     checks: list[dict[str, Any]] = []
     _gate_check(checks, metric="hit_rate", operator=">=", actual=_gate_metric(metrics, "hit_rate"), threshold=gate.min_hit_rate)
     _gate_check(checks, metric="mrr", operator=">=", actual=_gate_metric(metrics, "mrr"), threshold=gate.min_mrr)
@@ -1629,6 +1808,20 @@ def evaluate_benchmark_gate(
     )
     _gate_check(
         checks,
+        metric="expected_term_recall_at_k",
+        operator=">=",
+        actual=_gate_metric(metrics, "expected_term_recall_at_k"),
+        threshold=gate.min_expected_term_recall_at_k,
+    )
+    _gate_check(
+        checks,
+        metric="table_term_recall_at_k",
+        operator=">=",
+        actual=_gate_metric(metrics, "table_term_recall_at_k"),
+        threshold=gate.min_table_term_recall_at_k,
+    )
+    _gate_check(
+        checks,
         metric="expected_evidence_rank",
         operator="<=",
         actual=_gate_metric(metrics, "expected_evidence_rank"),
@@ -1671,8 +1864,14 @@ def evaluate_benchmark_gate(
         actual=deltas.get("map_at_k"),
         threshold=-gate.max_map_drop if gate.max_map_drop is not None else None,
     )
+    ok = all(check["passed"] for check in checks)
+    failed_metrics = [str(check["metric"]) for check in checks if not check["passed"]]
     return {
-        "ok": all(check["passed"] for check in checks),
+        "ok": ok,
+        "configured": True,
+        "status": "passed" if ok else "failed",
+        "failure_type": None if ok else "threshold",
+        "failed_metrics": failed_metrics,
         "thresholds": gate.to_dict(),
         "checks": checks,
     }
@@ -1696,7 +1895,13 @@ def attach_benchmark_evaluation(
 
     snapshot_index = _snapshot_alias_index(chunk_snapshot)
     per_query = [
-        _query_benchmark_metrics(case, qrels[case.query.id], cutoff=cutoff, snapshot_index=snapshot_index)
+        _query_benchmark_metrics(
+            case,
+            qrels[case.query.id],
+            cutoff=cutoff,
+            snapshot_index=snapshot_index,
+            chunk_snapshot=chunk_snapshot,
+        )
         for case in report.cases
     ]
     metrics = _aggregate_query_metrics(per_query)
@@ -1838,6 +2043,15 @@ def render_markdown_report(report: ValidationReport) -> str:
                     "- Strict chunk recall uses exact chunk IDs or stable content hashes; expected term metrics are semantic content evidence.",
                 ]
             )
+        if "candidate_snapshot_expected_chunk_recall_at_k" in benchmark.metrics:
+            lines.extend(
+                [
+                    f"- Candidate snapshot expected chunk recall@k: `{float(benchmark.metrics['candidate_snapshot_expected_chunk_recall_at_k']):.4f}`",
+                    f"- Candidate snapshot expected chunk hit rate: `{float(benchmark.metrics['candidate_snapshot_expected_chunk_hit_rate']):.2%}`",
+                    f"- Candidate snapshot expected chunks matched: `{int(benchmark.metrics.get('matched_candidate_snapshot_expected_chunks', 0))}/{int(benchmark.metrics.get('candidate_snapshot_expected_chunk_count', 0))}`",
+                    "- Candidate snapshot expected chunk metrics are advisory semantic matches against the candidate's own chunk boundaries.",
+                ]
+            )
         if "expected_term_recall_at_k" in benchmark.metrics:
             lines.extend(
                 [
@@ -1888,9 +2102,12 @@ def render_markdown_report(report: ValidationReport) -> str:
             )
         if benchmark.gate:
             lines.extend(["", "## Gate", ""])
-            lines.append(f"- Status: `{'passed' if benchmark.gate['ok'] else 'failed'}`")
-            lines.extend(["", "| metric | actual | operator | threshold | status |", "|---|---:|---|---:|---|"])
-            for check in benchmark.gate["checks"]:
+            lines.append(f"- Status: `{benchmark.gate.get('status', 'unknown')}`")
+            lines.append(f"- Configured: `{str(bool(benchmark.gate.get('configured'))).lower()}`")
+            checks = benchmark.gate.get("checks") if isinstance(benchmark.gate.get("checks"), list) else []
+            if checks:
+                lines.extend(["", "| metric | actual | operator | threshold | status |", "|---|---:|---|---:|---|"])
+            for check in checks:
                 lines.append(
                     f"| `{check['metric']}` | `{check['actual']:.4f}` | "
                     f"`{check['operator']}` | `{check['threshold']:.4f}` | "

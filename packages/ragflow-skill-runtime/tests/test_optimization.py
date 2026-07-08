@@ -494,6 +494,132 @@ class OptimizationTests(unittest.TestCase):
         self.assertGreaterEqual(results["summary"]["benchmark_artifact_followup_count"], 2)
         self.assertIn("weak benchmark evidence", " ".join(results["recommendation"]["rationale"]))
 
+    def test_summarize_optimization_results_explains_single_document_promotion_requirement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            _write_profile(profile, "single-doc-profile")
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[profile],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            benchmark = plan["inputs"]["benchmark"]
+            strength = benchmark["preflight"]["benchmark_strength"]
+            strength["status"] = "exploratory"
+            strength["issue_codes"] = ["single_target_document"]
+            strength["summary"].update(
+                {
+                    "expected_chunk_coverage": 1.0,
+                    "expected_modality_coverage": 1.0,
+                    "target_document_count": 1,
+                }
+            )
+            plan_path = root / "optimization_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            _write_validation_report(Path(plan["candidates"][0]["artifacts"]["validation_report"]), mrr=1.0, hit_rate=1.0)
+
+            results = summarize_optimization_results(plan_path=plan_path)
+            rendered = render_best_profile_markdown(results)
+
+        followups = results["benchmark_artifact_followups"]
+        self.assertEqual([item["code"] for item in followups], ["add_multi_document_or_negative_cases"])
+        self.assertEqual(followups[0]["severity"], "warning")
+        self.assertIn("multi-document or negative", followups[0]["recommendation"])
+        self.assertIn("add_multi_document_or_negative_cases", rendered)
+
+    def test_summarize_optimization_results_explains_candidate_local_strict_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doc = root / "sample.md"
+            doc.write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+            profile = root / "profile.json"
+            _write_profile(profile, "boundary-aware-profile")
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            queries.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {
+                                "id": "q1",
+                                "question": "Which table values?",
+                                "expected_terms": ["alpha revenue", "beta margin"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            qrels.write_text(
+                json.dumps(
+                    {
+                        "qrels": [
+                            {"query_id": "q1", "document": "sample.md"},
+                            {
+                                "query_id": "q1",
+                                "field": "expected_chunk",
+                                "target": "sha256:reference-boundary-hash",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            plan = create_optimization_plan(
+                kb_name="kb:optimize-test",
+                document_paths=[doc],
+                input_path=root,
+                profile_paths=[profile],
+                queries_path=queries,
+                qrels_path=qrels,
+                artifact_dir=root / "opt-artifacts",
+                run_id="run1",
+            )
+            plan_path = root / "optimization_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            candidate = plan["candidates"][0]
+            report_path = Path(candidate["artifacts"]["validation_report"])
+            _write_validation_report(report_path, mrr=1.0, hit_rate=1.0)
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+            payload["benchmark"]["metrics"].update(
+                {
+                    "strict_chunk_recall_at_k": 0.0,
+                    "expected_chunk_hit_rate": 0.0,
+                    "candidate_snapshot_expected_chunk_recall_at_k": 1.0,
+                    "candidate_snapshot_expected_chunk_hit_rate": 1.0,
+                    "candidate_snapshot_expected_chunk_count": 2,
+                    "matched_candidate_snapshot_expected_chunks": 2,
+                }
+            )
+            report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            results = summarize_optimization_results(plan_path=plan_path)
+            rendered = render_best_profile_markdown(results)
+
+        metrics = results["candidates"][0]["metrics"]
+        strict = results["candidates"][0]["decision_score"]["components"]["strict_evidence"]["metrics"]
+        rationale = " ".join(results["recommendation"]["rationale"])
+
+        self.assertEqual(metrics["strict_chunk_recall_at_k"], 0.0)
+        self.assertEqual(metrics["candidate_snapshot_expected_chunk_recall_at_k"], 1.0)
+        self.assertEqual(strict["strict_chunk_recall_at_k"], 0.0)
+        self.assertEqual(strict["candidate_snapshot_expected_chunk_recall_at_k"], 1.0)
+        self.assertIn("Candidate-local expected chunk recall@k", rationale)
+        self.assertIn("candidate_local_chunk_recall", rendered)
+        self.assertIn("Candidate-local expected chunk recall", rendered)
+
     def test_summarize_optimization_results_warns_when_core_metrics_are_saturated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

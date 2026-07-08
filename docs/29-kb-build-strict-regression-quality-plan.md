@@ -304,28 +304,28 @@ Likely files to modify:
 
 ### P1: Benchmark Strength And Gate Semantics
 
-- [ ] Add a follow-up message when the only benchmark-strength issue is
+- [x] Add a follow-up message when the only benchmark-strength issue is
   `single_target_document`, explaining that multi-document or negative cases are the
   next promotion requirement.
-- [ ] Add optional gate thresholds for expected-term and table-term recall if the report
+- [x] Add optional gate thresholds for expected-term and table-term recall if the report
   surface change is accepted.
-- [ ] Make validation output distinguish configured gate threshold failures from
+- [x] Make validation output distinguish configured gate threshold failures from
   case-level failures.
-- [ ] Add tests for unset gate, passing gate, failing strict-chunk gate, and failing
+- [x] Add tests for unset gate, passing gate, failing strict-chunk gate, and failing
   expected-term gate.
-- [ ] Keep single-document strict benchmarks `exploratory` by default.
+- [x] Keep single-document strict benchmarks `exploratory` by default.
 
 ### P1: Candidate-Specific Strict Evidence
 
-- [ ] Design a candidate-specific evidence mapping path from expected terms to each
+- [x] Design a candidate-specific evidence mapping path from expected terms to each
   candidate snapshot.
-- [ ] Add a no-network fixture with the same source document split into different chunk
+- [x] Add a no-network fixture with the same source document split into different chunk
   boundaries.
-- [ ] Report candidate-specific expected chunk matches separately from reference-snapshot
+- [x] Report candidate-specific expected chunk matches separately from reference-snapshot
   exact matches.
-- [ ] Update optimize summaries so strict evidence can explain both exact matches and
+- [x] Update optimize summaries so strict evidence can explain both exact matches and
   candidate-local semantic matches.
-- [ ] Keep this path advisory until at least one strict regression run proves it improves
+- [x] Keep this path advisory until at least one strict regression run proves it improves
   discrimination.
 
 ### P2: Embedding Template Strategy
@@ -387,6 +387,20 @@ Completed in the current implementation slice:
   in both JSON and generated Markdown.
 - Focused CLI coverage verifies that generated cleanup lifecycle Markdown does not expose
   cleanup target dataset IDs or temporary KB names.
+- Benchmark gates now emit explicit `not_configured`, `passed`, or `failed` statuses with
+  threshold failure details instead of relying on an omitted or boolean-only gate field.
+- Benchmark gates can optionally require expected-term and table-term recall thresholds.
+- Validation reports now include a top-level status summary that distinguishes case-level
+  validation failures from configured benchmark gate threshold failures.
+- Optimize summaries now emit a promotion follow-up when the only benchmark-strength issue
+  is `single_target_document`, making multi-document or negative cases the next promotion
+  requirement.
+- Benchmark reports now emit advisory `candidate_snapshot_expected_chunk_*` metrics when
+  expected terms can be mapped to the candidate snapshot's own chunk boundaries, while
+  keeping exact reference-snapshot `strict_chunk_recall_at_k` unchanged.
+- Optimize summaries now carry candidate-local strict-evidence metrics into the
+  `strict_evidence` component and Markdown rationale without adding them to the promotion
+  score.
 
 Not yet implemented:
 
@@ -402,6 +416,12 @@ python3 -m pytest packages/ragflow-skill-runtime/tests/test_validation.py -q
 python3 -m pytest packages/ragflow-skill-runtime/tests/test_optimization.py -q
 python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py -q
 git diff --check
+```
+
+Focused validation for the candidate-specific strict evidence slice:
+
+```bash
+python3 -m pytest packages/ragflow-skill-runtime/tests/test_validation.py packages/ragflow-skill-runtime/tests/test_optimization.py packages/ragflow-skill-runtime/tests/test_kb_build_cli.py -q
 ```
 
 Broader validation before closing a code round:

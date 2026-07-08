@@ -181,6 +181,14 @@ def _render_markdown_from_payload(payload: dict[str, Any]) -> str:
                     f"- Expected evidence rank: `{_as_float(bench_metrics.get('expected_evidence_rank')):.4f}`",
                 ]
             )
+        if "candidate_snapshot_expected_chunk_recall_at_k" in bench_metrics:
+            lines.extend(
+                [
+                    f"- Candidate snapshot expected chunk recall@k: `{_as_float(bench_metrics.get('candidate_snapshot_expected_chunk_recall_at_k')):.4f}`",
+                    f"- Candidate snapshot expected chunk hit rate: `{_as_float(bench_metrics.get('candidate_snapshot_expected_chunk_hit_rate')):.2%}`",
+                    f"- Candidate snapshot expected chunks matched: `{int(bench_metrics.get('matched_candidate_snapshot_expected_chunks') or 0)}/{int(bench_metrics.get('candidate_snapshot_expected_chunk_count') or 0)}`",
+                ]
+            )
         lines.extend(
             [
                 "",
@@ -200,9 +208,12 @@ def _render_markdown_from_payload(payload: dict[str, Any]) -> str:
         gate = benchmark.get("gate") if isinstance(benchmark.get("gate"), dict) else None
         if gate:
             lines.extend(["", "## Gate", ""])
-            lines.append(f"- Status: `{'passed' if gate.get('ok') else 'failed'}`")
-            lines.extend(["", "| metric | actual | operator | threshold | status |", "|---|---:|---|---:|---|"])
-            for check in gate.get("checks", []) if isinstance(gate.get("checks"), list) else []:
+            lines.append(f"- Status: `{gate.get('status', 'unknown')}`")
+            lines.append(f"- Configured: `{str(bool(gate.get('configured'))).lower()}`")
+            checks = gate.get("checks", []) if isinstance(gate.get("checks"), list) else []
+            if checks:
+                lines.extend(["", "| metric | actual | operator | threshold | status |", "|---|---:|---|---:|---|"])
+            for check in checks:
                 if not isinstance(check, dict):
                     continue
                 lines.append(
