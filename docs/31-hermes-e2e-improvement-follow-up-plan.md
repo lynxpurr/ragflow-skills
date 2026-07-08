@@ -157,11 +157,22 @@ Run deployment-specific checks only after the focused P0 chain passes:
   lifecycle passes.
 - [x] Add or refine reporting so `asset-upload-plan` and consistency checks distinguish
   true missing image files from semantic alias references.
-- [ ] Add or refine `refresh-report`, parse-report, or health-report guidance for
+- [x] Add or refine `refresh-report`, parse-report, or health-report guidance for
   RAGFlow document-list API variants that return zero documents despite build/parse/chunk
-  evidence.
-- [ ] Run deployment-specific embedding model checks if a concrete expected embedding
-  model is known.
+  evidence. Verified by dedicated offline tests (`refresh_report_classifies_empty_document_list_with_manifest_parse_evidence`,
+  `parse_report_surfaces_refresh_zero_document_compatibility_warning`), schema identity
+  check (`ok=true`, zero failures across all identities), and release hygiene (`ok=true`,
+  zero findings). The refresh-report path classifies a zero-document API response as a
+  version-specific read-only limitation when manifest parse evidence shows parsed chunks,
+  and parse-report surfaces a compatibility warning linking the two evidence sources.
+- [x] Run deployment-specific embedding model checks if a concrete expected embedding
+  model is known. Verified with `bge-m3` as the expected model: the model-specific profile
+  template dry-run reported `embedding_model_check.status: match` (`matches_expected: true`,
+  `rebuild_or_reparse_required: false`). A health-report against the prior retest KB
+  manifest documented an info-level `embedding_model_unknown` risk because the KB was
+  built with a model-neutral profile (`profile_embedding_model_missing`); this is a
+  reviewed finding, not a rebuild blocker — future builds that use the model-specific
+  profile template will carry embedding-model evidence into the manifest.
 - [ ] Keep route config, route tests, and `ragflow-query` validation as optional follow-up
   scope unless the user asks to test retrieval routing.
 
@@ -177,8 +188,24 @@ reports, cleaned up the disposable KB, and produced clean field-trial metrics wi
 The first P1 code change from this plan is complete: `asset-upload-plan` now classifies
 semantic image aliases as advisory `semantic_alias_reference` entries instead of true
 missing local image files, and `consistency-check` now reports semantic alias image hints
-separately from `missing_image_hints`. Remaining work is limited to refresh/document-list
-API compatibility guidance and P2 production-readiness follow-up.
+separately from `missing_image_hints`.
+
+The refresh/document-list API compatibility P1 item is now closed: `refresh-report`
+classifies a zero-document document-list response as a version-specific read-only
+limitation when manifest parse evidence shows parsed chunks, and `parse-report` surfaces
+a linking compatibility warning. Offline verification: two dedicated tests pass, schema
+identity check returns `ok=true`, and release hygiene returns `ok=true` with zero
+findings.
+
+The deployment-specific embedding model check is now closed: a model-specific profile
+template dry-run reported `embedding_model_check.status: match` for `bge-m3`. A
+health-report against the prior retest KB documented an info-level
+`embedding_model_unknown` risk because the KB was built with a model-neutral profile;
+this is a reviewed finding that informs future model-specific builds, not a rebuild
+blocker.
+
+Remaining open work is limited to the optional routing/route-test/query validation track
+(P2), which stays gated unless the user asks to test retrieval routing.
 
 ## Validation Evidence / Residual Gated Work
 
@@ -210,12 +237,13 @@ Residual gated work:
 
 Residual P1/P2 follow-up:
 
-- clarify refresh/document-list API compatibility when read-only refresh evidence
-  disagrees with build or parse evidence;
-- run deployment-specific embedding model checks before treating a concrete production
-  profile as validated;
-- keep route config, route tests, and `ragflow-query` validation outside this baseline
-  unless retrieval routing becomes the active test scope.
+- refresh/document-list API compatibility is now closed (verified by dedicated offline
+  tests, schema identity, and release hygiene);
+- deployment-specific embedding model check is now closed (dry-run match with
+  `bge-m3`; health-report documented the model-neutral-profile gap as a reviewed info
+  finding);
+- routing activation, route tests, and `ragflow-query` validation remain outside this
+  baseline unless retrieval routing becomes the active test scope.
 
 ## P0 Retest Closeout / Retrospective
 
@@ -234,8 +262,6 @@ What closed by the retest and follow-up development:
 
 What remains open:
 
-- read-only refresh API compatibility explanation;
-- model-specific profile validation for a concrete deployment;
 - optional retrieval routing and query validation when requested.
 
 ## Original Hermes Retest Prompt

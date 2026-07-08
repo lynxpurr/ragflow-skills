@@ -158,6 +158,28 @@ python scripts/build.py \
 
 一定要先 `--dry-run`，再决定 live build。
 
+### Embedding model 验证
+
+当已知部署目标 embedding model（如 `bge-m3`）时，dry-run 和 health-report 可做
+model-match 检查：
+
+```bash
+# dry-run with model-specific profile template
+python3 scripts/build.py \
+  --doc-manifest ./handoff/doc_manifest.json \
+  --kb-name "<kb-name>" \
+  --profile ./templates/bge-m3-zh-512.json \
+  --expected-embedding-model bge-m3 \
+  --dry-run --json
+```
+
+检查 `embedding_model_check.status` 是否为 `match`。如果已有 kb_manifest /
+parse_report / refresh_report，可跑 health-report 做更深检查。
+
+**注意**：如果 KB 建于 model-neutral profile（如 `default-zh-512.json`），health-report
+会报 info 级 `embedding_model_unknown`（`profile_embedding_model_missing`）。这是已知
+gap，不是 rebuild blocker — 未来用 model-specific profile template 即可。
+
 ## 当前套件与 ragflux / ragflow-kb-ops 的取舍
 
 | 维度 | 当前三 skill 套件 | ragflux | ragflow-kb-ops |
@@ -305,4 +327,5 @@ print(out.count('<!-- chunk -->'))
 - Reference: `references/blackwell-mineru-fastapi-backend-pitfall.md` — Blackwell GPU 上 MinerU high-accuracy backend 陷阱
 - Reference: `references/ragflow-doc-to-md-table-parameter-impact.md` — 参数调整对表格解析质量的影响与决策树
 - Reference: `references/mineru-fastapi-port-protocol-quirk.md` — 本地 MinerU FastAPI 端口协议识别陷阱
-- Reference: `references/ragflow-skills-e2e-test-checklist.md` — Hermes 端到端测试检查清单
+- Reference: `references/ragflow-skills-e2e-test-checklist.md` — Hermes 端到端测试检查清单 + docs/N checklist 关闭工作流（refresh/embedding/routing 三类验证链与 gating 逻辑）
+- Reference: `references/model-provider-404-false-alarm.md` — RAGFlow model-provider API 全 404 不是 embedding 服务故障；TEI + tei-embed-proxy 生产架构验证
