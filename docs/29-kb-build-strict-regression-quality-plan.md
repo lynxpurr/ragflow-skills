@@ -473,7 +473,90 @@ python3 tools/release_hygiene_check.py
 If public schemas, generated Markdown, or report surfaces change, also run the repository
 schema identity and report-surface checks required by the release validation chain.
 
+Offline regression checkpoint after the round retrospective:
+
+- Checkpoint date: 2026-07-08.
+- Tested commit: `861e0ffa8eafbb84dfdbdf3c74597a8cd1dd239a`.
+- Scope: offline, fake-client, no-network regression only; no live RAGFlow mutation and
+  no script-owned LLM/RAGAS execution.
+- Focused `kb-build` regression passed: 182 tests passed, 0 failed.
+- `doc-to-md` backend environment-isolation regression passed: 17 tests passed, 0 failed.
+- Full runtime regression passed: 632 tests plus 6 subtests passed, 0 failed.
+- `git diff --check` passed.
+- Release hygiene passed with `ok=true` and 0 findings.
+- No blocker was found that requires entering live R3 disposable-KB mutation. Test
+  artifacts were retained in a private regression run root outside the public repository.
+
 R3 strict regression remains gated by explicit approval for any live disposable RAGFlow
 mutation. The offline, fake-client-testable implementation backlog in this plan is
 complete; further work should be evidence-led release validation or an explicitly
 approved live strict-regression run.
+
+## Round Retrospective / Follow-Up Suggestions
+
+Review date: 2026-07-08
+
+This retrospective summarizes the closed offline quality round. It does not reopen the
+checklist above or add new default continuation work. The suggestions below are candidate
+inputs for a future evidence-led plan or for an explicitly approved R3 strict regression.
+
+Key improvements:
+
+- Strict-regression evidence is less brittle: Markdown table chunks are classified as
+  `table` before the Markdown text fallback, exact `strict_chunk_recall_at_k` remains
+  intact, and semantic expected-term plus table-term metrics now explain whether the
+  right evidence content is present across different chunk boundaries.
+- Optimize decisions now use more of the deterministic evidence already available to the
+  workflow. Candidate-local strict evidence and table atomicity signals are surfaced in
+  JSON and Markdown rationale, while remaining advisory where the evidence has not yet
+  been proven strong enough for promotion scoring.
+- Cleanup lifecycle closeout is harder to lose. Summaries can auto-discover sibling
+  cleanup, readiness, and cleanup-execution sidecars, distinguish executed-unverified
+  cleanup from verified cleanup, and keep public Markdown free of raw cleanup target
+  identifiers.
+- Benchmark gate semantics are now machine-readable. Reports distinguish unset gates,
+  passing gates, configured threshold failures, and case-level validation failures, so
+  later automation can decide whether evidence, thresholds, or retrieval behavior need
+  attention.
+- Profile and operator ergonomics improved without sacrificing portability. Generic
+  templates remain model-neutral, model-specific bge-m3 examples are available, missing
+  embedding-model metadata is reported as `not_configured`, candidate metrics are inlined
+  in optimize execute output, and readiness-derived cleanup confirmation still requires
+  reviewed evidence plus explicit execution.
+- The doc-to-md backend override audit found an environmental test-contamination issue
+  rather than a KB-build handoff defect. CLI and adaptive tests now scrub doc-to-md and
+  MinerU-related configuration variables unless a test explicitly injects them.
+
+Follow-up operating notes:
+
+- Treat exact strict chunk recall as reference-snapshot evidence only. Expected-term,
+  table-term, and candidate-local metrics explain semantic presence, but they should not
+  be presented as equivalent to exact chunk reuse.
+- Keep single-document strict benchmarks exploratory by default. Multi-document coverage
+  or negative cases remain the next evidence requirement before any default profile
+  promotion.
+- Keep R3 live strict regression gated by explicit user approval, disposable-resource
+  readiness, and verified cleanup. Ordinary continuation should stay offline unless that
+  gate is deliberately opened.
+- Preserve the new environment isolation pattern in CLI/adaptive tests. Future backend
+  tests should inject config explicitly instead of inheriting local shell state.
+- When future work changes report schemas, generated Markdown, benchmark gates, cleanup
+  lifecycle status, or public safety boundaries, rerun the release-hygiene path before
+  calling the release gate healthy.
+
+Future feature suggestions:
+
+- Add a multi-document and negative-case strict-regression fixture pack for table-heavy
+  corpora, then use it as the promotion-readiness baseline for a later R3 review.
+- Add a compact promotion-readiness summary that combines exact strict recall, semantic
+  expected-term recall, table atomicity, candidate-local evidence, cleanup verification,
+  and benchmark-strength status into one operator-facing decision block.
+- Add a deterministic table-structure qrels helper that can record expected row labels,
+  column labels, and nearby value evidence from handoff artifacts without script-owned
+  LLM execution.
+- Add cross-run profile comparison output for R2/R3-style experiments so operators can
+  inspect how candidate rank, co-winner status, strict evidence, semantic evidence, and
+  cleanup status changed between runs.
+- Add a host-agent review bundle for strict-regression runs that collects the relevant
+  plan, readiness, validation, summary, Markdown, and cleanup reports into a single
+  redacted review index.
