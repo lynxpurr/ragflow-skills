@@ -1023,6 +1023,10 @@ def _issues_from_parse_logs(summary: Mapping[str, Any]) -> list[dict[str, Any]]:
 def _next_steps(issues: Iterable[Mapping[str, Any]], *, documents_json_supplied: bool, parse_logs_supplied: bool) -> list[str]:
     codes = {str(issue.get("code") or "") for issue in issues}
     steps: list[str] = []
+    if "observed_state_document_list_api_zero_documents" in codes:
+        steps.append(
+            "Treat the refresh observed-state as a version-specific read-only API limitation when build, parse, or chunk evidence exists elsewhere."
+        )
     if not documents_json_supplied:
         steps.append("Export a read-only RAGFlow document-list/status JSON to compare live parse state with kb_manifest.")
     if not parse_logs_supplied:
@@ -1072,6 +1076,7 @@ def create_parse_report(
     multimodal_manifest = _load_multimodal_manifest(multimodal_kb_manifest_path) if multimodal_kb_manifest_path else None
     observed_state_report: dict[str, Any] | None = None
     observed_state_summary = {"available": False, "schema": None, "source": None, "summary": {}}
+    observed_state_issue_codes: set[str] = set()
     documents_payload: Any = None
     document_status_index = None
     detail_counts = {"document_count": None, "chunk_count": None}
@@ -1094,9 +1099,12 @@ def create_parse_report(
             observed_state_report,
             dataset_id=kb_manifest.dataset.id,
         )
+        issue_codes = observed_state_summary.get("issue_codes")
+        if isinstance(issue_codes, list):
+            observed_state_issue_codes = {str(code) for code in issue_codes if code}
         documents_payload = kb_refresh_report_document_status_payload(observed_state_report)
-        loaded = load_document_status_payload(observed_state_path)
-        document_status_index = _index_document_statuses(loaded["items"])
+        observed_items = _extract_status_items(documents_payload)
+        document_status_index = _index_document_statuses(observed_items)
         detail_counts = _extract_detail_counts(documents_payload)
         api_effective_parser_config, api_effective_parser_config_source = _extract_effective_parser_config(
             documents_payload
@@ -1154,6 +1162,21 @@ def create_parse_report(
     )
 
     issues = []
+    if "document_list_api_zero_documents" in observed_state_issue_codes:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="observed_state_document_list_api_zero_documents",
+                message=(
+                    "The supplied refresh-report observed-state recorded a zero-document document-list response "
+                    "despite separate manifest parse/chunk evidence."
+                ),
+                recommendation=(
+                    "Treat this as a version-specific read-only API limitation; use build, parse, smoke, or chunk "
+                    "evidence for lifecycle decisions until a compatible document-list endpoint is available."
+                ),
+            )
+        )
     if not kb_manifest.documents:
         issues.append(
             _issue(

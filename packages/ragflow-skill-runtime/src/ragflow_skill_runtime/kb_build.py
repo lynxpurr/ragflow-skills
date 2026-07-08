@@ -1849,6 +1849,10 @@ def _refresh_state_label(state: Mapping[str, Any]) -> str:
 def _refresh_next_steps(issues: list[Mapping[str, Any]]) -> list[str]:
     codes = {str(issue.get("code") or "") for issue in issues}
     steps: list[str] = []
+    if "document_list_api_zero_documents" in codes:
+        steps.append(
+            "Treat the zero-document document-list response as a version-specific read-only API limitation when build, parse, or chunk evidence exists elsewhere."
+        )
     if "manifest_document_missing_observed_state" in codes:
         steps.append("Export a fresh refresh report before using the manifest for parse, health, or benchmark decisions.")
     if "document_chunk_count_mismatch" in codes:
@@ -1951,6 +1955,7 @@ def create_kb_refresh_report(
     manifest_documents: list[dict[str, Any]] = []
     issues: list[dict[str, str]] = []
     manifest_chunk_total = 0
+    manifest_parse_evidence_document_count = 0
     observed_chunk_total = 0
     observed_chunk_document_count = 0
     chunk_mismatch_count = 0
@@ -1960,6 +1965,8 @@ def create_kb_refresh_report(
         manifest_chunks = _as_int(document.chunk_count)
         if manifest_chunks is not None:
             manifest_chunk_total += manifest_chunks
+        if (manifest_chunks is not None and manifest_chunks > 0) or parse_state_succeeded({"status": document.status or ""}):
+            manifest_parse_evidence_document_count += 1
         observed: Mapping[str, Any] | None = None
         for key in _refresh_match_keys(document):
             candidate = observed_lookup.get(key)
@@ -2055,6 +2062,24 @@ def create_kb_refresh_report(
                 )
             )
 
+    compatibility_warning_count = 0
+    document_list_zero_with_manifest_evidence = bool(not observed_documents and manifest_parse_evidence_document_count)
+    if document_list_zero_with_manifest_evidence:
+        compatibility_warning_count += 1
+        issues.append(
+            _issue(
+                severity="warning",
+                code="document_list_api_zero_documents",
+                message=(
+                    "RAGFlow document-list returned zero documents even though the KB manifest has parsed/chunk evidence."
+                ),
+                recommendation=(
+                    "Classify this as a version-specific read-only API limitation when build, parse, smoke, or chunk evidence "
+                    "proves the KB lifecycle; rerun against a compatible document-list endpoint before using refresh counts as authoritative."
+                ),
+            )
+        )
+
     missing_manifest_count = len(kb_manifest.documents) - matched_document_count
     warning_count = sum(1 for issue in issues if issue["severity"] == "warning")
     error_count = sum(1 for issue in issues if issue["severity"] == "error")
@@ -2096,9 +2121,11 @@ def create_kb_refresh_report(
             "missing_manifest_document_count": missing_manifest_count,
             "extra_observed_document_count": len(extra_observed_documents),
             "manifest_chunk_total": manifest_chunk_total,
+            "manifest_parse_evidence_document_count": manifest_parse_evidence_document_count,
             "observed_chunk_total": observed_chunk_total if observed_chunk_document_count or observed_documents else None,
             "observed_chunk_document_count": observed_chunk_document_count,
             "chunk_mismatch_count": chunk_mismatch_count,
+            "compatibility_warning_count": compatibility_warning_count,
             "succeeded_document_count": refresh_state_counts.get("succeeded", 0),
             "failed_document_count": refresh_state_counts.get("failed", 0),
             "in_progress_document_count": refresh_state_counts.get("in_progress", 0) + refresh_state_counts.get("unknown", 0),
@@ -2106,6 +2133,14 @@ def create_kb_refresh_report(
             "issue_count": len(issues),
             "warning_count": warning_count,
             "error_count": error_count,
+        },
+        "compatibility": {
+            "document_list_zero_documents_with_manifest_parse_evidence": document_list_zero_with_manifest_evidence,
+            "classification": (
+                "compatibility_warning:document_list_api_zero_documents"
+                if document_list_zero_with_manifest_evidence
+                else "none"
+            ),
         },
         "manifest_documents": manifest_documents,
         "observed_documents": [_compact_observed_state(state) or dict(state) for state in observed_documents],

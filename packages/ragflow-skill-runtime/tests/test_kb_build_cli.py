@@ -329,6 +329,19 @@ class FakeRefreshClient:
         }
 
 
+class FakeEmptyRefreshClient(FakeRefreshClient):
+    instances: list["FakeEmptyRefreshClient"] = []
+
+    def __init__(self, config):
+        self.config = config
+        self.list_calls: list[tuple[str, int, int]] = []
+        FakeEmptyRefreshClient.instances.append(self)
+
+    def list_documents(self, dataset_id, *, page=1, page_size=200):
+        self.list_calls.append((str(dataset_id), int(page), int(page_size)))
+        return {"data": {"docs": [], "doc_count": 0, "chunk_count": 0}}
+
+
 class ModelProviderHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/api/v1/llm/factories":
@@ -2756,6 +2769,69 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("<redacted:private-host>", combined)
         self.assertIn("<redacted:config-path>", combined)
 
+    def test_refresh_report_classifies_empty_document_list_with_manifest_parse_evidence(self) -> None:
+        module = load_build_module()
+        FakeEmptyRefreshClient.instances = []
+        module.RAGFlowClient = FakeEmptyRefreshClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kb_manifest = root / "kb_manifest.json"
+            output = root / "kb_refresh_report.json"
+            report_md = root / "kb_refresh_report.md"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "ragflow_base_url": "https://ragflow.example.test",
+                        "dataset": {"id": "ds-refresh-zero", "name": "kb:refresh-zero"},
+                        "documents": [
+                            {
+                                "document_id": "doc-md",
+                                "source_path": "source.pdf",
+                                "markdown_path": "documents/source.md",
+                                "status": "done",
+                                "chunk_count": 13,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "refresh-report",
+                        "--kb-manifest",
+                        str(kb_manifest),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "fake-key",
+                        "--report-json",
+                        str(output),
+                        "--report-md",
+                        str(report_md),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+            report_md_text = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(payload["summary"]["observed_document_count"], 0)
+        self.assertEqual(payload["summary"]["manifest_parse_evidence_document_count"], 1)
+        self.assertEqual(payload["summary"]["compatibility_warning_count"], 1)
+        self.assertTrue(payload["compatibility"]["document_list_zero_documents_with_manifest_parse_evidence"])
+        issue_codes = {issue["code"] for issue in payload["issues"]}
+        self.assertIn("document_list_api_zero_documents", issue_codes)
+        self.assertIn("version-specific read-only API limitation", report_md_text)
+        self.assertTrue(
+            any("version-specific read-only API limitation" in step for step in payload["next_steps"]),
+            payload["next_steps"],
+        )
+
     def test_parse_report_consumes_refresh_report_as_observed_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2837,6 +2913,90 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["observed_state"]["schema"], "ragflow_kb_refresh_report_v1")
         issue_codes = {issue["code"] for issue in payload["issues"]}
         self.assertNotIn("document_status_json_missing", issue_codes)
+
+    def test_parse_report_surfaces_refresh_zero_document_compatibility_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kb_manifest = root / "kb_manifest.json"
+            refresh_report = root / "kb_refresh_report.json"
+            output = root / "parse_report.json"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-refresh-zero", "name": "kb-refresh-zero"},
+                        "documents": [
+                            {
+                                "document_id": "doc-md",
+                                "source_path": "source.md",
+                                "markdown_path": "documents/source.md",
+                                "status": "done",
+                                "chunk_count": 13,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            refresh_report.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "schema": "ragflow_kb_refresh_report_v1",
+                        "status": "REVIEW",
+                        "dataset": {"id": "ds-refresh-zero", "name": "kb-refresh-zero"},
+                        "summary": {
+                            "observed_document_count": 0,
+                            "matched_document_count": 0,
+                            "missing_manifest_document_count": 1,
+                            "observed_chunk_total": None,
+                            "manifest_parse_evidence_document_count": 1,
+                            "compatibility_warning_count": 1,
+                            "warning_count": 2,
+                            "error_count": 0,
+                        },
+                        "observed_documents": [],
+                        "issues": [
+                            {
+                                "severity": "warning",
+                                "code": "document_list_api_zero_documents",
+                                "message": "document-list returned zero documents despite manifest parse evidence",
+                                "recommendation": "Treat as a version-specific read-only API limitation.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "parse-report",
+                    "--kb-manifest",
+                    str(kb_manifest),
+                    "--refresh-report",
+                    str(refresh_report),
+                    "--report-json",
+                    str(output),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        issue_codes = {issue["code"] for issue in payload["issues"]}
+        self.assertIn("observed_state_document_list_api_zero_documents", issue_codes)
+        self.assertIn("document_list_api_zero_documents", payload["observed_state"]["issue_codes"])
+        self.assertTrue(
+            any("version-specific read-only API limitation" in step for step in payload["next_steps"]),
+            payload["next_steps"],
+        )
 
     def test_snapshot_chunks_records_shared_observed_state_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
