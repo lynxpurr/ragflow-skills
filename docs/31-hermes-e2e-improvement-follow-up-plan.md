@@ -157,7 +157,7 @@ Run deployment-specific checks only after the focused P0 chain passes:
   lifecycle passes.
 - [x] Add or refine reporting so `asset-upload-plan` and consistency checks distinguish
   true missing image files from semantic alias references.
-- [x] Add or refine `refresh-report`, parse-report, or health-report guidance for
+- [ ] Add or refine `refresh-report`, parse-report, or health-report guidance for
   RAGFlow document-list API variants that return zero documents despite build/parse/chunk
   evidence.
 - [ ] Run deployment-specific embedding model checks if a concrete expected embedding
@@ -174,14 +174,11 @@ build, validated retrieval with a content-specific smoke query, generated post-b
 reports, cleaned up the disposable KB, and produced clean field-trial metrics with
 `ok=true` and zero findings.
 
-P1 report-clarity code changes from this plan are complete. `asset-upload-plan` now
-classifies semantic image aliases as advisory `semantic_alias_reference` entries instead
-of true missing local image files, and `consistency-check` reports semantic alias image
-hints separately from `missing_image_hints`. `refresh-report` now classifies zero-document
-document-list responses with existing manifest parse/chunk evidence as a version-specific
-read-only API compatibility warning, and `parse-report` surfaces that warning when it
-consumes the refresh observed-state sidecar. Remaining work is limited to P2
-production-readiness follow-up.
+The first P1 code change from this plan is complete: `asset-upload-plan` now classifies
+semantic image aliases as advisory `semantic_alias_reference` entries instead of true
+missing local image files, and `consistency-check` now reports semantic alias image hints
+separately from `missing_image_hints`. Remaining work is limited to refresh/document-list
+API compatibility guidance and P2 production-readiness follow-up.
 
 ## Validation Evidence / Residual Gated Work
 
@@ -211,8 +208,10 @@ Residual gated work:
 - provider, reranker, service wrapper, LLM backend, and private bridge adapters remain
   out of scope unless future field evidence satisfies their gates.
 
-Residual P2 follow-up:
+Residual P1/P2 follow-up:
 
+- clarify refresh/document-list API compatibility when read-only refresh evidence
+  disagrees with build or parse evidence;
 - run deployment-specific embedding model checks before treating a concrete production
   profile as validated;
 - keep route config, route tests, and `ragflow-query` validation outside this baseline
@@ -229,14 +228,13 @@ What closed by the retest and follow-up development:
 - real PDF formal handoff reached live KB build and cleanup;
 - field-trial metrics aggregation became clean;
 - model-provider endpoint failures were classified as compatibility warnings;
-- artifact hygiene no longer had zero-byte JSON issues;
+- artifact hygiene no longer had zero-byte JSON issues.
 - asset alias report clarity now separates semantic image aliases from true missing local
-  image files in `asset-upload-plan` and `consistency-check`;
-- refresh API compatibility reporting now explains zero-document document-list variants
-  when separate manifest parse/chunk evidence exists.
+  image files in `asset-upload-plan` and `consistency-check`.
 
 What remains open:
 
+- read-only refresh API compatibility explanation;
 - model-specific profile validation for a concrete deployment;
 - optional retrieval routing and query validation when requested.
 
