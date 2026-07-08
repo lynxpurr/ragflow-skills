@@ -1081,6 +1081,49 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(report_payload["schema"], "doc_postprocess_report_v1")
         self.assertTrue(json.loads(result.stdout)["ok"])
 
+    def test_postprocess_cli_accepts_pandoc_epub_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "pandoc.md"
+            output = root / "clean.md"
+            report = root / "postprocess_report.json"
+            markdown.write_text(
+                "# Title {#title}\n\n"
+                "::: {.section}\n"
+                "[Noisy]{style=\"color: red\"} []{#anchor}\n"
+                ":::\n",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "postprocess",
+                    "--markdown",
+                    str(markdown),
+                    "--profile",
+                    "pandoc-epub",
+                    "--output",
+                    str(output),
+                    "--report-json",
+                    str(report),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            cleaned = output.read_text(encoding="utf-8") if output.exists() else ""
+            report_payload = json.loads(report.read_text(encoding="utf-8")) if report.exists() else {}
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(json.loads(result.stdout)["ok"])
+        self.assertIn("# Title", cleaned)
+        self.assertNotIn("style=", cleaned)
+        self.assertGreater(report_payload["summary"]["rule_counts"]["pandoc_epub.fenced_div_markers"], 0)
+
     def test_postprocess_cli_writes_ragflux_like_chunk_profile_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

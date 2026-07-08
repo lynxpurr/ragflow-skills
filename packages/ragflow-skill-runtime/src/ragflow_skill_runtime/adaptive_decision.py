@@ -33,6 +33,7 @@ POSTPROCESS_PROFILES = {
     "none",
     "safe",
     "ocr",
+    "pandoc-epub",
     "chunk-markers",
     "chunk-markers-conservative",
     "chunk-markers-dense",

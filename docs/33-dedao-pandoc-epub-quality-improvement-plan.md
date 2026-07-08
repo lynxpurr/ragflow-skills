@@ -165,11 +165,11 @@ Acceptance criteria:
   output-name sanitizer.
 - [x] Implement Unicode-safe Markdown filename sanitization with deterministic collision
   handling.
-- [ ] Add a failing postprocess test for pandoc EPUB residue cleanup: marker-only fenced
+- [x] Add a failing postprocess test for pandoc EPUB residue cleanup: marker-only fenced
   divs, empty generated anchors, inline style attributes, and generated anchor tails.
-- [ ] Implement a conservative pandoc EPUB cleanup profile and postprocess rule-count
+- [x] Implement a conservative pandoc EPUB cleanup profile and postprocess rule-count
   reporting.
-- [ ] Update `ragflow-doc-to-md` public guidance to recommend the pandoc EPUB cleanup
+- [x] Update `ragflow-doc-to-md` public guidance to recommend the pandoc EPUB cleanup
   profile for Dedao-style or pandoc-generated EPUB Markdown before KB build.
 - [ ] Add `ragflow-kb-build` dry-run/readiness warning coverage for chunk markers that
   are unlikely to affect the selected downstream parser/profile.
@@ -206,6 +206,14 @@ The 2026-07-09 P0 filename slice adds a CJK filename regression for
 `safe_markdown_name` and preserves Unicode letters and numbers in generated Markdown
 filenames while keeping deterministic `-2`, `-3`, ... collision suffixes.
 
+The 2026-07-09 P0 pandoc EPUB cleanup slice adds a `pandoc-epub` postprocess profile for
+conservative cleanup of marker-only fenced div lines, empty generated anchors, inline
+style attributes, and generated heading anchor tails. The focused tests cover both
+content preservation and postprocess rule-count reporting. `ragflow-doc-to-md` now exposes
+the profile through `postprocess`, `pipeline`, and adaptive decision overrides, and the
+public skill guidance recommends it for Dedao-style or pandoc-generated EPUB Markdown
+before KB build.
+
 Checklist items should be checked only after implementation, focused verification, and
 redaction review are complete.
 
@@ -224,6 +232,15 @@ for every Dedao-style EPUB or every RAGFlow deployment.
 
 - `python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/doc_convert.py packages/ragflow-skill-runtime/tests/test_doc_convert.py`
 - `python3 -m pytest packages/ragflow-skill-runtime/tests/test_doc_convert.py -q`
+
+2026-07-09 P0 pandoc EPUB cleanup validation:
+
+- `python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/doc_postprocess.py packages/ragflow-skill-runtime/src/ragflow_skill_runtime/adaptive_decision.py skills/ragflow-doc-to-md/scripts/convert.py packages/ragflow-skill-runtime/tests/test_doc_postprocess.py packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py packages/ragflow-skill-runtime/tests/test_adaptive_pipeline.py`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_doc_postprocess.py packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py::DocConvertCliTests::test_postprocess_cli_accepts_pandoc_epub_profile packages/ragflow-skill-runtime/tests/test_adaptive_pipeline.py::AdaptivePipelineTests::test_decision_preserves_explicit_pandoc_epub_postprocess_profile -q`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_doc_postprocess.py packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py packages/ragflow-skill-runtime/tests/test_adaptive_pipeline.py -q`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests -q`
+- `git diff --check`
+- `python3 tools/release_hygiene_check.py >/tmp/ragflow-20260709-pandoc-epub-release-hygiene.json`
 
 Residual gated work:
 

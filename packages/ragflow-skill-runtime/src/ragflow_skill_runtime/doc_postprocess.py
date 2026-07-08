@@ -22,6 +22,7 @@ POSTPROCESS_PROFILES = {
     "none",
     "safe",
     "ocr",
+    "pandoc-epub",
     "chunk-markers",
     "chunk-markers-conservative",
     "chunk-markers-dense",
@@ -43,6 +44,15 @@ PAGE_TEXT_RE = re.compile(r"^\s*(?:page|p\.|第)\s*[0-9]{1,5}\s*(?:页)?\s*$", r
 LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
 CHUNK_MARKER_RE = re.compile(r"^\s*<!--\s*chunk\s*-->\s*$", re.IGNORECASE)
 CJK_RE = r"\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
+PANDOC_FENCED_DIV_LINE_RE = re.compile(r"(?m)^[ \t]*:{3,}[ \t]*(?:\{[^}\n]*\})?[ \t]*(?:\n|$)")
+PANDOC_EMPTY_ANCHOR_RE = re.compile(r"\[\]\{#[^}\n]+\}")
+PANDOC_HEADING_ANCHOR_TAIL_RE = re.compile(
+    r"(?m)^(?P<heading>[ \t]*#{1,6}[ \t]*.*?)[ \t]+\{#[A-Za-z0-9_.:-]+(?:[ \t][^}\n]*)?\}[ \t]*$"
+)
+PANDOC_SPAN_STYLE_RE = re.compile(
+    r"\[([^\]\n]+)\]\{[^}\n]*\bstyle\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s}]+)[^}\n]*\}"
+)
+HTML_STYLE_ATTR_RE = re.compile(r"\s+style\s*=\s*(\"[^\"]*\"|'[^']*')", re.IGNORECASE)
 
 CHUNK_MARKER_BOUNDARY_TYPES = ("heading", "page", "table", "image", "list")
 CHUNK_MARKER_PROFILE_CONFIG: dict[str, dict[str, Any]] = {
@@ -261,8 +271,29 @@ def _normalize_ocr_ligatures(text: str) -> tuple[str, int]:
         count = current.count(old)
         if count:
             current = current.replace(old, new)
-            changed += count
+        changed += count
     return current, changed
+
+
+def _remove_pandoc_fenced_div_markers(text: str) -> tuple[str, int]:
+    return PANDOC_FENCED_DIV_LINE_RE.subn("", text)
+
+
+def _remove_empty_pandoc_anchors(text: str) -> tuple[str, int]:
+    return PANDOC_EMPTY_ANCHOR_RE.subn("", text)
+
+
+def _strip_pandoc_inline_style_attributes(text: str) -> tuple[str, int]:
+    current, span_count = PANDOC_SPAN_STYLE_RE.subn(r"\1", text)
+    current, html_count = HTML_STYLE_ATTR_RE.subn("", current)
+    return current, span_count + html_count
+
+
+def _strip_pandoc_heading_anchor_tails(text: str) -> tuple[str, int]:
+    def replace(match: re.Match[str]) -> str:
+        return match.group("heading").rstrip()
+
+    return PANDOC_HEADING_ANCHOR_TAIL_RE.subn(replace, text)
 
 
 def _markdown_table_spans(text: str) -> list[tuple[int, int]]:
@@ -693,6 +724,27 @@ def postprocess_markdown_text(text: str, *, profile: str) -> tuple[str, list[Pos
 
     apply("safe.line_endings", "Normalize CRLF/CR line endings to LF", _normalize_line_endings)
     apply("safe.trailing_space", "Strip trailing spaces and tabs", _strip_trailing_spaces)
+    if profile == "pandoc-epub":
+        apply(
+            "pandoc_epub.fenced_div_markers",
+            "Remove marker-only Pandoc fenced div lines",
+            _remove_pandoc_fenced_div_markers,
+        )
+        apply(
+            "pandoc_epub.empty_generated_anchors",
+            "Remove empty generated Pandoc anchor spans",
+            _remove_empty_pandoc_anchors,
+        )
+        apply(
+            "pandoc_epub.inline_style_attributes",
+            "Remove inline Pandoc or HTML style attributes while preserving visible text",
+            _strip_pandoc_inline_style_attributes,
+        )
+        apply(
+            "pandoc_epub.generated_anchor_tails",
+            "Remove generated heading anchor tails",
+            _strip_pandoc_heading_anchor_tails,
+        )
     apply("safe.blank_lines", "Collapse three or more blank lines to two", _collapse_blank_lines)
     apply("safe.heading_spacing", "Repair obvious Markdown heading spacing", _repair_heading_spacing)
     apply("safe.image_paths", "Normalize simple local Markdown image paths", _normalize_markdown_image_targets)

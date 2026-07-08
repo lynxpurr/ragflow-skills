@@ -116,6 +116,7 @@ POSTPROCESS_PROFILE_CHOICES = [
     "none",
     "safe",
     "ocr",
+    "pandoc-epub",
     "chunk-markers",
     "chunk-markers-conservative",
     "chunk-markers-dense",

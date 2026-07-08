@@ -61,6 +61,62 @@ class DocPostprocessTests(unittest.TestCase):
         self.assertIn(pipe_table, processed)
         self.assertGreater(counts["ocr.cjk_spaces"], 0)
 
+    def test_pandoc_epub_profile_removes_artifacts_and_preserves_content(self) -> None:
+        text = (
+            "# 第一章 导论 {#generated-anchor}\n\n"
+            "::: {#intro .section style=\"page-break-before: always\"}\n"
+            "Visible <span style=\"font-weight: bold\">content</span> remains.\n\n"
+            "[Styled text]{style=\"font-size: 12pt\"} and []{#empty-generated-anchor}\n\n"
+            "![Cover](images/cover.jpg)\n"
+            ":::\n"
+        )
+
+        processed, rules = postprocess_markdown_text(text, profile="pandoc-epub")
+        counts = {rule.rule_id: rule.count for rule in rules}
+
+        self.assertIn("# 第一章 导论\n", processed)
+        self.assertIn("Visible <span>content</span> remains.", processed)
+        self.assertIn("Styled text and", processed)
+        self.assertIn("![Cover](images/cover.jpg)", processed)
+        self.assertNotIn("style=", processed)
+        self.assertNotIn("::: ", processed)
+        self.assertNotIn("[]{#", processed)
+        self.assertNotIn("{#generated-anchor}", processed)
+        self.assertGreater(counts["pandoc_epub.fenced_div_markers"], 0)
+        self.assertGreater(counts["pandoc_epub.empty_generated_anchors"], 0)
+        self.assertGreater(counts["pandoc_epub.inline_style_attributes"], 0)
+        self.assertGreater(counts["pandoc_epub.generated_anchor_tails"], 0)
+
+    def test_pandoc_epub_profile_reports_cleanup_rule_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "pandoc.md"
+            output = root / "clean.md"
+            markdown.write_text(
+                "# Title {#title}\n\n"
+                "::: {.section}\n"
+                "[Noisy]{style=\"color: red\"} []{#anchor}\n"
+                ":::\n",
+                encoding="utf-8",
+            )
+
+            report = postprocess_single_markdown(
+                markdown,
+                profile="pandoc-epub",
+                output_path=output,
+            )
+            cleaned = output.read_text(encoding="utf-8")
+
+        rule_counts = report["summary"]["rule_counts"]
+        document_rule_ids = {rule["rule_id"] for rule in report["documents"][0]["rules"]}
+        self.assertTrue(report["documents"][0]["changed"])
+        self.assertIn("# Title", cleaned)
+        self.assertGreater(rule_counts["pandoc_epub.fenced_div_markers"], 0)
+        self.assertGreater(rule_counts["pandoc_epub.empty_generated_anchors"], 0)
+        self.assertGreater(rule_counts["pandoc_epub.inline_style_attributes"], 0)
+        self.assertGreater(rule_counts["pandoc_epub.generated_anchor_tails"], 0)
+        self.assertIn("pandoc_epub.fenced_div_markers", document_rule_ids)
+
     def test_chunk_markers_insert_before_later_headings(self) -> None:
         processed, rules = postprocess_markdown_text("# One\nBody\n## Two\nBody\n", profile="chunk-markers")
         counts = {rule.rule_id: rule.count for rule in rules}

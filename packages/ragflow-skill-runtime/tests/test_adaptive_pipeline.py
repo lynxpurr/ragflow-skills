@@ -172,6 +172,30 @@ class AdaptivePipelineTests(unittest.TestCase):
         self.assertEqual(decision["script_owned_llm_calls"], 0)
         self.assertFalse(decision["live_mutation_enabled"])
 
+    def test_decision_preserves_explicit_pandoc_epub_postprocess_profile(self) -> None:
+        features = {
+            "schema": DOCUMENT_FEATURES_SCHEMA,
+            "summary": {
+                "primary_language": "zh",
+                "source_kind_counts": {"markdown": 1},
+                "table_heavy": False,
+                "sample_table_count": 0,
+                "has_formal_ingest_candidates": True,
+                "image_rich": False,
+                "long_document": False,
+                "scanned_or_low_text_pdf_count": 0,
+                "numeric_or_unit_signal_count": 0,
+            },
+        }
+
+        decision = make_pipeline_decision(
+            features,
+            requested_backend="pandoc",
+            requested_postprocess_profile="pandoc-epub",
+        )
+
+        self.assertEqual(decision["recommendation"]["postprocess_profile"], "pandoc-epub")
+
     def test_pdf_table_signal_promotes_auto_backend_to_high_quality_fastapi(self) -> None:
         features = {
             "schema": DOCUMENT_FEATURES_SCHEMA,
