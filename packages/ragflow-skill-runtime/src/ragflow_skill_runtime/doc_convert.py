@@ -16,6 +16,7 @@ import ssl
 import subprocess
 import tempfile
 import time
+import unicodedata
 import uuid
 import zipfile
 from dataclasses import dataclass, field
@@ -238,8 +239,18 @@ def safe_markdown_name(source: SourceDocument, *, used: set[str]) -> str:
     """Create a stable, collision-resistant Markdown filename."""
 
     raw = source.source_path.rsplit("/", 1)[-1]
-    stem = Path(raw).stem or "document"
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip(".-") or "document"
+    stem = unicodedata.normalize("NFC", Path(raw).stem or "document")
+    safe_parts: list[str] = []
+    last_was_separator = False
+    for char in stem:
+        category = unicodedata.category(char)
+        if char in "._-" or category[0] in {"L", "N"}:
+            safe_parts.append(char)
+            last_was_separator = False
+        elif not last_was_separator:
+            safe_parts.append("-")
+            last_was_separator = True
+    safe = "".join(safe_parts).strip(".-") or "document"
     candidate = f"{safe}.md"
     counter = 2
     while candidate in used:

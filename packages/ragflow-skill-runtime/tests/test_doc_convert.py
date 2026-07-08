@@ -225,6 +225,21 @@ class DocConvertTests(unittest.TestCase):
         self.assertEqual(first, "a.md")
         self.assertEqual(second, "a-2.md")
 
+    def test_safe_markdown_name_preserves_cjk_title_text(self) -> None:
+        used: set[str] = set()
+        title = "\u7b2c\u4e00\u7ae0-\u5bfc\u8bba"
+        first = safe_markdown_name(
+            SourceDocument(path=Path("/tmp/source.md"), source_path=f"dir/{title}.md"),
+            used=used,
+        )
+        second = safe_markdown_name(
+            SourceDocument(path=Path("/tmp/other.md"), source_path=f"other/{title}.md"),
+            used=used,
+        )
+
+        self.assertEqual(first, f"{title}.md")
+        self.assertEqual(second, f"{title}-2.md")
+
     def test_make_doc_manifest_payload_uses_relative_markdown_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

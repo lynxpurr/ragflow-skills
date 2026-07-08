@@ -161,9 +161,9 @@ Acceptance criteria:
   relative local image assets in the formal handoff.
 - [x] Implement Markdown passthrough asset materialization and verify the missing-image
   quality gate no longer blocks when source assets exist.
-- [ ] Add a failing filename test showing that CJK title text is preserved by the Markdown
+- [x] Add a failing filename test showing that CJK title text is preserved by the Markdown
   output-name sanitizer.
-- [ ] Implement Unicode-safe Markdown filename sanitization with deterministic collision
+- [x] Implement Unicode-safe Markdown filename sanitization with deterministic collision
   handling.
 - [ ] Add a failing postprocess test for pandoc EPUB residue cleanup: marker-only fenced
   divs, empty generated anchors, inline style attributes, and generated anchor tails.
@@ -202,6 +202,10 @@ conversion path. Existing relative image references such as `images/chart.png` a
 copied under `handoff/documents/` before the quality gate, retrieval hints, and rich
 handoff sidecars are generated.
 
+The 2026-07-09 P0 filename slice adds a CJK filename regression for
+`safe_markdown_name` and preserves Unicode letters and numbers in generated Markdown
+filenames while keeping deterministic `-2`, `-3`, ... collision suffixes.
+
 Checklist items should be checked only after implementation, focused verification, and
 redaction review are complete.
 
@@ -215,6 +219,11 @@ for every Dedao-style EPUB or every RAGFlow deployment.
 
 - `python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/__init__.py skills/ragflow-doc-to-md/scripts/convert.py packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py`
 - `python3 -m pytest packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py::DocConvertCliTests::test_convert_passthrough_directory packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py::DocConvertCliTests::test_pipeline_creates_rich_handoff_and_ingest_plan packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py::DocConvertCliTests::test_pipeline_passthrough_materializes_relative_markdown_images packages/ragflow-skill-runtime/tests/test_doc_convert.py::DocConvertTests::test_copy_local_markdown_assets_rewrites_absolute_temp_image -q`
+
+2026-07-09 P0 Unicode filename validation:
+
+- `python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/doc_convert.py packages/ragflow-skill-runtime/tests/test_doc_convert.py`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_doc_convert.py -q`
 
 Residual gated work:
 
