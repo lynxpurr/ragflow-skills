@@ -122,7 +122,7 @@ python scripts/convert.py adaptive \
   --json
 ```
 
-关键产物：
+主要产物：
 - `documents/*.md`
 - `doc_manifest.json` — 文档级契约，下游 `ragflow-kb-build` 消费
 - `formal_handoff_manifest.json` — 包级审计清单
@@ -130,6 +130,11 @@ python scripts/convert.py adaptive \
 - `retrieval_hints.json` — 检索提示
 - `quality_report.json` — 质量报告
 - `chunk_profile_report.json` — chunk marker 统计
+
+## 真实 PDF 扫描本的额外注意事项
+
+- `inspect-source` 可能报告 `likely_scanned: true` 和 `pdf_text_sample_quality: binary_garbage`。只要 `file` 命令确认是 PDF，这通常是低文本密度/嵌入字体导致的，不影响 MinerU 转换。
+- 扫描/中文 PDF 经 `mineru-fastapi` 后，图像资产可能使用 MinerU 生成的 `image-NNN_image.jpg` 名称或内容 hash 名称；`asset-upload-plan` 的语义别名启发式可能误报为 missing。先以 `inspect-handoff` 的 `missing_image_count` 为准，不要仅因 `asset-upload-plan` 的 `blocked` 状态就停止 live build。详情见 `references/asset-upload-plan-phantom-missing-image-pitfall.md`。
 
 ### chunk marker profile
 
@@ -216,6 +221,15 @@ retrying high-accuracy backends. See
 `references/blackwell-mineru-fastapi-backend-pitfall.md` and the sanitized scanned-PDF
 regression notes in `references/real-scanned-pdf-e2e-test-report.md`.
 
+Observed environment quirk (2026-07-08): a local MinerU FastAPI service running on
+`127.0.0.1:8888` exposed `protocol_version: 2` and a `/tasks` endpoint, but rejected
+PDF uploads with `HTTP 400 Unsupported file type: html`. The port had previously been
+used by a MinerU sync-style service. If the same port returns sync-style errors while
+advertising v2, verify the actual service binary behind the port before assuming the
+FastAPI backend is broken; check the unit files or health payload for the real backend.
+This is a deployment/protocol identification issue, not a universal `mineru-fastapi`
+limitation. See `references/mineru-fastapi-port-protocol-quirk.md`.
+
 ### Pitfall #3: 认为 chunk marker 能阻止 RAGFlow 切表格
 
 chunk marker 是**提示性边界**，不是**硬约束**。RAGFlow 的 chunker 仍可能按 `chunk_token_num` 切超大表格。表格原子性需要结合 RAGFlow profile 和入库后验证。
@@ -290,3 +304,5 @@ print(out.count('<!-- chunk -->'))
 - Reference: `references/ragflow-skills-adaptive-pipeline-guide.md` — adaptive pipeline 端到端使用指南
 - Reference: `references/blackwell-mineru-fastapi-backend-pitfall.md` — Blackwell GPU 上 MinerU high-accuracy backend 陷阱
 - Reference: `references/ragflow-doc-to-md-table-parameter-impact.md` — 参数调整对表格解析质量的影响与决策树
+- Reference: `references/mineru-fastapi-port-protocol-quirk.md` — 本地 MinerU FastAPI 端口协议识别陷阱
+- Reference: `references/ragflow-skills-e2e-test-checklist.md` — Hermes 端到端测试检查清单
