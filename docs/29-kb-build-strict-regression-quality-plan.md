@@ -290,16 +290,16 @@ Likely files to modify:
 
 ### P0/P1: Cleanup Lifecycle Closure
 
-- [ ] Add a test that runs summarize after cleanup artifacts exist without manually
+- [x] Add a test that runs summarize after cleanup artifacts exist without manually
   passing every sidecar path, if sidecar auto-discovery is selected.
-- [ ] Alternatively, add a generated next-step command that reruns summarize with
+- [x] Select sidecar auto-discovery instead of the generated next-step-only fallback for
   cleanup-plan, readiness, and cleanup-execution paths.
-- [ ] Add a machine-readable post-cleanup read-back verification report or field.
-- [ ] Ensure final summary distinguishes executed-unverified cleanup from verified
+- [x] Add a machine-readable post-cleanup read-back verification report or field.
+- [x] Ensure final summary distinguishes executed-unverified cleanup from verified
   cleanup.
-- [ ] Update generated Markdown so cleanup lifecycle reflects the same machine-readable
+- [x] Update generated Markdown so cleanup lifecycle reflects the same machine-readable
   state.
-- [ ] Add release-safety tests that generated cleanup summaries do not expose private
+- [x] Add release-safety tests that generated cleanup summaries do not expose private
   identifiers in Markdown.
 
 ### P1: Benchmark Strength And Gate Semantics
@@ -379,10 +379,17 @@ Completed in the current implementation slice:
   size.
 - Best-profile Markdown rationale now surfaces table atomicity risk and semantic table
   evidence alongside retrieval metrics.
+- Optimize summaries auto-discover sibling cleanup lifecycle sidecars named
+  `cleanup_plan.json`, `optimization_live_readiness_report.json`, and
+  `cleanup_execution_report.json` when explicit paths are not supplied.
+- Cleanup lifecycle summaries now expose machine-readable post-cleanup read-back status
+  fields and distinguish `cleanup_executed_unverified` from verified `complete` cleanup
+  in both JSON and generated Markdown.
+- Focused CLI coverage verifies that generated cleanup lifecycle Markdown does not expose
+  cleanup target dataset IDs or temporary KB names.
 
 Not yet implemented:
 
-- Post-cleanup read-back as a machine-readable artifact.
 - Template strategy that makes embedding-model checking easy without reducing public
   portability.
 

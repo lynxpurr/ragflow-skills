@@ -2061,6 +2061,15 @@ def _optional_report(
     return report
 
 
+def _discover_sibling_report_path(plan_path: str | Path, explicit_path: str | Path | None, filename: str) -> str | Path | None:
+    if explicit_path:
+        return explicit_path
+    candidate = Path(plan_path).parent / filename
+    if candidate.exists():
+        return candidate
+    return None
+
+
 def _cleanup_plan_status(cleanup_plan: Mapping[str, Any] | None) -> dict[str, Any]:
     if cleanup_plan is None:
         return {
@@ -2292,10 +2301,12 @@ def _optimization_cleanup_lifecycle(
         cleanup_execution_report,
         cleanup_executed=bool(cleanup_execution_status["cleanup_executed"]),
     )
+    post_cleanup_status = str(post_cleanup_verification.get("status") or "unknown")
+    post_cleanup_read_back_verified = post_cleanup_status in {"verified", "passed"}
     if not cleanup_required:
         status = "not_required"
     elif cleanup_execution_status["status"] == "executed":
-        if post_cleanup_verification.get("status") in {"verified", "passed"}:
+        if post_cleanup_read_back_verified:
             status = "complete"
         else:
             status = "cleanup_executed_unverified"
@@ -2327,6 +2338,7 @@ def _optimization_cleanup_lifecycle(
             **cleanup_execution_status,
         },
         "post_cleanup_verification": post_cleanup_verification,
+        "post_cleanup_read_back_verified": post_cleanup_read_back_verified,
     }
     lifecycle["next_steps"] = _cleanup_next_steps(
         plan_path=plan_path,
@@ -2409,6 +2421,13 @@ def summarize_optimization_results(
     if not isinstance(candidates, list) or not candidates:
         issues.append(OptimizationIssue("error", "optimization_plan_candidates_missing", "optimization plan has no candidates", "candidates"))
         candidates = []
+    cleanup_plan_path = _discover_sibling_report_path(plan_path, cleanup_plan_path, "cleanup_plan.json")
+    readiness_report_path = _discover_sibling_report_path(plan_path, readiness_report_path, "optimization_live_readiness_report.json")
+    cleanup_execution_report_path = _discover_sibling_report_path(
+        plan_path,
+        cleanup_execution_report_path,
+        "cleanup_execution_report.json",
+    )
     cleanup_plan = _optional_report(
         cleanup_plan_path,
         label="optimization cleanup plan",
@@ -2692,6 +2711,12 @@ def summarize_optimization_results(
             "cleanup_pending": cleanup_lifecycle["status"] in {"cleanup_plan_missing", "cleanup_pending", "cleanup_failed"},
             "cleanup_executed": bool(cleanup_lifecycle["cleanup_execution"]["cleanup_executed"]),
             "cleanup_status": cleanup_lifecycle["status"],
+            "post_cleanup_verification_status": (
+                cleanup_lifecycle["post_cleanup_verification"].get("status")
+                if isinstance(cleanup_lifecycle.get("post_cleanup_verification"), Mapping)
+                else None
+            ),
+            "post_cleanup_read_back_verified": bool(cleanup_lifecycle.get("post_cleanup_read_back_verified")),
         },
         "benchmark_strength": benchmark_strength,
         "benchmark_artifact_followups": benchmark_artifact_followups,
