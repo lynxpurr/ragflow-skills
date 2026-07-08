@@ -20,10 +20,36 @@ from ragflow_skill_runtime.manifests import load_doc_manifest
 ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_SRC = ROOT / "packages" / "ragflow-skill-runtime" / "src"
 CONVERT_SCRIPT = ROOT / "skills" / "ragflow-doc-to-md" / "scripts" / "convert.py"
+DOC_TO_MD_ENV_VARS = {
+    "RAGFLOW_CONFIG",
+    "DOC_TO_MD_BACKEND",
+    "DOC_TO_MD_TABLE_QUALITY",
+    "DOC_TO_MD_ALLOW_TABLE_QUALITY_FALLBACK",
+    "MINERU_API_KEY",
+    "MINERU_BASE_URL",
+    "MINERU_CLI_PATH",
+    "MINERU_CLI_BACKEND",
+    "MINERU_FASTAPI_BACKEND",
+    "MINERU_FASTAPI_SERVER_URL",
+    "MINERU_TIMEOUT",
+    "MINERU_POLL_INTERVAL",
+    "MINERU_VERIFY_SSL",
+    "MINERU_LANGUAGE",
+    "MINERU_PAGE_RANGE",
+    "MINERU_ENABLE_TABLE",
+    "MINERU_IS_OCR",
+    "MINERU_ENABLE_FORMULA",
+    "MINERU_ASSET_MODE",
+    "MINERU_V4_MODEL_VERSION",
+    "MINERU_V4_RESULT_MODE",
+    "MINERU_V4_DATA_ID_PREFIX",
+}
 
 
 def _env() -> dict[str, str]:
     env = os.environ.copy()
+    for name in DOC_TO_MD_ENV_VARS:
+        env.pop(name, None)
     env["RAGFLOW_SKILL_RUNTIME_PATH"] = str(RUNTIME_SRC)
     return env
 

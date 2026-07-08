@@ -1,6 +1,6 @@
 # KB Build Strict Regression Quality Plan
 
-Status: proposed spec-coding backlog
+Status: offline implementation complete; R3 live regression gated
 Date: 2026-07-08
 
 > For agentic workers: implement this plan task-by-task with
@@ -346,7 +346,7 @@ Likely files to modify:
   user review.
 - [x] Add tests that the convenience mode refuses to run without `--execute` and without
   a valid readiness artifact.
-- [ ] Track doc-to-md backend override failures only if they reproduce in a focused
+- [x] Track doc-to-md backend override failures only if they reproduce in a focused
   rerun; keep them outside this KB-build quality round unless they affect handoff
   contracts.
 
@@ -415,11 +415,17 @@ Completed in the current implementation slice:
   `ok=true`, the cleanup plan path matches, and cleanup confirmations were exact.
 - Focused CLI coverage verifies readiness-derived cleanup confirmation succeeds for a
   reviewed artifact and refuses both missing `--execute` and invalid readiness artifacts.
+- A focused doc-to-md backend override rerun reproduced failures only when the local shell
+  leaked private `RAGFLOW_CONFIG` / MinerU environment into CLI/adaptive tests. The
+  doc-to-md CLI and adaptive test helpers now strip doc-to-md and MinerU configuration
+  variables unless a test explicitly injects them, so explicit backend-preservation and
+  fallback tests remain deterministic and do not open KB-build handoff-contract work.
 
 Not yet implemented:
 
-- Reproduced doc-to-md backend override failure tracking, only if a focused rerun proves
-  it affects KB-build handoff contracts.
+- No remaining offline development tasks in this plan. R3 strict regression remains gated
+  by explicit approval for live disposable RAGFlow mutation and is not a default
+  continuation task.
 
 ## Validation Evidence / Residual Gated Work
 
@@ -450,6 +456,12 @@ Focused validation for the operator ergonomics slice:
 python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py -q
 ```
 
+Focused validation for the doc-to-md backend override audit:
+
+```bash
+python3 -m pytest packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py::DocConvertCliTests::test_table_quality_auto_promotes_fastapi_pdf_to_high_accuracy_backend packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py::DocConvertCliTests::test_table_quality_high_preserves_explicit_pipeline_backend packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py::DocConvertCliTests::test_table_quality_high_can_fallback_to_pipeline_after_backend_unsupported -q
+```
+
 Broader validation before closing a code round:
 
 ```bash
@@ -462,5 +474,6 @@ If public schemas, generated Markdown, or report surfaces change, also run the r
 schema identity and report-surface checks required by the release validation chain.
 
 R3 strict regression remains gated by explicit approval for any live disposable RAGFlow
-mutation. The preferred first implementation slice is offline and fake-client testable:
-fix table modality detection, add expected-term metrics, and update benchmark rendering.
+mutation. The offline, fake-client-testable implementation backlog in this plan is
+complete; further work should be evidence-led release validation or an explicitly
+approved live strict-regression run.
