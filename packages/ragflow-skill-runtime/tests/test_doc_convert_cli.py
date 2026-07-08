@@ -559,6 +559,57 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertNotIn("api_key", ingest_plan)
         self.assertNotIn("base_url", ingest_plan)
 
+    def test_pipeline_passthrough_materializes_relative_markdown_images(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "handoff"
+            image_dir = input_dir / "images"
+            image_dir.mkdir(parents=True)
+            (image_dir / "chart.png").write_bytes(b"fake chart")
+            input_dir.mkdir(exist_ok=True)
+            (input_dir / "alpha.md").write_text(
+                "# Alpha\n\nDedao-style chart.\n\n![Chart](images/chart.png)\n",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CONVERT_SCRIPT),
+                    "pipeline",
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                    "--mode",
+                    "passthrough",
+                    "--no-recursive",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+            materialized_image = output_dir / "documents" / "images" / "chart.png"
+            materialized_image_exists = materialized_image.is_file()
+            materialized_image_bytes = materialized_image.read_bytes() if materialized_image_exists else b""
+            markdown = (output_dir / "documents" / "alpha.md").read_text(encoding="utf-8")
+            quality_report = json.loads((output_dir / "quality_report.json").read_text(encoding="utf-8"))
+            retrieval_hints = json.loads((output_dir / "retrieval_hints.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(materialized_image_exists)
+        self.assertEqual(materialized_image_bytes, b"fake chart")
+        self.assertIn("![Chart](images/chart.png)", markdown)
+        self.assertEqual(payload["quality_gate"]["status"], "PASS")
+        self.assertEqual(quality_report["gate"]["status"], "PASS")
+        self.assertEqual(retrieval_hints["asset_semantics"]["summary"]["image_count"], 1)
+        self.assertTrue(any(item.get("path") == "documents/images/chart.png" for item in retrieval_hints["image_artifacts"]))
+
     def test_pipeline_dense_profile_writes_chunk_profile_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

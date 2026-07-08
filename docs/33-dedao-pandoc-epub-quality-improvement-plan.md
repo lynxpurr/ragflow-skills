@@ -157,9 +157,9 @@ Acceptance criteria:
 
 ## Task Checklist
 
-- [ ] Add a failing unit or CLI test showing that Markdown passthrough preserves existing
+- [x] Add a failing unit or CLI test showing that Markdown passthrough preserves existing
   relative local image assets in the formal handoff.
-- [ ] Implement Markdown passthrough asset materialization and verify the missing-image
+- [x] Implement Markdown passthrough asset materialization and verify the missing-image
   quality gate no longer blocks when source assets exist.
 - [ ] Add a failing filename test showing that CJK title text is preserved by the Markdown
   output-name sanitizer.
@@ -196,14 +196,25 @@ three implementation tracks:
 - P1 build-readiness warnings for `ragflow-kb-build`;
 - P2 repeatable regression evidence for retirement-transition decisions.
 
-No code task in this plan is marked complete yet. Checklist items should be checked only
-after implementation, focused verification, and redaction review are complete.
+The 2026-07-08 P0 startup slice adds a CLI regression for Markdown passthrough image
+materialization and wires existing local Markdown asset copying into the formal handoff
+conversion path. Existing relative image references such as `images/chart.png` are now
+copied under `handoff/documents/` before the quality gate, retrieval hints, and rich
+handoff sidecars are generated.
+
+Checklist items should be checked only after implementation, focused verification, and
+redaction review are complete.
 
 ## Validation Evidence / Residual Gated Work
 
 Current evidence is sanitized field-trial evidence plus local artifact review. It is
 strong enough to justify offline fixes, but it is not a blanket retirement certificate
 for every Dedao-style EPUB or every RAGFlow deployment.
+
+2026-07-08 P0 handoff asset validation:
+
+- `python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/__init__.py skills/ragflow-doc-to-md/scripts/convert.py packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py::DocConvertCliTests::test_convert_passthrough_directory packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py::DocConvertCliTests::test_pipeline_creates_rich_handoff_and_ingest_plan packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py::DocConvertCliTests::test_pipeline_passthrough_materializes_relative_markdown_images packages/ragflow-skill-runtime/tests/test_doc_convert.py::DocConvertTests::test_copy_local_markdown_assets_rewrites_absolute_temp_image -q`
 
 Residual gated work:
 

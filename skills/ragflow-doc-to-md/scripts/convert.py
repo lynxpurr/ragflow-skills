@@ -49,6 +49,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     QualityDocument,
     compare_adaptive_summary_runs,
     convert_source_to_markdown,
+    copy_local_markdown_assets,
     create_rich_handoff_package,
     configured_private_hosts_from_urls,
     discover_source_documents,
@@ -120,6 +121,7 @@ POSTPROCESS_PROFILE_CHOICES = [
     "chunk-markers-dense",
     "chunk-markers-ragflux-like",
 ]
+MARKDOWN_SOURCE_EXTENSIONS = {".md", ".markdown", ".mdown", ".mkd"}
 TABLE_QUALITY_CHOICES = {"standard", "high", "auto"}
 TABLE_QUALITY_HIGH_FASTAPI_BACKEND = "hybrid-auto-engine"
 TABLE_QUALITY_HIGH_FASTAPI_BACKENDS = {
@@ -2102,6 +2104,13 @@ def _run(args: argparse.Namespace) -> int:
                     source_path=source.source_path,
                 )
             )
+            if source.path.suffix.lower() in MARKDOWN_SOURCE_EXTENSIONS:
+                markdown = copy_local_markdown_assets(
+                    markdown,
+                    markdown_path=source.path,
+                    source_root=source.path.parent,
+                    asset_output_dir=markdown_path.parent,
+                )
             markdown_path.write_text(markdown, encoding="utf-8")
             markdown, image_rename_records = semantic_rename_markdown_images(
                 markdown,
