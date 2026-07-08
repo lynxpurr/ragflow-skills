@@ -29,6 +29,7 @@ ASSET_UPLOAD_PLAN_IMAGE_CLASSES = (
     "markdown_referenced",
     "manifest_listed",
     "sidecar_referenced",
+    "semantic_alias_reference",
     "residual_unreferenced",
     "outside_handoff",
     "missing",
@@ -321,6 +322,15 @@ def _hint_image_paths(retrieval_hints: Mapping[str, Any]) -> set[str]:
     )
 
 
+def _hint_semantic_alias_paths(retrieval_hints: Mapping[str, Any]) -> set[str]:
+    paths = _record_paths(retrieval_hints.get("image_artifacts"), ("semantic_alias",))
+    asset_semantics = retrieval_hints.get("asset_semantics")
+    if isinstance(asset_semantics, Mapping):
+        paths.update(_record_paths(asset_semantics.get("images"), ("semantic_alias",)))
+        paths.update(_record_paths(asset_semantics.get("semantic_aliases"), ("alias", "semantic_alias")))
+    return paths
+
+
 def _hint_table_documents(retrieval_hints: Mapping[str, Any]) -> set[str]:
     return _record_paths(retrieval_hints.get("table_artifacts"), ("document", "markdown_path", "source_path", "path"))
 
@@ -387,20 +397,37 @@ def _is_image_path_value(value: str) -> bool:
     return Path(_image_reference_path(value)).suffix.lower() in IMAGE_SUFFIXES
 
 
-def _iter_image_path_values(value: Any) -> list[str]:
+def _is_semantic_alias_key_path(key_path: tuple[str, ...]) -> bool:
+    lowered = tuple(item.lower() for item in key_path)
+    if not lowered:
+        return False
+    if lowered[-1] == "semantic_alias":
+        return True
+    if "semantic_aliases" in lowered and lowered[-1] in {"alias", "semantic_alias"}:
+        return True
+    if "asset_semantics" in lowered and lowered[-1] == "alias":
+        return True
+    return False
+
+
+def _iter_image_path_references(value: Any, *, key_path: tuple[str, ...] = ()) -> list[tuple[str, bool]]:
     if isinstance(value, str):
-        return [_image_reference_path(value)] if _is_image_path_value(value) else []
+        return [(_image_reference_path(value), _is_semantic_alias_key_path(key_path))] if _is_image_path_value(value) else []
     if isinstance(value, Mapping):
-        found: list[str] = []
-        for nested in value.values():
-            found.extend(_iter_image_path_values(nested))
+        found: list[tuple[str, bool]] = []
+        for key, nested in value.items():
+            found.extend(_iter_image_path_references(nested, key_path=(*key_path, str(key))))
         return found
     if isinstance(value, list):
         found = []
         for nested in value:
-            found.extend(_iter_image_path_values(nested))
+            found.extend(_iter_image_path_references(nested, key_path=key_path))
         return found
     return []
+
+
+def _iter_image_path_values(value: Any) -> list[str]:
+    return [path for path, _is_semantic_alias in _iter_image_path_references(value)]
 
 
 def _image_artifact_record(
@@ -480,8 +507,8 @@ def _add_image_artifact(
     return record
 
 
-def _collect_sidecar_image_references(*, handoff_root: Path) -> list[tuple[str, str, Path]]:
-    references: list[tuple[str, str, Path]] = []
+def _collect_sidecar_image_references(*, handoff_root: Path) -> list[tuple[str, str, Path, bool]]:
+    references: list[tuple[str, str, Path, bool]] = []
     for role, sidecar_name in DEFAULT_UPLOAD_PLAN_SIDECARS:
         if role == "doc_manifest":
             continue
@@ -494,14 +521,17 @@ def _collect_sidecar_image_references(*, handoff_root: Path) -> list[tuple[str, 
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        seen: set[str] = set()
-        for raw in _iter_image_path_values(payload):
+        seen: dict[str, int] = {}
+        for raw, is_semantic_alias in _iter_image_path_references(payload):
             if raw in seen:
+                index = seen[raw]
+                if references[index][3] and not is_semantic_alias:
+                    references[index] = (sidecar_name, raw, references[index][2], False)
                 continue
-            seen.add(raw)
             candidate = Path(raw)
             resolved = candidate if candidate.is_absolute() else handoff_root / candidate
-            references.append((sidecar_name, raw, resolved))
+            seen[raw] = len(references)
+            references.append((sidecar_name, raw, resolved, is_semantic_alias))
     return references
 
 
@@ -760,10 +790,18 @@ def create_kb_asset_upload_plan(
         documents.append(document_record)
 
     sidecar_image_assets: list[dict[str, Any]] = []
-    for sidecar_name, raw_path, resolved in _collect_sidecar_image_references(handoff_root=handoff_root):
+    for sidecar_name, raw_path, resolved, is_semantic_alias in _collect_sidecar_image_references(handoff_root=handoff_root):
         inside_handoff = _is_relative_to(resolved, handoff_root)
         exists = resolved.is_file()
-        asset_class = "missing" if not exists else "outside_handoff" if not inside_handoff else "sidecar_referenced"
+        asset_class = (
+            "semantic_alias_reference"
+            if is_semantic_alias
+            else "missing"
+            if not exists
+            else "outside_handoff"
+            if not inside_handoff
+            else "sidecar_referenced"
+        )
         artifact = _add_image_artifact(
             artifacts=discovered_image_artifacts,
             by_key=discovered_image_artifacts_by_key,
@@ -803,6 +841,15 @@ def create_kb_asset_upload_plan(
                     code="image_missing",
                     message=f"Local image asset is missing: {artifact.get('raw_path')}",
                     recommendation="Regenerate the handoff with asset landing enabled or repair image paths.",
+                )
+            )
+        elif asset_class == "semantic_alias_reference":
+            issues.append(
+                _issue(
+                    severity="warning",
+                    code="semantic_alias_image_reference",
+                    message=f"Image semantic alias is advisory and not a missing local file: {artifact.get('raw_path')}",
+                    recommendation="Use the paired canonical image path for asset existence checks; keep semantic aliases for human review and retrieval context.",
                 )
             )
 
@@ -936,6 +983,7 @@ def create_kb_asset_upload_plan(
             "markdown_referenced_image_count": asset_class_counts["markdown_referenced"],
             "manifest_listed_image_count": asset_class_counts["manifest_listed"],
             "sidecar_referenced_image_count": asset_class_counts["sidecar_referenced"],
+            "semantic_alias_reference_image_count": asset_class_counts["semantic_alias_reference"],
             "residual_unreferenced_image_count": asset_class_counts["residual_unreferenced"],
             "discovered_image_artifact_count": len(discovered_image_artifacts),
             "planned_visual_upload_file_count": len(planned_visual_upload_files),
@@ -973,6 +1021,7 @@ def create_kb_asset_upload_plan(
                 "This report does not call RAGFlow.",
                 "Only markdown_referenced image assets enter the default visual upload plan.",
                 "Manifest-listed, sidecar-referenced, and residual images are discovered for review but excluded from the default visual upload set.",
+                "Semantic image aliases are advisory review references; they are not treated as missing local files.",
                 "Only handoff-local existing Markdown, planned image, and sidecar files are projected into the local package.",
                 "Live upload of the package remains disabled until an explicit mutation gate approves it.",
             ],
@@ -1205,6 +1254,7 @@ def create_kb_artifact_consistency_report(
         )
 
     hint_images = sorted(_hint_image_paths(retrieval_hints))
+    semantic_alias_image_hints = sorted(_hint_semantic_alias_paths(retrieval_hints))
     hint_table_documents = sorted(_hint_table_documents(retrieval_hints))
     asset_images = _asset_plan_image_paths(asset_plan)
     asset_markdown = _asset_plan_markdown_paths(asset_plan)
@@ -1220,6 +1270,15 @@ def create_kb_artifact_consistency_report(
                 code="retrieval_hint_images_missing_from_asset_plan",
                 message="One or more image hints are not represented in the asset upload plan.",
                 recommendation="Regenerate asset-upload-plan from the same handoff or repair retrieval_hints image paths.",
+            )
+        )
+    if semantic_alias_image_hints:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="retrieval_hint_image_semantic_aliases",
+                message="One or more image hints are semantic aliases rather than required local image files.",
+                recommendation="Review semantic aliases for readability, but use canonical image paths when checking local asset existence.",
             )
         )
     if missing_table_documents:
@@ -1278,10 +1337,12 @@ def create_kb_artifact_consistency_report(
             "error_count": schema_issue_count,
         },
         "retrieval_hints_vs_asset_plan": {
-            "status": "review" if missing_image_hints or missing_table_documents else "ready",
+            "status": "review" if missing_image_hints or semantic_alias_image_hints or missing_table_documents else "ready",
             "hint_image_count": len(hint_images),
             "asset_plan_image_path_count": len(asset_images),
             "missing_image_hints": missing_image_hints,
+            "semantic_alias_image_hint_count": len(semantic_alias_image_hints),
+            "semantic_alias_image_hints": semantic_alias_image_hints,
             "hint_table_document_count": len(hint_table_documents),
             "asset_plan_markdown_document_count": len(asset_markdown),
             "missing_table_documents": missing_table_documents,
@@ -1324,6 +1385,7 @@ def create_kb_artifact_consistency_report(
             "error_count": schema_issue_count,
             "warning_count": warning_count,
             "hint_image_count": len(hint_images),
+            "semantic_alias_image_hint_count": len(semantic_alias_image_hints),
             "hint_table_count": table_hint_count,
             "planned_visual_upload_file_count": len(planned_visual_paths),
             "kb_manifest_document_count": len(kb_documents),
@@ -1425,6 +1487,7 @@ def render_kb_asset_upload_plan_markdown(report: Mapping[str, Any]) -> str:
         f"- markdown_referenced images: `{summary.get('markdown_referenced_image_count', 0)}`",
         f"- manifest_listed images: `{summary.get('manifest_listed_image_count', 0)}`",
         f"- sidecar_referenced images: `{summary.get('sidecar_referenced_image_count', 0)}`",
+        f"- semantic alias image references: `{summary.get('semantic_alias_reference_image_count', 0)}`",
         f"- residual_unreferenced images: `{summary.get('residual_unreferenced_image_count', summary.get('unreferenced_handoff_image_count', 0))}`",
         f"- planned visual upload files: `{summary.get('planned_visual_upload_file_count', summary.get('planned_image_file_count', 0))}`",
         f"- missing image assets: `{summary.get('missing_image_asset_count', summary.get('missing_image_count', 0))}`",

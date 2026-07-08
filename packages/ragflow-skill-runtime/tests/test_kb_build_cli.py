@@ -1775,6 +1775,80 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("doc_manifest.json", names)
         self.assertIn("retrieval_hints.json", names)
 
+    def test_asset_upload_plan_classifies_semantic_aliases_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = Path(tmp) / "handoff"
+            image_dir = handoff / "documents" / "images"
+            image_dir.mkdir(parents=True)
+            (handoff / "documents" / "sample.md").write_text(
+                "# Sample\n\n![asset](images/asset.png)\n",
+                encoding="utf-8",
+            )
+            (image_dir / "asset.png").write_bytes(b"image-bytes")
+            doc_manifest = handoff / "doc_manifest.json"
+            doc_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [{"source_path": "sample.pdf", "markdown_path": "documents/sample.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (handoff / "retrieval_hints.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "image_artifacts": [
+                            {
+                                "path": "documents/images/asset.png",
+                                "semantic_alias": "documents/images/apollo-panel.png",
+                                "rewrites_markdown": False,
+                            }
+                        ],
+                        "asset_semantics": {
+                            "semantic_aliases": [
+                                {
+                                    "path": "documents/images/asset.png",
+                                    "alias": "documents/images/apollo-panel.png",
+                                    "rewrites_markdown": False,
+                                }
+                            ]
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report_json = Path(tmp) / "asset_upload_plan.json"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "asset-upload-plan",
+                    "--doc-manifest",
+                    str(doc_manifest),
+                    "--report-json",
+                    str(report_json),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(payload["summary"]["missing_image_asset_count"], 0)
+        self.assertEqual(payload["summary"]["semantic_alias_reference_image_count"], 1)
+        self.assertEqual(payload["asset_class_counts"]["semantic_alias_reference"], 1)
+        self.assertTrue(
+            any(issue["code"] == "semantic_alias_image_reference" for issue in payload["issues"]),
+            payload["issues"],
+        )
+
     def test_image_ingestion_readiness_via_build_subcommand(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1973,6 +2047,122 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("RAGFlow KB Artifact Consistency Report", markdown)
         self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
         self.assertNotIn(str(root), combined)
+
+    def test_consistency_check_separates_semantic_alias_image_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            retrieval_hints = root / "retrieval_hints.json"
+            retrieval_hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "image_artifacts": [
+                            {
+                                "path": "documents/images/asset.png",
+                                "semantic_alias": "documents/images/apollo-panel.png",
+                                "rewrites_markdown": False,
+                            }
+                        ],
+                        "asset_semantics": {
+                            "semantic_aliases": [
+                                {
+                                    "path": "documents/images/asset.png",
+                                    "alias": "documents/images/apollo-panel.png",
+                                    "rewrites_markdown": False,
+                                }
+                            ]
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            asset_plan = root / "asset_upload_plan.json"
+            asset_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_kb_asset_upload_plan_v2",
+                        "status": "ready_with_review",
+                        "summary": {
+                            "document_count": 1,
+                            "planned_visual_upload_file_count": 1,
+                            "semantic_alias_reference_image_count": 1,
+                            "missing_image_asset_count": 0,
+                        },
+                        "documents": [{"markdown_path": "documents/sample.md", "package_path": "documents/sample.md"}],
+                        "planned_visual_upload_files": [
+                            {
+                                "source_path": "documents/images/asset.png",
+                                "package_path": "documents/images/asset.png",
+                                "asset_class": "markdown_referenced",
+                            }
+                        ],
+                        "discovered_image_artifacts": [
+                            {
+                                "source_path": "documents/images/asset.png",
+                                "package_path": "documents/images/asset.png",
+                                "asset_class": "markdown_referenced",
+                            },
+                            {
+                                "source_path": "documents/images/apollo-panel.png",
+                                "package_path": "documents/images/apollo-panel.png",
+                                "asset_class": "semantic_alias_reference",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            chunk_profile = root / "chunk_profile_report.json"
+            chunk_profile.write_text(
+                json.dumps({"schema": "ragflow_chunk_profile_report_v1", "summary": {"marker_count": 1}}),
+                encoding="utf-8",
+            )
+            kb_manifest = root / "kb_manifest.json"
+            kb_manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": "ds-consistency", "name": "kb:consistency"},
+                        "documents": [{"id": "doc-md", "name": "sample.md", "path": "documents/sample.md", "status": "DONE"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report_json = root / "consistency_report.json"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "consistency-check",
+                    "--retrieval-hints",
+                    str(retrieval_hints),
+                    "--asset-upload-plan",
+                    str(asset_plan),
+                    "--chunk-profile-report",
+                    str(chunk_profile),
+                    "--kb-manifest",
+                    str(kb_manifest),
+                    "--report-json",
+                    str(report_json),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(result.stdout)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        check = payload["checks"]["retrieval_hints_vs_asset_plan"]
+        self.assertEqual(check["missing_image_hints"], [])
+        self.assertEqual(check["semantic_alias_image_hints"], ["documents/images/apollo-panel.png"])
+        self.assertEqual(check["semantic_alias_image_hint_count"], 1)
+        self.assertTrue(
+            any(issue["code"] == "retrieval_hint_image_semantic_aliases" for issue in payload["issues"]),
+            payload["issues"],
+        )
 
     def test_image_ingestion_execute_requires_explicit_execute_flag(self) -> None:
         module = load_build_module()

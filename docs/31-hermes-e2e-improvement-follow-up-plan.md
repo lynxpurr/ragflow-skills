@@ -155,7 +155,7 @@ Run deployment-specific checks only after the focused P0 chain passes:
   findings.
 - [x] Record model-provider probe failures as compatibility warnings when the core KB
   lifecycle passes.
-- [ ] Add or refine reporting so `asset-upload-plan` and consistency checks distinguish
+- [x] Add or refine reporting so `asset-upload-plan` and consistency checks distinguish
   true missing image files from semantic alias references.
 - [ ] Add or refine `refresh-report`, parse-report, or health-report guidance for
   RAGFlow document-list API variants that return zero documents despite build/parse/chunk
@@ -174,8 +174,11 @@ build, validated retrieval with a content-specific smoke query, generated post-b
 reports, cleaned up the disposable KB, and produced clean field-trial metrics with
 `ok=true` and zero findings.
 
-No code changes have been made from this plan yet. Remaining work is limited to P1/P2
-report clarity and production-readiness follow-up.
+The first P1 code change from this plan is complete: `asset-upload-plan` now classifies
+semantic image aliases as advisory `semantic_alias_reference` entries instead of true
+missing local image files, and `consistency-check` now reports semantic alias image hints
+separately from `missing_image_hints`. Remaining work is limited to refresh/document-list
+API compatibility guidance and P2 production-readiness follow-up.
 
 ## Validation Evidence / Residual Gated Work
 
@@ -207,8 +210,6 @@ Residual gated work:
 
 Residual P1/P2 follow-up:
 
-- distinguish semantic image aliases from true missing local assets in asset planning and
-  consistency reports;
 - clarify refresh/document-list API compatibility when read-only refresh evidence
   disagrees with build or parse evidence;
 - run deployment-specific embedding model checks before treating a concrete production
@@ -222,16 +223,17 @@ The P0 retest changed the status of this plan from "evidence gap open" to "real 
 handoff baseline verified." It did not change runtime code, CLI behavior, skill guidance,
 schemas, or release gates. It contributed sanitized live field-trial evidence only.
 
-What closed:
+What closed by the retest and follow-up development:
 
 - real PDF formal handoff reached live KB build and cleanup;
 - field-trial metrics aggregation became clean;
 - model-provider endpoint failures were classified as compatibility warnings;
 - artifact hygiene no longer had zero-byte JSON issues.
+- asset alias report clarity now separates semantic image aliases from true missing local
+  image files in `asset-upload-plan` and `consistency-check`.
 
 What remains open:
 
-- report clarity for semantic image alias findings;
 - read-only refresh API compatibility explanation;
 - model-specific profile validation for a concrete deployment;
 - optional retrieval routing and query validation when requested.
