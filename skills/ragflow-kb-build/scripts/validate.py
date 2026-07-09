@@ -42,7 +42,9 @@ from ragflow_skill_runtime import (  # noqa: E402
     load_kb_refresh_report,
     load_kb_manifest,
     load_validation_queries,
+    make_public_query_result_retention_payload,
     render_markdown_report,
+    render_public_query_result_retention_markdown,
     run_retrieval_validation,
     smoke_query,
     summarize_kb_refresh_observed_state,
@@ -364,6 +366,11 @@ def _run(args: argparse.Namespace) -> int:
             )
             _write_json_file(args.redaction_report, redaction_report)
             markdown = _render_markdown_from_payload(payload)
+        retention_payload = None
+        if args.retention_json or args.retention_md:
+            retention_payload = make_public_query_result_retention_payload(payload)
+            _write_json_file(args.retention_json, retention_payload)
+            _write_text(args.retention_md, render_public_query_result_retention_markdown(retention_payload))
         rendered_json = json.dumps(payload, ensure_ascii=False, indent=2)
         _write_text(args.report_json, rendered_json + "\n")
         _write_text(args.report_md, markdown)
@@ -396,6 +403,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-raw", action="store_true", help="Include raw chunk payloads in top_chunks for downstream diagnostics")
     parser.add_argument("--report-json", help="Optional JSON report output path")
     parser.add_argument("--report-md", help="Optional Markdown report output path")
+    parser.add_argument("--retention-json", help="Optional public-safe per-query result retention JSON output path")
+    parser.add_argument("--retention-md", help="Optional public-safe per-query result retention Markdown output path")
     parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     parser.add_argument("--metadata", help="Optional ragflow_metadata_v1 file to summarize and lint before validation")
     parser.add_argument("--config", help="Runtime config file")

@@ -214,6 +214,14 @@ EXPECTED_IDENTITIES = (
         coverage_patterns=("ragflow_benchmark_report_v1",),
     ),
     SchemaIdentity(
+        key="public_query_result_retention",
+        group="benchmark",
+        identity="ragflow_public_query_result_retention_v1",
+        source_patterns=("ragflow_public_query_result_retention_v1", "PUBLIC_QUERY_RESULT_RETENTION_SCHEMA"),
+        coverage_patterns=("ragflow_public_query_result_retention_v1", "PUBLIC_QUERY_RESULT_RETENTION_SCHEMA"),
+        description="Public-safe per-query retrieval result retention report for future A/B/C/D/E comparisons.",
+    ),
+    SchemaIdentity(
         key="multimodal_benchmark",
         group="benchmark",
         identity="ragflow_multimodal_benchmark_v1",

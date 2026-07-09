@@ -90,6 +90,7 @@ python scripts/profile.py experiment --base-profile ./templates/default-en-768.j
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level smoke
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level regression --queries ./templates/validation-queries.example.json --report-md ./run/validation.md
 python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level benchmark --queries ./templates/benchmark-queries.example.json --qrels ./templates/qrels.example.json --chunk-snapshot ./run/chunk_snapshot.json --observed-state ./run/kb_refresh_report.json --gate-config ./templates/benchmark-gate.example.json --include-raw --report-md ./run/benchmark.md
+python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level benchmark --queries ./templates/benchmark-queries.example.json --qrels ./templates/qrels.example.json --retention-json ./run/public_query_result_retention.json --retention-md ./run/public_query_result_retention.md
 ```
 
 When a host agent should prepare config, run smoke checks, or perform end-to-end validation for the user, read `references/host-agent-setup.md` first. When an end user needs a copy-paste prompt to give their own host agent, use `references/user-onboarding-prompt.md`.
@@ -118,6 +119,7 @@ Notes:
 - Benchmark summarize/gate/trend/delta reports include deterministic root-cause hints for coverage, ranking, pollution, grounding, citation, abstention, and cost/latency regressions when matching metrics are present.
 - Use `benchmark suggest` to derive conservative `top_k` and `similarity_threshold` experiment suggestions from benchmark metrics, optional baseline deltas, and optional gate thresholds.
 - Use `suppression-report` on validation or benchmark reports to review bridge-term, source-boundary, allowed-tag, and unexpected-tag candidates. Run benchmark validation with `--include-raw --max-report-chunks ...` when tag localization needs raw chunk tags; raw payloads are opt-in, and suppression reports are advisory only.
+- Use `validate.py --retention-json ... --retention-md ...` to retain a public-safe per-query result artifact for future A/B/C/D/E comparisons. The retention report records per-query metrics, result ranks, stable content hashes, and hashed dataset/document/chunk references while omitting raw query text, raw chunk text, raw dataset IDs, raw document IDs, and raw chunk IDs. Keep `global_best_per_query_count` separate from `pairwise_win_count` when summarizing multi-candidate comparisons.
 - Use `qa generate` to create a deterministic, offline grounded QA scaffold from exact source spans; it does not call an LLM or mutate RAGFlow.
 - Use `qa validate` before feeding generated QA into benchmark gates; it checks required questions, answers, evidence spans, and exact source-span grounding when `--sources` or `--source-dir` is provided.
 - Use `qa map-evidence` after `snapshot-chunks` to map exact QA evidence spans onto chunk snapshot IDs and stable hashes for strict `expected_chunks` qrels; the report includes deterministic mapping confidence and mapped chunk coverage.

@@ -10,6 +10,7 @@ from ragflow_skill_runtime.validation import (
     CHUNK_SNAPSHOT_SCHEMA,
     MULTIMODAL_BENCHMARK_CATEGORIES,
     MULTIMODAL_BENCHMARK_SCHEMA,
+    PUBLIC_QUERY_RESULT_RETENTION_SCHEMA,
     ValidationCaseResult,
     ValidationQuery,
     ValidationReport,
@@ -18,6 +19,7 @@ from ragflow_skill_runtime.validation import (
     load_benchmark_gate,
     load_benchmark_qrels,
     load_validation_queries,
+    make_public_query_result_retention_payload,
     render_markdown_report,
     run_retrieval_validation,
 )
@@ -195,6 +197,83 @@ class ValidationTests(unittest.TestCase):
 
         self.assertNotIn("raw", default_payload["cases"][0]["top_chunks"][0])
         self.assertEqual(raw_payload["cases"][0]["top_chunks"][0]["raw"]["tags"], ["policy"])
+
+    def test_public_query_result_retention_omits_raw_text_and_hashes_identifiers(self) -> None:
+        private_dataset_id = "ds-private-123"
+        private_doc_id = "doc-private-456"
+        private_chunk_id = "chunk-private-789"
+        private_doc_name = "private-roadmap.md"
+        private_question = "What does the private roadmap say?"
+        private_content = "Private roadmap answer with secret launch details."
+        chunks = normalize_retrieval_response(
+            {
+                "data": {
+                    "chunks": [
+                        {
+                            "content_with_weight": private_content,
+                            "docnm_kwd": private_doc_name,
+                            "doc_id": private_doc_id,
+                            "kb_id": private_dataset_id,
+                            "id": private_chunk_id,
+                            "similarity": 0.93,
+                        }
+                    ]
+                }
+            }
+        )
+        report = ValidationReport(
+            level="benchmark",
+            dataset_id=private_dataset_id,
+            dataset_name="kb:private-roadmap",
+            cases=[
+                ValidationCaseResult(
+                    query=ValidationQuery(
+                        id="q-private",
+                        question=private_question,
+                        expected_terms=["roadmap"],
+                        expected_documents=[private_doc_name],
+                    ),
+                    passed=True,
+                    chunk_count=1,
+                    term_hits=["roadmap"],
+                    document_hits=[private_doc_name],
+                    chunks=chunks,
+                )
+            ],
+        )
+        report = attach_benchmark_evaluation(
+            report,
+            qrels={"q-private": load_benchmark_qrels_inline([{"query_id": "q-private", "document": private_doc_name}])["q-private"]},
+            cutoff=3,
+        )
+
+        retention = make_public_query_result_retention_payload(report.to_dict(include_raw=True))
+        serialized = json.dumps(retention, ensure_ascii=False)
+
+        self.assertEqual(retention["schema"], PUBLIC_QUERY_RESULT_RETENTION_SCHEMA)
+        self.assertEqual(retention["summary"]["query_count"], 1)
+        self.assertEqual(retention["queries"][0]["query_id"], "q-private")
+        self.assertEqual(retention["queries"][0]["benchmark_metrics"]["hit_rate"], 1.0)
+        self.assertEqual(retention["queries"][0]["results"][0]["rank"], 1)
+        self.assertEqual(retention["queries"][0]["results"][0]["content_hash"], stable_chunk_hash(chunks[0]))
+        self.assertTrue(retention["queries"][0]["results"][0]["document_ref"].startswith("doc:sha256:"))
+        self.assertTrue(retention["queries"][0]["results"][0]["chunk_ref"].startswith("chunk:sha256:"))
+        self.assertFalse(retention["safety"]["raw_query_text_retained"])
+        self.assertFalse(retention["safety"]["raw_chunk_text_retained"])
+        self.assertFalse(retention["safety"]["raw_dataset_ids_retained"])
+        self.assertTrue(retention["safety"]["identifiers_hashed"])
+        self.assertIn("global_best_per_query_count", retention["comparison_guidance"])
+        self.assertIn("pairwise_win_count", retention["comparison_guidance"])
+        for private_value in (
+            private_dataset_id,
+            private_doc_id,
+            private_chunk_id,
+            private_doc_name,
+            private_question,
+            private_content,
+            "kb:private-roadmap",
+        ):
+            self.assertNotIn(private_value, serialized)
 
     def test_load_benchmark_qrels_from_explicit_list(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -18,6 +19,7 @@ class ValidationError(RuntimeError):
     """Raised when validation inputs are invalid."""
 
 
+PUBLIC_QUERY_RESULT_RETENTION_SCHEMA = "ragflow_public_query_result_retention_v1"
 METRIC_KEYS = (
     "hit_rate",
     "mrr",
@@ -480,6 +482,186 @@ class ValidationReport:
             "cases": [case.to_dict(max_chunks=max_chunks, include_raw=include_raw) for case in self.cases],
             **({"benchmark": self.benchmark.to_dict()} if self.benchmark else {}),
         }
+
+
+def _public_ref(prefix: str, *values: Any) -> str | None:
+    parts = [str(value).strip() for value in values if isinstance(value, str) and value.strip()]
+    if not parts:
+        return None
+    digest = hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+    return f"{prefix}:sha256:{digest[:24]}"
+
+
+def _numeric_metrics(payload: Mapping[str, Any] | None) -> dict[str, float | int]:
+    if not isinstance(payload, Mapping):
+        return {}
+    metrics: dict[str, float | int] = {}
+    for key, value in payload.items():
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int | float):
+            metrics[str(key)] = value
+    return metrics
+
+
+def _benchmark_metrics_by_query(benchmark: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+    if not isinstance(benchmark, Mapping):
+        return {}
+    per_query = benchmark.get("per_query")
+    if not isinstance(per_query, list):
+        return {}
+    indexed: dict[str, dict[str, Any]] = {}
+    for item in per_query:
+        if not isinstance(item, Mapping):
+            continue
+        query_id = item.get("id")
+        if not isinstance(query_id, str) or not query_id:
+            continue
+        metrics = _numeric_metrics(item)
+        query_type = item.get("query_type")
+        if isinstance(query_type, str) and query_type:
+            metrics["query_type"] = query_type
+        indexed[query_id] = metrics
+    return indexed
+
+
+def _retained_result(chunk: Mapping[str, Any], *, rank: int) -> dict[str, Any]:
+    content_hash = stable_chunk_hash(chunk)
+    result: dict[str, Any] = {
+        "rank": rank,
+        "content_hash": content_hash,
+        "content_hash_algorithm": CHUNK_HASH_ALGORITHM,
+    }
+    similarity = chunk.get("similarity")
+    if isinstance(similarity, int | float):
+        result["similarity"] = similarity
+    document_ref = _public_ref("doc", chunk.get("document_id"), chunk.get("document_name"))
+    chunk_ref = _public_ref("chunk", chunk.get("chunk_id"), content_hash)
+    dataset_ref = _public_ref("dataset", chunk.get("dataset_id"))
+    if document_ref:
+        result["document_ref"] = document_ref
+    if chunk_ref:
+        result["chunk_ref"] = chunk_ref
+    if dataset_ref:
+        result["dataset_ref"] = dataset_ref
+    return result
+
+
+def make_public_query_result_retention_payload(validation_payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Create a public-safe per-query retention report from a validation payload."""
+
+    cases = validation_payload.get("cases") if isinstance(validation_payload.get("cases"), list) else []
+    benchmark = validation_payload.get("benchmark") if isinstance(validation_payload.get("benchmark"), Mapping) else None
+    benchmark_by_query = _benchmark_metrics_by_query(benchmark)
+    dataset = validation_payload.get("dataset") if isinstance(validation_payload.get("dataset"), Mapping) else {}
+    retained_queries: list[dict[str, Any]] = []
+    retained_result_count = 0
+    for case in cases:
+        if not isinstance(case, Mapping):
+            continue
+        query_id = str(case.get("id") or "")
+        chunks = case.get("top_chunks") if isinstance(case.get("top_chunks"), list) else []
+        results = [
+            _retained_result(chunk, rank=index)
+            for index, chunk in enumerate((chunk for chunk in chunks if isinstance(chunk, Mapping)), start=1)
+        ]
+        retained_result_count += len(results)
+        retained_query: dict[str, Any] = {
+            "query_id": query_id,
+            "passed": bool(case.get("passed")),
+            "chunk_count": int(case.get("chunk_count") or 0),
+            "result_count": len(results),
+            "term_hit_count": len(case.get("term_hits") or []) if isinstance(case.get("term_hits"), list) else 0,
+            "missing_term_count": len(case.get("missing_terms") or []) if isinstance(case.get("missing_terms"), list) else 0,
+            "document_hit_count": len(case.get("document_hits") or []) if isinstance(case.get("document_hits"), list) else 0,
+            "missing_document_count": (
+                len(case.get("missing_documents") or []) if isinstance(case.get("missing_documents"), list) else 0
+            ),
+            "results": results,
+        }
+        if query_id in benchmark_by_query:
+            retained_query["benchmark_metrics"] = benchmark_by_query[query_id]
+        retained_queries.append(retained_query)
+
+    payload: dict[str, Any] = {
+        "schema": PUBLIC_QUERY_RESULT_RETENTION_SCHEMA,
+        "source": {
+            "validation_level": validation_payload.get("level"),
+            "validation_ok": bool(validation_payload.get("ok")),
+            "dataset_ref": _public_ref("dataset", dataset.get("id"), dataset.get("name")),
+        },
+        "summary": {
+            "query_count": len(retained_queries),
+            "passed_query_count": sum(1 for item in retained_queries if item.get("passed")),
+            "failed_query_count": sum(1 for item in retained_queries if not item.get("passed")),
+            "retained_result_count": retained_result_count,
+        },
+        "aggregate_metrics": {
+            "validation": _numeric_metrics(validation_payload.get("metrics")),
+            "benchmark": _numeric_metrics(benchmark.get("metrics") if isinstance(benchmark, Mapping) else None),
+        },
+        "queries": retained_queries,
+        "comparison_guidance": {
+            "global_best_per_query_count": (
+                "count query-level wins where one candidate has the best selected metric across all compared candidates"
+            ),
+            "pairwise_win_count": (
+                "count query-level wins between exactly two candidates; do not mix this with global best-per-query counts"
+            ),
+        },
+        "safety": {
+            "ragflow_calls": 0,
+            "script_owned_llm_calls": 0,
+            "raw_query_text_retained": False,
+            "raw_chunk_text_retained": False,
+            "raw_dataset_ids_retained": False,
+            "raw_document_ids_retained": False,
+            "raw_chunk_ids_retained": False,
+            "identifiers_hashed": True,
+        },
+    }
+    return payload
+
+
+def render_public_query_result_retention_markdown(payload: Mapping[str, Any]) -> str:
+    """Render a compact Markdown summary for a public-safe retention report."""
+
+    summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
+    lines = [
+        "# Public Query Result Retention",
+        "",
+        f"- schema: `{payload.get('schema', '')}`",
+        f"- query_count: `{summary.get('query_count', 0)}`",
+        f"- retained_result_count: `{summary.get('retained_result_count', 0)}`",
+        "- raw_query_text_retained: `false`",
+        "- raw_chunk_text_retained: `false`",
+        "- identifiers_hashed: `true`",
+        "",
+        "| query_id | passed | result_count | top_content_hash |",
+        "|---|---:|---:|---|",
+    ]
+    for query in payload.get("queries", []) if isinstance(payload.get("queries"), list) else []:
+        if not isinstance(query, Mapping):
+            continue
+        results = query.get("results") if isinstance(query.get("results"), list) else []
+        top_hash = "-"
+        if results and isinstance(results[0], Mapping):
+            top_hash = str(results[0].get("content_hash") or "-")
+        lines.append(
+            f"| `{query.get('query_id', '')}` | {str(bool(query.get('passed'))).lower()} | "
+            f"{query.get('result_count', 0)} | `{top_hash}` |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Comparison Guidance",
+            "",
+            "- `global_best_per_query_count` and `pairwise_win_count` are separate counters.",
+            "- Do not mix global best-per-query counts with pairwise candidate wins in A/B/C/D/E summaries.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def load_validation_queries(path: str | Path) -> list[ValidationQuery]:

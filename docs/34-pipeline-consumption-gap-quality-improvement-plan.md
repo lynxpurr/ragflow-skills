@@ -1,6 +1,6 @@
 # Pipeline Consumption Gap Quality Improvement Plan
 
-Status: second upgrade batch complete
+Status: offline upgrade batches complete; live enrichment comparison gated
 Date: 2026-07-09
 
 ## Objective / Scope / Boundaries
@@ -233,7 +233,7 @@ Acceptance target:
       `auto_questions` candidates.
 - [ ] Run a disposable, approval-gated enrichment comparison only after offline
       planning and cleanup readiness pass.
-- [ ] Add a public-safe query-result retention format for future A/B/C/D/E
+- [x] Add a public-safe query-result retention format for future A/B/C/D/E
       comparisons.
 - [x] Update the relevant user-facing skill guidance after behavior changes are
       implemented and verified.
@@ -299,6 +299,27 @@ Second upgrade batch completed on 2026-07-09:
   retrieval hints, delimiter guidance, and the bounded enrichment planning
   command.
 
+Third upgrade batch completed on 2026-07-09:
+
+- `validate.py` now accepts `--retention-json` and `--retention-md` to emit
+  `ragflow_public_query_result_retention_v1`, a public-safe per-query retention
+  artifact for future A/B/C/D/E comparisons.
+- The retention artifact records per-query pass/fail counts, benchmark metrics
+  when available, result ranks, stable content hashes, hashed dataset/document
+  and chunk references, and aggregate validation/benchmark metrics.
+- The retention artifact deliberately omits raw query text, raw chunk text, raw
+  dataset IDs, raw document IDs, raw chunk IDs, raw KB names, and raw document
+  names. Its safety block records `ragflow_calls=0` and
+  `script_owned_llm_calls=0` because it is derived from the validation payload
+  already in memory.
+- The retention report includes comparison guidance that keeps
+  `global_best_per_query_count` separate from `pairwise_win_count`, fixing the
+  wording hazard found in the reviewed A/B/C/D/E summary pattern.
+- User-facing `ragflow-kb-build` guidance, host-agent setup notes, and the
+  onboarding prompt now recommend `--retention-json` / `--retention-md` for
+  retained comparison evidence instead of copying raw query output into shared
+  reports.
+
 Current verified baseline:
 
 - The public CLI/archive path remains the canonical release baseline.
@@ -310,11 +331,14 @@ Current verified baseline:
 - Image ingestion can succeed after review, and sidecar image paths such as
   `images/...` are resolved against `documents/images/...` before being reported
   missing.
+- Future A/B/C/D/E comparisons can now retain public-safe query-result evidence
+  via `ragflow_public_query_result_retention_v1` without publishing raw query
+  text, raw chunk text, or raw live identifiers.
 
-The next ordinary offline slice should focus on public-safe query-result
-retention for future A/B/C/D/E comparisons. Disposable enrichment comparison
-remains live-mutation gated and should start only after offline planning,
-cleanup readiness, exact confirmations, and user approval.
+All ordinary offline checklist items in this plan are now implemented. The only
+remaining checklist item is the disposable enrichment comparison, which remains
+live-mutation gated and should start only after offline planning, cleanup
+readiness, exact confirmations, and explicit user approval.
 
 ## Validation Evidence / Residual Gated Work
 
@@ -360,6 +384,18 @@ Second upgrade batch validation evidence:
   `DATASET_ID` placeholders, or technical terms such as `chunk_token_num`; no
   real endpoint, credential, dataset ID, document ID, private path, or raw
   retrieved chunk was added.
+
+Third upgrade batch validation evidence:
+
+- Red phase:
+  `python3 -m pytest packages/ragflow-skill-runtime/tests/test_validation.py::ValidationTests::test_public_query_result_retention_omits_raw_text_and_hashes_identifiers packages/ragflow-skill-runtime/tests/test_kb_build_cli.py::KbBuildCliTests::test_validate_writes_public_safe_query_result_retention_report -q` failed first because `PUBLIC_QUERY_RESULT_RETENTION_SCHEMA` and the retention helper did not exist.
+- Green phase:
+  `python3 -m pytest packages/ragflow-skill-runtime/tests/test_validation.py::ValidationTests::test_public_query_result_retention_omits_raw_text_and_hashes_identifiers packages/ragflow-skill-runtime/tests/test_kb_build_cli.py::KbBuildCliTests::test_validate_writes_public_safe_query_result_retention_report -q` passed with 2 tests.
+- `python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/__init__.py packages/ragflow-skill-runtime/src/ragflow_skill_runtime/validation.py skills/ragflow-kb-build/scripts/validate.py tools/schema_identity_check.py packages/ragflow-skill-runtime/tests/test_validation.py packages/ragflow-skill-runtime/tests/test_kb_build_cli.py` passed.
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_validation.py packages/ragflow-skill-runtime/tests/test_kb_build.py packages/ragflow-skill-runtime/tests/test_profiles.py packages/ragflow-skill-runtime/tests/test_kb_build_cli.py packages/ragflow-skill-runtime/tests/test_schema_identity_check.py packages/ragflow-skill-runtime/tests/test_report_surface_inventory.py -q` passed with 180 tests.
+- `python3 tools/schema_identity_check.py --report-json /tmp/ragflow-consumption-gap-batch3-schema-identity.json` passed with `ok=true`, 102 identities, 0 failed identities, and 0 findings.
+- `python3 tools/report_surface_inventory.py --report-json /tmp/ragflow-consumption-gap-batch3-report-surface.json` passed with `ok=true`, 103 commands, and 0 findings.
+- `python3 tools/release_hygiene_check.py >/tmp/ragflow-consumption-gap-batch3-release-hygiene-after-doc-evidence.json` passed with `ok=true` and 0 findings.
 
 Residual gated categories:
 

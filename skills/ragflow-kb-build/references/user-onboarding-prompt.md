@@ -202,6 +202,7 @@ kb:ragflow-skills-e2e-YYYYMMDD-HHMM
 - 如果 asset-upload-plan 报告图片缺失，确认 sidecar 中的 `images/...` 是否已被自动回退解析到 `documents/images/...`；语义别名只作为 advisory warning，不应阻断上传
 - ragflow-kb-build 创建 RAGFlow KB、上传 Markdown、触发解析、等待完成
 - ragflow-kb-build validate --level smoke
+- 如果要保留 A/B/C/D/E 或候选 profile 对比证据，请在 validate.py 中加 --retention-json 和 --retention-md；该 public-safe retention artifact 应保留 per-query 指标、rank、稳定内容 hash 和哈希化 dataset/document/chunk 引用，但不要保留原始 query text、chunk text、dataset id、document id 或 chunk id；总结时区分 global_best_per_query_count 和 pairwise_win_count
 - ragflow-query --mode direct 查询
 - ragflow-query --mode agentic --host-assisted 查询
 

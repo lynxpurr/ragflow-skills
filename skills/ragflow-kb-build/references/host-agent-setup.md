@@ -311,7 +311,9 @@ python ragflow-kb-build/scripts/build.py \
 python ragflow-kb-build/scripts/validate.py \
   --config "$RAGFLOW_CONFIG" \
   --kb-manifest /tmp/ragflow-skills-e2e/kb_manifest.json \
-  --level smoke
+  --level smoke \
+  --retention-json /tmp/ragflow-skills-e2e/public_query_result_retention.json \
+  --retention-md /tmp/ragflow-skills-e2e/public_query_result_retention.md
 
 python ragflow-query/scripts/query.py \
   --config "$RAGFLOW_CONFIG" \
@@ -325,6 +327,12 @@ python ragflow-query/scripts/query.py \
 For PDF/Office/image E2E, use `--backend mineru-fastapi` when the service implements MinerU FastAPI protocol v2, or `--backend mineru-v4` when it implements the MinerU v4 platform-compatible protocol. Keep `--backend auto` only when a local MinerU CLI is configured and should be preferred. Use `--backend mineru-cli` to force local CLI, `--backend mineru` when the service implements the MinerU Agent API, or `--backend mineru-sync` only for legacy synchronous multipart `/parse`. If no compatible CLI or service protocol can be identified, report the uncertainty and skip the MinerU test rather than guessing.
 
 For formal `markdown_assets` handoffs, expect local image references to use readable semantic filenames when MinerU or another converter returns hash-like names. Do not treat the absence of hash filenames as lost provenance; content hashes remain in the public manifest and rich sidecars.
+
+When retaining retrieval-quality evidence for comparison reports, prefer
+`validate.py --retention-json --retention-md` over copying raw query output into a
+shared summary. The retention artifact omits raw query text, raw chunk text, and raw
+dataset/document/chunk IDs, and keeps global best-per-query counts distinct from
+pairwise win counts.
 
 ## GitHub Release E2E
 

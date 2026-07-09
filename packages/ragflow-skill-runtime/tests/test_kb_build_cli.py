@@ -10379,6 +10379,75 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("runtime_partial_failure_status: `completed`", report_text)
         self.assertIn("Metadata Summary", report_text)
 
+    def test_validate_writes_public_safe_query_result_retention_report(self) -> None:
+        module = load_validate_module()
+        module.RAGFlowClient = FakeValidationClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            private_dataset_id = "ds-private-retention"
+            private_question = "Known private retention question"
+            manifest = root / "kb_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "dataset": {"id": private_dataset_id, "name": "kb:private-retention"},
+                        "documents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            queries = root / "queries.json"
+            queries.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {
+                                "id": "q-retention",
+                                "question": private_question,
+                                "expected_terms": ["known term"],
+                                "expected_documents": ["source.md"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            retention_json = root / "retention.json"
+            retention_md = root / "retention.md"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--kb-manifest",
+                        str(manifest),
+                        "--level",
+                        "regression",
+                        "--queries",
+                        str(queries),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--retention-json",
+                        str(retention_json),
+                        "--retention-md",
+                        str(retention_md),
+                    ]
+            )
+            retention_payload = json.loads(retention_json.read_text(encoding="utf-8"))
+            retention_md_text = retention_md.read_text(encoding="utf-8")
+            retention_text = retention_json.read_text(encoding="utf-8") + retention_md_text
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(retention_payload["schema"], "ragflow_public_query_result_retention_v1")
+        self.assertEqual(retention_payload["summary"]["query_count"], 1)
+        self.assertEqual(retention_payload["queries"][0]["query_id"], "q-retention")
+        self.assertFalse(retention_payload["safety"]["raw_query_text_retained"])
+        self.assertFalse(retention_payload["safety"]["raw_chunk_text_retained"])
+        self.assertTrue(retention_payload["safety"]["identifiers_hashed"])
+        self.assertNotIn(private_dataset_id, retention_text)
+        self.assertNotIn(private_question, retention_text)
+        self.assertIn("Public Query Result Retention", retention_md_text)
+
     def test_validate_regression_reports_partial_runtime_failures_via_fake_client(self) -> None:
         module = load_validate_module()
         module.RAGFlowClient = FakePartialValidationClient
