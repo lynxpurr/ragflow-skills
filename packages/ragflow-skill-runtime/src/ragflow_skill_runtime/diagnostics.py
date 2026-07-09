@@ -18,6 +18,24 @@ DIAGNOSTIC_RUNTIME_WARNING_STATUSES = ("warning",)
 DIAGNOSTIC_RUNTIME_FAILURE_STATUSES = ("error",)
 SHORT_ID_MIN_LENGTH = 16
 SUFFIX_FRAGMENT_RE = re.compile(r"\(\d+\)$")
+HTTP_STATUS_RE = re.compile(r"\bHTTP\s+(\d{3})\b", re.IGNORECASE)
+
+
+def _safe_probe_error_label(raw: str | None) -> str:
+    if not raw:
+        return "probe_error"
+    http_match = HTTP_STATUS_RE.search(raw)
+    if http_match:
+        return f"HTTP {http_match.group(1)}"
+    lowered = raw.lower()
+    if "base url" in lowered or "config" in lowered:
+        return "config_error"
+    if "timeout" in lowered:
+        return "timeout"
+    if "http://" in lowered or "https://" in lowered or "/datasets" in lowered:
+        return "endpoint_error"
+    token = re.sub(r"[^A-Za-z0-9_ -]", "", raw.split(":", 1)[0]).strip()
+    return token[:64] or "probe_error"
 
 
 @dataclass(frozen=True)
@@ -76,6 +94,114 @@ def _dataset_items(response: Any) -> list[Mapping[str, Any]]:
     if isinstance(data, list):
         return [item for item in data if isinstance(item, Mapping)]
     return []
+
+
+def review_kb_name_collision(
+    kb_name: str,
+    *,
+    dataset_candidates: list[Mapping[str, Any]] | None = None,
+    probe_performed: bool = False,
+    probe_error: str | None = None,
+) -> dict[str, Any]:
+    """Create a sanitized advisory review for an intended KB name."""
+
+    issues: list[dict[str, str]] = []
+    suffix_pattern = re.compile(rf"^{re.escape(kb_name)}\(\d+\)$")
+    if probe_error:
+        error_type = _safe_probe_error_label(probe_error)
+        issues.append(
+            {
+                "severity": "warning",
+                "code": "kb_name_collision_probe_failed",
+                "message": f"read-only dataset list probe failed ({error_type})",
+                "recommendation": "Check endpoint config or manually confirm the intended KB name before live creation.",
+            }
+        )
+        return {
+            "kb_name": kb_name,
+            "status": "probe_failed",
+            "probe_performed": probe_performed,
+            "review_required": True,
+            "matching_dataset_count": 0,
+            "suffix_match_count": 0,
+            "suffix_match_names": [],
+            "issues": issues,
+            "safety": {
+                "live_ragflow_mutation": "not_performed",
+                "read_only_endpoint_probe": "attempted" if probe_performed else "failed",
+                "dataset_ids_exposed": False,
+            },
+        }
+    if not probe_performed:
+        issues.append(
+            {
+                "severity": "warning",
+                "code": "kb_name_collision_probe_not_requested",
+                "message": "KB name collision probe was not requested for this dry-run",
+                "recommendation": (
+                    "Before live creation, either confirm the target name is unused in RAGFlow "
+                    "or rerun dry-run with --probe-kb-name-collision and read-only endpoint config."
+                ),
+            }
+        )
+        return {
+            "kb_name": kb_name,
+            "status": "not_probed",
+            "probe_performed": False,
+            "review_required": True,
+            "matching_dataset_count": 0,
+            "suffix_match_count": 0,
+            "suffix_match_names": [],
+            "issues": issues,
+            "safety": {
+                "live_ragflow_mutation": "not_performed",
+                "read_only_endpoint_probe": "not_requested",
+                "dataset_ids_exposed": False,
+            },
+        }
+
+    dataset_names = [
+        str(item.get("name"))
+        for item in dataset_candidates or []
+        if isinstance(item.get("name"), str) and item.get("name")
+    ]
+    exact_matches = [name for name in dataset_names if name == kb_name]
+    suffix_matches = sorted({name for name in dataset_names if suffix_pattern.search(name)})
+    if exact_matches:
+        issues.append(
+            {
+                "severity": "warning",
+                "code": "kb_name_already_exists",
+                "message": f"read-only probe found {len(exact_matches)} existing dataset name match for the requested KB name",
+                "recommendation": (
+                    "Choose a unique KB name or switch to an explicit append/rebuild flow; avoid relying on server-side suffixing."
+                ),
+            }
+        )
+    if suffix_matches:
+        issues.append(
+            {
+                "severity": "warning",
+                "code": "kb_name_suffix_collision_candidates",
+                "message": "read-only probe found dataset names with duplicate suffix fragments for the requested KB name",
+                "recommendation": "Confirm whether prior builds already created suffixed KBs before creating another dataset.",
+            }
+        )
+    return {
+        "kb_name": kb_name,
+        "status": "review" if issues else "clear",
+        "probe_performed": True,
+        "review_required": bool(issues),
+        "matching_dataset_count": len(exact_matches),
+        "suffix_match_count": len(suffix_matches),
+        "suffix_match_names": suffix_matches[:5],
+        "issues": issues,
+        "safety": {
+            "live_ragflow_mutation": "not_performed",
+            "read_only_endpoint_probe": "performed",
+            "dataset_ids_exposed": False,
+        },
+    }
 
 
 def _add_dataset_candidate_issues(

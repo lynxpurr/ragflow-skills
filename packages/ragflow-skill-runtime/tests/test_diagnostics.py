@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from ragflow_skill_runtime.diagnostics import diagnose_kb_manifest, probe_ragflow_client, render_diagnostic_markdown
+from ragflow_skill_runtime.diagnostics import (
+    diagnose_kb_manifest,
+    probe_ragflow_client,
+    render_diagnostic_markdown,
+    review_kb_name_collision,
+)
 from ragflow_skill_runtime.manifests import KbManifest
 
 
@@ -99,6 +104,37 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertFalse(report["capabilities"]["list_datasets"])
         self.assertEqual(report["summary"]["runtime_partial_failure_status"], "failed")
         self.assertEqual(report["runtime_partial_failure"]["summary"]["failure_count"], 1)
+
+    def test_kb_name_collision_review_defaults_to_manual_checklist(self) -> None:
+        report = review_kb_name_collision("kb:example")
+
+        self.assertEqual(report["status"], "not_probed")
+        self.assertFalse(report["probe_performed"])
+        self.assertTrue(report["review_required"])
+        self.assertEqual(report["safety"]["live_ragflow_mutation"], "not_performed")
+        self.assertEqual(report["issues"][0]["code"], "kb_name_collision_probe_not_requested")
+
+    def test_kb_name_collision_review_flags_exact_and_suffix_matches_without_ids(self) -> None:
+        report = review_kb_name_collision(
+            "kb:example",
+            probe_performed=True,
+            dataset_candidates=[
+                {"id": "private-dataset-id-1", "name": "kb:example"},
+                {"id": "private-dataset-id-2", "name": "kb:example(1)"},
+                {"id": "private-dataset-id-3", "name": "other"},
+            ],
+        )
+
+        self.assertEqual(report["status"], "review")
+        self.assertTrue(report["probe_performed"])
+        self.assertEqual(report["matching_dataset_count"], 1)
+        self.assertEqual(report["suffix_match_count"], 1)
+        self.assertEqual(report["suffix_match_names"], ["kb:example(1)"])
+        self.assertFalse(report["safety"]["dataset_ids_exposed"])
+        self.assertNotIn("private-dataset-id", str(report))
+        issue_codes = {issue["code"] for issue in report["issues"]}
+        self.assertIn("kb_name_already_exists", issue_codes)
+        self.assertIn("kb_name_suffix_collision_candidates", issue_codes)
 
 
 if __name__ == "__main__":

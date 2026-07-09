@@ -172,6 +172,7 @@ from .diagnostics import (
     diagnose_kb_manifest,
     probe_ragflow_client,
     render_diagnostic_markdown,
+    review_kb_name_collision,
 )
 from .manifests import (
     DOC_MANIFEST_JSON_SCHEMA,
@@ -946,6 +947,7 @@ __all__ = [
     "probe_conversion_backends",
     "probe_model_providers",
     "probe_ragflow_client",
+    "review_kb_name_collision",
     "postprocess_handoff",
     "postprocess_markdown_file",
     "postprocess_markdown_text",

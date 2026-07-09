@@ -96,6 +96,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_optimization_cleanup_plan_markdown,
     render_optimization_live_readiness_markdown,
     render_suppression_report_markdown,
+    review_kb_name_collision,
     sample_benchmark_dataset,
     segment_metadata_report_file,
     render_activation_plan_markdown,
@@ -211,6 +212,32 @@ def _read_json_file(path: str | Path, *, label: str = "file") -> Any:
         raise ProfileError(f"{label} not found: {source}") from exc
     except json.JSONDecodeError as exc:
         raise ProfileError(f"{label} is not valid JSON: {source}") from exc
+
+
+def _dataset_items_from_response(response: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(response, Mapping):
+        return []
+    data = response.get("data", response)
+    if isinstance(data, Mapping):
+        for key in ("datasets", "items", "list", "docs"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, Mapping)]
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, Mapping)]
+    return []
+
+
+def _probe_kb_name_collision(client: Any, *, kb_name: str, page_size: int = 50) -> dict[str, Any]:
+    try:
+        response = client.list_datasets(page=1, page_size=page_size, name=kb_name)
+    except Exception as exc:  # noqa: BLE001 - dry-run probe reports read-only failures as review data.
+        return review_kb_name_collision(kb_name, probe_performed=True, probe_error=str(exc))
+    return review_kb_name_collision(
+        kb_name,
+        dataset_candidates=_dataset_items_from_response(response),
+        probe_performed=True,
+    )
 
 
 def _write_text_file(path: str | None, text: str) -> None:
@@ -1147,6 +1174,7 @@ def _run(args: argparse.Namespace) -> int:
             table_parent_chunk_preflight = {"exists": False, "status": "not_available", "table_count": 0}
             retrieval_hints_payload = None
             retrieval_hints_path = _resolve_retrieval_hints_path(args)
+            kb_name_collision_review: dict[str, Any]
             if retrieval_hints_path:
                 loaded_hints = _read_json_file(retrieval_hints_path, label="retrieval hints")
                 if not isinstance(loaded_hints, Mapping):
@@ -1173,6 +1201,19 @@ def _run(args: argparse.Namespace) -> int:
                         "table_count": 0,
                         "error": str(exc),
                     }
+            if args.probe_kb_name_collision:
+                try:
+                    config = _load_config(args)
+                    client = RAGFlowClient(config)
+                    kb_name_collision_review = _probe_kb_name_collision(client, kb_name=args.kb_name)
+                except Exception as exc:  # noqa: BLE001 - dry-run keeps endpoint probe failures advisory.
+                    kb_name_collision_review = review_kb_name_collision(
+                        args.kb_name,
+                        probe_performed=True,
+                        probe_error=str(exc),
+                    )
+            else:
+                kb_name_collision_review = review_kb_name_collision(args.kb_name)
             _dump_json(
                 {
                     "ok": True,
@@ -1185,6 +1226,7 @@ def _run(args: argparse.Namespace) -> int:
                     "metadata_summary": metadata_summary,
                     "retrieval_hints_summary": summarize_retrieval_hints(retrieval_hints_payload),
                     "ingest_readiness": ingest_readiness,
+                    "kb_name_collision_review": kb_name_collision_review,
                     "table_parent_chunk_preflight": table_parent_chunk_preflight,
                     "batching": _batching_summary(
                         requested_batch_size=args.batch_size,
@@ -4864,6 +4906,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Expected embedding model label for dry-run/build drift warnings; repeatable",
     )
     parser.add_argument("--dry-run", action="store_true", help="Validate inputs without touching RAGFlow or writing kb_manifest.json")
+    parser.add_argument(
+        "--probe-kb-name-collision",
+        action="store_true",
+        help="With --dry-run, use read-only dataset listing to review KB name collisions",
+    )
     parser.add_argument("--no-parse", action="store_true", help="Upload documents without triggering parse")
     parser.add_argument("--no-wait", action="store_true", help="Do not wait for parse completion after triggering parse")
     parser.add_argument("--allow-blocked", action="store_true", help="Allow upload when doc_manifest quality_gate.status is BLOCKED")

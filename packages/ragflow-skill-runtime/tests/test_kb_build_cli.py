@@ -201,6 +201,27 @@ class FakePartialValidationClient(FakeValidationClient):
         return super().retrieve(question=question, dataset_ids=dataset_ids, top_k=top_k)
 
 
+class FakeKbNameCollisionClient:
+    instances: list["FakeKbNameCollisionClient"] = []
+
+    def __init__(self, config):
+        self.config = config
+        self.dataset_list_calls: list[dict[str, object]] = []
+        FakeKbNameCollisionClient.instances.append(self)
+
+    def list_datasets(self, *, page=1, page_size=200, name=None):
+        self.dataset_list_calls.append({"page": page, "page_size": page_size, "name": name})
+        return {
+            "data": {
+                "datasets": [
+                    {"id": "dataset-id-hidden-1", "name": "kb:test"},
+                    {"id": "dataset-id-hidden-2", "name": "kb:test(1)"},
+                    {"id": "dataset-id-hidden-3", "name": "unrelated"},
+                ]
+            }
+        }
+
+
 class FakeVisualIngestionClient:
     instances: list["FakeVisualIngestionClient"] = []
 
@@ -1583,6 +1604,84 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(language_readiness["detected_language"], "zh")
         self.assertEqual(language_readiness["selected_profile_language"], "unspecified")
         self.assertIn("chinese_corpus_profile_language_unspecified", issue_codes)
+
+    def test_build_dry_run_reports_kb_name_collision_review_without_live_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            input_dir = Path(tmp) / "docs"
+            input_dir.mkdir()
+            (input_dir / "sample.md").write_text("# Title\n\nBody\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "--input",
+                    str(input_dir),
+                    "--kb-name",
+                    "kb:test",
+                    "--profile",
+                    str(PROFILE_PATH),
+                    "--dry-run",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        collision_review = payload["kb_name_collision_review"]
+        self.assertEqual(collision_review["kb_name"], "kb:test")
+        self.assertEqual(collision_review["status"], "not_probed")
+        self.assertFalse(collision_review["probe_performed"])
+        self.assertTrue(collision_review["review_required"])
+        self.assertEqual(collision_review["safety"]["live_ragflow_mutation"], "not_performed")
+        issue_codes = {issue["code"] for issue in collision_review["issues"]}
+        self.assertIn("kb_name_collision_probe_not_requested", issue_codes)
+
+    def test_build_dry_run_can_probe_kb_name_collision_with_fake_read_only_client(self) -> None:
+        module = load_build_module()
+        FakeKbNameCollisionClient.instances = []
+        module.RAGFlowClient = FakeKbNameCollisionClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "docs"
+            input_dir.mkdir()
+            (input_dir / "sample.md").write_text("# Title\n\nBody\n", encoding="utf-8")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--input",
+                        str(input_dir),
+                        "--kb-name",
+                        "kb:test",
+                        "--profile",
+                        str(PROFILE_PATH),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "test-key",
+                        "--dry-run",
+                        "--probe-kb-name-collision",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(FakeKbNameCollisionClient.instances[0].dataset_list_calls[0]["name"], "kb:test")
+        collision_review = payload["kb_name_collision_review"]
+        self.assertEqual(collision_review["status"], "review")
+        self.assertTrue(collision_review["probe_performed"])
+        self.assertEqual(collision_review["matching_dataset_count"], 1)
+        self.assertEqual(collision_review["suffix_match_count"], 1)
+        issue_codes = {issue["code"] for issue in collision_review["issues"]}
+        self.assertIn("kb_name_already_exists", issue_codes)
+        self.assertIn("kb_name_suffix_collision_candidates", issue_codes)
+        self.assertNotIn("dataset-id-hidden", json.dumps(collision_review))
 
     def test_build_dry_run_recommends_activation_plan_after_build(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
