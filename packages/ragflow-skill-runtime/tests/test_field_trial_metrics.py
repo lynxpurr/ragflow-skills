@@ -188,6 +188,7 @@ class FieldTrialMetricsTests(unittest.TestCase):
         self.assertIn("handoff_quality", trigger_tracks)
         self.assertIn("query_quality", trigger_tracks)
         matrix = report["retirement_observation_matrix"]
+        self.assertEqual(matrix["schema"], "ragflow_retirement_observation_matrix_v1")
         self.assertEqual(matrix["schema"], RETIREMENT_MATRIX_SCHEMA)
         self.assertEqual(matrix["summary"]["observed_expected_sample_type_count"], 2)
         self.assertEqual(matrix["summary"]["missing_expected_sample_type_count"], 6)

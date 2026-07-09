@@ -45,6 +45,13 @@ class SchemaIdentityCheckTests(unittest.TestCase):
         self.assertIn("kb_artifact_consistency_report", keys)
         self.assertIn("kb_refresh_report", keys)
 
+    def test_retirement_observation_matrix_coverage_matches_schema_literal(self) -> None:
+        report = run_schema_identity_check()
+
+        check = next(item for item in report["checks"] if item["key"] == "retirement_observation_matrix")
+        expected_identity = "ragflow_" + "retirement_observation_matrix_v1"
+        self.assertNotIn(expected_identity, check["coverage"]["unmatched_patterns"])
+
     def test_schema_identity_check_reports_missing_source_or_coverage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

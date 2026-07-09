@@ -445,12 +445,11 @@ Corrections and cautions for future Hermes reports:
   Hermes output, because pasted chat text can contain segment markers or repeated
   fragments.
 
-Recommended follow-up:
+Completed follow-up:
 
-- Optionally harden schema-identity coverage so
+- The 2026-07-09 release-health cleanup hardens schema-identity coverage so
   `ragflow_retirement_observation_matrix_v1` is matched literally on the coverage side,
-  not only through `RETIREMENT_MATRIX_SCHEMA`. This is a low-risk release-health cleanup
-  and is not a P2 blocker.
+  not only through `RETIREMENT_MATRIX_SCHEMA`.
 
 Residual gated work:
 
