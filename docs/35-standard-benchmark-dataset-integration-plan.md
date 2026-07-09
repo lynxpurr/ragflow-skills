@@ -48,7 +48,7 @@ normalization, validation, and trend tracking first-class maintenance work.
 ## Current Execution Progress
 
 As of 2026-07-09, the first Open RAG Benchmark seed has been exercised through
-offline readiness.
+Stage 5 disposable live comparison.
 
 Completed evidence:
 
@@ -91,6 +91,38 @@ Current limitations and gates:
   candidates were created.
 - RAGFlow DeepDoc native PDF handling remains a separate live-approved
   PDF-native/fallback baseline path, not part of the first enrichment comparison.
+
+### Session Status Matrix
+
+| Work item | Status | Evidence / decision |
+| --- | --- | --- |
+| Stage 0 planning baseline | Complete | Standard benchmark integration plan accepted and committed. |
+| Stage 1 Open RAG Benchmark seed | Complete | One-PDF seed with 10 judged queries and document-level qrels established. |
+| Stage 2 import/preflight | Complete | Benchmark preflight passed with expected exploratory-strength warnings. |
+| Stage 3 PDF handoff/dry-run | Complete | MinerU hybrid formal handoff passed inspect-handoff and dry-run; table sizing resolved for this seed. |
+| Stage 4 readiness | Complete | Delimiter-aware profile base, bounded enrichment candidates, lint, optimization plan, cleanup plan, and readiness completed. |
+| Stage 5 disposable enrichment comparison | Complete | Four unique effective disposable KBs were created, queried, and cleaned up after explicit approval. Public-safe retention artifacts were generated. |
+| `docs/34` disposable enrichment checklist | Complete | Stage 5 evidence closed the remaining live-gated checklist item. |
+| DeepDoc native PDF baseline | Pending / separately gated | Optional PDF-native/fallback comparison requiring separate live approval. |
+| Stronger Open RAG Benchmark subset | Pending | Needs more documents, more queries, expected terms, or expected chunks before promotion decisions. |
+| FinanceBench table/numeric slice | Pending | Recommended next dataset expansion for table-heavy and numeric evidence retrieval. |
+| QASPER scientific QA slice | Deferred | Useful after Open RAG Benchmark and FinanceBench adapters are stable. |
+| TREC-COVID IR reference slice | Deferred | Later retrieval-metric and qrels-format calibration work. |
+| Regression portfolio | Pending | Current seed can become a smoke/exploratory baseline; broader portfolio still needs pinned subsets and trend reporting. |
+
+### Follow-Up Work Plan
+
+Recommended next sequence:
+
+1. Strengthen the current Open RAG Benchmark seed by adding expected terms or
+   expected chunk hashes for the 10 existing queries.
+2. Add one small FinanceBench slice to test table-heavy, numeric, and
+   evidence-page retrieval failure modes.
+3. Convert the current seed into a pinned regression smoke baseline with stable
+   source hashes and repeatable public-safe trend reports.
+4. Decide separately whether a DeepDoc native PDF baseline is needed for a
+   PDF-native parser comparison. This remains live-approved and should not be
+   bundled into ordinary offline benchmark expansion.
 
 ## Candidate Dataset Portfolio
 
