@@ -173,7 +173,7 @@ Acceptance criteria:
   profile for Dedao-style or pandoc-generated EPUB Markdown before KB build.
 - [x] Add `ragflow-kb-build` dry-run/readiness warning coverage for chunk markers that
   are unlikely to affect the selected downstream parser/profile.
-- [ ] Add Chinese corpus profile-readiness warnings or a documented review path for
+- [x] Add Chinese corpus profile-readiness warnings or a documented review path for
   language/tokenizer expectations.
 - [ ] Add read-only or fake-client-tested KB-name collision review behavior where the
   endpoint contract allows it.
@@ -220,6 +220,13 @@ declares the `<!-- chunk -->` delimiter. The readiness payload now records selec
 profile marker behavior and emits a `chunk_markers_ignored_by_selected_profile` warning
 when generated markers are unlikely to affect downstream parsing.
 
+The 2026-07-09 P1 Chinese corpus readiness slice adds a conservative parser/tokenizer
+review path to formal ingest readiness and `ragflow-kb-build --dry-run`. When Chinese
+text is detected but the selected profile does not declare Chinese language metadata, the
+report emits `chinese_corpus_profile_language_unspecified` as an advisory warning.
+Profiles that set `parser_config.__language__` to `Chinese` satisfy the review path
+without blocking the build.
+
 Checklist items should be checked only after implementation, focused verification, and
 redaction review are complete.
 
@@ -259,6 +266,17 @@ for every Dedao-style EPUB or every RAGFlow deployment.
 - `python3 -m pytest packages/ragflow-skill-runtime/tests/test_handoff.py -q`
 - `python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py -q`
 - `python3 tools/schema_identity_check.py --report-json /tmp/ragflow-20260709-chunk-readiness-schema-identity.json >/tmp/ragflow-20260709-chunk-readiness-schema-identity.stdout`
+
+2026-07-09 P1 Chinese corpus readiness validation:
+
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_handoff.py::HandoffTests::test_ingest_readiness_warns_when_chinese_corpus_profile_lacks_language_metadata -q`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py::KbBuildCliTests::test_build_dry_run_reports_chinese_corpus_profile_language_review -q`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_handoff.py::HandoffTests::test_ingest_readiness_warns_when_chinese_corpus_profile_lacks_language_metadata packages/ragflow-skill-runtime/tests/test_handoff.py::HandoffTests::test_ingest_readiness_accepts_explicit_chinese_profile_language_metadata packages/ragflow-skill-runtime/tests/test_kb_build_cli.py::KbBuildCliTests::test_build_dry_run_reports_chinese_corpus_profile_language_review -q`
+- `python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/handoff.py skills/ragflow-kb-build/scripts/build.py packages/ragflow-skill-runtime/tests/test_handoff.py packages/ragflow-skill-runtime/tests/test_kb_build_cli.py`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_handoff.py -q`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py -q`
+- `python3 tools/schema_identity_check.py --report-json /tmp/ragflow-20260709-language-readiness-schema-identity.json >/tmp/ragflow-20260709-language-readiness-schema-identity.stdout`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests -q`
 
 Residual gated work:
 

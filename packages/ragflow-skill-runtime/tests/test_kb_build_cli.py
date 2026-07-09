@@ -1523,6 +1523,67 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(chunk_readiness["selected_profile_marker_behavior"], "ignored")
         self.assertIn("chunk_markers_ignored_by_selected_profile", issue_codes)
 
+    def test_build_dry_run_reports_chinese_corpus_profile_language_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = Path(tmp) / "handoff"
+            docs_dir = handoff / "documents"
+            docs_dir.mkdir(parents=True)
+            (docs_dir / "manual.md").write_text("# 安装指南\n\n请检查设备电源和安全距离。\n", encoding="utf-8")
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "handoff_mode": "formal_ingest",
+                        "quality_gate": {"status": "PASS"},
+                        "documents": [{"source_path": "manual.md", "markdown_path": "documents/manual.md"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            profile = Path(tmp) / "plain-profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "plain-profile",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                        "parser_config": {"chunk_token_num": 512},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "--doc-manifest",
+                    str(manifest),
+                    "--kb-name",
+                    "kb:test",
+                    "--profile",
+                    str(profile),
+                    "--dry-run",
+                    "--json",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        issue_codes = {issue["code"] for issue in payload["ingest_readiness"]["issues"]}
+        language_readiness = payload["ingest_readiness"]["checks"]["language_readiness"]
+        self.assertEqual(language_readiness["detected_language"], "zh")
+        self.assertEqual(language_readiness["selected_profile_language"], "unspecified")
+        self.assertIn("chinese_corpus_profile_language_unspecified", issue_codes)
+
     def test_build_dry_run_recommends_activation_plan_after_build(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             handoff = Path(tmp) / "handoff"

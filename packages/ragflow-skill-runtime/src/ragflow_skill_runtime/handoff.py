@@ -2917,6 +2917,73 @@ def _chunk_readiness_summary(
     return summary
 
 
+def _normalize_language_hint(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return "unspecified"
+    if text in {"zh", "zh-cn", "zh_hans", "zh-hans", "cn", "ch", "zho", "chinese"}:
+        return "zh"
+    if text.startswith("chinese"):
+        return "zh"
+    if text in {"en", "en-us", "eng", "english"}:
+        return "en"
+    if text.startswith("english"):
+        return "en"
+    return text
+
+
+def _document_language_readiness(
+    *,
+    root: Path,
+    documents: list[Mapping[str, Any]],
+    selected_profile: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    manifest_hints = [
+        _normalize_language_hint(document.get("language"))
+        for document in documents
+        if _normalize_language_hint(document.get("language")) != "unspecified"
+    ]
+    cjk_document_count = 0
+    scanned_document_count = 0
+    for document in documents:
+        markdown_path = document.get("markdown_path")
+        if not isinstance(markdown_path, str):
+            continue
+        path = root / markdown_path
+        if not path.is_file():
+            continue
+        scanned_document_count += 1
+        sample = path.read_text(encoding="utf-8", errors="replace")[:8000]
+        if any("\u4e00" <= char <= "\u9fff" for char in sample):
+            cjk_document_count += 1
+    detected = "zh" if "zh" in manifest_hints or cjk_document_count else "unknown"
+
+    selected_profile_provided = isinstance(selected_profile, Mapping)
+    profile_language = "not_selected" if not selected_profile_provided else "unspecified"
+    if isinstance(selected_profile, Mapping):
+        parser_config = selected_profile.get("parser_config") if isinstance(selected_profile.get("parser_config"), Mapping) else {}
+        for value in (
+            parser_config.get("__language__") if isinstance(parser_config, Mapping) else None,
+            selected_profile.get("language"),
+            selected_profile.get("locale"),
+        ):
+            normalized = _normalize_language_hint(value)
+            if normalized != "unspecified":
+                profile_language = normalized
+                break
+
+    review_required = selected_profile_provided and detected == "zh" and profile_language != "zh"
+    return {
+        "detected_language": detected,
+        "selected_profile_language": profile_language,
+        "selected_profile_provided": selected_profile_provided,
+        "manifest_language_hints": manifest_hints[:20],
+        "cjk_document_count": cjk_document_count,
+        "scanned_document_count": scanned_document_count,
+        "review_required": review_required,
+    }
+
+
 def _ingest_plan_summary(ragflow_ingest_plan: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(ragflow_ingest_plan, Mapping):
         return {
@@ -3044,6 +3111,11 @@ def make_doc_ingest_readiness_payload(
         sidecar_exists=bool(sidecars.get("chunk_profile_report", {}).get("exists")),
         selected_profile=selected_profile,
     )
+    language_readiness = _document_language_readiness(
+        root=root,
+        documents=documents,
+        selected_profile=selected_profile,
+    )
     table_parent_chunk_preflight = _table_parent_chunk_preflight(
         retrieval_hints=retrieval_hints,
         selected_profile=selected_profile,
@@ -3162,6 +3234,16 @@ def make_doc_ingest_readiness_payload(
                 code="chunk_markers_ignored_by_selected_profile",
                 message="chunk markers exist but the selected profile does not define the chunk delimiter",
                 recommendation="Use a delimiter-aware profile with parser_config.delimiter set to `<!-- chunk -->`, or treat chunk markers as advisory comments only.",
+            )
+        )
+    if language_readiness["review_required"]:
+        issues.append(
+            _readiness_issue(
+                check="language_readiness",
+                severity="warning",
+                code="chinese_corpus_profile_language_unspecified",
+                message="Chinese text was detected but the selected profile does not declare Chinese language metadata",
+                recommendation="Review parser/tokenizer expectations and prefer a profile with parser_config.__language__ set to Chinese for Chinese corpora.",
             )
         )
     if not retrieval_summary["exists"]:
@@ -3294,6 +3376,7 @@ def make_doc_ingest_readiness_payload(
             "missing": sidecar_summary["missing"],
         },
         "chunk_readiness": chunk_summary,
+        "language_readiness": language_readiness,
         "table_parent_chunk_preflight": table_parent_chunk_preflight,
         "retrieval_hints_richness": retrieval_summary,
         "artifact_coverage": {

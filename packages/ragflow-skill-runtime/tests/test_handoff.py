@@ -1039,6 +1039,88 @@ class HandoffTests(unittest.TestCase):
         self.assertIn("chunk_markers_ignored_by_selected_profile", issue_codes)
         self.assertIn("chunk_markers_ignored_by_selected_profile", readiness_md)
 
+    def test_ingest_readiness_warns_when_chinese_corpus_profile_lacks_language_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            documents.mkdir()
+            markdown = documents / "manual.md"
+            markdown.write_text("# 安装指南\n\n设备安装前请确认电源和安全距离。\n", encoding="utf-8")
+            (root / "doc_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "handoff_mode": "formal_ingest",
+                        "quality_gate": {"status": "PASS"},
+                        "documents": [
+                            {
+                                "source_path": "manual.md",
+                                "markdown_path": "documents/manual.md",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            readiness = make_doc_ingest_readiness_payload(
+                handoff_root=root,
+                selected_profile={
+                    "id": "plain-profile",
+                    "parser_config": {"chunk_token_num": 512},
+                },
+            )
+            readiness_md = render_doc_ingest_readiness_markdown(readiness)
+
+        issue_codes = {issue["code"] for issue in readiness["issues"]}
+        language_readiness = readiness["checks"]["language_readiness"]
+        self.assertEqual(language_readiness["detected_language"], "zh")
+        self.assertEqual(language_readiness["selected_profile_language"], "unspecified")
+        self.assertIn("chinese_corpus_profile_language_unspecified", issue_codes)
+        self.assertIn("chinese_corpus_profile_language_unspecified", readiness_md)
+
+    def test_ingest_readiness_accepts_explicit_chinese_profile_language_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            documents.mkdir()
+            markdown = documents / "manual.md"
+            markdown.write_text("# 安装指南\n\n设备安装前请确认电源和安全距离。\n", encoding="utf-8")
+            (root / "doc_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "handoff_mode": "formal_ingest",
+                        "quality_gate": {"status": "PASS"},
+                        "documents": [
+                            {
+                                "source_path": "manual.md",
+                                "markdown_path": "documents/manual.md",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            readiness = make_doc_ingest_readiness_payload(
+                handoff_root=root,
+                selected_profile={
+                    "id": "zh-profile",
+                    "parser_config": {"chunk_token_num": 512, "__language__": "Chinese"},
+                },
+            )
+
+        issue_codes = {issue["code"] for issue in readiness["issues"]}
+        language_readiness = readiness["checks"]["language_readiness"]
+        self.assertEqual(language_readiness["detected_language"], "zh")
+        self.assertEqual(language_readiness["selected_profile_language"], "zh")
+        self.assertNotIn("chinese_corpus_profile_language_unspecified", issue_codes)
+
     def test_inspect_rich_handoff_blocks_missing_images(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
