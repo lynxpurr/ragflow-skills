@@ -195,7 +195,9 @@ kb:ragflow-skills-e2e-YYYYMMDD-HHMM
 然后执行：
 - ragflow-doc-to-md pipeline 生成 doc_manifest.json、retrieval_hints.json 和 ragflow_ingest_plan.yaml
 - 先确认 handoff_mode: formal_ingest，再运行 ragflow-kb-build inspect-handoff 和 --dry-run
-- ragflow-kb-build --dry-run 消费 doc_manifest.json 和用户确认的 profile
+- ragflow-kb-build --dry-run 消费 doc_manifest.json、ragflow_ingest_plan.yaml 和用户确认的 profile
+- 检查 dry-run 输出中的 build_payload_preview，确认 language、delimiter、auto_keywords、auto_questions、chunk_overlap、retrieval_hints 等字段是发送到 RAGFlow、仅本地审计、后置建议，还是 unsupported/gated
+- 如果 asset-upload-plan 报告图片缺失，确认 sidecar 中的 `images/...` 是否已被自动回退解析到 `documents/images/...`；语义别名只作为 advisory warning，不应阻断上传
 - ragflow-kb-build 创建 RAGFlow KB、上传 Markdown、触发解析、等待完成
 - ragflow-kb-build validate --level smoke
 - ragflow-query --mode direct 查询

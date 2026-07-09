@@ -96,6 +96,14 @@ EXPECTED_IDENTITIES = (
         description="No-live Markdown plus local image asset upload package dry-run report.",
     ),
     SchemaIdentity(
+        key="kb_build_payload_preview",
+        group="kb_build",
+        identity="ragflow_kb_build_payload_preview_v1",
+        source_patterns=("ragflow_kb_build_payload_preview_v1", "BUILD_PAYLOAD_PREVIEW_SCHEMA"),
+        coverage_patterns=("ragflow_kb_build_payload_preview_v1", "BUILD_PAYLOAD_PREVIEW_SCHEMA"),
+        description="Embedded build payload preview block inside KB dry-run and live build reports.",
+    ),
+    SchemaIdentity(
         key="kb_asset_ingestion_report",
         group="kb_build",
         identity="ragflow_kb_asset_ingestion_report_v1",
@@ -282,6 +290,14 @@ EXPECTED_IDENTITIES = (
         source_patterns=("ragflow_profile_decision_report_v1", "PROFILE_DECISION_REPORT_SCHEMA"),
         coverage_patterns=("ragflow_profile_decision_report_v1", "decide_profile_from_reports"),
         description="Offline profile decision report with sample thresholds before default-profile changes.",
+    ),
+    SchemaIdentity(
+        key="build_profile_materialization",
+        group="kb_build",
+        identity="ragflow_build_profile_materialization_v1",
+        source_patterns=("ragflow_build_profile_materialization_v1", "BUILD_PROFILE_MATERIALIZATION_SCHEMA"),
+        coverage_patterns=("BUILD_PROFILE_MATERIALIZATION_SCHEMA", "materialize_profile_suggestion"),
+        description="Offline helper report for turning profile_suggestions.json into a reviewed build profile.",
     ),
     SchemaIdentity(
         key="grounded_qa_generate_report",

@@ -225,6 +225,7 @@ python ragflow-kb-build/scripts/build.py \
   --doc-manifest /tmp/ragflow-skills-handoff/doc_manifest.json \
   --kb-name kb:reviewed-name \
   --profile ragflow-kb-build/templates/default-en-768.json \
+  --ingest-plan /tmp/ragflow-skills-handoff/ragflow_ingest_plan.yaml \
   --dry-run \
   --json
 ```
@@ -240,11 +241,14 @@ approves live RAGFlow mutation:
   `semantic_risks`, and `estimated_parent_chunk_tokens`.
 - Run `inspect-handoff` and require no BLOCKED quality or missing-image errors.
 - Run `asset-upload-plan`; require `missing_image_asset_count=0` before any live build,
-  and review unreferenced handoff images instead of silently uploading them.
+  and review unreferenced handoff images instead of silently uploading them. Sidecar
+  paths such as `images/...` are checked against both the handoff root and
+  `documents/images/...`; semantic aliases remain advisory review hints.
 - Prefer a generated `table-atomic-*-4096` profile when the target deployment supports
-  that parent chunk size. If the deployment requires a smaller profile, keep the profile
-  explicit and treat `table_parent_chunk_preflight` warnings from `build.py --dry-run` as
-  manual review gates.
+  that parent chunk size. If the deployment requires a smaller profile, materialize a
+  reviewed profile that clamps unsupported `chunk_token_num` values, keeps the original
+  suggestion auditable, and treats `table_parent_chunk_preflight` warnings from
+  `build.py --dry-run` as manual review gates.
 - Do not set a children delimiter for table-atomic ingestion; delimiter chunk markers
   control boundaries but cannot override a lower server-side parent chunk limit.
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -14,8 +14,9 @@ from typing import Any, Mapping
 import zipfile
 
 from .manifests import DocManifest, KbDocumentEntry, KbManifest, ManifestError, load_kb_manifest
-from .profiles import ChunkProfile, ProfileError, load_profile
+from .profiles import ChunkProfile, ProfileError, SUPPORTED_PARSER_KEYS, load_profile, normalize_profile_language
 
+BUILD_PAYLOAD_PREVIEW_SCHEMA = "ragflow_kb_build_payload_preview_v1"
 KB_ASSET_UPLOAD_PLAN_SCHEMA = "ragflow_kb_asset_upload_plan_v2"
 KB_ASSET_INGESTION_REPORT_SCHEMA = "ragflow_kb_asset_ingestion_report_v1"
 KB_ARTIFACT_CONSISTENCY_REPORT_SCHEMA = "ragflow_kb_artifact_consistency_report_v1"
@@ -189,6 +190,225 @@ def check_embedding_model_drift(
         "rebuild_or_reparse_required": not matches,
         "reason": None if matches else "embedding_model_expected_mismatch",
         "recommendation": None if matches else "Rebuild or re-parse the KB with a profile that uses the expected embedding model.",
+    }
+
+
+def _ingest_plan_language(ragflow_ingest_plan: Mapping[str, Any] | None) -> tuple[str | None, str | None]:
+    if not isinstance(ragflow_ingest_plan, Mapping):
+        return None, None
+    recommended_build = (
+        ragflow_ingest_plan.get("recommended_build")
+        if isinstance(ragflow_ingest_plan.get("recommended_build"), Mapping)
+        else {}
+    )
+    parser_profile = (
+        recommended_build.get("parser_profile")
+        if isinstance(recommended_build.get("parser_profile"), Mapping)
+        else {}
+    )
+    language = normalize_profile_language(parser_profile.get("language"))
+    if language:
+        return language, "ragflow_ingest_plan.recommended_build.parser_profile.language"
+    return None, None
+
+
+def _profile_language(profile: ChunkProfile) -> tuple[str | None, str | None]:
+    if profile.language:
+        internal = normalize_profile_language(profile.parser_config.get("__language__"))
+        if internal and internal == profile.language:
+            return profile.language, "profile.parser_config.__language__"
+        return profile.language, "profile.language"
+    return None, None
+
+
+def select_build_language(
+    profile: ChunkProfile,
+    *,
+    ragflow_ingest_plan: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the language that the build path can materialize, plus source evidence."""
+
+    value, source = _profile_language(profile)
+    if value:
+        return {
+            "value": value,
+            "source": source,
+            "status": "materialized_to_ragflow",
+            "target": "dataset.language",
+        }
+    value, source = _ingest_plan_language(ragflow_ingest_plan)
+    if value:
+        return {
+            "value": value,
+            "source": source,
+            "status": "materialized_to_ragflow",
+            "target": "dataset.language",
+        }
+    return {
+        "value": None,
+        "source": None,
+        "status": "unsupported_or_gated",
+        "target": "dataset.language",
+        "reason": "language_not_configured",
+    }
+
+
+def apply_build_profile_language(
+    profile: ChunkProfile,
+    *,
+    ragflow_ingest_plan: Mapping[str, Any] | None = None,
+) -> ChunkProfile:
+    """Return a profile with top-level language selected from profile or ingest-plan evidence."""
+
+    language = select_build_language(profile, ragflow_ingest_plan=ragflow_ingest_plan)
+    value = language.get("value")
+    if isinstance(value, str) and value.strip() and profile.language != value:
+        return replace(profile, language=value)
+    return profile
+
+
+def _retrieval_hint_count(retrieval_hints: Mapping[str, Any] | None, key: str) -> int:
+    if not isinstance(retrieval_hints, Mapping):
+        return 0
+    value = retrieval_hints.get(key)
+    return len(value) if isinstance(value, list) else 0
+
+
+def make_build_payload_preview(
+    *,
+    kb_name: str,
+    profile: ChunkProfile,
+    retrieval_hints: Mapping[str, Any] | None = None,
+    ragflow_ingest_plan: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Preview which build settings are sent to RAGFlow and which remain advisory."""
+
+    effective_profile = apply_build_profile_language(profile, ragflow_ingest_plan=ragflow_ingest_plan)
+    dataset_payload = effective_profile.to_dataset_payload()
+    language = select_build_language(profile, ragflow_ingest_plan=ragflow_ingest_plan)
+    dataset_create_payload = {"name": kb_name, **dataset_payload}
+    fields: list[dict[str, Any]] = []
+
+    def add_field(
+        field: str,
+        *,
+        status: str,
+        source: str,
+        target: str | None,
+        value: Any = None,
+        reason: str | None = None,
+    ) -> None:
+        record = {
+            "field": field,
+            "status": status,
+            "source": source,
+            "target": target,
+        }
+        if value is not None:
+            record["value"] = value
+        if reason:
+            record["reason"] = reason
+        fields.append(record)
+
+    add_field(
+        "chunk_method",
+        status="materialized_to_ragflow",
+        source="profile.chunk_method",
+        target="dataset.chunk_method",
+        value=effective_profile.chunk_method,
+    )
+    add_field(
+        "language",
+        status=str(language["status"]),
+        source=str(language.get("source") or "none"),
+        target="dataset.language",
+        value=language.get("value"),
+        reason=language.get("reason") if isinstance(language.get("reason"), str) else None,
+    )
+    for key in sorted(effective_profile.parser_config):
+        value = effective_profile.parser_config[key]
+        field = f"parser_config.{key}"
+        if str(key).startswith("__"):
+            add_field(
+                field,
+                status="local_audit_only",
+                source=field,
+                target=None,
+                value=value,
+                reason="internal_parser_metadata_not_sent",
+            )
+            continue
+        status = "materialized_to_ragflow" if key in SUPPORTED_PARSER_KEYS else "unsupported_or_gated"
+        add_field(
+            field,
+            status=status,
+            source=field,
+            target=f"dataset.parser_config.{key}" if status == "materialized_to_ragflow" else None,
+            value=value,
+            reason=None if status == "materialized_to_ragflow" else "unsupported_parser_config_key",
+        )
+    add_field(
+        "chunk_overlap",
+        status="local_audit_only",
+        source="profile.chunk_overlap",
+        target=None,
+        value=effective_profile.chunk_overlap,
+        reason="not_part_of_current_dataset_parser_payload",
+    )
+    if isinstance(retrieval_hints, Mapping):
+        add_field(
+            "retrieval_hints.keyword_candidates",
+            status="advisory_after_build",
+            source="retrieval_hints.json",
+            target=None,
+            value=_retrieval_hint_count(retrieval_hints, "keyword_candidates"),
+            reason="not_derived_into_auto_keywords_without_reviewed_profile",
+        )
+        add_field(
+            "retrieval_hints.question_candidates",
+            status="advisory_after_build",
+            source="retrieval_hints.json",
+            target=None,
+            value=_retrieval_hint_count(retrieval_hints, "question_candidates"),
+            reason="not_derived_into_auto_questions_without_reviewed_profile",
+        )
+        add_field(
+            "retrieval_hints.image_artifacts",
+            status="advisory_after_build",
+            source="retrieval_hints.json",
+            target=None,
+            value=_retrieval_hint_count(retrieval_hints, "image_artifacts"),
+            reason="visual_ingestion_remains_separately_gated",
+        )
+        add_field(
+            "retrieval_hints.table_artifacts",
+            status="advisory_after_build",
+            source="retrieval_hints.json",
+            target=None,
+            value=_retrieval_hint_count(retrieval_hints, "table_artifacts"),
+            reason="table_hints_require_profile_or_benchmark_review",
+        )
+
+    return {
+        "schema": BUILD_PAYLOAD_PREVIEW_SCHEMA,
+        "created_at": _now(),
+        "kb_name": kb_name,
+        "language": language,
+        "dataset_create_payload": dataset_create_payload,
+        "fields": fields,
+        "source_sidecars": {
+            "retrieval_hints": "loaded" if isinstance(retrieval_hints, Mapping) else "not_loaded",
+            "ragflow_ingest_plan": "loaded" if isinstance(ragflow_ingest_plan, Mapping) else "not_loaded",
+        },
+        "summary": {
+            "field_count": len(fields),
+            "ragflow_field_count": sum(1 for item in fields if item["status"] == "materialized_to_ragflow"),
+            "local_only_field_count": sum(1 for item in fields if item["status"] == "local_audit_only"),
+            "advisory_field_count": sum(1 for item in fields if item["status"] == "advisory_after_build"),
+            "unsupported_or_gated_field_count": sum(1 for item in fields if item["status"] == "unsupported_or_gated"),
+            "retrieval_hint_keyword_candidate_count": _retrieval_hint_count(retrieval_hints, "keyword_candidates"),
+            "retrieval_hint_question_candidate_count": _retrieval_hint_count(retrieval_hints, "question_candidates"),
+        },
     }
 
 
@@ -530,6 +750,10 @@ def _collect_sidecar_image_references(*, handoff_root: Path) -> list[tuple[str, 
                 continue
             candidate = Path(raw)
             resolved = candidate if candidate.is_absolute() else handoff_root / candidate
+            if not candidate.is_absolute() and not resolved.is_file():
+                documents_relative = handoff_root / "documents" / candidate
+                if documents_relative.is_file():
+                    resolved = documents_relative
             seen[raw] = len(references)
             references.append((sidecar_name, raw, resolved, is_semantic_alias))
     return references
@@ -1591,11 +1815,12 @@ def make_kb_manifest_payload(
     profile: ChunkProfile,
     documents: list[tuple[BuildDocument, str, str | None, int | None]],
     expected_embedding_models: list[str] | tuple[str, ...] | None = None,
+    build_payload_preview: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create a serializable KB manifest payload."""
 
     embedding_model = describe_embedding_model(profile)
-    return {
+    payload = {
         "version": "0.1",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "ragflow_base_url": base_url,
@@ -1614,6 +1839,9 @@ def make_kb_manifest_payload(
             for doc, document_id, status, chunk_count in documents
         ],
     }
+    if isinstance(build_payload_preview, Mapping):
+        payload["build_payload_preview"] = dict(build_payload_preview)
+    return payload
 
 
 def document_entries_from_manifest(payload: Mapping[str, Any]) -> list[KbDocumentEntry]:

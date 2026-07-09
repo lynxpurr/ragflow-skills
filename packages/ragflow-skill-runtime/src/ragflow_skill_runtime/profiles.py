@@ -24,6 +24,8 @@ SUPPORTED_PARSER_KEYS = {
     "auto_questions",
     "delimiter",
 }
+RAGFLOW_CHUNK_TOKEN_NUM_MAX = 2048
+BUILD_PROFILE_MATERIALIZATION_SCHEMA = "ragflow_build_profile_materialization_v1"
 ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA = "ragflow_enrichment_experiment_matrix_v1"
 ENRICHMENT_EXPERIMENT_REPORT_SCHEMA = "ragflow_enrichment_experiment_report_v1"
 CANDIDATE_PROFILE_SET_SCHEMA = "ragflow_candidate_profile_set_v1"
@@ -36,14 +38,30 @@ LANGUAGE_ALIASES = {
     "ch": "Chinese",
     "cn": "Chinese",
     "zho": "Chinese",
+    "chinese": "Chinese",
+    "中文": "Chinese",
     "en": "English",
     "eng": "English",
+    "english": "English",
 }
+
+
+def normalize_profile_language(value: Any) -> str | None:
+    """Normalize a profile language hint without treating unknown labels as valid."""
+
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    normalized = LANGUAGE_ALIASES.get(text.lower())
+    return normalized
 
 
 @dataclass(frozen=True)
 class ChunkProfile:
     profile_id: str
+    language: str | None = None
     chunk_method: str = "naive"
     chunk_size: int = 512
     chunk_overlap: int = 64
@@ -73,9 +91,13 @@ class ChunkProfile:
         parser_config.setdefault("chunk_token_num", chunk_size)
         parser_config.setdefault("auto_keywords", 0)
         parser_config.setdefault("auto_questions", 0)
+        language = normalize_profile_language(data.get("language"))
+        if language is None:
+            language = normalize_profile_language(parser_config.get("__language__"))
 
         return cls(
             profile_id=profile_id.strip(),
+            language=language,
             chunk_method=str(data.get("chunk_method", "naive")),
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
@@ -91,6 +113,8 @@ class ChunkProfile:
             "chunk_method": self.chunk_method,
             "parser_config": parser_config,
         }
+        if self.language:
+            payload["language"] = self.language
         if self.embedding_model:
             payload["embedding_model"] = self.embedding_model
         return payload
@@ -98,6 +122,7 @@ class ChunkProfile:
     def to_manifest_dict(self) -> dict[str, Any]:
         return {
             "id": self.profile_id,
+            "language": self.language,
             "chunk_method": self.chunk_method,
             "chunk_size": self.chunk_size,
             "chunk_overlap": self.chunk_overlap,
@@ -322,15 +347,15 @@ def lint_profile(profile: ChunkProfile) -> ProfileLintReport:
                 )
             )
 
-    language = profile.parser_config.get("__language__")
+    language = profile.language or profile.parser_config.get("__language__")
     if not isinstance(language, str) or not language.strip():
         issues.append(
             ProfileIssue(
                 severity="info",
                 code="language_metadata_missing",
-                field="parser_config.__language__",
+                field="language",
                 message="profile has no language metadata",
-                recommendation="Add parser_config.__language__ as neutral metadata for host-agent explanations.",
+                recommendation="Add top-level language as neutral metadata for host-agent explanations.",
             )
         )
 
@@ -351,7 +376,7 @@ def explain_profile(profile: ChunkProfile) -> dict[str, Any]:
             "chunk_size": profile.chunk_size,
             "chunk_overlap": profile.chunk_overlap,
             "overlap_ratio": profile.chunk_overlap / profile.chunk_size,
-            "language": profile.parser_config.get("__language__") or "unknown",
+            "language": profile.language or profile.parser_config.get("__language__") or "unknown",
             "embedding_model": profile.embedding_model,
         },
         "notes": [
@@ -363,10 +388,10 @@ def explain_profile(profile: ChunkProfile) -> dict[str, Any]:
 
 
 def _normalize_language(language: str) -> str:
-    key = language.strip().lower()
-    if key not in LANGUAGE_ALIASES:
+    normalized = normalize_profile_language(language)
+    if normalized is None or normalized not in {"auto", "Chinese", "English"}:
         raise ProfileError("language must be one of auto, zh, ch, cn, zho, en, eng")
-    return LANGUAGE_ALIASES[key]
+    return normalized
 
 
 def recommend_profile(
@@ -454,6 +479,204 @@ def recommend_profile(
         rationale=rationale,
         retrieval_hints_summary=dict(retrieval_hints_summary) if retrieval_hints_summary is not None else None,
     )
+
+
+def _profile_suggestion_records(profile_suggestions: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    if profile_suggestions.get("schema") not in {None, "ragflow_profile_suggestions_v1"}:
+        raise ProfileError("profile suggestions schema must be ragflow_profile_suggestions_v1")
+    suggestions = profile_suggestions.get("suggestions")
+    if not isinstance(suggestions, list):
+        raise ProfileError("profile suggestions must contain a suggestions list")
+    records = [item for item in suggestions if isinstance(item, Mapping)]
+    if not records:
+        raise ProfileError("profile suggestions contains no usable suggestions")
+    return records
+
+
+def _suggestion_has_delimiter(record: Mapping[str, Any]) -> bool:
+    parser_config = record.get("parser_config") if isinstance(record.get("parser_config"), Mapping) else {}
+    delimiter = parser_config.get("delimiter")
+    if isinstance(delimiter, str) and delimiter.strip():
+        return True
+    postprocess_profile = record.get("postprocess_profile")
+    return isinstance(postprocess_profile, str) and "chunk-marker" in postprocess_profile
+
+
+def _select_profile_suggestion(
+    records: list[Mapping[str, Any]],
+    *,
+    suggestion_id: str | None,
+) -> Mapping[str, Any]:
+    if suggestion_id:
+        for record in records:
+            if str(record.get("id") or record.get("profile_id") or "") == suggestion_id:
+                return record
+        raise ProfileError(f"profile suggestion not found: {suggestion_id}")
+    for record in records:
+        if _suggestion_has_delimiter(record):
+            return record
+    return records[0]
+
+
+def _first_int(*values: Any) -> int | None:
+    for value in values:
+        if isinstance(value, bool) or value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _ingest_plan_parser_profile(ragflow_ingest_plan: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    if not isinstance(ragflow_ingest_plan, Mapping):
+        return {}
+    if ragflow_ingest_plan.get("schema") not in {None, "ragflow_ingest_plan_v1"}:
+        raise ProfileError("ragflow ingest plan schema must be ragflow_ingest_plan_v1")
+    recommended_build = (
+        ragflow_ingest_plan.get("recommended_build")
+        if isinstance(ragflow_ingest_plan.get("recommended_build"), Mapping)
+        else {}
+    )
+    parser_profile = (
+        recommended_build.get("parser_profile")
+        if isinstance(recommended_build.get("parser_profile"), Mapping)
+        else {}
+    )
+    return parser_profile
+
+
+def _suggestion_language(
+    suggestion: Mapping[str, Any],
+    *,
+    ingest_parser_profile: Mapping[str, Any],
+) -> tuple[str | None, str | None]:
+    parser_config = suggestion.get("parser_config") if isinstance(suggestion.get("parser_config"), Mapping) else {}
+    candidates = (
+        ("profile_suggestions.suggestions[].parser_config.__language__", parser_config.get("__language__")),
+        ("profile_suggestions.suggestions[].language", suggestion.get("language")),
+        ("ragflow_ingest_plan.recommended_build.parser_profile.language", ingest_parser_profile.get("language")),
+    )
+    for source, value in candidates:
+        normalized = normalize_profile_language(value)
+        if normalized:
+            return normalized, source
+    return None, None
+
+
+def _materialized_profile_id(source_id: str, *, original_tokens: int | None, effective_tokens: int) -> str:
+    base = _slug(source_id, default="materialized-profile")
+    if original_tokens and original_tokens != effective_tokens and str(original_tokens) in base:
+        return base.replace(str(original_tokens), str(effective_tokens))
+    if original_tokens and original_tokens != effective_tokens:
+        return f"{base}-{effective_tokens}"
+    return base
+
+
+def materialize_profile_suggestion(
+    *,
+    profile_suggestions: Mapping[str, Any],
+    ragflow_ingest_plan: Mapping[str, Any] | None = None,
+    suggestion_id: str | None = None,
+    max_chunk_token_num: int = RAGFLOW_CHUNK_TOKEN_NUM_MAX,
+) -> dict[str, Any]:
+    """Convert advisory handoff profile suggestions into a reviewed build profile."""
+
+    if max_chunk_token_num <= 0:
+        raise ProfileError("max_chunk_token_num must be positive")
+    records = _profile_suggestion_records(profile_suggestions)
+    suggestion = _select_profile_suggestion(records, suggestion_id=suggestion_id)
+    parser_config = suggestion.get("parser_config") if isinstance(suggestion.get("parser_config"), Mapping) else {}
+    ingest_parser_profile = _ingest_plan_parser_profile(ragflow_ingest_plan)
+    original_tokens = _first_int(
+        parser_config.get("chunk_token_num"),
+        suggestion.get("chunk_size"),
+        ingest_parser_profile.get("chunk_size"),
+    )
+    if original_tokens is None or original_tokens <= 0:
+        original_tokens = 512
+    effective_tokens = min(original_tokens, max_chunk_token_num)
+    clamps: list[dict[str, Any]] = []
+    if effective_tokens != original_tokens:
+        clamps.append(
+            {
+                "field": "parser_config.chunk_token_num",
+                "original": original_tokens,
+                "effective": effective_tokens,
+                "reason": "ragflow_chunk_token_num_max",
+            }
+        )
+
+    language, language_source = _suggestion_language(suggestion, ingest_parser_profile=ingest_parser_profile)
+    source_id = str(suggestion.get("id") or suggestion.get("profile_id") or "materialized-profile")
+    chunk_overlap = _first_int(suggestion.get("chunk_overlap"), ingest_parser_profile.get("chunk_overlap"))
+    if chunk_overlap is None:
+        chunk_overlap = 0 if _suggestion_has_delimiter(suggestion) else min(64, max(effective_tokens - 1, 0))
+    if chunk_overlap >= effective_tokens:
+        chunk_overlap = max(effective_tokens - 1, 0)
+
+    effective_parser_config: dict[str, Any] = {"chunk_token_num": effective_tokens}
+    unsupported_fields: list[str] = []
+    local_only_fields: list[str] = []
+    for key, value in parser_config.items():
+        key_text = str(key)
+        if key_text.startswith("__"):
+            local_only_fields.append(f"parser_config.{key_text}")
+            continue
+        if key_text == "chunk_token_num":
+            continue
+        if key_text in SUPPORTED_PARSER_KEYS:
+            effective_parser_config[key_text] = value
+        else:
+            unsupported_fields.append(f"parser_config.{key_text}")
+    effective_parser_config.setdefault("auto_keywords", 0)
+    effective_parser_config.setdefault("auto_questions", 0)
+
+    profile_payload: dict[str, Any] = {
+        "profile_id": _materialized_profile_id(
+            source_id,
+            original_tokens=original_tokens,
+            effective_tokens=effective_tokens,
+        ),
+        "language": language,
+        "chunk_method": str(suggestion.get("chunk_method") or "naive"),
+        "chunk_size": effective_tokens,
+        "chunk_overlap": chunk_overlap,
+        "parser_config": effective_parser_config,
+    }
+    embedding_model = suggestion.get("embedding_model")
+    if isinstance(embedding_model, str) and embedding_model.strip():
+        profile_payload["embedding_model"] = embedding_model.strip()
+
+    materialized_profile = ChunkProfile.from_dict(profile_payload)
+    lint = lint_profile(materialized_profile).to_dict()
+    warning_count = len(clamps) + len(unsupported_fields)
+    return {
+        "ok": lint["ok"],
+        "schema": BUILD_PROFILE_MATERIALIZATION_SCHEMA,
+        "created_at": _now(),
+        "profile": materialized_profile.to_manifest_dict() | {"profile_id": materialized_profile.profile_id},
+        "source_suggestion": dict(suggestion),
+        "materialization": {
+            "selected_suggestion_id": source_id,
+            "selection_reason": "delimiter_profile" if _suggestion_has_delimiter(suggestion) else "first_suggestion",
+            "language": language,
+            "language_source": language_source,
+            "max_chunk_token_num": max_chunk_token_num,
+            "clamps": clamps,
+            "local_only_fields": local_only_fields,
+            "unsupported_fields": unsupported_fields,
+        },
+        "summary": {
+            "source_suggestion_count": len(records),
+            "clamp_count": len(clamps),
+            "local_only_field_count": len(local_only_fields),
+            "unsupported_field_count": len(unsupported_fields),
+            "warning_count": warning_count,
+        },
+        "lint": lint,
+    }
 
 
 def _number_from(mapping: Mapping[str, Any], *keys: str) -> float | None:

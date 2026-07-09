@@ -887,6 +887,13 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["retrieval_hints_summary"]["table_artifact_count"], 1)
         self.assertEqual(payload["retrieval_hints_summary"]["image_artifact_count"], 1)
         self.assertEqual(payload["retrieval_hints_summary"]["quality_risk_count"], 1)
+        preview = payload["build_payload_preview"]
+        self.assertEqual(preview["schema"], "ragflow_kb_build_payload_preview_v1")
+        self.assertEqual(preview["dataset_create_payload"]["language"], "English")
+        self.assertNotIn("__language__", preview["dataset_create_payload"]["parser_config"])
+        fields = {item["field"]: item for item in preview["fields"]}
+        self.assertEqual(fields["parser_config.__language__"]["status"], "local_audit_only")
+        self.assertEqual(fields["retrieval_hints.keyword_candidates"]["status"], "advisory_after_build")
 
     def test_build_dry_run_reports_embedding_model_drift_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -937,6 +944,63 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["embedding_model_check"]["status"], "mismatch")
         self.assertTrue(payload["embedding_model_check"]["rebuild_or_reparse_required"])
         self.assertEqual(payload["embedding_model_check"]["expected_models"], ["bge-m3"])
+
+    def test_build_dry_run_materializes_language_from_ingest_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "docs"
+            input_dir.mkdir()
+            (input_dir / "sample.md").write_text("# 标题\n\n正文\n", encoding="utf-8")
+            profile = root / "neutral-profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "neutral-profile",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                        "parser_config": {"chunk_token_num": 512},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            ingest_plan = root / "ragflow_ingest_plan.json"
+            ingest_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_ingest_plan_v1",
+                        "recommended_build": {"parser_profile": {"language": "zh"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "--input",
+                    str(input_dir),
+                    "--kb-name",
+                    "kb:test",
+                    "--profile",
+                    str(profile),
+                    "--ingest-plan",
+                    str(ingest_plan),
+                    "--dry-run",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        preview = payload["build_payload_preview"]
+        self.assertEqual(preview["language"]["value"], "Chinese")
+        self.assertEqual(preview["language"]["source"], "ragflow_ingest_plan.recommended_build.parser_profile.language")
+        self.assertEqual(preview["dataset_create_payload"]["language"], "Chinese")
 
     def test_build_dry_run_reports_generic_embedding_model_not_configured(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1071,6 +1135,76 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("stage_timings", manifest["runtime_metrics"])
         self.assertEqual(manifest["embedding_model"]["model"], "unknown")
         self.assertEqual(manifest["embedding_model"]["reason"], "profile_embedding_model_missing")
+        created_profile = FakeOptimizeBuildClient.instances[0].created[0][1]
+        self.assertEqual(created_profile["language"], "English")
+        self.assertNotIn("__language__", created_profile["parser_config"])
+        self.assertEqual(manifest["build_payload_preview"]["dataset_create_payload"]["language"], "English")
+        self.assertEqual(manifest["build_payload_preview"]["fields"][0]["status"], "materialized_to_ragflow")
+
+    def test_build_live_path_materializes_language_from_ingest_plan_with_fake_client(self) -> None:
+        module = load_build_module()
+        FakeOptimizeBuildClient.instances = []
+        module.RAGFlowClient = FakeOptimizeBuildClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "docs"
+            input_dir.mkdir()
+            (input_dir / "sample.md").write_text("# 标题\n\nKnown answer\n", encoding="utf-8")
+            profile = root / "neutral-profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "neutral-profile",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                        "parser_config": {"chunk_token_num": 512},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            ingest_plan = root / "ragflow_ingest_plan.json"
+            ingest_plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_ingest_plan_v1",
+                        "recommended_build": {"parser_profile": {"language": "zh"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output = root / "kb_manifest.json"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--input",
+                        str(input_dir),
+                        "--kb-name",
+                        "kb:test",
+                        "--profile",
+                        str(profile),
+                        "--ingest-plan",
+                        str(ingest_plan),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "test-key",
+                        "--output",
+                        str(output),
+                        "--json",
+                    ]
+                )
+            manifest = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        created_profile = FakeOptimizeBuildClient.instances[0].created[0][1]
+        self.assertEqual(created_profile["language"], "Chinese")
+        self.assertNotIn("__language__", created_profile["parser_config"])
+        self.assertEqual(
+            manifest["build_payload_preview"]["language"]["source"],
+            "ragflow_ingest_plan.recommended_build.parser_profile.language",
+        )
+        self.assertEqual(manifest["profile"]["language"], "Chinese")
 
     def test_build_live_path_batches_markdown_parse_requests(self) -> None:
         module = load_build_module()

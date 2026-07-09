@@ -10,6 +10,7 @@ from ragflow_skill_runtime.kb_build import (
     BuildError,
     BuildDocument,
     KB_ASSET_UPLOAD_PLAN_SCHEMA,
+    BUILD_PAYLOAD_PREVIEW_SCHEMA,
     MULTIMODAL_KB_MANIFEST_SCHEMA,
     create_kb_asset_upload_plan,
     discover_markdown_documents,
@@ -19,6 +20,7 @@ from ragflow_skill_runtime.kb_build import (
     extract_document_items,
     extract_document_name,
     extract_uploaded_document_id,
+    make_build_payload_preview,
     make_kb_manifest_payload,
     make_multimodal_kb_manifest_payload,
     normalize_document_state,
@@ -218,6 +220,44 @@ class KbBuildTests(unittest.TestCase):
             {item["source_path"] for item in plan["planned_visual_upload_files"]},
         )
 
+    def test_asset_upload_plan_resolves_sidecar_images_under_documents_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = Path(tmp) / "handoff"
+            image_dir = handoff / "documents" / "images"
+            image_dir.mkdir(parents=True)
+            (handoff / "documents" / "sample.md").write_text("# Sample\n\nNo inline images.\n", encoding="utf-8")
+            (image_dir / "sidecar-only.png").write_bytes(b"sidecar")
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [{"source_path": "sample.pdf", "markdown_path": "documents/sample.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (handoff / "artifact_index.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_artifact_index_v1",
+                        "artifacts": [{"path": "images/sidecar-only.png", "type": "image"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            plan = create_kb_asset_upload_plan(doc_manifest_path=manifest)
+
+        self.assertEqual(plan["summary"]["sidecar_referenced_image_count"], 1)
+        self.assertEqual(plan["summary"]["missing_image_count"], 0)
+        self.assertNotIn("image_missing", {issue["code"] for issue in plan["issues"]})
+        self.assertIn(
+            "documents/images/sidecar-only.png",
+            {item["source_path"] for item in plan["discovered_image_artifacts"]},
+        )
+
     def test_asset_upload_plan_classifies_apollo_style_referenced_and_residual_images(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             handoff = Path(tmp) / "handoff"
@@ -332,6 +372,50 @@ class KbBuildTests(unittest.TestCase):
         self.assertEqual(payload["documents"][0]["document_id"], "doc-1")
         self.assertEqual(payload["documents"][0]["source_path"], "a.pdf")
         self.assertEqual(payload["profile"]["id"], "default-en-768")
+
+    def test_build_payload_preview_separates_sent_local_only_and_advisory_fields(self) -> None:
+        profile = ChunkProfile.from_dict(
+            {
+                "profile_id": "table-atomic-zh-2048",
+                "language": "Chinese",
+                "chunk_size": 2048,
+                "chunk_overlap": 0,
+                "parser_config": {
+                    "chunk_token_num": 2048,
+                    "delimiter": "`<!-- chunk -->`",
+                    "auto_keywords": 1,
+                    "auto_questions": 0,
+                    "__language__": "Chinese",
+                },
+            }
+        )
+
+        preview = make_build_payload_preview(
+            kb_name="kb:test",
+            profile=profile,
+            retrieval_hints={
+                "schema": "ragflow_retrieval_hints_v1",
+                "keyword_candidates": ["apollo", "ontology"],
+                "question_candidates": ["What changed?"],
+                "image_artifacts": [{"path": "images/page.png"}],
+            },
+            ragflow_ingest_plan={
+                "schema": "ragflow_ingest_plan_v1",
+                "recommended_build": {"parser_profile": {"language": "zh"}},
+            },
+        )
+        fields = {item["field"]: item for item in preview["fields"]}
+
+        self.assertEqual(preview["schema"], BUILD_PAYLOAD_PREVIEW_SCHEMA)
+        self.assertEqual(preview["dataset_create_payload"]["language"], "Chinese")
+        self.assertEqual(fields["language"]["status"], "materialized_to_ragflow")
+        self.assertEqual(fields["parser_config.delimiter"]["status"], "materialized_to_ragflow")
+        self.assertEqual(fields["parser_config.__language__"]["status"], "local_audit_only")
+        self.assertEqual(fields["chunk_overlap"]["status"], "local_audit_only")
+        self.assertEqual(fields["retrieval_hints.keyword_candidates"]["status"], "advisory_after_build")
+        self.assertEqual(fields["retrieval_hints.question_candidates"]["status"], "advisory_after_build")
+        self.assertEqual(preview["summary"]["ragflow_field_count"], 6)
+        self.assertEqual(preview["summary"]["retrieval_hint_keyword_candidate_count"], 2)
 
     def test_make_multimodal_kb_manifest_links_markdown_visuals_and_observed_state(self) -> None:
         profile = ChunkProfile.from_dict({"profile_id": "default-zh-1024", "chunk_size": 1024})

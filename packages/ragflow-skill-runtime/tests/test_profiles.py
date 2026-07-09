@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from ragflow_skill_runtime.profiles import (
+    BUILD_PROFILE_MATERIALIZATION_SCHEMA,
     ChunkProfile,
     ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA,
     ENRICHMENT_EXPERIMENT_REPORT_SCHEMA,
@@ -14,6 +15,7 @@ from ragflow_skill_runtime.profiles import (
     decide_profile_from_reports,
     explain_profile,
     lint_profile,
+    materialize_profile_suggestion,
     plan_enrichment_experiments,
     load_profile,
     recommend_profile,
@@ -189,6 +191,66 @@ class ProfileTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertNotIn("__language__", payload["api_payload"]["parser_config"])
         self.assertEqual(payload["summary"]["language"], "English")
+
+    def test_profile_suggestion_materialization_clamps_delimiter_profile_and_preserves_source(self) -> None:
+        profile_suggestions = {
+            "schema": "ragflow_profile_suggestions_v1",
+            "suggestions": [
+                {
+                    "id": "default-zh-512",
+                    "language": "zh",
+                    "chunk_size": 512,
+                    "chunk_overlap": 64,
+                },
+                {
+                    "id": "table-atomic-zh-4096",
+                    "language": "zh",
+                    "chunk_method": "naive",
+                    "chunk_size": 4096,
+                    "chunk_overlap": 0,
+                    "postprocess_profile": "chunk-markers-dense",
+                    "parser_config": {
+                        "chunk_token_num": 4096,
+                        "delimiter": "`<!-- chunk -->`",
+                        "auto_keywords": 0,
+                        "auto_questions": 0,
+                        "__language__": "Chinese",
+                    },
+                    "avoid_children_delimiter": True,
+                },
+            ],
+        }
+        ingest_plan = {
+            "schema": "ragflow_ingest_plan_v1",
+            "recommended_build": {
+                "parser_profile": {
+                    "language": "zh",
+                    "chunk_size": 4096,
+                    "chunk_overlap": 0,
+                }
+            },
+        }
+
+        report = materialize_profile_suggestion(
+            profile_suggestions=profile_suggestions,
+            ragflow_ingest_plan=ingest_plan,
+        )
+        profile = report["profile"]
+        lint = lint_profile(ChunkProfile.from_dict(profile))
+
+        self.assertEqual(report["schema"], BUILD_PROFILE_MATERIALIZATION_SCHEMA)
+        self.assertEqual(profile["profile_id"], "table-atomic-zh-2048")
+        self.assertEqual(profile["language"], "Chinese")
+        self.assertEqual(profile["chunk_size"], 2048)
+        self.assertEqual(profile["parser_config"]["chunk_token_num"], 2048)
+        self.assertEqual(profile["parser_config"]["delimiter"], "`<!-- chunk -->`")
+        self.assertNotIn("__language__", profile["parser_config"])
+        self.assertTrue(lint.ok)
+        self.assertEqual(report["materialization"]["selected_suggestion_id"], "table-atomic-zh-4096")
+        self.assertEqual(report["materialization"]["clamps"][0]["field"], "parser_config.chunk_token_num")
+        self.assertEqual(report["materialization"]["clamps"][0]["original"], 4096)
+        self.assertEqual(report["materialization"]["clamps"][0]["effective"], 2048)
+        self.assertEqual(report["source_suggestion"]["id"], "table-atomic-zh-4096")
 
     def test_recommend_profile_for_chinese_notes(self) -> None:
         recommendation = recommend_profile(language="zh", doc_type="notes")

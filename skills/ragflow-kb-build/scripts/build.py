@@ -34,6 +34,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     HandoffError,
     RAGFlowClient,
     ApolloQaError,
+    apply_build_profile_language,
     attach_benchmark_evaluation,
     build_runtime_metrics_summary,
     build_runtime_partial_failure_report,
@@ -59,10 +60,12 @@ from ragflow_skill_runtime import (  # noqa: E402
     load_doc_manifest,
     load_kb_manifest,
     load_profile,
+    load_ragflow_ingest_plan,
     load_validation_queries,
     lint_metadata_file,
     lint_tagset_file,
     make_kb_manifest_payload,
+    make_build_payload_preview,
     make_doc_ingest_readiness_payload,
     make_metadata_template_payload,
     make_tagset_template_payload,
@@ -672,6 +675,27 @@ def _resolve_retrieval_hints_path(args: argparse.Namespace) -> Path | None:
     return retrieval_hints_path
 
 
+def _resolve_ingest_plan_path(args: argparse.Namespace) -> Path | None:
+    ingest_plan_path = Path(args.ingest_plan) if getattr(args, "ingest_plan", None) else None
+    if ingest_plan_path is None and args.doc_manifest:
+        handoff_root = Path(args.doc_manifest).parent
+        for name in ("ragflow_ingest_plan.yaml", "ragflow_ingest_plan.yml", "ragflow_ingest_plan.json"):
+            candidate = handoff_root / name
+            if candidate.is_file():
+                return candidate
+    return ingest_plan_path
+
+
+def _load_ingest_plan_for_build(args: argparse.Namespace) -> dict[str, Any] | None:
+    ingest_plan_path = _resolve_ingest_plan_path(args)
+    if ingest_plan_path is None:
+        return None
+    try:
+        return load_ragflow_ingest_plan(ingest_plan_path)
+    except HandoffError as exc:
+        raise BuildError(str(exc)) from exc
+
+
 def _post_build_recommendations(
     args: argparse.Namespace,
     *,
@@ -1274,7 +1298,9 @@ def _run(args: argparse.Namespace) -> int:
         stage_results: list[dict[str, Any]] = []
         stage_latency_ms: list[float] = []
         stage_timings: list[dict[str, Any]] = []
-        profile = load_profile(args.profile)
+        source_profile = load_profile(args.profile)
+        ragflow_ingest_plan = _load_ingest_plan_for_build(args)
+        profile = apply_build_profile_language(source_profile, ragflow_ingest_plan=ragflow_ingest_plan)
         expected_embedding_models = normalize_embedding_model_expectations(args.expected_embedding_model)
         embedding_model = describe_embedding_model(profile)
         embedding_model_check = check_embedding_model_drift(embedding_model, expected_embedding_models)
@@ -1288,17 +1314,17 @@ def _run(args: argparse.Namespace) -> int:
         metadata_summary = summarize_metadata_for_documents(args.metadata, [doc.path for doc in docs])
         if metadata_summary and not metadata_summary.get("ok", False):
             raise BuildError("metadata lint failed; run metadata lint for details")
+        retrieval_hints_payload = None
+        retrieval_hints_path = _resolve_retrieval_hints_path(args)
+        if retrieval_hints_path:
+            loaded_hints = _read_json_file(retrieval_hints_path, label="retrieval hints")
+            if not isinstance(loaded_hints, Mapping):
+                raise BuildError("retrieval hints must be a JSON object")
+            retrieval_hints_payload = loaded_hints
         if args.dry_run:
             ingest_readiness: dict[str, Any] | None = None
             table_parent_chunk_preflight = {"exists": False, "status": "not_available", "table_count": 0}
-            retrieval_hints_payload = None
-            retrieval_hints_path = _resolve_retrieval_hints_path(args)
             kb_name_collision_review: dict[str, Any]
-            if retrieval_hints_path:
-                loaded_hints = _read_json_file(retrieval_hints_path, label="retrieval hints")
-                if not isinstance(loaded_hints, Mapping):
-                    raise BuildError("retrieval hints must be a JSON object")
-                retrieval_hints_payload = loaded_hints
             if args.doc_manifest:
                 try:
                     readiness = make_doc_ingest_readiness_payload(
@@ -1344,6 +1370,12 @@ def _run(args: argparse.Namespace) -> int:
                     "documents": [str(doc.path) for doc in docs],
                     "metadata_summary": metadata_summary,
                     "retrieval_hints_summary": summarize_retrieval_hints(retrieval_hints_payload),
+                    "build_payload_preview": make_build_payload_preview(
+                        kb_name=args.kb_name,
+                        profile=source_profile,
+                        retrieval_hints=retrieval_hints_payload,
+                        ragflow_ingest_plan=ragflow_ingest_plan,
+                    ),
                     "ingest_readiness": ingest_readiness,
                     "build_readiness_metrics": _build_readiness_metrics(
                         docs=docs,
@@ -1371,6 +1403,12 @@ def _run(args: argparse.Namespace) -> int:
 
         config = _load_config(args)
         client = RAGFlowClient(config)
+        build_payload_preview = make_build_payload_preview(
+            kb_name=args.kb_name,
+            profile=source_profile,
+            retrieval_hints=retrieval_hints_payload,
+            ragflow_ingest_plan=ragflow_ingest_plan,
+        )
         checkpoint_payload: dict[str, Any] | None = None
         checkpoint_created_at: str | None = None
         checkpoint_records: dict[str, dict[str, Any]] = {}
@@ -1723,6 +1761,7 @@ def _run(args: argparse.Namespace) -> int:
             profile=profile,
             documents=uploaded,
             expected_embedding_models=expected_embedding_models,
+            build_payload_preview=build_payload_preview,
         )
         if metadata_summary:
             payload["metadata_summary"] = metadata_summary
@@ -1755,6 +1794,7 @@ def _run(args: argparse.Namespace) -> int:
                 "parse_errors": parse_errors,
                 "embedding_model": embedding_model,
                 "embedding_model_check": embedding_model_check,
+                "build_payload_preview": build_payload_preview,
                 "runtime_partial_failure": runtime_partial_failure,
                 "runtime_metrics": runtime_metrics,
                 "batching": batching,
@@ -5020,6 +5060,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", required=True, help="Chunk profile JSON/YAML")
     parser.add_argument("--metadata", help="Optional ragflow_metadata_v1 file to summarize and lint before upload")
     parser.add_argument("--retrieval-hints", help="Optional retrieval_hints.json used by dry-run readiness review")
+    parser.add_argument("--ingest-plan", help="Optional ragflow_ingest_plan.yaml/json used by build payload preview")
     parser.add_argument("--output", default="kb_manifest.json", help="Output kb_manifest.json path for non-dry-run builds")
     parser.add_argument("--config", help="Runtime config file")
     parser.add_argument("--base-url", help="RAGFlow base URL")
