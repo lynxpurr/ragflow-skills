@@ -66,6 +66,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     lint_tagset_file,
     make_kb_manifest_payload,
     make_build_payload_preview,
+    make_handoff_consumption_status,
     make_doc_ingest_readiness_payload,
     make_metadata_template_payload,
     make_tagset_template_payload,
@@ -1299,6 +1300,7 @@ def _run(args: argparse.Namespace) -> int:
         stage_latency_ms: list[float] = []
         stage_timings: list[dict[str, Any]] = []
         source_profile = load_profile(args.profile)
+        ragflow_ingest_plan_path = _resolve_ingest_plan_path(args)
         ragflow_ingest_plan = _load_ingest_plan_for_build(args)
         profile = apply_build_profile_language(source_profile, ragflow_ingest_plan=ragflow_ingest_plan)
         expected_embedding_models = normalize_embedding_model_expectations(args.expected_embedding_model)
@@ -1321,6 +1323,15 @@ def _run(args: argparse.Namespace) -> int:
             if not isinstance(loaded_hints, Mapping):
                 raise BuildError("retrieval hints must be a JSON object")
             retrieval_hints_payload = loaded_hints
+        handoff_consumption_status = make_handoff_consumption_status(
+            doc_manifest_path=args.doc_manifest,
+            documents=docs,
+            metadata_path=args.metadata,
+            retrieval_hints=retrieval_hints_payload,
+            retrieval_hints_path=retrieval_hints_path,
+            ragflow_ingest_plan=ragflow_ingest_plan,
+            ragflow_ingest_plan_path=ragflow_ingest_plan_path,
+        )
         if args.dry_run:
             ingest_readiness: dict[str, Any] | None = None
             table_parent_chunk_preflight = {"exists": False, "status": "not_available", "table_count": 0}
@@ -1376,6 +1387,7 @@ def _run(args: argparse.Namespace) -> int:
                         retrieval_hints=retrieval_hints_payload,
                         ragflow_ingest_plan=ragflow_ingest_plan,
                     ),
+                    "handoff_consumption_status": handoff_consumption_status,
                     "ingest_readiness": ingest_readiness,
                     "build_readiness_metrics": _build_readiness_metrics(
                         docs=docs,
@@ -1765,6 +1777,7 @@ def _run(args: argparse.Namespace) -> int:
         )
         if metadata_summary:
             payload["metadata_summary"] = metadata_summary
+        payload["handoff_consumption_status"] = handoff_consumption_status
         payload["runtime_partial_failure"] = runtime_partial_failure
         payload["runtime_metrics"] = runtime_metrics
         payload["batching"] = batching
@@ -1795,6 +1808,7 @@ def _run(args: argparse.Namespace) -> int:
                 "embedding_model": embedding_model,
                 "embedding_model_check": embedding_model_check,
                 "build_payload_preview": build_payload_preview,
+                "handoff_consumption_status": handoff_consumption_status,
                 "runtime_partial_failure": runtime_partial_failure,
                 "runtime_metrics": runtime_metrics,
                 "batching": batching,

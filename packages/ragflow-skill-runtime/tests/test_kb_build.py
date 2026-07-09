@@ -11,6 +11,7 @@ from ragflow_skill_runtime.kb_build import (
     BuildDocument,
     KB_ASSET_UPLOAD_PLAN_SCHEMA,
     BUILD_PAYLOAD_PREVIEW_SCHEMA,
+    HANDOFF_CONSUMPTION_STATUS_SCHEMA,
     MULTIMODAL_KB_MANIFEST_SCHEMA,
     create_kb_asset_upload_plan,
     discover_markdown_documents,
@@ -20,6 +21,7 @@ from ragflow_skill_runtime.kb_build import (
     extract_document_items,
     extract_document_name,
     extract_uploaded_document_id,
+    make_handoff_consumption_status,
     make_build_payload_preview,
     make_kb_manifest_payload,
     make_multimodal_kb_manifest_payload,
@@ -416,6 +418,98 @@ class KbBuildTests(unittest.TestCase):
         self.assertEqual(fields["retrieval_hints.question_candidates"]["status"], "advisory_after_build")
         self.assertEqual(preview["summary"]["ragflow_field_count"], 6)
         self.assertEqual(preview["summary"]["retrieval_hint_keyword_candidate_count"], 2)
+
+    def test_handoff_consumption_status_classifies_core_sidecars_assets_and_tables(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = Path(tmp) / "handoff"
+            docs_dir = handoff / "documents"
+            image_dir = docs_dir / "images"
+            table_dir = handoff / "artifacts" / "tables"
+            image_dir.mkdir(parents=True)
+            table_dir.mkdir(parents=True)
+            markdown = docs_dir / "sample.md"
+            markdown.write_text("# Sample\n\n![diagram](images/diagram.png)\n", encoding="utf-8")
+            (image_dir / "diagram.png").write_bytes(b"image")
+            (table_dir / "sample.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "quality_report": "quality_report.json",
+                        "documents": [{"source_path": "source.pdf", "markdown_path": "documents/sample.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (handoff / "quality_report.json").write_text(
+                json.dumps({"schema": "doc_quality_report_v1", "gate": {"status": "PASS"}}),
+                encoding="utf-8",
+            )
+            (handoff / "metadata.json").write_text(
+                json.dumps({"schema": "ragflow_metadata_v1", "documents": []}),
+                encoding="utf-8",
+            )
+            (handoff / "profile_suggestions.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_profile_suggestions_v1",
+                        "suggestions": [
+                            {
+                                "id": "table-atomic-zh-4096",
+                                "parser_config": {"chunk_token_num": 4096, "delimiter": "`<!-- chunk -->`"},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            retrieval_hints = {
+                "schema": "ragflow_retrieval_hints_v1",
+                "keyword_candidates": [{"term": "sample"}],
+                "question_candidates": [{"question": "What is sample?"}],
+                "image_artifacts": [{"path": "images/diagram.png"}],
+                "table_artifacts": [{"path": "artifacts/tables/sample.csv", "document": "documents/sample.md"}],
+            }
+            (handoff / "retrieval_hints.json").write_text(json.dumps(retrieval_hints), encoding="utf-8")
+            (handoff / "assistant_profile.json").write_text(
+                json.dumps({"schema": "ragflow_assistant_profile_v1", "profile_id": "review"}),
+                encoding="utf-8",
+            )
+            ingest_plan = {
+                "schema": "ragflow_ingest_plan_v1",
+                "recommended_build": {"parser_profile": {"language": "zh"}},
+            }
+            (handoff / "ragflow_ingest_plan.json").write_text(json.dumps(ingest_plan), encoding="utf-8")
+
+            report = make_handoff_consumption_status(
+                doc_manifest_path=manifest,
+                documents=[BuildDocument(path=markdown, manifest_source_path="source.pdf")],
+                metadata_path=handoff / "metadata.json",
+                retrieval_hints=retrieval_hints,
+                retrieval_hints_path=handoff / "retrieval_hints.json",
+                ragflow_ingest_plan=ingest_plan,
+                ragflow_ingest_plan_path=handoff / "ragflow_ingest_plan.json",
+            )
+
+        self.assertEqual(report["schema"], HANDOFF_CONSUMPTION_STATUS_SCHEMA)
+        by_artifact = {item["artifact"]: item for item in report["artifacts"]}
+        self.assertEqual(by_artifact["doc_manifest.json"]["status"], "materialized_to_manifest")
+        self.assertEqual(by_artifact["documents/sample.md"]["status"], "materialized_to_ragflow")
+        self.assertEqual(by_artifact["quality_report.json"]["status"], "local_audit_only")
+        self.assertEqual(by_artifact["profile_suggestions.json"]["status"], "advisory_after_build")
+        self.assertEqual(by_artifact["retrieval_hints.json"]["status"], "advisory_after_build")
+        self.assertEqual(by_artifact["metadata.json"]["status"], "materialized_to_manifest")
+        self.assertEqual(by_artifact["assistant_profile.json"]["status"], "advisory_after_build")
+        self.assertEqual(by_artifact["ragflow_ingest_plan.json"]["status"], "materialized_to_ragflow")
+        image_record = next(item for item in report["artifacts"] if item["kind"] == "image_asset")
+        table_record = next(item for item in report["artifacts"] if item["kind"] == "table_artifact")
+        self.assertEqual(image_record["status"], "unsupported_or_gated")
+        self.assertEqual(table_record["status"], "local_audit_only")
+        self.assertEqual(report["summary"]["status_counts"]["advisory_after_build"], 3)
+        self.assertEqual(report["summary"]["image_asset_count"], 1)
+        self.assertEqual(report["summary"]["table_artifact_count"], 1)
 
     def test_make_multimodal_kb_manifest_links_markdown_visuals_and_observed_state(self) -> None:
         profile = ChunkProfile.from_dict({"profile_id": "default-zh-1024", "chunk_size": 1024})

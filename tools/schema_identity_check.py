@@ -104,6 +104,14 @@ EXPECTED_IDENTITIES = (
         description="Embedded build payload preview block inside KB dry-run and live build reports.",
     ),
     SchemaIdentity(
+        key="handoff_consumption_status",
+        group="kb_build",
+        identity="ragflow_handoff_consumption_status_v1",
+        source_patterns=("ragflow_handoff_consumption_status_v1", "HANDOFF_CONSUMPTION_STATUS_SCHEMA"),
+        coverage_patterns=("ragflow_handoff_consumption_status_v1", "HANDOFF_CONSUMPTION_STATUS_SCHEMA"),
+        description="Embedded KB build report block classifying how handoff artifacts are consumed.",
+    ),
+    SchemaIdentity(
         key="kb_asset_ingestion_report",
         group="kb_build",
         identity="ragflow_kb_asset_ingestion_report_v1",

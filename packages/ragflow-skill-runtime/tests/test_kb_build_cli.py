@@ -850,6 +850,8 @@ class KbBuildCliTests(unittest.TestCase):
                 json.dumps(
                     {
                         "schema": "ragflow_retrieval_hints_v1",
+                        "keyword_candidates": [{"term": "sample-keyword"}],
+                        "question_candidates": [{"question": "What does the sample contain?"}],
                         "table_artifacts": [{"document": "sample.md", "caption": "Sample table"}],
                         "image_artifacts": [{"path": "images/sample.png", "caption": "Sample image"}],
                         "quality_risks": [{"code": "table_fragmentation", "severity": "warning"}],
@@ -894,6 +896,13 @@ class KbBuildCliTests(unittest.TestCase):
         fields = {item["field"]: item for item in preview["fields"]}
         self.assertEqual(fields["parser_config.__language__"]["status"], "local_audit_only")
         self.assertEqual(fields["retrieval_hints.keyword_candidates"]["status"], "advisory_after_build")
+        self.assertEqual(preview["dataset_create_payload"]["parser_config"]["auto_keywords"], 0)
+        self.assertEqual(preview["dataset_create_payload"]["parser_config"]["auto_questions"], 0)
+        consumption = payload["handoff_consumption_status"]
+        self.assertEqual(consumption["schema"], "ragflow_handoff_consumption_status_v1")
+        consumption_by_artifact = {item["artifact"]: item for item in consumption["artifacts"]}
+        self.assertEqual(consumption_by_artifact[str(input_dir / "sample.md")]["status"], "materialized_to_ragflow")
+        self.assertEqual(consumption_by_artifact[str(retrieval_hints)]["status"], "advisory_after_build")
 
     def test_build_dry_run_reports_embedding_model_drift_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1205,6 +1214,76 @@ class KbBuildCliTests(unittest.TestCase):
             "ragflow_ingest_plan.recommended_build.parser_profile.language",
         )
         self.assertEqual(manifest["profile"]["language"], "Chinese")
+
+    def test_build_live_path_does_not_derive_parser_enrichment_from_retrieval_hints(self) -> None:
+        module = load_build_module()
+        FakeOptimizeBuildClient.instances = []
+        module.RAGFlowClient = FakeOptimizeBuildClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "docs"
+            input_dir.mkdir()
+            (input_dir / "sample.md").write_text("# Title\n\nKnown answer\n", encoding="utf-8")
+            retrieval_hints = root / "retrieval_hints.json"
+            retrieval_hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hints_v1",
+                        "keyword_candidates": [{"term": "must-not-be-auto-keyword"}],
+                        "question_candidates": [{"question": "Must this become auto question?"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            profile = root / "reviewed-profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "reviewed-profile",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                        "parser_config": {"chunk_token_num": 512, "auto_keywords": 0, "auto_questions": 0},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output = root / "kb_manifest.json"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--input",
+                        str(input_dir),
+                        "--kb-name",
+                        "kb:test",
+                        "--profile",
+                        str(profile),
+                        "--retrieval-hints",
+                        str(retrieval_hints),
+                        "--base-url",
+                        "https://ragflow.example.test",
+                        "--api-key",
+                        "test-key",
+                        "--output",
+                        str(output),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            manifest = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        created_profile = FakeOptimizeBuildClient.instances[0].created[0][1]
+        self.assertEqual(created_profile["parser_config"]["auto_keywords"], 0)
+        self.assertEqual(created_profile["parser_config"]["auto_questions"], 0)
+        fields = {item["field"]: item for item in payload["build_payload_preview"]["fields"]}
+        self.assertEqual(fields["retrieval_hints.keyword_candidates"]["status"], "advisory_after_build")
+        self.assertEqual(fields["retrieval_hints.question_candidates"]["status"], "advisory_after_build")
+        self.assertEqual(manifest["handoff_consumption_status"]["schema"], "ragflow_handoff_consumption_status_v1")
+        self.assertEqual(
+            manifest["handoff_consumption_status"]["summary"]["status_counts"]["advisory_after_build"],
+            1,
+        )
 
     def test_build_live_path_batches_markdown_parse_requests(self) -> None:
         module = load_build_module()
@@ -1677,6 +1756,10 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertGreater(chunk_readiness["marker_count"], 0)
         self.assertEqual(chunk_readiness["selected_profile_marker_behavior"], "ignored")
         self.assertIn("chunk_markers_ignored_by_selected_profile", issue_codes)
+        guidance = chunk_readiness["delimiter_profile_guidance"]
+        self.assertEqual(guidance["status"], "recommended")
+        self.assertEqual(guidance["recommended_parser_config"]["delimiter"], "`<!-- chunk -->`")
+        self.assertTrue(any("--set" in command["command"] for command in guidance["review_commands"]))
 
     def test_build_dry_run_reports_chinese_corpus_profile_language_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -9801,6 +9884,48 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(candidate_payload["schema"], "ragflow_candidate_profile_set_v1")
         self.assertIn("llm_backed_enrichment_enabled", {issue["code"] for issue in payload["issues"]})
         self.assertIn("RAGFlow Enrichment Experiment Matrix", report_text)
+
+    def test_profile_experiment_bounded_defaults_plan_keyword_question_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidate_set = root / "candidate_profile_set.json"
+            report_json = root / "experiment_report.json"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROFILE_SCRIPT),
+                    "experiment",
+                    "--base-profile",
+                    str(PROFILE_PATH),
+                    "--bounded-defaults",
+                    "--candidate-set",
+                    str(candidate_set),
+                    "--report-json",
+                    str(report_json),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(report_json.read_text(encoding="utf-8")) if report_json.exists() else {}
+            candidate_payload = json.loads(candidate_set.read_text(encoding="utf-8")) if candidate_set.exists() else {}
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(payload["schema"], "ragflow_enrichment_experiment_report_v1")
+        self.assertEqual(payload["matrix"]["dimensions"]["auto_keywords"], [0, 1])
+        self.assertEqual(payload["matrix"]["dimensions"]["auto_questions"], [0, 1])
+        self.assertEqual(payload["summary"]["candidate_profile_count"], 4)
+        self.assertEqual(payload["summary"]["mutation_steps"], 0)
+        values = {
+            (
+                profile["parser_config"]["auto_keywords"],
+                profile["parser_config"]["auto_questions"],
+            )
+            for profile in candidate_payload["profiles"]
+        }
+        self.assertEqual(values, {(0, 0), (0, 1), (1, 0), (1, 1)})
+        self.assertIn("llm_backed_enrichment_enabled", {issue["code"] for issue in payload["issues"]})
 
     def test_profile_experiment_collapses_alias_duplicates_via_subprocess(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

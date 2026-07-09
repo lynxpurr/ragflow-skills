@@ -230,6 +230,15 @@ python ragflow-kb-build/scripts/build.py \
   --json
 ```
 
+Review dry-run `build_payload_preview` and `handoff_consumption_status` before live
+mutation. The preview shows the actual RAGFlow dataset payload versus local-only or
+advisory evidence; the consumption status classifies sidecars, images, tables, metadata,
+and assistant/query artifacts without implying they are all written to RAGFlow. If
+`ingest_readiness.checks.chunk_readiness.delimiter_profile_guidance.status` is
+`recommended`, plan a reviewed delimiter profile before live build; chunk marker
+delimiters help boundaries only when the deployment honors `parser_config.delimiter` and
+do not override server-side parent chunk limits.
+
 ## Complex Table Ingest Review
 
 For complex specification tables, keep the review offline until the user explicitly

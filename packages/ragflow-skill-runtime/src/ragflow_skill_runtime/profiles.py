@@ -30,6 +30,7 @@ ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA = "ragflow_enrichment_experiment_matrix_v1"
 ENRICHMENT_EXPERIMENT_REPORT_SCHEMA = "ragflow_enrichment_experiment_report_v1"
 CANDIDATE_PROFILE_SET_SCHEMA = "ragflow_candidate_profile_set_v1"
 PROFILE_DECISION_REPORT_SCHEMA = "ragflow_profile_decision_report_v1"
+DEFAULT_BOUNDED_ENRICHMENT_EXPERIMENT_NAME = "bounded-keyword-question-enrichment"
 
 DOC_TYPES = {"general", "book", "manual", "paper", "notes", "mixed"}
 LANGUAGE_ALIASES = {
@@ -1040,6 +1041,19 @@ def load_enrichment_experiment_matrix(path: str | Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ProfileError("experiment matrix must be an object")
     return data
+
+
+def make_bounded_enrichment_experiment_matrix(*, name: str | None = None) -> dict[str, Any]:
+    """Return a small offline matrix for reviewing keyword/question enrichment."""
+
+    return {
+        "schema": ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA,
+        "name": name or DEFAULT_BOUNDED_ENRICHMENT_EXPERIMENT_NAME,
+        "dimensions": {
+            "auto_keywords": [0, 1],
+            "auto_questions": [0, 1],
+        },
+    }
 
 
 def _matrix_issue_counts(issues: list[ProfileIssue]) -> dict[str, int]:

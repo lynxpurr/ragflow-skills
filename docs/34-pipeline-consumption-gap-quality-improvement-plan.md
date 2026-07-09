@@ -1,6 +1,6 @@
 # Pipeline Consumption Gap Quality Improvement Plan
 
-Status: first upgrade batch complete
+Status: second upgrade batch complete
 Date: 2026-07-09
 
 ## Objective / Scope / Boundaries
@@ -222,14 +222,14 @@ Acceptance target:
       original suggestion remains auditable.
 - [x] Fix sidecar image path resolution for `documents/images/...` fallback
       while preserving semantic alias warning behavior.
-- [ ] Add a handoff consumption status report covering profiles, retrieval
+- [x] Add a handoff consumption status report covering profiles, retrieval
       hints, metadata, assistant profile, ingest plan, image assets, and table
       artifacts.
-- [ ] Add CLI tests showing retrieval hints are summarized but not silently
+- [x] Add CLI tests showing retrieval hints are summarized but not silently
       written to live parser settings unless a reviewed profile says so.
-- [ ] Add delimiter-profile recommendation or materialization guidance when
+- [x] Add delimiter-profile recommendation or materialization guidance when
       chunk markers are dense and aligned.
-- [ ] Add an enrichment experiment plan for bounded `auto_keywords` and
+- [x] Add an enrichment experiment plan for bounded `auto_keywords` and
       `auto_questions` candidates.
 - [ ] Run a disposable, approval-gated enrichment comparison only after offline
       planning and cleanup readiness pass.
@@ -274,19 +274,47 @@ First upgrade batch completed on 2026-07-09:
   ingest-plan language materialization, reviewed profile clamping, and the
   sidecar image fallback.
 
+Second upgrade batch completed on 2026-07-09:
+
+- `ragflow-kb-build` dry-run output, live stdout payloads, and `kb_manifest.json`
+  now include an embedded `ragflow_handoff_consumption_status_v1` block. It
+  classifies Markdown documents, `doc_manifest.json`, `quality_report.json`,
+  `profile_suggestions.json`, `retrieval_hints.json`, `metadata.json`,
+  `assistant_profile.json`, `ragflow_ingest_plan.*`, image assets, and table
+  artifacts as materialized to RAGFlow, materialized to the manifest, advisory
+  after build, local audit only, or unsupported/gated.
+- CLI coverage now proves that `retrieval_hints.json` keyword and question
+  candidates are summarized and surfaced in previews, but are not silently
+  converted into live `auto_keywords` or `auto_questions` parser settings unless
+  a reviewed profile explicitly requests those settings.
+- Dry-run ingest readiness now includes `delimiter_profile_guidance` when chunk
+  markers are present but the selected profile ignores them. The guidance
+  recommends planning a reviewed delimiter candidate and states that delimiters
+  do not override server-side parent chunk limits.
+- `profile.py experiment --bounded-defaults` now creates the small offline
+  `auto_keywords`/`auto_questions` matrix `0`/`1` for conservative enrichment
+  planning before any approval-gated disposable live comparison.
+- User-facing `ragflow-kb-build` guidance, host-agent setup notes, and the
+  onboarding prompt now call out `handoff_consumption_status`, advisory
+  retrieval hints, delimiter guidance, and the bounded enrichment planning
+  command.
+
 Current verified baseline:
 
 - The public CLI/archive path remains the canonical release baseline.
 - The rich handoff producer is ahead of the default live KB consumer for this
   field-trial pattern.
-- Existing dry-run behavior already detects some relevant risks, including
-  ignored chunk markers and language-profile review issues.
-- Image ingestion can succeed after review, but the asset plan can still report
-  false missing sidecar image paths.
+- Existing dry-run behavior now detects relevant risks including ignored chunk
+  markers, language-profile review issues, handoff consumption boundaries, and
+  unsupported or gated image/table sidecar materialization.
+- Image ingestion can succeed after review, and sidecar image paths such as
+  `images/...` are resolved against `documents/images/...` before being reported
+  missing.
 
-The next implementation slice should be small and offline-testable. The safest
-first slice is either build payload preview/reporting or sidecar image path
-resolution, because both can be validated without live mutation.
+The next ordinary offline slice should focus on public-safe query-result
+retention for future A/B/C/D/E comparisons. Disposable enrichment comparison
+remains live-mutation gated and should start only after offline planning,
+cleanup readiness, exact confirmations, and user approval.
 
 ## Validation Evidence / Residual Gated Work
 
@@ -318,6 +346,20 @@ First upgrade batch validation evidence:
   `/tmp` work directories, environment-variable placeholders, example KB names,
   or technical terms such as `chunk_token_num`; no real endpoint, credential,
   dataset ID, document ID, private path, or raw retrieved chunk was added.
+
+Second upgrade batch validation evidence:
+
+- `python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/__init__.py packages/ragflow-skill-runtime/src/ragflow_skill_runtime/handoff.py packages/ragflow-skill-runtime/src/ragflow_skill_runtime/kb_build.py packages/ragflow-skill-runtime/src/ragflow_skill_runtime/profiles.py skills/ragflow-kb-build/scripts/build.py skills/ragflow-kb-build/scripts/profile.py tools/schema_identity_check.py packages/ragflow-skill-runtime/tests/test_kb_build.py packages/ragflow-skill-runtime/tests/test_kb_build_cli.py` passed.
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build.py packages/ragflow-skill-runtime/tests/test_profiles.py packages/ragflow-skill-runtime/tests/test_kb_build_cli.py packages/ragflow-skill-runtime/tests/test_schema_identity_check.py packages/ragflow-skill-runtime/tests/test_report_surface_inventory.py -q` passed with 154 tests.
+- `python3 tools/schema_identity_check.py --report-json /tmp/ragflow-consumption-gap-batch2-schema-identity.json` passed with `ok=true`, 101 identities, 0 failed identities, and 0 findings.
+- `python3 tools/report_surface_inventory.py --report-json /tmp/ragflow-consumption-gap-batch2-report-surface.json` passed with `ok=true`, 103 commands, and 0 findings.
+- `python3 tools/release_hygiene_check.py >/tmp/ragflow-consumption-gap-batch2-release-hygiene-after-doc-evidence.json` passed with `ok=true` and 0 findings.
+- `git diff --check` passed.
+- Changed-doc redaction scan hits were reviewed as placeholder commands, example
+  `/tmp` work directories, environment-variable placeholders, example KB names,
+  `DATASET_ID` placeholders, or technical terms such as `chunk_token_num`; no
+  real endpoint, credential, dataset ID, document ID, private path, or raw
+  retrieved chunk was added.
 
 Residual gated categories:
 

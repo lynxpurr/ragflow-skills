@@ -17,6 +17,7 @@ from .manifests import DocManifest, KbDocumentEntry, KbManifest, ManifestError, 
 from .profiles import ChunkProfile, ProfileError, SUPPORTED_PARSER_KEYS, load_profile, normalize_profile_language
 
 BUILD_PAYLOAD_PREVIEW_SCHEMA = "ragflow_kb_build_payload_preview_v1"
+HANDOFF_CONSUMPTION_STATUS_SCHEMA = "ragflow_handoff_consumption_status_v1"
 KB_ASSET_UPLOAD_PLAN_SCHEMA = "ragflow_kb_asset_upload_plan_v2"
 KB_ASSET_INGESTION_REPORT_SCHEMA = "ragflow_kb_asset_ingestion_report_v1"
 KB_ARTIFACT_CONSISTENCY_REPORT_SCHEMA = "ragflow_kb_artifact_consistency_report_v1"
@@ -26,6 +27,7 @@ RETRIEVAL_HINTS_SCHEMA = "ragflow_retrieval_hints_v1"
 CHUNK_PROFILE_REPORT_SCHEMA = "ragflow_chunk_profile_report_v1"
 MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)]\(([^)]+)\)")
 IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".tif", ".tiff", ".webp"}
+TABLE_SUFFIXES = {".csv", ".html", ".htm", ".json", ".md", ".markdown", ".tsv", ".xlsx"}
 ASSET_UPLOAD_PLAN_IMAGE_CLASSES = (
     "markdown_referenced",
     "manifest_listed",
@@ -408,6 +410,385 @@ def make_build_payload_preview(
             "unsupported_or_gated_field_count": sum(1 for item in fields if item["status"] == "unsupported_or_gated"),
             "retrieval_hint_keyword_candidate_count": _retrieval_hint_count(retrieval_hints, "keyword_candidates"),
             "retrieval_hint_question_candidate_count": _retrieval_hint_count(retrieval_hints, "question_candidates"),
+        },
+    }
+
+
+def _artifact_label(path: str | Path, *, handoff_root: Path | None) -> str:
+    candidate = Path(path)
+    if handoff_root is not None and _is_relative_to(candidate, handoff_root):
+        return _relative_to_root(candidate, handoff_root)
+    return str(path)
+
+
+def _sidecar_path(
+    *,
+    handoff_root: Path | None,
+    explicit_path: str | Path | None,
+    names: tuple[str, ...],
+) -> Path | None:
+    if explicit_path:
+        return Path(explicit_path)
+    if handoff_root is None:
+        return None
+    for name in names:
+        candidate = handoff_root / name
+        if candidate.exists():
+            return candidate
+    return handoff_root / names[0] if names else None
+
+
+def _resolve_handoff_artifact_path(raw: str, *, handoff_root: Path | None, base: Path | None = None) -> Path:
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return candidate
+    if base is not None:
+        resolved = base / candidate
+        if resolved.exists():
+            return resolved
+    if handoff_root is None:
+        return candidate
+    resolved = handoff_root / candidate
+    if resolved.exists():
+        return resolved
+    documents_relative = handoff_root / "documents" / candidate
+    if documents_relative.exists():
+        return documents_relative
+    return resolved
+
+
+def _artifact_status_record(
+    *,
+    artifact: str,
+    kind: str,
+    status: str,
+    source: str,
+    target: str | None,
+    exists: bool | None = None,
+    reason: str | None = None,
+    path: str | None = None,
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "artifact": artifact,
+        "kind": kind,
+        "status": status,
+        "source": source,
+        "target": target,
+    }
+    if exists is not None:
+        record["exists"] = exists
+    if reason:
+        record["reason"] = reason
+    if path:
+        record["path"] = path
+    return record
+
+
+def _add_artifact_status(
+    artifacts: list[dict[str, Any]],
+    seen: set[tuple[str, str]],
+    *,
+    artifact: str,
+    kind: str,
+    status: str,
+    source: str,
+    target: str | None,
+    exists: bool | None = None,
+    reason: str | None = None,
+    path: str | None = None,
+) -> None:
+    key = (kind, artifact)
+    if key in seen:
+        return
+    seen.add(key)
+    artifacts.append(
+        _artifact_status_record(
+            artifact=artifact,
+            kind=kind,
+            status=status,
+            source=source,
+            target=target,
+            exists=exists,
+            reason=reason,
+            path=path,
+        )
+    )
+
+
+def _iter_markdown_image_paths(path: Path) -> list[str]:
+    if not path.is_file():
+        return []
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return [_image_reference_path(match.group(2)) for match in MARKDOWN_IMAGE_RE.finditer(text)]
+
+
+def _retrieval_hint_paths(payload: Mapping[str, Any] | None, key: str, fields: tuple[str, ...]) -> list[str]:
+    if not isinstance(payload, Mapping):
+        return []
+    values = payload.get(key)
+    if not isinstance(values, list):
+        return []
+    paths: list[str] = []
+    for item in values:
+        if not isinstance(item, Mapping):
+            continue
+        for field in fields:
+            cleaned = _clean_artifact_path(item.get(field))
+            if cleaned:
+                paths.append(cleaned)
+                break
+    return paths
+
+
+def make_handoff_consumption_status(
+    *,
+    doc_manifest_path: str | Path | None,
+    documents: list[BuildDocument] | tuple[BuildDocument, ...],
+    metadata_path: str | Path | None = None,
+    retrieval_hints: Mapping[str, Any] | None = None,
+    retrieval_hints_path: str | Path | None = None,
+    ragflow_ingest_plan: Mapping[str, Any] | None = None,
+    ragflow_ingest_plan_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Classify how handoff artifacts are consumed by the standard KB build path."""
+
+    manifest_path = Path(doc_manifest_path) if doc_manifest_path else None
+    handoff_root = manifest_path.parent if manifest_path else None
+    manifest_payload: Mapping[str, Any] = {}
+    if manifest_path is not None and manifest_path.is_file():
+        try:
+            manifest_payload = _read_json_mapping(manifest_path, label="doc_manifest")
+        except BuildError:
+            manifest_payload = {}
+    artifacts: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    if manifest_path is not None:
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(manifest_path, handoff_root=handoff_root),
+            kind="doc_manifest",
+            status="materialized_to_manifest",
+            source="doc_manifest.json",
+            target="build.document_plan",
+            exists=manifest_path.is_file(),
+            reason="controls_markdown_document_selection_and_kb_manifest_document_records",
+            path=str(manifest_path),
+        )
+
+    for document in documents:
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(document.path, handoff_root=handoff_root),
+            kind="markdown_document",
+            status="materialized_to_ragflow",
+            source="doc_manifest.documents" if document.manifest_source_path else "input_markdown",
+            target="dataset.documents",
+            exists=document.path.is_file(),
+            reason="standard_build_uploads_markdown_documents",
+            path=str(document.path),
+        )
+
+    quality_name = manifest_payload.get("quality_report") if isinstance(manifest_payload.get("quality_report"), str) else None
+    quality_names = (quality_name, "quality_report.json") if quality_name else ("quality_report.json",)
+    quality_path = _sidecar_path(handoff_root=handoff_root, explicit_path=None, names=quality_names)
+    if quality_path is not None and quality_path.exists():
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(quality_path, handoff_root=handoff_root),
+            kind="quality_report",
+            status="local_audit_only",
+            source="quality_report.json",
+            target=None,
+            exists=quality_path.is_file(),
+            reason="quality_gate_is_checked_locally_before_build_not_sent_to_ragflow",
+            path=str(quality_path),
+        )
+
+    profile_suggestions_path = _sidecar_path(
+        handoff_root=handoff_root,
+        explicit_path=None,
+        names=("profile_suggestions.json",),
+    )
+    if profile_suggestions_path is not None and profile_suggestions_path.exists():
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(profile_suggestions_path, handoff_root=handoff_root),
+            kind="profile_suggestions",
+            status="advisory_after_build",
+            source="profile_suggestions.json",
+            target=None,
+            exists=profile_suggestions_path.is_file(),
+            reason="requires_reviewed_profile_materialization_before_parser_settings_change",
+            path=str(profile_suggestions_path),
+        )
+
+    resolved_retrieval_hints_path = _sidecar_path(
+        handoff_root=handoff_root,
+        explicit_path=retrieval_hints_path,
+        names=("retrieval_hints.json",),
+    )
+    if resolved_retrieval_hints_path is not None and (resolved_retrieval_hints_path.exists() or retrieval_hints is not None):
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(resolved_retrieval_hints_path, handoff_root=handoff_root),
+            kind="retrieval_hints",
+            status="advisory_after_build",
+            source="retrieval_hints.json",
+            target=None,
+            exists=resolved_retrieval_hints_path.is_file(),
+            reason="summarized_for_review_not_written_to_parser_or_query_settings",
+            path=str(resolved_retrieval_hints_path),
+        )
+
+    metadata_sidecar_path = _sidecar_path(
+        handoff_root=handoff_root,
+        explicit_path=metadata_path,
+        names=("metadata.json",),
+    )
+    if metadata_sidecar_path is not None and metadata_sidecar_path.exists():
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(metadata_sidecar_path, handoff_root=handoff_root),
+            kind="metadata",
+            status="materialized_to_manifest" if metadata_path else "local_audit_only",
+            source="metadata.json" if not metadata_path else "build --metadata",
+            target="kb_manifest.metadata_summary" if metadata_path else None,
+            exists=metadata_sidecar_path.is_file(),
+            reason="metadata_is_linted_and_summarized_locally_not_sent_as_dataset_parser_config",
+            path=str(metadata_sidecar_path),
+        )
+
+    assistant_profile_path = _sidecar_path(
+        handoff_root=handoff_root,
+        explicit_path=None,
+        names=("assistant_profile.json",),
+    )
+    if assistant_profile_path is not None and assistant_profile_path.exists():
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(assistant_profile_path, handoff_root=handoff_root),
+            kind="assistant_profile",
+            status="advisory_after_build",
+            source="assistant_profile.json",
+            target=None,
+            exists=assistant_profile_path.is_file(),
+            reason="assistant_and_query_parameters_are_not_written_through_kb_creation_api",
+            path=str(assistant_profile_path),
+        )
+
+    resolved_ingest_plan_path = _sidecar_path(
+        handoff_root=handoff_root,
+        explicit_path=ragflow_ingest_plan_path,
+        names=("ragflow_ingest_plan.yaml", "ragflow_ingest_plan.yml", "ragflow_ingest_plan.json"),
+    )
+    if resolved_ingest_plan_path is not None and (resolved_ingest_plan_path.exists() or ragflow_ingest_plan is not None):
+        language, language_source = _ingest_plan_language(ragflow_ingest_plan)
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(resolved_ingest_plan_path, handoff_root=handoff_root),
+            kind="ragflow_ingest_plan",
+            status="materialized_to_ragflow" if language else "materialized_to_manifest",
+            source=language_source or "ragflow_ingest_plan",
+            target="dataset.language" if language else "build_payload_preview",
+            exists=resolved_ingest_plan_path.is_file(),
+            reason=(
+                "language_recommendation_materialized_to_top_level_dataset_language"
+                if language
+                else "ingest_plan_reviewed_locally_without_supported_dataset_field_materialization"
+            ),
+            path=str(resolved_ingest_plan_path),
+        )
+
+    image_paths: dict[str, Path] = {}
+    for document in documents:
+        for raw in _iter_markdown_image_paths(document.path):
+            if not raw or _is_remote_asset_reference(raw):
+                continue
+            resolved = _resolve_handoff_artifact_path(raw, handoff_root=handoff_root, base=document.path.parent)
+            image_paths[_image_artifact_key(resolved)] = resolved
+    for raw in _retrieval_hint_paths(
+        retrieval_hints,
+        "image_artifacts",
+        ("path", "source_path", "raw_path", "target", "asset_path", "resolved_path", "package_path"),
+    ):
+        resolved = _resolve_handoff_artifact_path(raw, handoff_root=handoff_root)
+        image_paths.setdefault(_image_artifact_key(resolved), resolved)
+    for resolved in image_paths.values():
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(resolved, handoff_root=handoff_root),
+            kind="image_asset",
+            status="unsupported_or_gated",
+            source="markdown_or_retrieval_hints_image_reference",
+            target=None,
+            exists=resolved.is_file(),
+            reason="standard_markdown_build_does_not_upload_image_files_without_guarded_visual_ingestion",
+            path=str(resolved),
+        )
+
+    table_paths: dict[str, Path] = {}
+    for raw in _retrieval_hint_paths(
+        retrieval_hints,
+        "table_artifacts",
+        ("path", "table_path", "artifact_path", "source_path", "csv_path", "html_path"),
+    ):
+        resolved = _resolve_handoff_artifact_path(raw, handoff_root=handoff_root)
+        table_paths[str(resolved.resolve(strict=False))] = resolved
+    if handoff_root is not None:
+        table_root = handoff_root / "artifacts" / "tables"
+        if table_root.is_dir():
+            for path in table_root.rglob("*"):
+                if path.is_file() and path.suffix.lower() in TABLE_SUFFIXES:
+                    table_paths.setdefault(str(path.resolve(strict=False)), path)
+    for resolved in table_paths.values():
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(resolved, handoff_root=handoff_root),
+            kind="table_artifact",
+            status="local_audit_only",
+            source="retrieval_hints.table_artifacts_or_artifacts_tables",
+            target=None,
+            exists=resolved.is_file(),
+            reason="table_sidecar_artifacts_support_review_but_are_not_uploaded_as_standard_markdown_documents",
+            path=str(resolved),
+        )
+
+    status_values = [
+        "materialized_to_ragflow",
+        "materialized_to_manifest",
+        "advisory_after_build",
+        "local_audit_only",
+        "unsupported_or_gated",
+    ]
+    status_counts = {status: sum(1 for item in artifacts if item.get("status") == status) for status in status_values}
+    return {
+        "schema": HANDOFF_CONSUMPTION_STATUS_SCHEMA,
+        "created_at": _now(),
+        "status_values": status_values,
+        "doc_manifest": str(doc_manifest_path) if doc_manifest_path else None,
+        "summary": {
+            "artifact_count": len(artifacts),
+            "status_counts": status_counts,
+            "markdown_document_count": sum(1 for item in artifacts if item.get("kind") == "markdown_document"),
+            "image_asset_count": sum(1 for item in artifacts if item.get("kind") == "image_asset"),
+            "table_artifact_count": sum(1 for item in artifacts if item.get("kind") == "table_artifact"),
+        },
+        "artifacts": artifacts,
+        "safety": {
+            "ragflow_calls": 0,
+            "script_owned_llm_calls": 0,
+            "assistant_or_query_settings_written": False,
         },
     }
 

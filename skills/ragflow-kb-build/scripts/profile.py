@@ -39,6 +39,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     lint_profile,
     load_enrichment_experiment_matrix,
     load_profile,
+    make_bounded_enrichment_experiment_matrix,
     plan_enrichment_experiments,
     recommend_profile,
     render_enrichment_experiment_markdown,
@@ -574,11 +575,12 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
     if args.batch_size is not None and args.batch_size <= 0:
         raise ProfileError("profile experiment batch_size must be positive")
 
-    matrix = (
-        load_enrichment_experiment_matrix(args.matrix)
-        if args.matrix
-        else {"schema": ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA, "dimensions": {}}
-    )
+    if args.matrix:
+        matrix = load_enrichment_experiment_matrix(args.matrix)
+    elif args.bounded_defaults:
+        matrix = make_bounded_enrichment_experiment_matrix(name=args.name)
+    else:
+        matrix = {"schema": ENRICHMENT_EXPERIMENT_MATRIX_SCHEMA, "dimensions": {}}
     if args.name:
         matrix["name"] = args.name
     dimensions = matrix.setdefault("dimensions", {})
@@ -685,6 +687,11 @@ def build_parser() -> argparse.ArgumentParser:
     experiment = subparsers.add_parser("experiment", help="Plan offline enrichment experiment profiles")
     experiment.add_argument("--base-profile", required=True, help="Base profile JSON/YAML path")
     experiment.add_argument("--matrix", help="ragflow_enrichment_experiment_matrix_v1 JSON/YAML")
+    experiment.add_argument(
+        "--bounded-defaults",
+        action="store_true",
+        help="Use a small offline auto_keywords/auto_questions matrix: 0 and 1 for each",
+    )
     experiment.add_argument("--set", action="append", default=[], help="Add/override a dimension as key=value1,value2; may be repeated")
     experiment.add_argument("--name", help="Optional experiment matrix name")
     experiment.add_argument("--profile-id-prefix", help="Prefix for generated candidate profile ids")

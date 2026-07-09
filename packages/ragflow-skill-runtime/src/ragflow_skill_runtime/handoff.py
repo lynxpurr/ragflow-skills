@@ -2923,6 +2923,39 @@ def _chunk_readiness_summary(
             except (TypeError, ValueError):
                 summary[key] = 0
         summary["preferred_boundary_alignment_ratio"] = report_summary.get("preferred_boundary_alignment_ratio")
+    if summary.get("marker_count", 0) > 0 and summary.get("selected_profile_marker_behavior") == "ignored":
+        selected_profile_id = str(summary.get("selected_profile_id") or "<reviewed-profile>")
+        summary["delimiter_profile_guidance"] = {
+            "status": "recommended",
+            "reason": "chunk_markers_ignored_by_selected_profile",
+            "marker_count": summary.get("marker_count", 0),
+            "preferred_boundary_alignment_ratio": summary.get("preferred_boundary_alignment_ratio"),
+            "recommended_parser_config": {"delimiter": f"`{CHUNK_MARKER}`"},
+            "profile_notes": [
+                "delimiter controls chunk marker boundaries when the RAGFlow deployment honors parser_config.delimiter",
+                "delimiter does not override server-side parent chunk limits",
+            ],
+            "review_commands": [
+                {
+                    "name": "plan_delimiter_candidate_profile",
+                    "command": [
+                        "ragflow-kb-build",
+                        "profile",
+                        "experiment",
+                        "--base-profile",
+                        f"<{selected_profile_id}.json>",
+                        "--set",
+                        f"parser_config.delimiter=`{CHUNK_MARKER}`",
+                        "--set",
+                        "chunk_overlap=0",
+                        "--candidate-set",
+                        "<run>/delimiter_candidate_profile_set.json",
+                        "--report-json",
+                        "<run>/delimiter_profile_experiment.json",
+                    ],
+                }
+            ],
+        }
     return summary
 
 
