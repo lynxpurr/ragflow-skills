@@ -607,12 +607,13 @@ Allowed conclusion:
 
 ## 分阶段落实任务清单
 
-当前项目状态决定了落实顺序：`docs/34-pipeline-consumption-gap-quality-improvement-plan.md`
-的离线升级已经完成，剩余项是 approval-gated disposable enrichment comparison；
-本计划应先建立可复用的离线标准 benchmark seed，再用该 seed 支撑最后一项 live
-验证。除非当前线程获得明确授权，以下阶段默认不执行 live RAGFlow mutation。
+以下阶段 0 到阶段 5 记录首轮 Open RAG Benchmark seed 的执行路线。它们最初
+用于支撑 `docs/34-pipeline-consumption-gap-quality-improvement-plan.md` 的剩余
+live-gated enrichment comparison；截至 2026-07-09，该首轮路线已经完成并关闭
+`docs/34` 的对应 checklist 项。阶段 6 之后仍是后续 benchmark portfolio 扩展
+计划。除非当前线程获得明确授权，任何新的 live RAGFlow mutation 仍然默认不执行。
 
-### 阶段 0：冻结规划基线
+### 阶段 0：冻结规划基线（已完成）
 
 目标：
 
@@ -625,8 +626,9 @@ Allowed conclusion:
   FinanceBench 第二，QASPER 第三，TREC-COVID 延后。
 - 确认治理边界：不把外部 PDF、源数据集 dump、raw chunks、真实 RAGFlow
   endpoint、KB 名称、dataset ID 或 document ID 写入公开仓库。
-- 保持 `docs/34` 最后一项 live-gated checklist 未完成，直到真实 live
-  comparison、retention artifacts 和 cleanup verification 都完成。
+- 记录当时 gate 条件：只有真实 live comparison、retention artifacts 和
+  cleanup verification 都完成后，才可关闭 `docs/34` 对应 checklist 项；该
+  gate 已在阶段 5 后关闭。
 - 如需要进入版本历史，提交本文件作为 planning baseline；提交前只 stage
   intended docs changes。
 
@@ -635,7 +637,7 @@ Allowed conclusion:
 - 本计划被接受为后续执行基线。
 - 后续执行任务都引用本计划的 artifact contract、指标和 gate 条件。
 
-### 阶段 1：Open RAG Benchmark 离线种子集
+### 阶段 1：Open RAG Benchmark 离线种子集（已完成）
 
 目标：
 
@@ -668,7 +670,7 @@ Allowed conclusion:
   升级为 expected-chunk qrels。
 - 没有 live RAGFlow 调用，也没有 public repo 数据集大文件变更。
 
-### 阶段 2：Benchmark Import 和 Preflight 闭环
+### 阶段 2：Benchmark Import 和 Preflight 闭环（已完成）
 
 目标：
 
@@ -701,7 +703,7 @@ Allowed conclusion:
 - 该 benchmark 可用于 handoff dry-run readiness。
 - 仍不声称 profile 或 enrichment 有检索质量提升。
 
-### 阶段 3：PDF 到 Handoff 到 Dry-run 验证
+### 阶段 3：PDF 到 Handoff 到 Dry-run 验证（已完成）
 
 目标：
 
@@ -736,12 +738,12 @@ Allowed conclusion:
 - `inspect-handoff` 和 dry-run 通过或只有已分类的 advisory warning。
 - 不执行 live mutation。
 
-### 阶段 4：为 `docs/34` disposable enrichment 做 readiness
+### 阶段 4：为 `docs/34` disposable enrichment 做 readiness（已完成）
 
 目标：
 
 - 使用标准 benchmark seed 准备 `docs/34` 最后一项 live-gated enrichment
-  comparison，但仍先停在 plan/readiness。
+  comparison；该阶段当时只停在 plan/readiness，不执行 live mutation。
 
 任务：
 
@@ -768,14 +770,15 @@ Allowed conclusion:
 - 如果 delimiter base 与 `auto_keywords=0, auto_questions=0` 产生重复
   effective profile，应在 Stage 5 中只创建一个代表性 disposable KB。
 - 如果 readiness 不是 `ok=true`，不进入 live comparison。
-- 如果 readiness 通过，只能进入下一阶段的显式授权流程。
+- Readiness 通过后，只能进入下一阶段的显式授权流程；首轮已在阶段 5 获得
+  授权并完成。
 
-### 阶段 5：一次受控 Disposable Live Comparison
+### 阶段 5：一次受控 Disposable Live Comparison（已完成）
 
 目标：
 
 - 在明确授权后，使用标准 seed 关闭 `docs/34` 剩余的 live-gated checklist
-  item。
+  item；首轮已完成并验证 cleanup。
 
 任务：
 
@@ -806,7 +809,7 @@ Allowed conclusion:
 - Public-safe retention artifacts 完成。
 - Cleanup verified。
 - Redaction scan 和 release hygiene 通过。
-- 只有在以上条件全部满足后，才可勾选 `docs/34` 最后一项。
+- 以上条件已在首轮 Stage 5 后满足，`docs/34` 对应 checklist 项已关闭。
 
 ### 阶段 6：FinanceBench 表格和数值压力集
 
