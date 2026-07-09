@@ -1,7 +1,7 @@
 # Standard Benchmark Dataset Integration Plan
 
 Status: active standard-dataset integration plan; Open RAG Benchmark seed
-validated through Stage 4 readiness
+validated through Stage 5 disposable comparison
 Date: 2026-07-09
 
 ## Objective
@@ -70,22 +70,27 @@ Completed evidence:
 - Stage 4 readiness completed offline with a delimiter-aware profile base,
   bounded `auto_keywords` / `auto_questions` candidates, profile lint,
   optimization planning, cleanup planning, and readiness reporting.
+- Stage 5 completed after explicit live approval. Four unique effective
+  disposable KBs were created, parsed, queried, and cleaned up; public-safe
+  retention artifacts were generated; cleanup verification reported zero
+  residual disposable KBs.
+- On this exploratory seed, `auto_questions=1` improved average top similarity
+  by about 6%, while `auto_keywords=1` showed no measured gain. All candidates
+  hit all judged queries, so the benchmark remains too weak to evaluate
+  precision or support promotion.
 
 Current limitations and gates:
 
 - The benchmark supports workflow validation and exploratory comparison only.
   It must not be used for profile promotion or global default strategy changes.
-- Stage 4 readiness authorizes asking for Stage 5 approval; it does not authorize
-  live RAGFlow mutation by itself.
-- Duplicate effective profiles must be collapsed before live execution. The
-  delimiter-aware base profile represents the `auto_keywords=0,
-  auto_questions=0` baseline, so Stage 5 should create only four unique
-  effective disposable candidates.
-- The remaining `docs/34` checklist item cannot be closed until the disposable
-  live enrichment comparison, public-safe retention artifacts, and cleanup
-  verification are all complete.
+- The Stage 5 evidence closes the `docs/34` disposable enrichment checklist
+  item, but only at an exploratory decision tier.
+- Duplicate effective profiles were collapsed before live execution. The
+  delimiter-aware base profile represented the `auto_keywords=0,
+  auto_questions=0` baseline, so only four unique effective disposable
+  candidates were created.
 - RAGFlow DeepDoc native PDF handling remains a separate live-approved
-  PDF-native/fallback baseline path, not part of the Stage 3/4 offline evidence.
+  PDF-native/fallback baseline path, not part of the first enrichment comparison.
 
 ## Candidate Dataset Portfolio
 
@@ -863,22 +868,16 @@ Allowed conclusion:
 
 ## 立即执行建议
 
-当前已完成阶段 0 到阶段 4 的离线准备。下一步不是继续扩大离线报告，而是
-决定是否发起阶段 5 的明确 live approval。
+当前已完成阶段 0 到阶段 5 的首轮标准 seed 验证。下一步不应从这一个
+exploratory seed 推广默认 profile，而应选择一个新的证据增强方向：
 
-阶段 5 approval 应逐条确认：
-
-1. 允许创建 disposable RAGFlow KB，仅用于本 seed 的 bounded enrichment
-   comparison。
-2. 只创建 4 个 unique effective candidate profile；delimiter-aware baseline
-   同时代表 `auto_keywords=0, auto_questions=0`。
-3. 运行后生成 public-safe retention artifacts，不保留 raw chunks、真实
-   dataset/document IDs、KB 名称、endpoint 或 credentials 到公开仓库。
-4. 执行 cleanup，并验证 disposable KB 已删除。
-5. DeepDoc native baseline 如需执行，应作为单独 live approval 处理。
-
-如果没有明确 live approval，本计划应停留在 Stage 4 readiness 状态，并继续
-将 `docs/34` 最后一项保持为未关闭。
+1. 建立更强 Open RAG Benchmark subset：增加文档数、query 数、expected terms
+   或 expected chunks。
+2. 引入 FinanceBench 小切片，补 table-heavy、numeric evidence 和 evidence-page
+   压力测试。
+3. 如需 PDF native/fallback 对照，单独申请 DeepDoc live baseline approval。
+4. 将当前 seed 固化为 regression smoke/exploratory baseline，并在后续 release
+   health review 中重复运行。
 
 ## Governance And Safety
 
@@ -916,7 +915,8 @@ The standard-dataset program is useful when it can answer these questions repeat
 
 ## Immediate Next Step
 
-Request an explicit Stage 5 live approval only if the user wants to run the disposable
-enrichment comparison now. Without that approval, retain the current state as
-Stage 4-ready and do not close the remaining live-gated item in
-`docs/34-pipeline-consumption-gap-quality-improvement-plan.md`.
+Treat the first Open RAG Benchmark seed as a completed exploratory baseline. The next
+quality step is to strengthen the benchmark portfolio before making any profile
+promotion decision: add chunk-level or expected-term evidence to this seed, add a
+FinanceBench table/numeric slice, or run a separately approved DeepDoc native baseline
+comparison if PDF-native behavior is the question being tested.

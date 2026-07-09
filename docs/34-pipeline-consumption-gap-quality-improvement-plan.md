@@ -1,6 +1,6 @@
 # Pipeline Consumption Gap Quality Improvement Plan
 
-Status: offline upgrade batches complete; live enrichment comparison gated
+Status: complete; live enrichment comparison executed and cleanup verified
 Date: 2026-07-09
 
 ## Objective / Scope / Boundaries
@@ -231,7 +231,7 @@ Acceptance target:
       chunk markers are dense and aligned.
 - [x] Add an enrichment experiment plan for bounded `auto_keywords` and
       `auto_questions` candidates.
-- [ ] Run a disposable, approval-gated enrichment comparison only after offline
+- [x] Run a disposable, approval-gated enrichment comparison only after offline
       planning and cleanup readiness pass.
 - [x] Add a public-safe query-result retention format for future A/B/C/D/E
       comparisons.
@@ -335,10 +335,27 @@ Current verified baseline:
   via `ragflow_public_query_result_retention_v1` without publishing raw query
   text, raw chunk text, or raw live identifiers.
 
-All ordinary offline checklist items in this plan are now implemented. The only
-remaining checklist item is the disposable enrichment comparison, which remains
-live-mutation gated and should start only after offline planning, cleanup
-readiness, exact confirmations, and explicit user approval.
+Live enrichment comparison completed on 2026-07-09 after explicit user
+approval:
+
+- Stage 4 readiness selected four unique effective disposable profiles after
+  merging the duplicate delimiter baseline and `auto_keywords=0,
+  auto_questions=0` candidate.
+- Stage 5 created, parsed, queried, and deleted four disposable RAGFlow KBs.
+  All four parsed successfully with the same chunk count, all benchmark queries
+  returned hits, and cleanup verification reported zero residual disposable KBs.
+- Public-safe retention evidence was generated with aggregate metrics only. It
+  excludes raw chunks, credentials, live endpoints, raw dataset IDs, raw
+  document IDs, and raw KB identifiers.
+- On this exploratory one-document benchmark, `auto_questions=1` improved
+  average top similarity by about 6% while `auto_keywords=1` showed no measured
+  gain. Because the benchmark is still exploratory and document-level only, this
+  is not sufficient evidence for profile promotion.
+
+All checklist items in this plan are now complete. Remaining work, if desired,
+belongs to separately approved tracks such as DeepDoc native PDF baseline
+comparison, stronger multi-document/chunk-level benchmark construction, or
+broader release-health observation.
 
 ## Validation Evidence / Residual Gated Work
 
@@ -357,6 +374,8 @@ Focused implementation validation for future slices:
   generated Markdown audit, runtime resilience inventory, and release hygiene;
 - live disposable comparisons: explicit user approval, dry-run plan, cleanup
   readiness, exact confirmations, cleanup execution, and sanitized evidence.
+- Stage 5 disposable enrichment comparison completed with four unique effective
+  profiles, public-safe retention artifacts, and verified cleanup.
 
 First upgrade batch validation evidence:
 
