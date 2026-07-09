@@ -2882,6 +2882,7 @@ def _chunk_readiness_summary(
     postprocess_report: Mapping[str, Any] | None,
     chunk_profile_report: Mapping[str, Any] | None,
     sidecar_exists: bool,
+    selected_profile: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "chunk_profile_report_exists": sidecar_exists,
@@ -2890,6 +2891,14 @@ def _chunk_readiness_summary(
         "profile": None,
         "preferred_boundary_alignment_ratio": None,
     }
+    if isinstance(selected_profile, Mapping):
+        parser_config = selected_profile.get("parser_config") if isinstance(selected_profile.get("parser_config"), Mapping) else {}
+        delimiter = parser_config.get("delimiter") if isinstance(parser_config, Mapping) else None
+        delimiter_text = str(delimiter or "")
+        has_chunk_delimiter = bool(CHUNK_MARKER_RE.search(delimiter_text))
+        summary["selected_profile_id"] = str(selected_profile.get("id") or selected_profile.get("profile_id") or "")
+        summary["selected_profile_has_chunk_delimiter"] = has_chunk_delimiter
+        summary["selected_profile_marker_behavior"] = "honored" if has_chunk_delimiter else "ignored"
     source = chunk_profile_report
     if not isinstance(source, Mapping) and isinstance(postprocess_report, Mapping):
         embedded = postprocess_report.get("chunk_profile_report")
@@ -3033,6 +3042,7 @@ def make_doc_ingest_readiness_payload(
         postprocess_report=postprocess_report,
         chunk_profile_report=chunk_profile_report,
         sidecar_exists=bool(sidecars.get("chunk_profile_report", {}).get("exists")),
+        selected_profile=selected_profile,
     )
     table_parent_chunk_preflight = _table_parent_chunk_preflight(
         retrieval_hints=retrieval_hints,
@@ -3139,6 +3149,19 @@ def make_doc_ingest_readiness_payload(
                 code="chunk_profile_report_missing",
                 message="chunk profile readiness sidecar is missing",
                 recommendation="Use a chunk-marker postprocess profile before formal ingestion when chunk boundaries matter.",
+            )
+        )
+    if (
+        chunk_summary.get("marker_count", 0) > 0
+        and chunk_summary.get("selected_profile_marker_behavior") == "ignored"
+    ):
+        issues.append(
+            _readiness_issue(
+                check="chunk_readiness",
+                severity="warning",
+                code="chunk_markers_ignored_by_selected_profile",
+                message="chunk markers exist but the selected profile does not define the chunk delimiter",
+                recommendation="Use a delimiter-aware profile with parser_config.delimiter set to `<!-- chunk -->`, or treat chunk markers as advisory comments only.",
             )
         )
     if not retrieval_summary["exists"]:

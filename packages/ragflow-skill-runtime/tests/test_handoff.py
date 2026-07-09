@@ -980,6 +980,65 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(ingest_readiness["summary"]["chunk_marker_count"], readiness_chunk["marker_count"])
         self.assertEqual(ingest_readiness["status"], "ready_with_review")
 
+    def test_ingest_readiness_warns_when_selected_profile_will_ignore_chunk_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            documents.mkdir()
+            markdown = documents / "chunked.md"
+            markdown.write_text(
+                "# Section One\n\n"
+                "First body.\n\n"
+                "## Section Two\n\n"
+                "Second body.\n",
+                encoding="utf-8",
+            )
+            (root / "doc_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "handoff_mode": "formal_ingest",
+                        "quality_gate": {"status": "PASS"},
+                        "documents": [
+                            {
+                                "source_path": "chunked.md",
+                                "markdown_path": "documents/chunked.md",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            postprocess_handoff(
+                root / "doc_manifest.json",
+                profile="chunk-markers",
+                write=True,
+                report_json=root / "postprocess_report.json",
+                chunk_profile_report_json=root / "chunk_profile_report.json",
+            )
+            manifest = json.loads((root / "doc_manifest.json").read_text(encoding="utf-8"))
+            manifest["postprocess_report"] = "postprocess_report.json"
+            manifest["chunk_profile_report"] = "chunk_profile_report.json"
+            (root / "doc_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+            readiness = make_doc_ingest_readiness_payload(
+                handoff_root=root,
+                selected_profile={
+                    "id": "plain-profile",
+                    "parser_config": {"chunk_token_num": 512},
+                },
+            )
+            readiness_md = render_doc_ingest_readiness_markdown(readiness)
+
+        issue_codes = {issue["code"] for issue in readiness["issues"]}
+        chunk_readiness = readiness["checks"]["chunk_readiness"]
+        self.assertGreater(chunk_readiness["marker_count"], 0)
+        self.assertEqual(chunk_readiness["selected_profile_marker_behavior"], "ignored")
+        self.assertFalse(chunk_readiness["selected_profile_has_chunk_delimiter"])
+        self.assertIn("chunk_markers_ignored_by_selected_profile", issue_codes)
+        self.assertIn("chunk_markers_ignored_by_selected_profile", readiness_md)
+
     def test_inspect_rich_handoff_blocks_missing_images(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

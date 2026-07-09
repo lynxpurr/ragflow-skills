@@ -1143,6 +1143,7 @@ def _run(args: argparse.Namespace) -> int:
         if metadata_summary and not metadata_summary.get("ok", False):
             raise BuildError("metadata lint failed; run metadata lint for details")
         if args.dry_run:
+            ingest_readiness: dict[str, Any] | None = None
             table_parent_chunk_preflight = {"exists": False, "status": "not_available", "table_count": 0}
             retrieval_hints_payload = None
             retrieval_hints_path = _resolve_retrieval_hints_path(args)
@@ -1158,6 +1159,7 @@ def _run(args: argparse.Namespace) -> int:
                         doc_manifest_name=Path(args.doc_manifest).name,
                         selected_profile=profile.to_manifest_dict(),
                     )
+                    ingest_readiness = readiness
                     checks = readiness.get("checks") if isinstance(readiness.get("checks"), Mapping) else {}
                     table_parent_chunk_preflight = (
                         checks.get("table_parent_chunk_preflight")
@@ -1182,6 +1184,7 @@ def _run(args: argparse.Namespace) -> int:
                     "documents": [str(doc.path) for doc in docs],
                     "metadata_summary": metadata_summary,
                     "retrieval_hints_summary": summarize_retrieval_hints(retrieval_hints_payload),
+                    "ingest_readiness": ingest_readiness,
                     "table_parent_chunk_preflight": table_parent_chunk_preflight,
                     "batching": _batching_summary(
                         requested_batch_size=args.batch_size,

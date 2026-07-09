@@ -171,7 +171,7 @@ Acceptance criteria:
   reporting.
 - [x] Update `ragflow-doc-to-md` public guidance to recommend the pandoc EPUB cleanup
   profile for Dedao-style or pandoc-generated EPUB Markdown before KB build.
-- [ ] Add `ragflow-kb-build` dry-run/readiness warning coverage for chunk markers that
+- [x] Add `ragflow-kb-build` dry-run/readiness warning coverage for chunk markers that
   are unlikely to affect the selected downstream parser/profile.
 - [ ] Add Chinese corpus profile-readiness warnings or a documented review path for
   language/tokenizer expectations.
@@ -214,6 +214,12 @@ the profile through `postprocess`, `pipeline`, and adaptive decision overrides, 
 public skill guidance recommends it for Dedao-style or pandoc-generated EPUB Markdown
 before KB build.
 
+The 2026-07-09 P1 chunk-marker readiness slice extends `ragflow-kb-build` dry-run and
+formal ingest readiness review so chunk markers are advisory unless the selected profile
+declares the `<!-- chunk -->` delimiter. The readiness payload now records selected
+profile marker behavior and emits a `chunk_markers_ignored_by_selected_profile` warning
+when generated markers are unlikely to affect downstream parsing.
+
 Checklist items should be checked only after implementation, focused verification, and
 redaction review are complete.
 
@@ -241,6 +247,18 @@ for every Dedao-style EPUB or every RAGFlow deployment.
 - `python3 -m pytest packages/ragflow-skill-runtime/tests -q`
 - `git diff --check`
 - `python3 tools/release_hygiene_check.py >/tmp/ragflow-20260709-pandoc-epub-release-hygiene.json`
+
+2026-07-09 P1 chunk-marker readiness validation:
+
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_handoff.py::HandoffTests::test_ingest_readiness_warns_when_selected_profile_will_ignore_chunk_markers -q`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py::KbBuildCliTests::test_build_dry_run_reports_chunk_marker_profile_mismatch -q`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py::KbBuildCliTests::test_build_dry_run_reports_chunk_marker_profile_mismatch packages/ragflow-skill-runtime/tests/test_kb_build_cli.py::KbBuildCliTests::test_build_dry_run_reports_table_parent_chunk_preflight packages/ragflow-skill-runtime/tests/test_kb_build_cli.py::KbBuildCliTests::test_inspect_handoff_reviews_ingest_readiness_sidecar -q`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_handoff.py::HandoffTests::test_ingest_readiness_warns_when_selected_profile_will_ignore_chunk_markers packages/ragflow-skill-runtime/tests/test_handoff.py::HandoffTests::test_report_consistency_for_quality_postprocess_chunk_profile_and_ingest_readiness -q`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_handoff.py::HandoffTests::test_table_parent_chunk_preflight_warns_on_small_profile -q`
+- `python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/handoff.py skills/ragflow-kb-build/scripts/build.py packages/ragflow-skill-runtime/tests/test_handoff.py packages/ragflow-skill-runtime/tests/test_kb_build_cli.py`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_handoff.py -q`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py -q`
+- `python3 tools/schema_identity_check.py --report-json /tmp/ragflow-20260709-chunk-readiness-schema-identity.json >/tmp/ragflow-20260709-chunk-readiness-schema-identity.stdout`
 
 Residual gated work:
 

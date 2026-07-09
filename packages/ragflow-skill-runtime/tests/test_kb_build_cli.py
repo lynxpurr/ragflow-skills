@@ -1436,6 +1436,93 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(preflight["max_estimated_parent_chunk_tokens"], 960)
         self.assertEqual(preflight["issues"][0]["code"], "table_parent_chunk_profile_too_small")
 
+    def test_build_dry_run_reports_chunk_marker_profile_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = Path(tmp) / "handoff"
+            docs_dir = handoff / "documents"
+            docs_dir.mkdir(parents=True)
+            (docs_dir / "sample.md").write_text(
+                "# Title\n\n"
+                "Body.\n\n"
+                "## Next\n\n"
+                "More body.\n",
+                encoding="utf-8",
+            )
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "handoff_mode": "formal_ingest",
+                        "quality_gate": {"status": "PASS"},
+                        "documents": [{"source_path": "source.md", "markdown_path": "documents/sample.md"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(DOC_CONVERT_SCRIPT),
+                    "postprocess",
+                    "--doc-manifest",
+                    str(manifest),
+                    "--profile",
+                    "chunk-markers",
+                    "--write",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=True,
+                env=_env(),
+            )
+            manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+            manifest_payload["postprocess_report"] = "postprocess_report.json"
+            manifest_payload["chunk_profile_report"] = "chunk_profile_report.json"
+            manifest.write_text(json.dumps(manifest_payload), encoding="utf-8")
+            profile = Path(tmp) / "plain-profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "plain-profile",
+                        "chunk_size": 512,
+                        "chunk_overlap": 64,
+                        "parser_config": {"chunk_token_num": 512},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "--doc-manifest",
+                    str(manifest),
+                    "--kb-name",
+                    "kb:test",
+                    "--profile",
+                    str(profile),
+                    "--dry-run",
+                    "--json",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        issue_codes = {issue["code"] for issue in payload["ingest_readiness"]["issues"]}
+        chunk_readiness = payload["ingest_readiness"]["checks"]["chunk_readiness"]
+        self.assertGreater(chunk_readiness["marker_count"], 0)
+        self.assertEqual(chunk_readiness["selected_profile_marker_behavior"], "ignored")
+        self.assertIn("chunk_markers_ignored_by_selected_profile", issue_codes)
+
     def test_build_dry_run_recommends_activation_plan_after_build(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             handoff = Path(tmp) / "handoff"
