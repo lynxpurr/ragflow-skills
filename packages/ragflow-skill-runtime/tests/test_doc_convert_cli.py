@@ -727,10 +727,13 @@ class DocConvertCliTests(unittest.TestCase):
         self.assertEqual(report["static_comparison"]["retained_package"]["effective_root"], "ragflow_input")
         self.assertEqual(report["static_comparison"]["retained_package"]["markdown"]["markdown_file_count"], 1)
         self.assertEqual(report["static_comparison"]["retained_package"]["images"]["local_image_file_count"], 1)
+        self.assertIn("quality_metrics", report["static_comparison"])
+        self.assertIn("cleaned_handoff", report["static_comparison"]["quality_metrics"])
         self.assertEqual(report["live_evidence"]["paired_live_ab"]["status"], "not_run")
         self.assertFalse(report["live_evidence"]["paired_live_ab"]["executed"])
         self.assertEqual(report["safety"]["live_ragflow_mutation"], "not_performed")
         self.assertIn("RAGFlow Handoff Comparison", markdown)
+        self.assertIn("Cleanup Quality Metrics", markdown)
         self.assertIn("strict_paired_live_ab_not_run", markdown)
 
     def test_compare_adaptive_summaries_cli_writes_sanitized_report(self) -> None:

@@ -39,6 +39,15 @@ MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)]\(([^)]+)\)")
 NUMERIC_RE = re.compile(r"\b\d+(?:[.,]\d+)*(?:\s?[%A-Za-zμ°/-]+)?")
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
 CJK_PHRASE_RE = re.compile(r"[\u4e00-\u9fff]{2,12}")
+PANDOC_FENCED_DIV_LINE_RE = re.compile(r"(?m)^[ \t]*:{3,}[ \t]*(?:\{[^}\n]*\})?[ \t]*(?:\n|$)")
+PANDOC_EMPTY_ANCHOR_RE = re.compile(r"\[\]\{#[^}\n]+\}")
+PANDOC_HEADING_ANCHOR_TAIL_RE = re.compile(
+    r"(?m)^(?P<heading>[ \t]*#{1,6}[ \t]*.*?)[ \t]+\{#[A-Za-z0-9_.:-]+(?:[ \t][^}\n]*)?\}[ \t]*$"
+)
+PANDOC_SPAN_STYLE_RE = re.compile(
+    r"\[([^\]\n]+)\]\{[^}\n]*\bstyle\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s}]+)[^}\n]*\}"
+)
+HTML_STYLE_ATTR_RE = re.compile(r"\s+style\s*=\s*(\"[^\"]*\"|'[^']*')", re.IGNORECASE)
 PAGE_COMMENT_RE = re.compile(
     r"<!--\s*(?:page|page_id|page-id|page_index|page-index)\s*[:=]?\s*(\d+)\s*-->",
     re.IGNORECASE,
@@ -3789,6 +3798,42 @@ def _count_markdown_tables(text: str) -> int:
     return count
 
 
+def _comparison_int(value: Any) -> int:
+    if isinstance(value, bool) or value is None:
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _pandoc_artifact_counts(text: str) -> dict[str, int]:
+    counts = {
+        "fenced_div_marker_count": len(PANDOC_FENCED_DIV_LINE_RE.findall(text)),
+        "empty_generated_anchor_count": len(PANDOC_EMPTY_ANCHOR_RE.findall(text)),
+        "inline_style_attribute_count": len(PANDOC_SPAN_STYLE_RE.findall(text))
+        + len(HTML_STYLE_ATTR_RE.findall(text)),
+        "generated_heading_anchor_tail_count": len(PANDOC_HEADING_ANCHOR_TAIL_RE.findall(text)),
+    }
+    counts["total"] = sum(counts.values())
+    return counts
+
+
+def _merge_pandoc_artifact_counts(total: dict[str, int], counts: Mapping[str, int]) -> None:
+    for key, value in counts.items():
+        total[key] = total.get(key, 0) + int(value or 0)
+
+
+def _is_missing_local_image_reference(raw: str, *, markdown_path: Path) -> bool:
+    target = _image_reference_path(raw)
+    if not target or _is_remote_image_reference(target):
+        return False
+    candidate = Path(target)
+    if not candidate.is_absolute():
+        candidate = markdown_path.parent / candidate
+    return not candidate.exists()
+
+
 def _normalize_markdown_text_for_comparison(text: str) -> str:
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     normalized = CHUNK_MARKER_RE.sub("\n", normalized)
@@ -3804,9 +3849,17 @@ def _comparison_markdown_metrics(paths: list[Path], *, root: Path) -> tuple[dict
     image_ref_count = 0
     local_image_ref_count = 0
     remote_image_ref_count = 0
+    missing_local_image_ref_count = 0
     chunk_marker_count = 0
     markdown_table_count = 0
     html_table_count = 0
+    pandoc_counts = {
+        "fenced_div_marker_count": 0,
+        "empty_generated_anchor_count": 0,
+        "inline_style_attribute_count": 0,
+        "generated_heading_anchor_tail_count": 0,
+        "total": 0,
+    }
     normalized_parts: list[str] = []
     for path in paths:
         try:
@@ -3823,11 +3876,14 @@ def _comparison_markdown_metrics(paths: list[Path], *, root: Path) -> tuple[dict
             target = _image_reference_path(match.group(2))
             if target and not _is_remote_image_reference(target):
                 local_image_ref_count += 1
+                if _is_missing_local_image_reference(target, markdown_path=path):
+                    missing_local_image_ref_count += 1
             else:
                 remote_image_ref_count += 1
         chunk_marker_count += len(CHUNK_MARKER_RE.findall(raw))
         markdown_table_count += _count_markdown_tables(raw)
         html_table_count += len(parse_html_tables(raw))
+        _merge_pandoc_artifact_counts(pandoc_counts, _pandoc_artifact_counts(raw))
         normalized_parts.append(_normalize_markdown_text_for_comparison(raw))
     normalized_text = "\n".join(part for part in normalized_parts if part)
     return (
@@ -3839,9 +3895,12 @@ def _comparison_markdown_metrics(paths: list[Path], *, root: Path) -> tuple[dict
             "image_reference_count": image_ref_count,
             "local_image_reference_count": local_image_ref_count,
             "remote_image_reference_count": remote_image_ref_count,
+            "missing_local_image_reference_count": missing_local_image_ref_count,
             "chunk_marker_count": chunk_marker_count,
             "markdown_table_count": markdown_table_count,
             "html_table_count": html_table_count,
+            "pandoc_artifact_count": pandoc_counts["total"],
+            "pandoc_artifacts": pandoc_counts,
             "normalized_text_chars": len(normalized_text),
             "normalized_text_sha256": hashlib.sha256(normalized_text.encode("utf-8")).hexdigest(),
         },
@@ -3996,6 +4055,32 @@ def _comparison_ingest_readiness_summary(root: Path, *, ignored_dirs: set[str]) 
     }
 
 
+def _comparison_postprocess_summary(root: Path, *, ignored_dirs: set[str]) -> dict[str, Any]:
+    payload, path = _comparison_load_sidecar_payload(root, ("postprocess_report.json",), ignored_dirs=ignored_dirs)
+    if not isinstance(payload, Mapping):
+        return {
+            "exists": False,
+            "path": path,
+            "schema": None,
+            "profile": None,
+            "changed_documents": 0,
+            "total_rule_applications": 0,
+            "rule_counts": {},
+        }
+    summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
+    raw_rule_counts = summary.get("rule_counts") if isinstance(summary.get("rule_counts"), Mapping) else {}
+    rule_counts = {str(key): _comparison_int(value) for key, value in raw_rule_counts.items()}
+    return {
+        "exists": True,
+        "path": path,
+        "schema": payload.get("schema"),
+        "profile": payload.get("profile"),
+        "changed_documents": _comparison_int(summary.get("changed_documents")),
+        "total_rule_applications": _comparison_int(summary.get("total_rule_applications")),
+        "rule_counts": rule_counts,
+    }
+
+
 def _comparison_package_summary(
     *,
     root: Path,
@@ -4010,6 +4095,7 @@ def _comparison_package_summary(
     artifacts = _comparison_artifact_summary(root, ignored_dirs=ignored_dirs)
     sidecars = _comparison_sidecar_completeness(root, ignored_dirs=ignored_dirs)
     readiness = _comparison_ingest_readiness_summary(root, ignored_dirs=ignored_dirs)
+    postprocess = _comparison_postprocess_summary(root, ignored_dirs=ignored_dirs)
     table_signal_count = (
         int(markdown_metrics["markdown_table_count"])
         + int(markdown_metrics["html_table_count"])
@@ -4042,6 +4128,7 @@ def _comparison_package_summary(
         "images": {
             "markdown_image_reference_count": markdown_metrics["image_reference_count"],
             "local_image_reference_count": markdown_metrics["local_image_reference_count"],
+            "missing_local_image_reference_count": markdown_metrics["missing_local_image_reference_count"],
             **artifacts,
         },
         "tables": {
@@ -4055,6 +4142,7 @@ def _comparison_package_summary(
         "chunk_markers": {
             "marker_count": markdown_metrics["chunk_marker_count"],
         },
+        "postprocess": postprocess,
         "retrieval_hints": hints,
         "ingest_readiness": readiness,
         "sidecar_completeness": sidecars,
@@ -4063,6 +4151,10 @@ def _comparison_package_summary(
             "markdown_bytes": markdown_metrics["markdown_bytes"],
             "markdown_lines": markdown_metrics["markdown_lines"],
             "local_image_file_count": artifacts["local_image_file_count"],
+            "missing_local_image_reference_count": markdown_metrics["missing_local_image_reference_count"],
+            "pandoc_artifact_count": markdown_metrics["pandoc_artifact_count"],
+            "postprocess_rule_application_count": postprocess["total_rule_applications"],
+            "quality_gate_status": quality["status"],
             "chunk_marker_count": markdown_metrics["chunk_marker_count"],
             "retrieval_hint_section_count": hints.get("section_boundary_count", 0),
             "retrieval_hint_preferred_boundary_count": hints.get("preferred_boundary_count", 0),
@@ -4090,6 +4182,64 @@ def _comparison_delta(replacement: Mapping[str, Any], retained: Mapping[str, Any
     if isinstance(left, (int, float)) and isinstance(right, (int, float)):
         return left - right
     return None
+
+
+def _comparison_summary(summary: Mapping[str, Any], key: str) -> int:
+    metrics = summary.get("summary") if isinstance(summary.get("summary"), Mapping) else {}
+    return _comparison_int(metrics.get(key))
+
+
+def _comparison_quality_gate_status(summary: Mapping[str, Any]) -> str:
+    metrics = summary.get("summary") if isinstance(summary.get("summary"), Mapping) else {}
+    value = metrics.get("quality_gate_status")
+    return str(value) if value else "UNKNOWN"
+
+
+def _comparison_postprocess_rule_counts(summary: Mapping[str, Any]) -> dict[str, int]:
+    postprocess = summary.get("postprocess") if isinstance(summary.get("postprocess"), Mapping) else {}
+    rule_counts = postprocess.get("rule_counts") if isinstance(postprocess.get("rule_counts"), Mapping) else {}
+    return {str(key): _comparison_int(value) for key, value in rule_counts.items()}
+
+
+def _comparison_quality_metrics(
+    *,
+    retained_summary: Mapping[str, Any],
+    replacement_summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    retained_bytes = _comparison_summary(retained_summary, "markdown_bytes")
+    replacement_bytes = _comparison_summary(replacement_summary, "markdown_bytes")
+    retained_chars = _comparison_summary(retained_summary, "markdown_chars")
+    replacement_chars = _comparison_summary(replacement_summary, "markdown_chars")
+    retained_artifacts = _comparison_summary(retained_summary, "pandoc_artifact_count")
+    replacement_artifacts = _comparison_summary(replacement_summary, "pandoc_artifact_count")
+    retained_missing_images = _comparison_summary(retained_summary, "missing_local_image_reference_count")
+    replacement_missing_images = _comparison_summary(replacement_summary, "missing_local_image_reference_count")
+    bytes_removed = retained_bytes - replacement_bytes
+    chars_removed = retained_chars - replacement_chars
+    return {
+        "raw_markdown": {
+            "markdown_bytes": retained_bytes,
+            "markdown_chars": retained_chars,
+            "pandoc_artifact_count": retained_artifacts,
+            "missing_local_image_reference_count": retained_missing_images,
+            "quality_gate_status": _comparison_quality_gate_status(retained_summary),
+        },
+        "cleaned_handoff": {
+            "markdown_bytes": replacement_bytes,
+            "markdown_chars": replacement_chars,
+            "pandoc_artifact_count": replacement_artifacts,
+            "missing_local_image_reference_count": replacement_missing_images,
+            "quality_gate_status": _comparison_quality_gate_status(replacement_summary),
+            "postprocess_rule_counts": _comparison_postprocess_rule_counts(replacement_summary),
+        },
+        "deltas": {
+            "markdown_bytes_removed": bytes_removed,
+            "markdown_chars_removed": chars_removed,
+            "text_reduction_ratio": round(bytes_removed / retained_bytes, 6) if retained_bytes else 0.0,
+            "pandoc_artifacts_removed": retained_artifacts - replacement_artifacts,
+            "missing_local_images_repaired": retained_missing_images - replacement_missing_images,
+        },
+    }
 
 
 def _nested_number(payload: Mapping[str, Any], keys: tuple[str, ...]) -> int | float | None:
@@ -4250,6 +4400,9 @@ def make_handoff_comparison_payload(
             "markdown_bytes",
             "markdown_lines",
             "local_image_file_count",
+            "missing_local_image_reference_count",
+            "pandoc_artifact_count",
+            "postprocess_rule_application_count",
             "chunk_marker_count",
             "retrieval_hint_section_count",
             "retrieval_hint_preferred_boundary_count",
@@ -4311,6 +4464,10 @@ def make_handoff_comparison_payload(
                     "normalized Markdown image link paths to <image>",
                 ],
             },
+            "quality_metrics": _comparison_quality_metrics(
+                retained_summary=retained_summary,
+                replacement_summary=replacement_summary,
+            ),
             "deltas": deltas,
             "observations": observations,
         },
@@ -4364,6 +4521,9 @@ def render_handoff_comparison_markdown(report: Mapping[str, Any]) -> str:
         ("markdown_bytes", "Markdown bytes"),
         ("markdown_lines", "Markdown lines"),
         ("local_image_file_count", "Local image files"),
+        ("missing_local_image_reference_count", "Missing local images"),
+        ("pandoc_artifact_count", "Pandoc artifacts"),
+        ("postprocess_rule_application_count", "Postprocess rule applications"),
         ("chunk_marker_count", "Chunk markers"),
         ("retrieval_hint_section_count", "Hint sections"),
         ("retrieval_hint_preferred_boundary_count", "Preferred boundaries"),
@@ -4376,6 +4536,24 @@ def render_handoff_comparison_markdown(report: Mapping[str, Any]) -> str:
     for key, label in metric_labels:
         lines.append(
             f"| {label} | {retained_summary.get(key, 0)} | {replacement_summary.get(key, 0)} | {deltas.get(key, '')} |"
+        )
+    quality_metrics = static.get("quality_metrics") if isinstance(static.get("quality_metrics"), Mapping) else {}
+    raw_metrics = quality_metrics.get("raw_markdown") if isinstance(quality_metrics.get("raw_markdown"), Mapping) else {}
+    cleaned_metrics = quality_metrics.get("cleaned_handoff") if isinstance(quality_metrics.get("cleaned_handoff"), Mapping) else {}
+    quality_deltas = quality_metrics.get("deltas") if isinstance(quality_metrics.get("deltas"), Mapping) else {}
+    if quality_metrics:
+        lines.extend(
+            [
+                "",
+                "## Cleanup Quality Metrics",
+                "",
+                f"- raw_quality_gate_status: `{raw_metrics.get('quality_gate_status', 'UNKNOWN')}`",
+                f"- cleaned_quality_gate_status: `{cleaned_metrics.get('quality_gate_status', 'UNKNOWN')}`",
+                f"- markdown_bytes_removed: {quality_deltas.get('markdown_bytes_removed', 0)}",
+                f"- text_reduction_ratio: {quality_deltas.get('text_reduction_ratio', 0)}",
+                f"- pandoc_artifacts_removed: {quality_deltas.get('pandoc_artifacts_removed', 0)}",
+                f"- missing_local_images_repaired: {quality_deltas.get('missing_local_images_repaired', 0)}",
+            ]
         )
     lines.extend(["", "## Live Evidence", ""])
     replacement_live = live.get("replacement_path") if isinstance(live.get("replacement_path"), Mapping) else {}

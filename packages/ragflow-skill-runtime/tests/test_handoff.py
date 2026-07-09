@@ -291,6 +291,102 @@ class HandoffTests(unittest.TestCase):
         self.assertNotIn(str(root), serialized)
         self.assertNotIn("noise.md", serialized)
 
+    def test_handoff_comparison_reports_pandoc_cleanup_quality_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw = root / "raw-pandoc"
+            raw_images = raw / "images"
+            raw_images.mkdir(parents=True)
+            raw_markdown = raw / "pandoc.md"
+            raw_markdown.write_text(
+                "# 第一章 合成样本 {#chapter-one}\n\n"
+                "::: {.section style=\"page-break-before: always\"}\n"
+                "设备校准流程保留为可读正文，"
+                "[样式文本]{style=\"font-size: 12pt\"} []{#empty-anchor}\n\n"
+                "| 指标 | 数值 |\n"
+                "| --- | --- |\n"
+                "| 稳定性 | 高 |\n\n"
+                "![示意图](images/synthetic-chart.png)\n"
+                "![缺失图](images/missing-chart.png)\n"
+                ":::\n",
+                encoding="utf-8",
+            )
+            (raw_images / "synthetic-chart.png").write_bytes(b"synthetic image")
+
+            replacement = root / "replacement"
+            replacement_docs = replacement / "documents"
+            replacement_images = replacement_docs / "images"
+            replacement_images.mkdir(parents=True)
+            replacement_markdown = replacement_docs / "pandoc.md"
+            replacement_markdown.write_text(raw_markdown.read_text(encoding="utf-8"), encoding="utf-8")
+            (replacement_images / "synthetic-chart.png").write_bytes(b"synthetic image")
+            (replacement_images / "missing-chart.png").write_bytes(b"materialized image")
+            (replacement / "doc_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "handoff_mode": "formal_ingest",
+                        "documents": [
+                            {
+                                "source_path": "pandoc.md",
+                                "markdown_path": "documents/pandoc.md",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            postprocess_report = postprocess_handoff(
+                replacement / "doc_manifest.json",
+                profile="pandoc-epub",
+                write=True,
+                report_json=replacement / "postprocess_report.json",
+            )
+            quality_report = make_quality_report_payload(
+                output_root=replacement,
+                documents=[QualityDocument(source_path="pandoc.md", markdown_path=replacement_markdown)],
+            )
+            (replacement / "quality_report.json").write_text(
+                json.dumps(quality_report, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            manifest = json.loads((replacement / "doc_manifest.json").read_text(encoding="utf-8"))
+            manifest["quality_report"] = "quality_report.json"
+            manifest["postprocess_report"] = "postprocess_report.json"
+            manifest["quality_gate"] = quality_report["gate"]
+            (replacement / "doc_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+            report = make_handoff_comparison_payload(
+                retained_package=raw,
+                replacement_handoff=replacement,
+            )
+            markdown = render_handoff_comparison_markdown(report)
+
+        quality_metrics = report["static_comparison"]["quality_metrics"]
+        raw_metrics = quality_metrics["raw_markdown"]
+        cleaned_metrics = quality_metrics["cleaned_handoff"]
+        deltas = quality_metrics["deltas"]
+
+        self.assertGreater(raw_metrics["pandoc_artifact_count"], 0)
+        self.assertEqual(cleaned_metrics["pandoc_artifact_count"], 0)
+        self.assertEqual(raw_metrics["missing_local_image_reference_count"], 1)
+        self.assertEqual(cleaned_metrics["missing_local_image_reference_count"], 0)
+        self.assertEqual(cleaned_metrics["quality_gate_status"], "PASS")
+        self.assertEqual(
+            cleaned_metrics["postprocess_rule_counts"]["pandoc_epub.inline_style_attributes"],
+            postprocess_report["summary"]["rule_counts"]["pandoc_epub.inline_style_attributes"],
+        )
+        self.assertGreater(deltas["pandoc_artifacts_removed"], 0)
+        self.assertEqual(deltas["missing_local_images_repaired"], 1)
+        self.assertGreater(deltas["markdown_bytes_removed"], 0)
+        self.assertGreater(deltas["text_reduction_ratio"], 0)
+        self.assertIn("Pandoc artifacts", markdown)
+        self.assertIn("Missing local images", markdown)
+        serialized = json.dumps(report, ensure_ascii=False) + markdown
+        self.assertNotIn(str(root), serialized)
+
     def test_retrieval_hints_include_pages_context_templates_and_layout_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

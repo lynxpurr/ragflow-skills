@@ -3,7 +3,7 @@ name: ragflow-skills
 description: "RAGFlow 三 skill 套件：ragflow-doc-to-md + ragflow-kb-build + ragflow-query。知识库准备阶段以 doc-to-md → kb-build 为主线；覆盖 handoff 契约、regression test、chunk marker/table 原子性、以及 ragflux/ragflow-kb-ops 退役过渡对照。"
 version: 1.0.1
 author: Architect (Luca)
-_updated: '2026-07-05'
+_updated: '2026-07-09'
 license: MIT
 metadata:
   hermes:
@@ -291,6 +291,28 @@ python scripts/convert.py adaptive \
 `adaptive --decision-only` 输出 `pipeline_decision.json`，但 pipeline 执行时仍受显式参数覆盖。
 要让 `adaptive` 自动执行推荐配置，用完整命令；要人工 review，用 `--decision-only` 读 `recommendation` 字段后再决定。
 
+### Pitfall #8: asset-upload-plan 误报 image_missing（status=blocked）
+
+`_collect_sidecar_image_references()` 从 sidecar JSON（如 `artifact_index.json`）提取图片路径时，部分路径缺少 `documents/` 前缀，导致 `handoff_root / path` 解析失败 → 36 个 `image_missing` error → plan status=blocked。
+
+**关键**：`planned_visual_upload_files`（实际要上传的文件列表）不受此 bug 影响——88/88 全部 `exists=true`。`image-ingestion-execute` 不检查 plan status，直接执行即可。
+
+详见 `references/defect-asset-upload-plan-sidecar-path.md`。
+
+### Pitfall #9: RAGFlow API 参数限制与 build.py 重复 KB 处理
+
+- `chunk_token_num` 上限为 **2048**（profile_suggestions 推荐的 4096 不可直接使用）
+- `language` 字段必须在 dataset 顶层，不能放在 `parser_config` 内
+- `build.py` 在同名 KB 已存在时报 `could not extract dataset id from RAGFlow response`，需手动 `POST /datasets` 创建 KB 后直接上传文档
+
+### Pitfall #10: 默认 naive profile 浪费 chunk markers
+
+`chunk-markers-dense` 后处理在 Markdown 中插入数百个 `<!-- chunk -->` 语义边界标记。但 `default-zh-768` profile 使用 naive chunker 按 token 数切分，完全忽略这些标记。
+
+**实测**：delimiter 模式（`parser_config.delimiter = "`<!-- chunk -->`"`）比 naive 模式 Top-1 sim 提升 +0.008，用更少的 chunks（210 vs 256）达到更高检索精度。推荐对 doc-to-md pipeline 产出的 handoff 优先使用 delimiter profile。
+
+详见 `references/pdf-pipeline-abc-benchmark-2026-07-09.md` 的 D 管线章节。
+
 ## 常用验证命令
 
 ```bash
@@ -329,3 +351,5 @@ print(out.count('<!-- chunk -->'))
 - Reference: `references/mineru-fastapi-port-protocol-quirk.md` — 本地 MinerU FastAPI 端口协议识别陷阱
 - Reference: `references/ragflow-skills-e2e-test-checklist.md` — Hermes 端到端测试检查清单 + docs/N checklist 关闭工作流（refresh/embedding/routing 三类验证链与 gating 逻辑）
 - Reference: `references/model-provider-404-false-alarm.md` — RAGFlow model-provider API 全 404 不是 embedding 服务故障；TEI + tei-embed-proxy 生产架构验证
+- Reference: `references/pdf-pipeline-abc-benchmark-2026-07-09.md` — PDF 四管线 (chunk-build / manual MinerU / skill naive / skill delimiter) A/B/C/D 基准对比：检索质量 + 文本干净度 + 图片上传 + delimiter 模式验证
+- Reference: `references/defect-asset-upload-plan-sidecar-path.md` — DEFECT-001: asset-upload-plan sidecar 图片路径解析缺陷导致误报 image_missing

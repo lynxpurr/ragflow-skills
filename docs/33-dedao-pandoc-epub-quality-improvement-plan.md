@@ -178,13 +178,13 @@ Acceptance criteria:
 - [x] Add read-only or fake-client-tested KB-name collision review behavior where the
   endpoint contract allows it.
 - [x] Add a sanitized pandoc EPUB regression fixture or synthetic equivalent.
-- [ ] Add quality metrics comparing raw pandoc Markdown with cleaned formal handoff
+- [x] Add quality metrics comparing raw pandoc Markdown with cleaned formal handoff
   output.
-- [ ] Add build/readiness metrics for chunk count, chunk-size variation, parser/profile
+- [x] Add build/readiness metrics for chunk count, chunk-size variation, parser/profile
   warnings, and quality gate status.
-- [ ] Add retrieval benchmark guidance for future approved A/B runs, including ranking,
+- [x] Add retrieval benchmark guidance for future approved A/B runs, including ranking,
   agreement, empty-result, and latency metrics.
-- [ ] Re-run focused tests, `git diff --check`, and public-doc redaction scans before
+- [x] Re-run focused tests, `git diff --check`, and public-doc redaction scans before
   marking any checklist item complete.
 
 ## Current Development Progress
@@ -238,6 +238,27 @@ The 2026-07-09 P2 regression-fixture slice adds a synthetic Pandoc EPUB Markdown
 that covers marker-only fenced divs, generated anchors, inline style attributes, generated
 heading anchor tails, a Markdown table, and a local image reference without private corpus
 text. The fixture is now exercised by the `pandoc-epub` postprocess regression tests.
+
+The 2026-07-09 P2 document-quality metrics slice extends the static handoff comparison
+report so a raw Pandoc Markdown directory can be compared with a cleaned formal handoff
+without network access. The report now aggregates Pandoc artifact counts, missing local
+image references, Markdown byte/character reduction, cleaned quality-gate status, and
+replacement postprocess rule counts while keeping paths relative and omitting raw chunks.
+
+The 2026-07-09 P2 build-readiness metrics slice adds an advisory
+`build_readiness_metrics` block to `ragflow-kb-build --dry-run`. It records document
+count, selected profile, quality-gate status, ingest-readiness status, readiness issue
+codes, profile lint counts, and offline estimated chunk count / chunk-size coefficient of
+variation. The estimate is explicitly character-window based and does not claim to be a
+live RAGFlow parser chunk result.
+
+The 2026-07-09 P2 retrieval benchmark guidance slice keeps retrieval A/B evidence gated
+behind explicit benchmark inputs and separate live approval. Future approved runs should
+report only sanitized aggregate metrics: query count, mean score or similarity, Hit@k,
+MRR or equivalent ranking quality, top-result agreement, empty-result rate, p50/p95
+latency, timeout/error counts, and cleanup status. Public evidence must avoid private KB
+names, dataset identifiers, document identifiers, raw retrieved chunks, private prompts,
+tokens, and private run roots.
 
 Checklist items should be checked only after implementation, focused verification, and
 redaction review are complete.
@@ -298,6 +319,20 @@ for every Dedao-style EPUB or every RAGFlow deployment.
 
 - `python3 -m pytest packages/ragflow-skill-runtime/tests/test_doc_postprocess.py::DocPostprocessTests::test_sanitized_pandoc_epub_fixture_covers_observed_noise_classes -q`
 - `python3 -m pytest packages/ragflow-skill-runtime/tests/test_doc_postprocess.py -q`
+
+2026-07-09 P2 quality/build metrics validation:
+
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_handoff.py::HandoffTests::test_handoff_comparison_reports_pandoc_cleanup_quality_metrics -q`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_handoff.py::HandoffTests::test_handoff_comparison_ignores_retained_intermediates_and_normalizes_text packages/ragflow-skill-runtime/tests/test_handoff.py::HandoffTests::test_handoff_comparison_reports_pandoc_cleanup_quality_metrics -q`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py::DocConvertCliTests::test_compare_retained_package_cli_writes_static_report -q`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py::KbBuildCliTests::test_build_dry_run_reports_build_readiness_metrics -q`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py::KbBuildCliTests::test_build_dry_run_reports_chunk_marker_profile_mismatch packages/ragflow-skill-runtime/tests/test_kb_build_cli.py::KbBuildCliTests::test_build_dry_run_reports_chinese_corpus_profile_language_review packages/ragflow-skill-runtime/tests/test_kb_build_cli.py::KbBuildCliTests::test_build_dry_run_reports_build_readiness_metrics packages/ragflow-skill-runtime/tests/test_kb_build_cli.py::KbBuildCliTests::test_build_dry_run_reports_kb_name_collision_review_without_live_probe -q`
+- `python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/handoff.py skills/ragflow-kb-build/scripts/build.py packages/ragflow-skill-runtime/tests/test_handoff.py packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py packages/ragflow-skill-runtime/tests/test_kb_build_cli.py`
+- `python3 tools/schema_identity_check.py --report-json /tmp/ragflow-20260709-pandoc-p2-schema-identity.json >/tmp/ragflow-20260709-pandoc-p2-schema-identity.stdout`
+- `python3 tools/release_hygiene_check.py >/tmp/ragflow-20260709-pandoc-p2-release-hygiene.json`
+- `rg -n "/home/|192\\.168|127\\.0\\.0\\.1|/tmp/|api[_-]?key|bearer|token|dataset_id|document_id|kb:" docs/33-dedao-pandoc-epub-quality-improvement-plan.md || true`
+- `git diff --check`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests -q`
 
 Residual gated work:
 

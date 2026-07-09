@@ -148,6 +148,7 @@ from ragflow_skill_runtime.metadata_governance import MetadataGovernanceError  #
 from ragflow_skill_runtime.parse_report import ParseReportError  # noqa: E402
 from ragflow_skill_runtime.profiles import ChunkProfile  # noqa: E402
 from ragflow_skill_runtime.profiles import ProfileError  # noqa: E402
+from ragflow_skill_runtime.profiles import lint_profile  # noqa: E402
 from ragflow_skill_runtime.topology import TopologyError  # noqa: E402
 from ragflow_skill_runtime.validation import ValidationError  # noqa: E402
 
@@ -194,6 +195,124 @@ def _guard_quality_gate(doc_manifest, *, allow_blocked: bool) -> None:
             "doc_manifest quality gate is BLOCKED; inspect the quality report or pass "
             "--allow-blocked to upload anyway"
         )
+
+
+def _quality_gate_status(doc_manifest) -> str:
+    if not doc_manifest:
+        return "UNKNOWN"
+    gate = getattr(doc_manifest, "quality_gate", {}) or {}
+    status = gate.get("status") if isinstance(gate, dict) else None
+    return str(status or "UNKNOWN")
+
+
+def _estimated_chunk_lengths_for_text(text: str, *, chunk_size: int, chunk_overlap: int) -> list[int]:
+    stripped = text.strip()
+    if not stripped:
+        return []
+    target = max(int(chunk_size or 1), 1)
+    step = max(target - max(int(chunk_overlap or 0), 0), 1)
+    lengths: list[int] = []
+    for start in range(0, len(stripped), step):
+        lengths.append(min(target, len(stripped) - start))
+    return lengths
+
+
+def _coefficient_of_variation(values: list[int]) -> float:
+    if not values:
+        return 0.0
+    mean = sum(values) / len(values)
+    if mean <= 0:
+        return 0.0
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    return round((variance ** 0.5) / mean, 6)
+
+
+def _estimated_chunk_size_metrics(docs: list[Any], profile: ChunkProfile) -> dict[str, Any]:
+    lengths: list[int] = []
+    markdown_char_count = 0
+    for doc in docs:
+        try:
+            text = doc.path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        markdown_char_count += len(text)
+        lengths.extend(
+            _estimated_chunk_lengths_for_text(
+                text,
+                chunk_size=profile.chunk_size,
+                chunk_overlap=profile.chunk_overlap,
+            )
+        )
+    average = round(sum(lengths) / len(lengths), 2) if lengths else 0.0
+    return {
+        "estimation_basis": "markdown_character_windows",
+        "markdown_char_count": markdown_char_count,
+        "estimated_chunk_count": len(lengths),
+        "estimated_chunk_chars_min": min(lengths) if lengths else 0,
+        "estimated_chunk_chars_max": max(lengths) if lengths else 0,
+        "estimated_chunk_chars_average": average,
+        "estimated_chunk_size_coefficient_of_variation": _coefficient_of_variation(lengths),
+    }
+
+
+def _readiness_issue_codes(ingest_readiness: Mapping[str, Any] | None) -> list[str]:
+    if not isinstance(ingest_readiness, Mapping):
+        return []
+    issues = ingest_readiness.get("issues")
+    if not isinstance(issues, list):
+        return []
+    codes = []
+    for issue in issues:
+        if isinstance(issue, Mapping) and issue.get("code"):
+            codes.append(str(issue["code"]))
+    return sorted(set(codes))
+
+
+def _readiness_issue_count(ingest_readiness: Mapping[str, Any] | None) -> int:
+    if not isinstance(ingest_readiness, Mapping):
+        return 0
+    issues = ingest_readiness.get("issues")
+    if not isinstance(issues, list):
+        return 0
+    return sum(1 for issue in issues if isinstance(issue, Mapping))
+
+
+def _build_readiness_metrics(
+    *,
+    docs: list[Any],
+    profile: ChunkProfile,
+    doc_manifest: Any,
+    ingest_readiness: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    chunk_metrics = _estimated_chunk_size_metrics(docs, profile)
+    profile_lint = lint_profile(profile).to_dict()
+    profile_summary = profile_lint.get("summary") if isinstance(profile_lint.get("summary"), Mapping) else {}
+    profile_issues = profile_lint.get("issues") if isinstance(profile_lint.get("issues"), list) else []
+    warning_codes = sorted(
+        {
+            str(issue.get("code"))
+            for issue in profile_issues
+            if isinstance(issue, Mapping) and issue.get("severity") in {"warning", "error"} and issue.get("code")
+        }
+    )
+    readiness_codes = _readiness_issue_codes(ingest_readiness)
+    return {
+        "advisory_only": True,
+        "offline_only": True,
+        "document_count": len(docs),
+        "selected_profile_id": profile.profile_id,
+        "selected_profile_chunk_size": profile.chunk_size,
+        "selected_profile_chunk_overlap": profile.chunk_overlap,
+        "quality_gate_status": _quality_gate_status(doc_manifest),
+        "ingest_readiness_status": str(ingest_readiness.get("status")) if isinstance(ingest_readiness, Mapping) else "not_available",
+        "readiness_issue_count": _readiness_issue_count(ingest_readiness),
+        "readiness_issue_codes": readiness_codes,
+        "parser_profile_error_count": int(profile_summary.get("errors", 0) or 0),
+        "parser_profile_warning_count": int(profile_summary.get("warnings", 0) or 0),
+        "parser_profile_info_count": int(profile_summary.get("infos", 0) or 0),
+        "parser_profile_warning_codes": warning_codes,
+        **chunk_metrics,
+    }
 
 
 def _write_json_file(path: str | None, payload: Any) -> None:
@@ -1226,6 +1345,12 @@ def _run(args: argparse.Namespace) -> int:
                     "metadata_summary": metadata_summary,
                     "retrieval_hints_summary": summarize_retrieval_hints(retrieval_hints_payload),
                     "ingest_readiness": ingest_readiness,
+                    "build_readiness_metrics": _build_readiness_metrics(
+                        docs=docs,
+                        profile=profile,
+                        doc_manifest=doc_manifest,
+                        ingest_readiness=ingest_readiness,
+                    ),
                     "kb_name_collision_review": kb_name_collision_review,
                     "table_parent_chunk_preflight": table_parent_chunk_preflight,
                     "batching": _batching_summary(

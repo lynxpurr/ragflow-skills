@@ -1605,6 +1605,80 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(language_readiness["selected_profile_language"], "unspecified")
         self.assertIn("chinese_corpus_profile_language_unspecified", issue_codes)
 
+    def test_build_dry_run_reports_build_readiness_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            handoff = root / "handoff"
+            docs_dir = handoff / "documents"
+            docs_dir.mkdir(parents=True)
+            (docs_dir / "short.md").write_text("# Short\n\nBrief body.\n", encoding="utf-8")
+            (docs_dir / "long.md").write_text(
+                "# Long\n\n" + ("This section has repeated deterministic build readiness text. " * 20),
+                encoding="utf-8",
+            )
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "handoff_mode": "formal_ingest",
+                        "quality_gate": {"status": "PASS"},
+                        "documents": [
+                            {"source_path": "short.md", "markdown_path": "documents/short.md"},
+                            {"source_path": "long.md", "markdown_path": "documents/long.md"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            profile = root / "small-profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "profile_id": "small-profile",
+                        "chunk_size": 128,
+                        "chunk_overlap": 0,
+                        "parser_config": {"chunk_token_num": 128},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "--doc-manifest",
+                    str(manifest),
+                    "--kb-name",
+                    "kb:test",
+                    "--profile",
+                    str(profile),
+                    "--dry-run",
+                    "--json",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        metrics = payload["build_readiness_metrics"]
+
+        self.assertEqual(metrics["document_count"], 2)
+        self.assertEqual(metrics["quality_gate_status"], "PASS")
+        self.assertEqual(metrics["ingest_readiness_status"], payload["ingest_readiness"]["status"])
+        self.assertGreater(metrics["estimated_chunk_count"], 1)
+        self.assertGreater(metrics["estimated_chunk_size_coefficient_of_variation"], 0)
+        self.assertGreater(metrics["parser_profile_warning_count"], 0)
+        self.assertIn("chunk_size_small", metrics["parser_profile_warning_codes"])
+        self.assertEqual(metrics["readiness_issue_count"], len(payload["ingest_readiness"]["issues"]))
+        self.assertEqual(metrics["selected_profile_id"], "small-profile")
+
     def test_build_dry_run_reports_kb_name_collision_review_without_live_probe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             input_dir = Path(tmp) / "docs"
