@@ -175,9 +175,9 @@ Acceptance criteria:
   are unlikely to affect the selected downstream parser/profile.
 - [x] Add Chinese corpus profile-readiness warnings or a documented review path for
   language/tokenizer expectations.
-- [ ] Add read-only or fake-client-tested KB-name collision review behavior where the
+- [x] Add read-only or fake-client-tested KB-name collision review behavior where the
   endpoint contract allows it.
-- [ ] Add a sanitized pandoc EPUB regression fixture or synthetic equivalent.
+- [x] Add a sanitized pandoc EPUB regression fixture or synthetic equivalent.
 - [ ] Add quality metrics comparing raw pandoc Markdown with cleaned formal handoff
   output.
 - [ ] Add build/readiness metrics for chunk count, chunk-size variation, parser/profile
@@ -226,6 +226,18 @@ text is detected but the selected profile does not declare Chinese language meta
 report emits `chinese_corpus_profile_language_unspecified` as an advisory warning.
 Profiles that set `parser_config.__language__` to `Chinese` satisfy the review path
 without blocking the build.
+
+The 2026-07-09 P1 KB-name collision review slice adds a sanitized
+`kb_name_collision_review` block to `ragflow-kb-build --dry-run`. Default dry-run remains
+non-networked and emits a manual review checklist. When the operator explicitly adds
+`--probe-kb-name-collision` with reviewed read-only endpoint config, dry-run lists
+datasets without mutation and warns on exact or suffixed KB-name matches while suppressing
+dataset identifiers from the report.
+
+The 2026-07-09 P2 regression-fixture slice adds a synthetic Pandoc EPUB Markdown fixture
+that covers marker-only fenced divs, generated anchors, inline style attributes, generated
+heading anchor tails, a Markdown table, and a local image reference without private corpus
+text. The fixture is now exercised by the `pandoc-epub` postprocess regression tests.
 
 Checklist items should be checked only after implementation, focused verification, and
 redaction review are complete.
@@ -277,6 +289,15 @@ for every Dedao-style EPUB or every RAGFlow deployment.
 - `python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py -q`
 - `python3 tools/schema_identity_check.py --report-json /tmp/ragflow-20260709-language-readiness-schema-identity.json >/tmp/ragflow-20260709-language-readiness-schema-identity.stdout`
 - `python3 -m pytest packages/ragflow-skill-runtime/tests -q`
+
+2026-07-09 P1 KB-name collision review validation:
+
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_diagnostics.py::DiagnosticsTests::test_kb_name_collision_review_defaults_to_manual_checklist packages/ragflow-skill-runtime/tests/test_diagnostics.py::DiagnosticsTests::test_kb_name_collision_review_flags_exact_and_suffix_matches_without_ids packages/ragflow-skill-runtime/tests/test_kb_build_cli.py::KbBuildCliTests::test_build_dry_run_reports_kb_name_collision_review_without_live_probe packages/ragflow-skill-runtime/tests/test_kb_build_cli.py::KbBuildCliTests::test_build_dry_run_can_probe_kb_name_collision_with_fake_read_only_client -q`
+
+2026-07-09 P2 synthetic pandoc EPUB fixture validation:
+
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_doc_postprocess.py::DocPostprocessTests::test_sanitized_pandoc_epub_fixture_covers_observed_noise_classes -q`
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_doc_postprocess.py -q`
 
 Residual gated work:
 

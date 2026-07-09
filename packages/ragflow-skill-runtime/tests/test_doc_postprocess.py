@@ -14,6 +14,8 @@ from ragflow_skill_runtime.doc_postprocess import (
     postprocess_single_markdown,
 )
 
+FIXTURES_DIR = Path(__file__).with_name("fixtures")
+
 
 class DocPostprocessTests(unittest.TestCase):
     def test_safe_profile_repairs_heading_spacing_and_blank_lines(self) -> None:
@@ -116,6 +118,34 @@ class DocPostprocessTests(unittest.TestCase):
         self.assertGreater(rule_counts["pandoc_epub.inline_style_attributes"], 0)
         self.assertGreater(rule_counts["pandoc_epub.generated_anchor_tails"], 0)
         self.assertIn("pandoc_epub.fenced_div_markers", document_rule_ids)
+
+    def test_sanitized_pandoc_epub_fixture_covers_observed_noise_classes(self) -> None:
+        fixture = FIXTURES_DIR / "pandoc_epub_synthetic.md"
+        text = fixture.read_text(encoding="utf-8")
+
+        self.assertIn(":::", text)
+        self.assertIn("style=", text)
+        self.assertIn("[]{#", text)
+        self.assertIn("{#chapter-one}", text)
+        self.assertNotIn("api_key", text.lower())
+        self.assertNotIn("dataset_id", text.lower())
+        self.assertNotIn("/home/", text)
+
+        processed, rules = postprocess_markdown_text(text, profile="pandoc-epub")
+        counts = {rule.rule_id: rule.count for rule in rules}
+
+        self.assertIn("# 第一章 合成样本", processed)
+        self.assertIn("设备校准流程保留为可读正文", processed)
+        self.assertIn("| 指标 | 数值 |", processed)
+        self.assertIn("![示意图](images/synthetic-chart.png)", processed)
+        self.assertNotIn("style=", processed)
+        self.assertNotIn("::: ", processed)
+        self.assertNotIn("[]{#", processed)
+        self.assertNotIn("{#chapter-one}", processed)
+        self.assertGreater(counts["pandoc_epub.fenced_div_markers"], 0)
+        self.assertGreater(counts["pandoc_epub.empty_generated_anchors"], 0)
+        self.assertGreater(counts["pandoc_epub.inline_style_attributes"], 0)
+        self.assertGreater(counts["pandoc_epub.generated_anchor_tails"], 0)
 
     def test_chunk_markers_insert_before_later_headings(self) -> None:
         processed, rules = postprocess_markdown_text("# One\nBody\n## Two\nBody\n", profile="chunk-markers")
