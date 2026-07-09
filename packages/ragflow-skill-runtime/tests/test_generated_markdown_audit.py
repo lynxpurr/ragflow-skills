@@ -40,6 +40,8 @@ class GeneratedMarkdownAuditTests(unittest.TestCase):
         self.assertIn("markdown_report", by_command["ragflow-kb-build consistency-check"]["output_categories"])
         self.assertIn("ragflow-kb-build refresh-report", by_command)
         self.assertIn("markdown_report", by_command["ragflow-kb-build refresh-report"]["output_categories"])
+        self.assertIn("ragflow-kb-build parameter-audit", by_command)
+        self.assertIn("markdown_report", by_command["ragflow-kb-build parameter-audit"]["output_categories"])
 
     def test_generated_markdown_audit_reports_missing_and_stale_entries(self) -> None:
         report = run_generated_markdown_audit(

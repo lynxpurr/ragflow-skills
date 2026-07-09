@@ -126,6 +126,14 @@ EXPECTED_IDENTITIES = (
         description="Embedded KB build report block classifying sidecar-derived parser and UI parameter materialization.",
     ),
     SchemaIdentity(
+        key="parameter_read_back_audit",
+        group="kb_build",
+        identity="ragflow_parameter_read_back_audit_v1",
+        source_patterns=("ragflow_parameter_read_back_audit_v1", "PARAMETER_READ_BACK_AUDIT_SCHEMA"),
+        coverage_patterns=("ragflow_parameter_read_back_audit_v1", "parameter-audit"),
+        description="Read-only audit comparing requested KB parser parameters with public-safe read-back evidence.",
+    ),
+    SchemaIdentity(
         key="kb_asset_ingestion_report",
         group="kb_build",
         identity="ragflow_kb_asset_ingestion_report_v1",

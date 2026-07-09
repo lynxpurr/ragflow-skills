@@ -13,6 +13,7 @@ from ragflow_skill_runtime.kb_build import (
     BUILD_PAYLOAD_PREVIEW_SCHEMA,
     HANDOFF_CONSUMPTION_STATUS_SCHEMA,
     PARAMETER_MATERIALIZATION_INVENTORY_SCHEMA,
+    PARAMETER_READ_BACK_AUDIT_SCHEMA,
     MULTIMODAL_KB_MANIFEST_SCHEMA,
     create_kb_asset_upload_plan,
     discover_markdown_documents,
@@ -27,6 +28,7 @@ from ragflow_skill_runtime.kb_build import (
     make_kb_manifest_payload,
     make_multimodal_kb_manifest_payload,
     make_parameter_materialization_inventory,
+    create_parameter_read_back_audit,
     normalize_document_state,
     write_kb_asset_upload_zip,
     wait_for_document_states,
@@ -508,6 +510,66 @@ class KbBuildTests(unittest.TestCase):
         self.assertEqual(by_field["ragflow_ui.table_to_html"]["parser_path_scope"], "deepdoc_native")
         self.assertEqual(inventory["safety"]["ragflow_calls"], 0)
         self.assertFalse(inventory["safety"]["writes_live_ragflow"])
+
+    def test_parameter_read_back_audit_compares_requested_observed_and_ui_controls(self) -> None:
+        profile = ChunkProfile.from_dict(
+            {
+                "profile_id": "delimiter-en-768",
+                "chunk_size": 768,
+                "chunk_method": "naive",
+                "parser_config": {
+                    "chunk_token_num": 768,
+                    "delimiter": "<!-- chunk -->",
+                    "auto_questions": 1,
+                },
+                "language": "en",
+            }
+        )
+        preview = make_build_payload_preview(kb_name="kb:private-name", profile=profile)
+        inventory = make_parameter_materialization_inventory(profile=profile)
+        dry_run = {
+            "schema": "ragflow_kb_build_dry_run_v1",
+            "build_payload_preview": preview,
+            "parameter_materialization_inventory": inventory,
+        }
+        observed_state = {
+            "schema": "ragflow_observed_fixture_v1",
+            "data": {
+                "parser_config": {
+                    "chunk_token_num": 768,
+                    "delimiter": "\n\n",
+                    "auto_keywords": 0,
+                },
+                "language": "en",
+            },
+        }
+
+        audit = create_parameter_read_back_audit(dry_run_report=dry_run, observed_state=observed_state)
+
+        self.assertEqual(audit["schema"], PARAMETER_READ_BACK_AUDIT_SCHEMA)
+        self.assertTrue(audit["ok"])
+        self.assertEqual(audit["status"], "REVIEW")
+        self.assertTrue(audit["advisory_only"])
+        self.assertEqual(audit["mutation"], "none")
+        self.assertEqual(audit["observed_state"]["parser_config_source"], "observed_state.data.parser_config")
+        self.assertEqual(audit["summary"]["observed_match_count"], 3)
+        self.assertEqual(audit["summary"]["observed_changed_count"], 1)
+        self.assertEqual(audit["summary"]["observed_missing_count"], 1)
+        self.assertEqual(audit["summary"]["unknown_api_mapping_count"], 5)
+        self.assertEqual(audit["summary"]["native_parser_only_count"], 1)
+        by_field = {item["field"]: item for item in audit["fields"]}
+        self.assertEqual(by_field["dataset.language"]["audit_status"], "observed_match")
+        self.assertEqual(by_field["dataset.parser_config.chunk_token_num"]["audit_status"], "observed_match")
+        self.assertEqual(by_field["dataset.parser_config.delimiter"]["audit_status"], "observed_changed")
+        self.assertEqual(by_field["dataset.parser_config.delimiter"]["requested_value"], "<!-- chunk -->")
+        self.assertEqual(by_field["dataset.parser_config.delimiter"]["observed_value"], "\n\n")
+        self.assertEqual(by_field["dataset.parser_config.auto_questions"]["audit_status"], "observed_missing")
+        self.assertEqual(by_field["ragflow_ui.page_index"]["audit_status"], "unknown_api_mapping")
+        self.assertEqual(by_field["ragflow_ui.page_index"]["ui_label"], "PageIndex")
+        self.assertEqual(by_field["ragflow_ui.table_to_html"]["audit_status"], "native_parser_only")
+        self.assertEqual(audit["safety"]["ragflow_calls"], 0)
+        self.assertFalse(audit["safety"]["writes_live_ragflow"])
+        self.assertFalse(audit["safety"]["raw_chunks_included"])
 
     def test_handoff_consumption_status_classifies_core_sidecars_assets_and_tables(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

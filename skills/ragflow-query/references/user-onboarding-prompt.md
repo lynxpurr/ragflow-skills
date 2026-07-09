@@ -195,9 +195,14 @@ kb:ragflow-skills-e2e-YYYYMMDD-HHMM
 然后执行：
 - ragflow-doc-to-md pipeline 生成 doc_manifest.json、retrieval_hints.json 和 ragflow_ingest_plan.yaml
 - 先确认 handoff_mode: formal_ingest，再运行 ragflow-kb-build inspect-handoff 和 --dry-run
-- ragflow-kb-build --dry-run 消费 doc_manifest.json 和用户确认的 profile
+- ragflow-kb-build --dry-run 消费 doc_manifest.json、ragflow_ingest_plan.yaml 和用户确认的 profile
+- 检查 dry-run 输出中的 build_payload_preview，确认 language、delimiter、auto_keywords、auto_questions、chunk_overlap、retrieval_hints 等字段是发送到 RAGFlow、仅本地审计、后置建议，还是 unsupported/gated
+- 检查 dry-run 或 live manifest 中的 handoff_consumption_status，确认 doc_manifest、Markdown、quality_report、profile_suggestions、retrieval_hints、metadata、assistant_profile、ragflow_ingest_plan、图片和表格 sidecar 分别是 materialized_to_ragflow、materialized_to_manifest、advisory_after_build、local_audit_only，还是 unsupported_or_gated；不要把 retrieval hints、assistant/query 参数当成已自动写入 KB 创建 API
+- 如果 dry-run 的 ingest_readiness.checks.chunk_readiness.delimiter_profile_guidance.status 是 recommended，请先生成并审阅 delimiter profile；delimiter 只能帮助 chunk marker 边界，不能覆盖 RAGFlow 服务端 parent chunk 限制
+- 如果 asset-upload-plan 报告图片缺失，确认 sidecar 中的 `images/...` 是否已被自动回退解析到 `documents/images/...`；语义别名只作为 advisory warning，不应阻断上传
 - ragflow-kb-build 创建 RAGFlow KB、上传 Markdown、触发解析、等待完成
 - ragflow-kb-build validate --level smoke
+- 如果要保留 A/B/C/D/E 或候选 profile 对比证据，请在 validate.py 中加 --retention-json 和 --retention-md；该 public-safe retention artifact 应保留 per-query 指标、rank、稳定内容 hash 和哈希化 dataset/document/chunk 引用，但不要保留原始 query text、chunk text、dataset id、document id 或 chunk id；总结时区分 global_best_per_query_count 和 pairwise_win_count
 - ragflow-query --mode direct 查询
 - ragflow-query --mode agentic --host-assisted 查询
 

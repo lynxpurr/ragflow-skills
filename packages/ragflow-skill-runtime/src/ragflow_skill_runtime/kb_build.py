@@ -19,6 +19,7 @@ from .profiles import ChunkProfile, ProfileError, SUPPORTED_PARSER_KEYS, load_pr
 BUILD_PAYLOAD_PREVIEW_SCHEMA = "ragflow_kb_build_payload_preview_v1"
 HANDOFF_CONSUMPTION_STATUS_SCHEMA = "ragflow_handoff_consumption_status_v1"
 PARAMETER_MATERIALIZATION_INVENTORY_SCHEMA = "ragflow_parameter_materialization_inventory_v1"
+PARAMETER_READ_BACK_AUDIT_SCHEMA = "ragflow_parameter_read_back_audit_v1"
 KB_ASSET_UPLOAD_PLAN_SCHEMA = "ragflow_kb_asset_upload_plan_v2"
 KB_ASSET_INGESTION_REPORT_SCHEMA = "ragflow_kb_asset_ingestion_report_v1"
 KB_ARTIFACT_CONSISTENCY_REPORT_SCHEMA = "ragflow_kb_artifact_consistency_report_v1"
@@ -286,6 +287,357 @@ PARAMETER_MATERIALIZATION_STATUS_VALUES = (
     "native_parser_only",
     "unknown_api_mapping",
 )
+PARAMETER_READ_BACK_AUDIT_STATUS_VALUES = (
+    "observed_match",
+    "observed_missing",
+    "observed_changed",
+    "not_observable",
+    "unknown_api_mapping",
+    "native_parser_only",
+    "not_requested",
+)
+READ_BACK_DETAIL_NESTED_KEYS = ("dataset", "kb", "knowledgebase", "knowledge_base", "detail", "details", "summary")
+READ_BACK_PARSER_CONFIG_KEYS = ("parser_config", "parserConfig")
+
+
+def _read_back_roots(payload: Mapping[str, Any]) -> list[tuple[str, Mapping[str, Any]]]:
+    roots: list[tuple[str, Mapping[str, Any]]] = [("observed_state", payload)]
+    data = payload.get("data")
+    if isinstance(data, Mapping):
+        roots.append(("observed_state.data", data))
+        for nested_key in READ_BACK_DETAIL_NESTED_KEYS:
+            nested = data.get(nested_key)
+            if isinstance(nested, Mapping):
+                roots.append((f"observed_state.data.{nested_key}", nested))
+    for nested_key in READ_BACK_DETAIL_NESTED_KEYS:
+        nested = payload.get(nested_key)
+        if isinstance(nested, Mapping):
+            roots.append((f"observed_state.{nested_key}", nested))
+    return roots
+
+
+def _extract_read_back_parser_config(payload: Mapping[str, Any] | None) -> tuple[dict[str, Any] | None, str | None]:
+    if not isinstance(payload, Mapping):
+        return None, None
+    for prefix, root in _read_back_roots(payload):
+        for key in READ_BACK_PARSER_CONFIG_KEYS:
+            value = root.get(key)
+            if isinstance(value, Mapping):
+                return dict(value), f"{prefix}.{key}"
+        parser = root.get("parser")
+        if isinstance(parser, Mapping):
+            for key in READ_BACK_PARSER_CONFIG_KEYS:
+                value = parser.get(key)
+                if isinstance(value, Mapping):
+                    return dict(value), f"{prefix}.parser.{key}"
+    return None, None
+
+
+def _extract_read_back_language(payload: Mapping[str, Any] | None) -> tuple[Any, str | None]:
+    if not isinstance(payload, Mapping):
+        return None, None
+    for prefix, root in _read_back_roots(payload):
+        for key in ("language", "lang"):
+            if key in root:
+                return root.get(key), f"{prefix}.{key}"
+    return None, None
+
+
+def _audit_status_counts(fields: list[Mapping[str, Any]]) -> dict[str, int]:
+    return {
+        status: sum(1 for item in fields if item.get("audit_status") == status)
+        for status in PARAMETER_READ_BACK_AUDIT_STATUS_VALUES
+    }
+
+
+def create_parameter_read_back_audit(
+    *,
+    dry_run_report: Mapping[str, Any],
+    observed_state: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compare dry-run parameter intent with read-back evidence without mutating RAGFlow."""
+
+    preview = dry_run_report.get("build_payload_preview") if isinstance(dry_run_report, Mapping) else None
+    inventory = (
+        dry_run_report.get("parameter_materialization_inventory") if isinstance(dry_run_report, Mapping) else None
+    )
+    preview_fields = preview.get("fields", []) if isinstance(preview, Mapping) else []
+    inventory_fields = inventory.get("fields", []) if isinstance(inventory, Mapping) else []
+    dataset_payload = preview.get("dataset_create_payload", {}) if isinstance(preview, Mapping) else {}
+    observed_parser_config, parser_config_source = _extract_read_back_parser_config(observed_state)
+    observed_language, language_source = _extract_read_back_language(observed_state)
+    observed_parser_config_available = observed_parser_config is not None
+    observed_parser_config = observed_parser_config or {}
+
+    fields: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_field(record: dict[str, Any]) -> None:
+        field = str(record.get("field") or "")
+        if not field or field in seen:
+            return
+        seen.add(field)
+        fields.append(record)
+
+    def compare_value(
+        *,
+        field: str,
+        requested_value: Any,
+        observed_value: Any,
+        observed_available: bool,
+        source: str,
+        requested_source: str | None,
+        materialization_status: str,
+        parser_path_scope: str,
+        target: str | None,
+    ) -> None:
+        if not observed_available:
+            audit_status = "not_observable"
+        elif observed_value is None:
+            audit_status = "observed_missing"
+        elif observed_value == requested_value:
+            audit_status = "observed_match"
+        else:
+            audit_status = "observed_changed"
+        record: dict[str, Any] = {
+            "field": field,
+            "audit_status": audit_status,
+            "materialization_status": materialization_status,
+            "parser_path_scope": parser_path_scope,
+            "target": target,
+            "source": source,
+            "requested_source": requested_source,
+            "observed_source": source if observed_available else None,
+        }
+        if requested_value is not None:
+            record["requested_value"] = requested_value
+        if observed_available and observed_value is not None:
+            record["observed_value"] = observed_value
+        add_field(record)
+
+    if isinstance(preview_fields, list):
+        for item in preview_fields:
+            if not isinstance(item, Mapping) or item.get("status") != "materialized_to_ragflow":
+                continue
+            target = item.get("target")
+            if not isinstance(target, str) or not target:
+                continue
+            if target == "dataset.language":
+                requested_value = item.get("value")
+                comparable_requested = normalize_profile_language(requested_value) or requested_value
+                comparable_observed = normalize_profile_language(observed_language) or observed_language
+                compare_value(
+                    field=target,
+                    requested_value=comparable_requested,
+                    observed_value=comparable_observed,
+                    observed_available=language_source is not None,
+                    source=language_source or "observed_state.language",
+                    requested_source=str(item.get("source") or "build_payload_preview"),
+                    materialization_status="materialized_to_ragflow",
+                    parser_path_scope="markdown_handoff",
+                    target=target,
+                )
+                continue
+            prefix = "dataset.parser_config."
+            if target.startswith(prefix):
+                key = target[len(prefix) :]
+                compare_value(
+                    field=target,
+                    requested_value=item.get("value"),
+                    observed_value=observed_parser_config.get(key),
+                    observed_available=observed_parser_config_available,
+                    source=parser_config_source or "observed_state.parser_config",
+                    requested_source=str(item.get("source") or "build_payload_preview"),
+                    materialization_status="materialized_to_ragflow",
+                    parser_path_scope="markdown_handoff",
+                    target=target,
+                )
+                continue
+            add_field(
+                {
+                    "field": target,
+                    "audit_status": "not_observable",
+                    "materialization_status": "materialized_to_ragflow",
+                    "parser_path_scope": "markdown_handoff",
+                    "target": target,
+                    "source": "build_payload_preview",
+                    "requested_source": str(item.get("source") or "build_payload_preview"),
+                    "requested_value": item.get("value"),
+                    "reason": "read_back_mapping_not_supported_for_this_target",
+                }
+            )
+
+    if isinstance(inventory_fields, list):
+        for item in inventory_fields:
+            if not isinstance(item, Mapping):
+                continue
+            status = str(item.get("status") or "")
+            if status == "materialized_to_ragflow":
+                continue
+            if status == "unknown_api_mapping":
+                audit_status = "unknown_api_mapping"
+            elif status == "native_parser_only":
+                audit_status = "native_parser_only"
+            else:
+                audit_status = "not_requested"
+            record = {
+                "field": str(item.get("field") or ""),
+                "audit_status": audit_status,
+                "materialization_status": status,
+                "parser_path_scope": str(item.get("parser_path_scope") or "unknown"),
+                "target": item.get("target"),
+                "source": item.get("source"),
+                "reason": item.get("reason"),
+            }
+            if "ui_label" in item:
+                record["ui_label"] = item.get("ui_label")
+            if "value" in item:
+                record["requested_value"] = item.get("value")
+            add_field(record)
+
+    observed_extra_parser_config_keys = sorted(
+        str(key)
+        for key in observed_parser_config
+        if f"dataset.parser_config.{key}" not in seen and not str(key).startswith("__")
+    )
+    status_counts = _audit_status_counts(fields)
+    warning_count = (
+        status_counts["observed_missing"]
+        + status_counts["observed_changed"]
+        + status_counts["unknown_api_mapping"]
+        + status_counts["native_parser_only"]
+    )
+    issues: list[dict[str, Any]] = []
+    if status_counts["observed_changed"]:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="parameter_read_back_changed",
+                message="Some requested RAGFlow parameters differ from read-back evidence.",
+                recommendation="Review the changed values before treating this KB as parser-profile parity evidence.",
+            )
+        )
+    if status_counts["observed_missing"]:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="parameter_read_back_missing",
+                message="Some requested RAGFlow parameters were not found in read-back evidence.",
+                recommendation="Confirm whether the RAGFlow API hides default values or ignored the requested fields.",
+            )
+        )
+    if observed_extra_parser_config_keys:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="parameter_read_back_extra_effective_keys",
+                message="Read-back parser_config contains keys that were not requested by the dry-run payload.",
+                recommendation="Treat extra effective keys as server defaults or UI-side settings until mapped explicitly.",
+            )
+        )
+    status = "REVIEW" if warning_count or observed_extra_parser_config_keys else "PASS"
+    return {
+        "ok": True,
+        "schema": PARAMETER_READ_BACK_AUDIT_SCHEMA,
+        "created_at": _now(),
+        "status": status,
+        "advisory_only": True,
+        "mutation": "none",
+        "inputs": {
+            "dry_run_report": "provided_mapping",
+            "observed_state": "provided_mapping" if isinstance(observed_state, Mapping) else "not_provided",
+        },
+        "requested_state": {
+            "build_payload_preview_schema": preview.get("schema") if isinstance(preview, Mapping) else None,
+            "parameter_materialization_inventory_schema": (
+                inventory.get("schema") if isinstance(inventory, Mapping) else None
+            ),
+            "dataset_payload_keys": sorted(str(key) for key in dataset_payload) if isinstance(dataset_payload, Mapping) else [],
+        },
+        "observed_state": {
+            "available": isinstance(observed_state, Mapping),
+            "parser_config_available": observed_parser_config_available,
+            "parser_config_source": parser_config_source,
+            "language_available": language_source is not None,
+            "language_source": language_source,
+            "extra_parser_config_keys": observed_extra_parser_config_keys,
+        },
+        "summary": {
+            "field_count": len(fields),
+            "status_counts": status_counts,
+            **{f"{status}_count": count for status, count in status_counts.items()},
+            "observed_extra_parser_config_key_count": len(observed_extra_parser_config_keys),
+            "issue_count": len(issues),
+            "warning_count": len(issues),
+            "error_count": 0,
+        },
+        "fields": fields,
+        "issues": issues,
+        "next_steps": [
+            "Use this audit to decide which sidecar recommendations are already materialized, which are merely visible, and which need API mapping before writable support.",
+            "Keep unknown API mappings blocked until fake-client coverage and read-back evidence agree on the RAGFlow payload shape.",
+        ],
+        "safety": {
+            "ragflow_calls": 0,
+            "writes_live_ragflow": False,
+            "script_owned_llm_calls": 0,
+            "raw_chunks_included": False,
+        },
+    }
+
+
+def render_parameter_read_back_audit_markdown(report: Mapping[str, Any]) -> str:
+    """Render a concise Markdown summary for a parameter read-back audit."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    observed_state = report.get("observed_state", {}) if isinstance(report.get("observed_state"), Mapping) else {}
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    notable_statuses = {"observed_changed", "observed_missing", "unknown_api_mapping", "native_parser_only"}
+    notable_fields = [
+        item
+        for item in report.get("fields", [])
+        if isinstance(item, Mapping) and str(item.get("audit_status") or "") in notable_statuses
+    ]
+    lines = [
+        "# RAGFlow Parameter Read-Back Audit",
+        "",
+        f"- schema: `{report.get('schema', PARAMETER_READ_BACK_AUDIT_SCHEMA)}`",
+        f"- status: `{report.get('status', 'unknown')}`",
+        f"- mutation: `{report.get('mutation', 'none')}`",
+        f"- advisory only: `{bool(report.get('advisory_only', True))}`",
+        f"- fields: `{summary.get('field_count', 0)}`",
+        f"- observed matches: `{summary.get('observed_match_count', 0)}`",
+        f"- observed changed: `{summary.get('observed_changed_count', 0)}`",
+        f"- observed missing: `{summary.get('observed_missing_count', 0)}`",
+        f"- unknown API mappings: `{summary.get('unknown_api_mapping_count', 0)}`",
+        f"- native parser only: `{summary.get('native_parser_only_count', 0)}`",
+        f"- parser config source: `{observed_state.get('parser_config_source') or '-'}`",
+        f"- language source: `{observed_state.get('language_source') or '-'}`",
+        "",
+        "## Field Findings",
+        "",
+    ]
+    if notable_fields:
+        for item in notable_fields[:40]:
+            field = item.get("field", "")
+            status = item.get("audit_status", "")
+            label = f" ({item.get('ui_label')})" if item.get("ui_label") else ""
+            lines.append(f"- `{status}` `{field}`{label}")
+    else:
+        lines.append("- No changed, missing, unknown, or native-only fields found.")
+    lines.extend(["", "## Issues", ""])
+    if issues:
+        for issue in issues[:30]:
+            if isinstance(issue, Mapping):
+                lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    else:
+        lines.append("- No issues found.")
+    next_steps = report.get("next_steps") if isinstance(report.get("next_steps"), list) else []
+    if next_steps:
+        lines.extend(["", "## Next Steps", ""])
+        for step in next_steps[:10]:
+            lines.append(f"- {step}")
+    return "\n".join(lines) + "\n"
 
 
 def _profile_suggestion_parser_keys(profile_suggestions: Mapping[str, Any] | None) -> set[str]:

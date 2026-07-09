@@ -225,9 +225,19 @@ python ragflow-kb-build/scripts/build.py \
   --doc-manifest /tmp/ragflow-skills-handoff/doc_manifest.json \
   --kb-name kb:reviewed-name \
   --profile ragflow-kb-build/templates/default-en-768.json \
+  --ingest-plan /tmp/ragflow-skills-handoff/ragflow_ingest_plan.yaml \
   --dry-run \
   --json
 ```
+
+Review dry-run `build_payload_preview` and `handoff_consumption_status` before live
+mutation. The preview shows the actual RAGFlow dataset payload versus local-only or
+advisory evidence; the consumption status classifies sidecars, images, tables, metadata,
+and assistant/query artifacts without implying they are all written to RAGFlow. If
+`ingest_readiness.checks.chunk_readiness.delimiter_profile_guidance.status` is
+`recommended`, plan a reviewed delimiter profile before live build; chunk marker
+delimiters help boundaries only when the deployment honors `parser_config.delimiter` and
+do not override server-side parent chunk limits.
 
 ## Complex Table Ingest Review
 
@@ -240,11 +250,14 @@ approves live RAGFlow mutation:
   `semantic_risks`, and `estimated_parent_chunk_tokens`.
 - Run `inspect-handoff` and require no BLOCKED quality or missing-image errors.
 - Run `asset-upload-plan`; require `missing_image_asset_count=0` before any live build,
-  and review unreferenced handoff images instead of silently uploading them.
+  and review unreferenced handoff images instead of silently uploading them. Sidecar
+  paths such as `images/...` are checked against both the handoff root and
+  `documents/images/...`; semantic aliases remain advisory review hints.
 - Prefer a generated `table-atomic-*-4096` profile when the target deployment supports
-  that parent chunk size. If the deployment requires a smaller profile, keep the profile
-  explicit and treat `table_parent_chunk_preflight` warnings from `build.py --dry-run` as
-  manual review gates.
+  that parent chunk size. If the deployment requires a smaller profile, materialize a
+  reviewed profile that clamps unsupported `chunk_token_num` values, keeps the original
+  suggestion auditable, and treats `table_parent_chunk_preflight` warnings from
+  `build.py --dry-run` as manual review gates.
 - Do not set a children delimiter for table-atomic ingestion; delimiter chunk markers
   control boundaries but cannot override a lower server-side parent chunk limit.
 
@@ -298,7 +311,9 @@ python ragflow-kb-build/scripts/build.py \
 python ragflow-kb-build/scripts/validate.py \
   --config "$RAGFLOW_CONFIG" \
   --kb-manifest /tmp/ragflow-skills-e2e/kb_manifest.json \
-  --level smoke
+  --level smoke \
+  --retention-json /tmp/ragflow-skills-e2e/public_query_result_retention.json \
+  --retention-md /tmp/ragflow-skills-e2e/public_query_result_retention.md
 
 python ragflow-query/scripts/query.py \
   --config "$RAGFLOW_CONFIG" \
@@ -312,6 +327,12 @@ python ragflow-query/scripts/query.py \
 For PDF/Office/image E2E, use `--backend mineru-fastapi` when the service implements MinerU FastAPI protocol v2, or `--backend mineru-v4` when it implements the MinerU v4 platform-compatible protocol. Keep `--backend auto` only when a local MinerU CLI is configured and should be preferred. Use `--backend mineru-cli` to force local CLI, `--backend mineru` when the service implements the MinerU Agent API, or `--backend mineru-sync` only for legacy synchronous multipart `/parse`. If no compatible CLI or service protocol can be identified, report the uncertainty and skip the MinerU test rather than guessing.
 
 For formal `markdown_assets` handoffs, expect local image references to use readable semantic filenames when MinerU or another converter returns hash-like names. Do not treat the absence of hash filenames as lost provenance; content hashes remain in the public manifest and rich sidecars.
+
+When retaining retrieval-quality evidence for comparison reports, prefer
+`validate.py --retention-json --retention-md` over copying raw query output into a
+shared summary. The retention artifact omits raw query text, raw chunk text, and raw
+dataset/document/chunk IDs, and keeps global best-per-query counts distinct from
+pairwise win counts.
 
 ## GitHub Release E2E
 

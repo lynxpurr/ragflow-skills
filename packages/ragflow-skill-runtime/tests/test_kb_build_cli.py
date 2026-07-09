@@ -3466,6 +3466,145 @@ class KbBuildCliTests(unittest.TestCase):
         issue_codes = {issue["code"] for issue in payload["issues"]}
         self.assertNotIn("document_status_json_missing", issue_codes)
 
+    def test_parameter_audit_subcommand_compares_dry_run_and_observed_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dry_run = root / "dry_run.json"
+            observed_state = root / "observed_state.json"
+            output = root / "parameter_audit.json"
+            report_md = root / "parameter_audit.md"
+            redaction_report = root / "parameter_audit.redaction.json"
+            dry_run.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_kb_build_dry_run_v1",
+                        "build_payload_preview": {
+                            "schema": "ragflow_kb_build_payload_preview_v1",
+                            "dataset_create_payload": {
+                                "name": "kb:private-name",
+                                "language": "English",
+                                "parser_config": {
+                                    "chunk_token_num": 768,
+                                    "delimiter": "<!-- chunk -->",
+                                    "auto_questions": 1,
+                                },
+                            },
+                            "fields": [
+                                {
+                                    "field": "language",
+                                    "status": "materialized_to_ragflow",
+                                    "source": "profile.language",
+                                    "target": "dataset.language",
+                                    "value": "English",
+                                },
+                                {
+                                    "field": "parser_config.chunk_token_num",
+                                    "status": "materialized_to_ragflow",
+                                    "source": "parser_config.chunk_token_num",
+                                    "target": "dataset.parser_config.chunk_token_num",
+                                    "value": 768,
+                                },
+                                {
+                                    "field": "parser_config.delimiter",
+                                    "status": "materialized_to_ragflow",
+                                    "source": "parser_config.delimiter",
+                                    "target": "dataset.parser_config.delimiter",
+                                    "value": "<!-- chunk -->",
+                                },
+                                {
+                                    "field": "parser_config.auto_questions",
+                                    "status": "materialized_to_ragflow",
+                                    "source": "parser_config.auto_questions",
+                                    "target": "dataset.parser_config.auto_questions",
+                                    "value": 1,
+                                },
+                            ],
+                        },
+                        "parameter_materialization_inventory": {
+                            "schema": "ragflow_parameter_materialization_inventory_v1",
+                            "fields": [
+                                {
+                                    "field": "ragflow_ui.page_index",
+                                    "status": "unknown_api_mapping",
+                                    "source": "ragflow_ui_observation",
+                                    "target": None,
+                                    "parser_path_scope": "unknown",
+                                    "reason": "page_index_api_mapping_unconfirmed",
+                                    "ui_label": "PageIndex",
+                                },
+                                {
+                                    "field": "ragflow_ui.table_to_html",
+                                    "status": "native_parser_only",
+                                    "source": "ragflow_ui_observation",
+                                    "target": None,
+                                    "parser_path_scope": "deepdoc_native",
+                                    "reason": "native_pdf_parser_control_not_markdown_handoff",
+                                    "ui_label": "Table to HTML",
+                                },
+                            ],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            observed_state.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_dataset_read_back_fixture_v1",
+                        "data": {
+                            "language": "en",
+                            "parser_config": {
+                                "chunk_token_num": 768,
+                                "delimiter": "\n\n",
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "parameter-audit",
+                    "--dry-run-report",
+                    str(dry_run),
+                    "--observed-state",
+                    str(observed_state),
+                    "--report-json",
+                    str(output),
+                    "--report-md",
+                    str(report_md),
+                    "--redaction-report",
+                    str(redaction_report),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            payload = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+            markdown = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+            redaction_payload = json.loads(redaction_report.read_text(encoding="utf-8")) if redaction_report.exists() else {}
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(payload["schema"], "ragflow_parameter_read_back_audit_v1")
+        self.assertEqual(payload["status"], "REVIEW")
+        self.assertTrue(payload["advisory_only"])
+        self.assertEqual(payload["mutation"], "none")
+        self.assertEqual(payload["summary"]["observed_match_count"], 2)
+        self.assertEqual(payload["summary"]["observed_changed_count"], 1)
+        self.assertEqual(payload["summary"]["observed_missing_count"], 1)
+        self.assertEqual(payload["summary"]["unknown_api_mapping_count"], 1)
+        self.assertEqual(payload["summary"]["native_parser_only_count"], 1)
+        self.assertEqual(payload["safety"]["ragflow_calls"], 0)
+        self.assertFalse(payload["safety"]["writes_live_ragflow"])
+        self.assertIn("RAGFlow Parameter Read-Back Audit", markdown)
+        self.assertIn("observed_changed", markdown)
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+
     def test_parse_report_surfaces_refresh_zero_document_compatibility_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

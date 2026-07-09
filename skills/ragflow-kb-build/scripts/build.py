@@ -44,6 +44,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     create_kb_asset_ingestion_readiness_report,
     create_kb_artifact_consistency_report,
     create_kb_asset_upload_plan,
+    create_parameter_read_back_audit,
     create_metadata_suggestion_request,
     create_optimization_cleanup_plan,
     create_optimization_live_readiness_report,
@@ -111,6 +112,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_kb_asset_upload_plan_markdown,
     render_split_plan_markdown,
     render_topology_advice_markdown,
+    render_parameter_read_back_audit_markdown,
     render_optimization_plan_markdown,
     review_grounded_qa_suggestions,
     snapshot_chunks,
@@ -4158,6 +4160,36 @@ def _run_parse_report(args: argparse.Namespace) -> int:
         return _error(str(exc), json_output=args.json)
 
 
+def _run_parameter_audit(args: argparse.Namespace) -> int:
+    try:
+        dry_run_report = _read_json_file(args.dry_run_report, label="dry-run report")
+        if not isinstance(dry_run_report, Mapping):
+            raise BuildError("dry-run report must be a JSON object")
+        observed_state = None
+        if args.observed_state:
+            observed_state = _read_json_file(args.observed_state, label="observed state")
+            if not isinstance(observed_state, Mapping):
+                raise BuildError("observed state must be a JSON object")
+        report = create_parameter_read_back_audit(
+            dry_run_report=dry_run_report,
+            observed_state=observed_state,
+        )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[args.dry_run_report, args.observed_state],
+                output_paths=[args.report_json, args.report_md, args.redaction_report],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_parameter_read_back_audit_markdown(report))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
+    except (BuildError, ProfileError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
 def _run_refresh_report(args: argparse.Namespace) -> int:
     try:
         kb_manifest = load_kb_manifest(args.kb_manifest)
@@ -5030,6 +5062,29 @@ def build_parse_report_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_parameter_audit_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Compare dry-run KB parameters with read-back evidence without mutation")
+    parser.add_argument("--dry-run-report", required=True, help="ragflow-kb-build --dry-run JSON containing payload preview")
+    parser.add_argument(
+        "--observed-state",
+        "--refresh-report",
+        dest="observed_state",
+        help="Optional read-back JSON from RAGFlow dataset detail, document list, or refresh-report evidence",
+    )
+    parser.add_argument(
+        "--report-json",
+        "--output",
+        dest="report_json",
+        default="parameter_read_back_audit.json",
+        help="Output ragflow_parameter_read_back_audit_v1 JSON",
+    )
+    parser.add_argument("--report-md", help="Optional parameter audit Markdown path")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    parser.set_defaults(func=_run_parameter_audit)
+    return parser
+
+
 def build_refresh_report_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Export current RAGFlow document states without mutating the KB")
     parser.add_argument("--kb-manifest", required=True, help="Local kb_manifest.json for the built KB")
@@ -5183,6 +5238,9 @@ def main(argv: list[str] | None = None) -> int:
         if command == "parse-report":
             parse_report_args = build_parse_report_parser().parse_args(command_args)
             return parse_report_args.func(parse_report_args)
+        if command == "parameter-audit":
+            parameter_audit_args = build_parameter_audit_parser().parse_args(command_args)
+            return parameter_audit_args.func(parameter_audit_args)
         if command == "refresh-report":
             refresh_report_args = build_refresh_report_parser().parse_args(command_args)
             return refresh_report_args.func(refresh_report_args)

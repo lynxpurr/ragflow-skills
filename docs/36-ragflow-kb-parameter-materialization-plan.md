@@ -194,7 +194,7 @@ Acceptance target:
 - [x] Add a parameter mapping inventory covering sidecar recommendations,
       current materialization status, parser-path scope, and required
       verification.
-- [ ] Add a read-only KB parameter read-back audit with public-safe redaction.
+- [x] Add a read-only KB parameter read-back audit with public-safe redaction.
 - [ ] Add fake-client tests for any newly writable parser or dataset fields.
 - [ ] Extend `build_payload_preview` and handoff consumption status to show
       candidate UI/parser fields and why each is materialized or not.
@@ -209,9 +209,10 @@ Acceptance target:
 ## Current Development Progress
 
 This document started as the planning artifact for KB parameter materialization.
-The first P0 implementation slice now adds an embedded
+The first two P0 implementation slices now add an embedded
 `parameter_materialization_inventory` block to `ragflow-kb-build --dry-run`
-output.
+output and a read-only `parameter-audit` command for comparing requested
+settings with read-back evidence.
 
 Implemented on 2026-07-09:
 
@@ -225,6 +226,19 @@ Implemented on 2026-07-09:
 - The block is offline-only and records zero RAGFlow calls, zero live writes,
   zero script-owned LLM calls, and no raw chunks.
 - Schema identity coverage was added for the embedded block.
+- Added `ragflow_parameter_read_back_audit_v1` as a standalone public-safe
+  report emitted by `ragflow-kb-build parameter-audit`.
+- The audit compares `build_payload_preview` materialized targets with
+  read-back `language` and `parser_config` values when those values are present
+  in a local observed-state JSON.
+- The audit classifies fields as `observed_match`, `observed_missing`,
+  `observed_changed`, `not_observable`, `unknown_api_mapping`,
+  `native_parser_only`, or `not_requested`.
+- The command supports JSON, Markdown, and redaction sidecar outputs, performs
+  no RAGFlow calls, performs no live writes, invokes no script-owned LLMs, and
+  includes no raw chunks.
+- Report surface, generated Markdown, runtime-resilience inventory, and schema
+  identity coverage were updated for the new command.
 
 Related completed evidence:
 
@@ -239,9 +253,9 @@ Related completed evidence:
 Remaining gap:
 
 - The sidecar recommendation surface is now visible in a field-level inventory,
-  but candidate UI/parser options still need API mapping, fake-client coverage,
-  read-back evidence, and disposable live validation before they become
-  materialized settings.
+  and requested parser settings can now be compared with read-back evidence.
+  Candidate UI/parser options still need API mapping, fake-client coverage, and
+  disposable live validation before they become materialized settings.
 
 ## Validation Evidence / Residual Gated Work
 
