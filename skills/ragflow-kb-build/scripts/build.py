@@ -67,6 +67,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     make_kb_manifest_payload,
     make_build_payload_preview,
     make_handoff_consumption_status,
+    make_parameter_materialization_inventory,
     make_doc_ingest_readiness_payload,
     make_metadata_template_payload,
     make_tagset_template_payload,
@@ -674,6 +675,13 @@ def _resolve_retrieval_hints_path(args: argparse.Namespace) -> Path | None:
         if candidate_hints.is_file():
             retrieval_hints_path = candidate_hints
     return retrieval_hints_path
+
+
+def _resolve_profile_suggestions_path(args: argparse.Namespace) -> Path | None:
+    if not args.doc_manifest:
+        return None
+    candidate = Path(args.doc_manifest).parent / "profile_suggestions.json"
+    return candidate if candidate.is_file() else None
 
 
 def _resolve_ingest_plan_path(args: argparse.Namespace) -> Path | None:
@@ -1323,6 +1331,18 @@ def _run(args: argparse.Namespace) -> int:
             if not isinstance(loaded_hints, Mapping):
                 raise BuildError("retrieval hints must be a JSON object")
             retrieval_hints_payload = loaded_hints
+        profile_suggestions_payload = None
+        profile_suggestions_path = _resolve_profile_suggestions_path(args)
+        if profile_suggestions_path:
+            loaded_profile_suggestions = _read_json_file(profile_suggestions_path, label="profile suggestions")
+            if not isinstance(loaded_profile_suggestions, Mapping):
+                raise BuildError("profile suggestions must be a JSON object")
+            profile_suggestions_payload = loaded_profile_suggestions
+        metadata_payload = None
+        if args.metadata and Path(args.metadata).suffix.lower() == ".json":
+            loaded_metadata = _read_json_file(args.metadata, label="metadata")
+            if isinstance(loaded_metadata, Mapping):
+                metadata_payload = loaded_metadata
         handoff_consumption_status = make_handoff_consumption_status(
             doc_manifest_path=args.doc_manifest,
             documents=docs,
@@ -1388,6 +1408,13 @@ def _run(args: argparse.Namespace) -> int:
                         ragflow_ingest_plan=ragflow_ingest_plan,
                     ),
                     "handoff_consumption_status": handoff_consumption_status,
+                    "parameter_materialization_inventory": make_parameter_materialization_inventory(
+                        profile=source_profile,
+                        profile_suggestions=profile_suggestions_payload,
+                        retrieval_hints=retrieval_hints_payload,
+                        ragflow_ingest_plan=ragflow_ingest_plan,
+                        metadata=metadata_payload,
+                    ),
                     "ingest_readiness": ingest_readiness,
                     "build_readiness_metrics": _build_readiness_metrics(
                         docs=docs,

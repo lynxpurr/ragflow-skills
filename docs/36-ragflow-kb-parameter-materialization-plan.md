@@ -1,6 +1,6 @@
 # RAGFlow KB Parameter Materialization Plan
 
-Status: proposed KB parameter materialization plan
+Status: active KB parameter materialization plan; P0 inventory implemented
 Date: 2026-07-09
 
 ## Objective / Scope / Boundaries
@@ -191,7 +191,7 @@ Acceptance target:
 
 ## Task Checklist
 
-- [ ] Add a parameter mapping inventory covering sidecar recommendations,
+- [x] Add a parameter mapping inventory covering sidecar recommendations,
       current materialization status, parser-path scope, and required
       verification.
 - [ ] Add a read-only KB parameter read-back audit with public-safe redaction.
@@ -208,9 +208,23 @@ Acceptance target:
 
 ## Current Development Progress
 
-This document is the initial planning artifact for KB parameter materialization.
-No runtime, CLI, schema, public skill guidance, release gate, or live workflow
-behavior is changed by this document.
+This document started as the planning artifact for KB parameter materialization.
+The first P0 implementation slice now adds an embedded
+`parameter_materialization_inventory` block to `ragflow-kb-build --dry-run`
+output.
+
+Implemented on 2026-07-09:
+
+- Added `ragflow_parameter_materialization_inventory_v1` as an embedded KB build
+  report block.
+- The inventory classifies selected-profile parser settings, profile
+  suggestions, retrieval hints, ingest-plan parser evidence, metadata sidecars,
+  and known RAGFlow UI controls.
+- Each inventory field records disposition, parser-path scope, target, reason,
+  and required verification.
+- The block is offline-only and records zero RAGFlow calls, zero live writes,
+  zero script-owned LLM calls, and no raw chunks.
+- Schema identity coverage was added for the embedded block.
 
 Related completed evidence:
 
@@ -224,10 +238,10 @@ Related completed evidence:
 
 Remaining gap:
 
-- The sidecar recommendation surface is richer than the current writable
-  RAGFlow payload surface. Candidate UI/parser options need API mapping,
-  fake-client coverage, read-back evidence, and disposable live validation
-  before they become materialized settings.
+- The sidecar recommendation surface is now visible in a field-level inventory,
+  but candidate UI/parser options still need API mapping, fake-client coverage,
+  read-back evidence, and disposable live validation before they become
+  materialized settings.
 
 ## Validation Evidence / Residual Gated Work
 

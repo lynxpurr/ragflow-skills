@@ -112,6 +112,20 @@ EXPECTED_IDENTITIES = (
         description="Embedded KB build report block classifying how handoff artifacts are consumed.",
     ),
     SchemaIdentity(
+        key="parameter_materialization_inventory",
+        group="kb_build",
+        identity="ragflow_parameter_materialization_inventory_v1",
+        source_patterns=(
+            "ragflow_parameter_materialization_inventory_v1",
+            "PARAMETER_MATERIALIZATION_INVENTORY_SCHEMA",
+        ),
+        coverage_patterns=(
+            "ragflow_parameter_materialization_inventory_v1",
+            "PARAMETER_MATERIALIZATION_INVENTORY_SCHEMA",
+        ),
+        description="Embedded KB build report block classifying sidecar-derived parser and UI parameter materialization.",
+    ),
+    SchemaIdentity(
         key="kb_asset_ingestion_report",
         group="kb_build",
         identity="ragflow_kb_asset_ingestion_report_v1",

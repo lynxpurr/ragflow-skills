@@ -903,6 +903,20 @@ class KbBuildCliTests(unittest.TestCase):
         consumption_by_artifact = {item["artifact"]: item for item in consumption["artifacts"]}
         self.assertEqual(consumption_by_artifact[str(input_dir / "sample.md")]["status"], "materialized_to_ragflow")
         self.assertEqual(consumption_by_artifact[str(retrieval_hints)]["status"], "advisory_after_build")
+        inventory = payload["parameter_materialization_inventory"]
+        self.assertEqual(inventory["schema"], "ragflow_parameter_materialization_inventory_v1")
+        inventory_by_field = {item["field"]: item for item in inventory["fields"]}
+        self.assertEqual(
+            inventory_by_field["retrieval_hints.keyword_candidates"]["status"],
+            "advisory_after_build",
+        )
+        self.assertEqual(
+            inventory_by_field["retrieval_hints.image_artifacts"]["status"],
+            "unsupported_or_gated",
+        )
+        self.assertEqual(inventory_by_field["ragflow_ui.page_index"]["status"], "unknown_api_mapping")
+        self.assertEqual(inventory_by_field["ragflow_ui.table_to_html"]["parser_path_scope"], "deepdoc_native")
+        self.assertEqual(inventory["safety"]["ragflow_calls"], 0)
 
     def test_build_dry_run_reports_embedding_model_drift_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -18,6 +18,7 @@ from .profiles import ChunkProfile, ProfileError, SUPPORTED_PARSER_KEYS, load_pr
 
 BUILD_PAYLOAD_PREVIEW_SCHEMA = "ragflow_kb_build_payload_preview_v1"
 HANDOFF_CONSUMPTION_STATUS_SCHEMA = "ragflow_handoff_consumption_status_v1"
+PARAMETER_MATERIALIZATION_INVENTORY_SCHEMA = "ragflow_parameter_materialization_inventory_v1"
 KB_ASSET_UPLOAD_PLAN_SCHEMA = "ragflow_kb_asset_upload_plan_v2"
 KB_ASSET_INGESTION_REPORT_SCHEMA = "ragflow_kb_asset_ingestion_report_v1"
 KB_ARTIFACT_CONSISTENCY_REPORT_SCHEMA = "ragflow_kb_artifact_consistency_report_v1"
@@ -274,6 +275,344 @@ def _retrieval_hint_count(retrieval_hints: Mapping[str, Any] | None, key: str) -
         return 0
     value = retrieval_hints.get(key)
     return len(value) if isinstance(value, list) else 0
+
+
+PARAMETER_MATERIALIZATION_STATUS_VALUES = (
+    "materialized_to_ragflow",
+    "materialized_to_manifest",
+    "local_audit_only",
+    "advisory_after_build",
+    "unsupported_or_gated",
+    "native_parser_only",
+    "unknown_api_mapping",
+)
+
+
+def _profile_suggestion_parser_keys(profile_suggestions: Mapping[str, Any] | None) -> set[str]:
+    if not isinstance(profile_suggestions, Mapping):
+        return set()
+    suggestions = profile_suggestions.get("suggestions")
+    if not isinstance(suggestions, list):
+        return set()
+    keys: set[str] = set()
+    for suggestion in suggestions:
+        if not isinstance(suggestion, Mapping):
+            continue
+        parser_config = suggestion.get("parser_config")
+        if isinstance(parser_config, Mapping):
+            keys.update(str(key) for key in parser_config)
+        if suggestion.get("language") is not None:
+            keys.add("language")
+    return keys
+
+
+def make_parameter_materialization_inventory(
+    *,
+    profile: ChunkProfile,
+    profile_suggestions: Mapping[str, Any] | None = None,
+    retrieval_hints: Mapping[str, Any] | None = None,
+    ragflow_ingest_plan: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Classify sidecar-derived KB parameters before any live RAGFlow mutation."""
+
+    language = select_build_language(profile, ragflow_ingest_plan=ragflow_ingest_plan)
+    fields: list[dict[str, Any]] = []
+
+    def add_field(
+        field: str,
+        *,
+        status: str,
+        source: str,
+        parser_path_scope: str,
+        target: str | None = None,
+        value: Any = None,
+        reason: str | None = None,
+        required_verification: list[str] | tuple[str, ...] | None = None,
+        ui_label: str | None = None,
+    ) -> None:
+        record: dict[str, Any] = {
+            "field": field,
+            "status": status,
+            "source": source,
+            "target": target,
+            "parser_path_scope": parser_path_scope,
+        }
+        if value is not None:
+            record["value"] = value
+        if reason:
+            record["reason"] = reason
+        if required_verification:
+            record["required_verification"] = list(required_verification)
+        if ui_label:
+            record["ui_label"] = ui_label
+        fields.append(record)
+
+    if language.get("value") is not None:
+        source = str(language.get("source") or "profile_or_ingest_plan")
+        add_field(
+            "profile.language" if source.startswith("profile.") else "ragflow_ingest_plan.recommended_build.parser_profile.language",
+            status=str(language["status"]),
+            source=source,
+            target="dataset.language",
+            parser_path_scope="markdown_handoff",
+            value=language.get("value"),
+            reason=language.get("reason") if isinstance(language.get("reason"), str) else None,
+            required_verification=("fake_client_dataset_payload", "ragflow_read_back_audit"),
+        )
+
+    for key in sorted(profile.parser_config):
+        value = profile.parser_config[key]
+        field = f"profile.parser_config.{key}"
+        if str(key).startswith("__"):
+            add_field(
+                field,
+                status="local_audit_only",
+                source=field,
+                target=None,
+                parser_path_scope="markdown_handoff",
+                value=value,
+                reason="internal_parser_metadata_not_sent_to_ragflow",
+                required_verification=("dry_run_payload_preview",),
+            )
+            continue
+        status = "materialized_to_ragflow" if key in SUPPORTED_PARSER_KEYS else "unsupported_or_gated"
+        add_field(
+            field,
+            status=status,
+            source=field,
+            target=f"dataset.parser_config.{key}" if status == "materialized_to_ragflow" else None,
+            parser_path_scope="markdown_handoff",
+            value=value,
+            reason=None if status == "materialized_to_ragflow" else "unsupported_parser_config_key",
+            required_verification=(
+                ("fake_client_dataset_payload", "ragflow_read_back_audit")
+                if status == "materialized_to_ragflow"
+                else ("api_field_mapping_confirmation",)
+            ),
+        )
+
+    add_field(
+        "profile.chunk_overlap",
+        status="local_audit_only",
+        source="profile.chunk_overlap",
+        target=None,
+        parser_path_scope="markdown_handoff",
+        value=profile.chunk_overlap,
+        reason="overlap_percent_api_mapping_not_confirmed",
+        required_verification=("api_field_mapping_confirmation", "fake_client_dataset_payload"),
+    )
+
+    for key in sorted(_profile_suggestion_parser_keys(profile_suggestions)):
+        if key == "language":
+            field = "profile_suggestions.suggestions[].language"
+        else:
+            field = f"profile_suggestions.suggestions[].parser_config.{key}"
+        add_field(
+            field,
+            status="advisory_after_build",
+            source="profile_suggestions.json",
+            target=f"profile.parser_config.{key}" if key != "language" else "profile.language",
+            parser_path_scope="markdown_handoff",
+            reason="profile_suggestions_are_not_materialized_until_a_reviewed_profile_is_selected",
+            required_verification=("profile_review", "dry_run_payload_preview"),
+        )
+
+    if isinstance(retrieval_hints, Mapping):
+        add_field(
+            "retrieval_hints.keyword_candidates",
+            status="advisory_after_build",
+            source="retrieval_hints.json",
+            target=None,
+            parser_path_scope="markdown_handoff",
+            value=_retrieval_hint_count(retrieval_hints, "keyword_candidates"),
+            reason="not_silently_converted_to_auto_keywords",
+            required_verification=("benchmark_evidence", "reviewed_profile_selection"),
+        )
+        add_field(
+            "retrieval_hints.question_candidates",
+            status="advisory_after_build",
+            source="retrieval_hints.json",
+            target=None,
+            parser_path_scope="markdown_handoff",
+            value=_retrieval_hint_count(retrieval_hints, "question_candidates"),
+            reason="not_silently_converted_to_auto_questions",
+            required_verification=("benchmark_evidence", "reviewed_profile_selection"),
+        )
+        add_field(
+            "retrieval_hints.image_artifacts",
+            status="unsupported_or_gated",
+            source="retrieval_hints.json",
+            target=None,
+            parser_path_scope="markdown_handoff",
+            value=_retrieval_hint_count(retrieval_hints, "image_artifacts"),
+            reason="standard_markdown_build_does_not_upload_visual_assets_without_a_gated_visual_ingestion_path",
+            required_verification=("visual_ingestion_gate", "ragflow_read_back_audit"),
+        )
+        add_field(
+            "retrieval_hints.table_artifacts",
+            status="advisory_after_build",
+            source="retrieval_hints.json",
+            target=None,
+            parser_path_scope="markdown_handoff",
+            value=_retrieval_hint_count(retrieval_hints, "table_artifacts"),
+            reason="table_artifacts_support_review_and_sizing_not_native_table_parser_settings",
+            required_verification=("benchmark_evidence", "parser_path_mapping"),
+        )
+
+    parser_profile = {}
+    if isinstance(ragflow_ingest_plan, Mapping):
+        recommended_build = (
+            ragflow_ingest_plan.get("recommended_build")
+            if isinstance(ragflow_ingest_plan.get("recommended_build"), Mapping)
+            else {}
+        )
+        parser_profile = (
+            recommended_build.get("parser_profile")
+            if isinstance(recommended_build.get("parser_profile"), Mapping)
+            else {}
+        )
+    if "language" in parser_profile:
+        ingest_language = normalize_profile_language(parser_profile.get("language"))
+        selected_language = language.get("value")
+        ingest_language_materialized = (
+            isinstance(ingest_language, str)
+            and bool(ingest_language)
+            and (selected_language is None or normalize_profile_language(selected_language) == ingest_language)
+        )
+        already_recorded = any(
+            item["field"] == "ragflow_ingest_plan.recommended_build.parser_profile.language" for item in fields
+        )
+        if not already_recorded:
+            add_field(
+                "ragflow_ingest_plan.recommended_build.parser_profile.language",
+                status="materialized_to_ragflow" if ingest_language_materialized else "advisory_after_build",
+                source="ragflow_ingest_plan.recommended_build.parser_profile.language",
+                target="dataset.language" if ingest_language_materialized else None,
+                parser_path_scope="markdown_handoff",
+                value=ingest_language or parser_profile.get("language"),
+                reason=None if ingest_language_materialized else "profile_language_takes_precedence",
+                required_verification=("fake_client_dataset_payload", "ragflow_read_back_audit"),
+            )
+    for key in ("postprocess_profile", "avoid_children_delimiter"):
+        if key in parser_profile:
+            add_field(
+                f"ragflow_ingest_plan.recommended_build.parser_profile.{key}",
+                status="local_audit_only" if key == "postprocess_profile" else "advisory_after_build",
+                source="ragflow_ingest_plan.yaml",
+                target=None,
+                parser_path_scope="markdown_handoff",
+                value=parser_profile.get(key),
+                reason=(
+                    "postprocess_profile_controls_markdown_generation_not_ragflow_parser_config"
+                    if key == "postprocess_profile"
+                    else "children_delimiter_behavior_requires_api_mapping_confirmation"
+                ),
+                required_verification=("api_field_mapping_confirmation",),
+            )
+
+    if isinstance(metadata, Mapping):
+        add_field(
+            "metadata.json",
+            status="local_audit_only",
+            source="metadata.json",
+            target=None,
+            parser_path_scope="markdown_handoff",
+            reason="metadata_sidecar_is_not_written_as_ragflow_automatic_metadata",
+            required_verification=("api_field_mapping_confirmation", "ragflow_read_back_audit"),
+        )
+
+    ui_controls = (
+        (
+            "ragflow_ui.page_index",
+            "PageIndex",
+            "unknown_api_mapping",
+            "unknown",
+            "page_index_api_mapping_unconfirmed",
+        ),
+        (
+            "ragflow_ui.image_context_window",
+            "Image context window",
+            "unknown_api_mapping",
+            "unknown",
+            "image_context_window_api_mapping_unconfirmed",
+        ),
+        (
+            "ragflow_ui.table_context_window",
+            "Table context window",
+            "unknown_api_mapping",
+            "unknown",
+            "table_context_window_api_mapping_unconfirmed",
+        ),
+        (
+            "ragflow_ui.automatic_metadata",
+            "Automatic metadata",
+            "unknown_api_mapping",
+            "unknown",
+            "automatic_metadata_api_mapping_unconfirmed",
+        ),
+        (
+            "ragflow_ui.overlap_percent",
+            "Overlapped percent",
+            "unknown_api_mapping",
+            "unknown",
+            "overlap_percent_api_mapping_unconfirmed",
+        ),
+        (
+            "ragflow_ui.table_to_html",
+            "Table to HTML",
+            "native_parser_only",
+            "deepdoc_native",
+            "native_pdf_parser_control_not_markdown_handoff",
+        ),
+    )
+    for field, label, status, scope, reason in ui_controls:
+        add_field(
+            field,
+            status=status,
+            source="ragflow_ui_observation",
+            target=None,
+            parser_path_scope=scope,
+            reason=reason,
+            required_verification=("api_ui_read_back_audit",),
+            ui_label=label,
+        )
+
+    status_counts = {
+        status: sum(1 for item in fields if item["status"] == status)
+        for status in PARAMETER_MATERIALIZATION_STATUS_VALUES
+    }
+    parser_path_scope_counts = {
+        scope: sum(1 for item in fields if item.get("parser_path_scope") == scope)
+        for scope in ("markdown_handoff", "deepdoc_native", "unknown")
+    }
+    return {
+        "schema": PARAMETER_MATERIALIZATION_INVENTORY_SCHEMA,
+        "created_at": _now(),
+        "status_values": list(PARAMETER_MATERIALIZATION_STATUS_VALUES),
+        "parser_path_scope_values": ["markdown_handoff", "deepdoc_native", "unknown"],
+        "source_sidecars": {
+            "profile_suggestions": "loaded" if isinstance(profile_suggestions, Mapping) else "not_loaded",
+            "retrieval_hints": "loaded" if isinstance(retrieval_hints, Mapping) else "not_loaded",
+            "ragflow_ingest_plan": "loaded" if isinstance(ragflow_ingest_plan, Mapping) else "not_loaded",
+            "metadata": "loaded" if isinstance(metadata, Mapping) else "not_loaded",
+        },
+        "summary": {
+            "field_count": len(fields),
+            "status_counts": status_counts,
+            "parser_path_scope_counts": parser_path_scope_counts,
+            "materialized_to_ragflow_count": status_counts["materialized_to_ragflow"],
+            "unknown_api_mapping_count": status_counts["unknown_api_mapping"],
+            "native_parser_only_count": status_counts["native_parser_only"],
+        },
+        "fields": fields,
+        "safety": {
+            "ragflow_calls": 0,
+            "writes_live_ragflow": False,
+            "script_owned_llm_calls": 0,
+            "raw_chunks_included": False,
+        },
+    }
 
 
 def make_build_payload_preview(

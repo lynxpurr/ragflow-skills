@@ -12,6 +12,7 @@ from ragflow_skill_runtime.kb_build import (
     KB_ASSET_UPLOAD_PLAN_SCHEMA,
     BUILD_PAYLOAD_PREVIEW_SCHEMA,
     HANDOFF_CONSUMPTION_STATUS_SCHEMA,
+    PARAMETER_MATERIALIZATION_INVENTORY_SCHEMA,
     MULTIMODAL_KB_MANIFEST_SCHEMA,
     create_kb_asset_upload_plan,
     discover_markdown_documents,
@@ -25,6 +26,7 @@ from ragflow_skill_runtime.kb_build import (
     make_build_payload_preview,
     make_kb_manifest_payload,
     make_multimodal_kb_manifest_payload,
+    make_parameter_materialization_inventory,
     normalize_document_state,
     write_kb_asset_upload_zip,
     wait_for_document_states,
@@ -418,6 +420,94 @@ class KbBuildTests(unittest.TestCase):
         self.assertEqual(fields["retrieval_hints.question_candidates"]["status"], "advisory_after_build")
         self.assertEqual(preview["summary"]["ragflow_field_count"], 6)
         self.assertEqual(preview["summary"]["retrieval_hint_keyword_candidate_count"], 2)
+
+    def test_parameter_materialization_inventory_classifies_sidecars_and_ui_controls(self) -> None:
+        profile = ChunkProfile.from_dict(
+            {
+                "profile_id": "delimiter-en-768",
+                "chunk_size": 768,
+                "chunk_overlap": 64,
+                "parser_config": {
+                    "chunk_token_num": 768,
+                    "delimiter": "`<!-- chunk -->`",
+                    "auto_keywords": 0,
+                    "auto_questions": 1,
+                    "__language__": "English",
+                },
+            }
+        )
+
+        inventory = make_parameter_materialization_inventory(
+            profile=profile,
+            profile_suggestions={
+                "schema": "ragflow_profile_suggestions_v1",
+                "suggestions": [
+                    {
+                        "id": "table-atomic",
+                        "parser_config": {
+                            "chunk_token_num": 1024,
+                            "delimiter": "`<!-- chunk -->`",
+                        },
+                    }
+                ],
+            },
+            retrieval_hints={
+                "schema": "ragflow_retrieval_hints_v1",
+                "keyword_candidates": [{"term": "tsn"}],
+                "question_candidates": [{"question": "What changed?"}],
+                "image_artifacts": [{"path": "images/page.png"}],
+                "table_artifacts": [{"path": "artifacts/tables/table.md"}],
+            },
+            ragflow_ingest_plan={
+                "schema": "ragflow_ingest_plan_v1",
+                "recommended_build": {
+                    "parser_profile": {
+                        "language": "en",
+                        "postprocess_profile": "chunk-markers-dense",
+                    }
+                },
+            },
+            metadata={"schema": "ragflow_document_metadata_v1", "documents": []},
+        )
+        by_field = {item["field"]: item for item in inventory["fields"]}
+
+        self.assertEqual(inventory["schema"], PARAMETER_MATERIALIZATION_INVENTORY_SCHEMA)
+        self.assertIn("unknown_api_mapping", inventory["status_values"])
+        self.assertIn("native_parser_only", inventory["status_values"])
+        self.assertEqual(
+            by_field["profile.parser_config.chunk_token_num"]["status"],
+            "materialized_to_ragflow",
+        )
+        self.assertEqual(
+            by_field["profile.parser_config.delimiter"]["parser_path_scope"],
+            "markdown_handoff",
+        )
+        self.assertEqual(
+            by_field["profile.chunk_overlap"]["status"],
+            "local_audit_only",
+        )
+        self.assertEqual(
+            by_field["profile_suggestions.suggestions[].parser_config.delimiter"]["status"],
+            "advisory_after_build",
+        )
+        self.assertEqual(
+            by_field["retrieval_hints.keyword_candidates"]["status"],
+            "advisory_after_build",
+        )
+        self.assertEqual(
+            by_field["retrieval_hints.image_artifacts"]["status"],
+            "unsupported_or_gated",
+        )
+        self.assertEqual(
+            by_field["ragflow_ingest_plan.recommended_build.parser_profile.language"]["status"],
+            "materialized_to_ragflow",
+        )
+        self.assertEqual(by_field["metadata.json"]["status"], "local_audit_only")
+        self.assertEqual(by_field["ragflow_ui.page_index"]["status"], "unknown_api_mapping")
+        self.assertEqual(by_field["ragflow_ui.table_to_html"]["status"], "native_parser_only")
+        self.assertEqual(by_field["ragflow_ui.table_to_html"]["parser_path_scope"], "deepdoc_native")
+        self.assertEqual(inventory["safety"]["ragflow_calls"], 0)
+        self.assertFalse(inventory["safety"]["writes_live_ragflow"])
 
     def test_handoff_consumption_status_classifies_core_sidecars_assets_and_tables(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
