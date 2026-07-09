@@ -334,6 +334,124 @@ for every Dedao-style EPUB or every RAGFlow deployment.
 - `git diff --check`
 - `python3 -m pytest packages/ragflow-skill-runtime/tests -q`
 
+## Hermes Agent Regression Instructions
+
+Use this instruction block when asking a Hermes agent to regression-test the
+Dedao/Pandoc EPUB P2 quality evidence work. Run from the repository root
+`<repo-root>` and keep the run offline unless a separate live gate is explicitly
+approved.
+
+Constraints:
+
+- Use `python3`.
+- Do not run live RAGFlow mutation.
+- Do not call script-owned LLM or RAGAS backends.
+- Do not commit, revert, or clean user changes unless explicitly requested.
+- Verify only deterministic offline behavior and public report hygiene.
+
+Regression command sequence:
+
+```bash
+git status --short --branch
+
+python3 -m py_compile \
+  packages/ragflow-skill-runtime/src/ragflow_skill_runtime/handoff.py \
+  skills/ragflow-kb-build/scripts/build.py \
+  packages/ragflow-skill-runtime/tests/test_handoff.py \
+  packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py \
+  packages/ragflow-skill-runtime/tests/test_kb_build_cli.py
+
+python3 -m pytest \
+  packages/ragflow-skill-runtime/tests/test_handoff.py::HandoffTests::test_handoff_comparison_reports_pandoc_cleanup_quality_metrics \
+  packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py::DocConvertCliTests::test_compare_retained_package_cli_writes_static_report \
+  packages/ragflow-skill-runtime/tests/test_kb_build_cli.py::KbBuildCliTests::test_build_dry_run_reports_build_readiness_metrics \
+  -q
+
+python3 -m pytest packages/ragflow-skill-runtime/tests/test_doc_postprocess.py -q
+python3 -m pytest packages/ragflow-skill-runtime/tests -q
+git diff --check
+
+python3 tools/schema_identity_check.py \
+  --report-json /tmp/hermes-pandoc-p2-schema-identity.json \
+  >/tmp/hermes-pandoc-p2-schema-identity.stdout
+
+python3 tools/release_hygiene_check.py \
+  >/tmp/hermes-pandoc-p2-release-hygiene.json
+
+rg -n "/home/|192\\.168|127\\.0\\.0\\.1|/tmp/|api[_-]?key|bearer|token|dataset_id|document_id|kb:" \
+  docs/33-dedao-pandoc-epub-quality-improvement-plan.md || true
+```
+
+Expected release-hygiene summary:
+
+- Schema identity report has `ok=true` and zero failed identities.
+- Release hygiene report has `ok=true` and zero findings.
+
+Manual field checks:
+
+- `ragflow_handoff_comparison_v1` JSON includes
+  `static_comparison.quality_metrics`.
+- The generated handoff comparison Markdown includes `Cleanup Quality Metrics`.
+- `ragflow-kb-build --dry-run` JSON includes `build_readiness_metrics`.
+- `build_readiness_metrics` is advisory/offline. Estimated chunks are a Markdown
+  character-window estimate using the selected profile chunk size and overlap; they
+  must not be treated as live RAGFlow parser chunks.
+- No raw retrieved chunks, real KB names, dataset or document identifiers, endpoints,
+  API keys, private prompts, or private run roots are present in public reports.
+- No live mutation or script-owned LLM/RAGAS execution occurred.
+
+Public-doc redaction scan review:
+
+- Benign hits can include `tokenizer` / `tokens` wording and `/tmp` validation output
+  paths recorded as command examples.
+- Do not compare the redaction scan with a fixed expected hit count. Report every
+  current hit and manually classify it, because this document may gain additional
+  benign `/tmp` command examples during later validation rounds.
+- Any raw endpoint, private path, private run root, credential, real KB name, dataset
+  identifier, document identifier, or raw retrieved chunk must be treated as a failure.
+
+Hermes should return a concise Chinese regression report with:
+
+- git status summary;
+- pass/fail result for every command;
+- confirmation of the new `quality_metrics` and `build_readiness_metrics` fields;
+- redaction-scan hits and manual judgment;
+- explicit statement that live mutation and script-owned LLM/RAGAS were not run;
+- residual risks or follow-up recommendations.
+
+## Hermes Regression Review Notes
+
+The 2026-07-09 Codex review of the Hermes P2 regression report confirmed the main
+offline regression conclusion: the P2 focus tests, `test_doc_postprocess.py`, full
+runtime test suite, schema identity check, release hygiene check, and whitespace check
+were all independently re-run successfully. The review also verified that
+`ragflow_handoff_comparison_v1` emits `static_comparison.quality_metrics`, the generated
+handoff comparison Markdown includes `Cleanup Quality Metrics`, and
+`ragflow-kb-build --dry-run` emits `build_readiness_metrics`.
+
+Corrections and cautions for future Hermes reports:
+
+- Treat git status and redaction scan counts as run-specific evidence. The Hermes report
+  was correct for its run, but this document later gained additional regression
+  instructions, so current scans can legitimately include more benign `/tmp` command
+  examples.
+- Describe `estimated_chunk_count` as an offline Markdown character-window estimate using
+  the selected profile chunk size and overlap. In the P2 fixture this aligns with
+  `parser_config.chunk_token_num`, but the metric is not a live parser result.
+- State live and LLM safety narrowly: the P2 regression run did not perform real live
+  RAGFlow mutation or script-owned LLM/RAGAS execution. Do not infer that every unrelated
+  full-suite fake-client path is a live mutation path.
+- Prefer the raw generated Markdown report artifact over chat transcripts when archiving
+  Hermes output, because pasted chat text can contain segment markers or repeated
+  fragments.
+
+Recommended follow-up:
+
+- Optionally harden schema-identity coverage so
+  `ragflow_retirement_observation_matrix_v1` is matched literally on the coverage side,
+  not only through `RETIREMENT_MATRIX_SCHEMA`. This is a low-risk release-health cleanup
+  and is not a P2 blocker.
+
 Residual gated work:
 
 - Any live RAGFlow mutation or live A/B retest requires explicit user approval,
