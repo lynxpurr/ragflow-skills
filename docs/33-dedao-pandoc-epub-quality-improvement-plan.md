@@ -462,3 +462,28 @@ Residual gated work:
 - Old skill repositories should remain comparison evidence only; follow-up fixes should
   land in the current public skill suite unless a separate maintenance request targets
   the old code directly.
+
+## Archived Next-Round Gate Tracks
+
+This P0-P2 Dedao/Pandoc EPUB optimization round is closed for public offline work. The
+following tracks are archived as next-round gates, not as unfinished tasks in this plan:
+
+- Live RAGFlow mutation or paired live A/B retest remains gated behind explicit user
+  approval, disposable resources, sanitized aggregate reporting, and cleanup evidence.
+- Script-owned LLM/RAGAS backend execution remains deferred until a separate backend gate
+  provides explicit configuration, fake-provider fixtures, advisory-output marking,
+  citation compatibility checks, and redaction validation.
+- Private Dedao bridge or corpus-specific adapter work remains outside the public
+  `skills/` release boundary. Public docs may record only sanitized handoff shape and
+  decision summaries.
+- Post-CLI adapters, `ragflow-query serve`, provider adapters, reranker adapters, and
+  remote-conversion clients should open only after `docs/15-field-trial-observation-plan.md`
+  records trigger evidence that the current one-shot CLI/archive path is insufficient.
+- Release-path validation should continue as periodic maintenance: full runtime tests,
+  release hygiene, archive export, consumer acceptance, and strict-vendor platform smoke
+  before public release candidates or broad public-surface changes.
+
+Use `docs/15-field-trial-observation-plan.md` for sanitized observation records and
+`docs/16-system-closeout-report.md` as the system-level gated backlog baseline. Create a
+new dedicated design document only when one gate has concrete trigger evidence and a
+focused implementation slice is ready.
