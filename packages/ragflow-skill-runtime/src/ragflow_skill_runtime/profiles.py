@@ -108,7 +108,9 @@ class ChunkProfile:
 
     def to_dataset_payload(self) -> dict[str, Any]:
         parser_config = {
-            key: value for key, value in self.parser_config.items() if not key.startswith("__")
+            key: value
+            for key, value in self.parser_config.items()
+            if not key.startswith("__") and key in SUPPORTED_PARSER_KEYS
         }
         payload: dict[str, Any] = {
             "chunk_method": self.chunk_method,

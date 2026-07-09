@@ -391,6 +391,8 @@ class KbBuildTests(unittest.TestCase):
                     "delimiter": "`<!-- chunk -->`",
                     "auto_keywords": 1,
                     "auto_questions": 0,
+                    "page_index": True,
+                    "table_to_html": True,
                     "__language__": "Chinese",
                 },
             }
@@ -416,11 +418,21 @@ class KbBuildTests(unittest.TestCase):
         self.assertEqual(preview["dataset_create_payload"]["language"], "Chinese")
         self.assertEqual(fields["language"]["status"], "materialized_to_ragflow")
         self.assertEqual(fields["parser_config.delimiter"]["status"], "materialized_to_ragflow")
+        self.assertEqual(fields["parser_config.page_index"]["status"], "unsupported_or_gated")
+        self.assertEqual(fields["parser_config.page_index"]["target"], None)
+        self.assertEqual(fields["parser_config.table_to_html"]["status"], "unsupported_or_gated")
         self.assertEqual(fields["parser_config.__language__"]["status"], "local_audit_only")
         self.assertEqual(fields["chunk_overlap"]["status"], "local_audit_only")
+        self.assertEqual(fields["ragflow_ui.page_index"]["status"], "unknown_api_mapping")
+        self.assertEqual(fields["ragflow_ui.page_index"]["ui_label"], "PageIndex")
+        self.assertEqual(fields["ragflow_ui.overlap_percent"]["status"], "unknown_api_mapping")
+        self.assertEqual(fields["ragflow_ui.table_to_html"]["status"], "native_parser_only")
+        self.assertEqual(fields["ragflow_ui.table_to_html"]["parser_path_scope"], "deepdoc_native")
         self.assertEqual(fields["retrieval_hints.keyword_candidates"]["status"], "advisory_after_build")
         self.assertEqual(fields["retrieval_hints.question_candidates"]["status"], "advisory_after_build")
         self.assertEqual(preview["summary"]["ragflow_field_count"], 6)
+        self.assertEqual(preview["summary"]["unknown_api_mapping_field_count"], 5)
+        self.assertEqual(preview["summary"]["native_parser_only_field_count"], 1)
         self.assertEqual(preview["summary"]["retrieval_hint_keyword_candidate_count"], 2)
 
     def test_parameter_materialization_inventory_classifies_sidecars_and_ui_controls(self) -> None:
@@ -659,7 +671,19 @@ class KbBuildTests(unittest.TestCase):
         table_record = next(item for item in report["artifacts"] if item["kind"] == "table_artifact")
         self.assertEqual(image_record["status"], "unsupported_or_gated")
         self.assertEqual(table_record["status"], "local_audit_only")
+        parameter_fields = {item["field"]: item for item in report["parameter_fields"]}
+        self.assertEqual(
+            parameter_fields["ragflow_ingest_plan.recommended_build.parser_profile.language"]["status"],
+            "materialized_to_ragflow",
+        )
+        self.assertEqual(parameter_fields["retrieval_hints.keyword_candidates"]["status"], "advisory_after_build")
+        self.assertEqual(parameter_fields["metadata.json"]["status"], "local_audit_only")
+        self.assertEqual(parameter_fields["ragflow_ui.page_index"]["status"], "unknown_api_mapping")
+        self.assertEqual(parameter_fields["ragflow_ui.page_index"]["ui_label"], "PageIndex")
+        self.assertEqual(parameter_fields["ragflow_ui.table_to_html"]["status"], "native_parser_only")
         self.assertEqual(report["summary"]["status_counts"]["advisory_after_build"], 3)
+        self.assertEqual(report["summary"]["parameter_status_counts"]["unknown_api_mapping"], 5)
+        self.assertEqual(report["summary"]["parameter_status_counts"]["native_parser_only"], 1)
         self.assertEqual(report["summary"]["image_asset_count"], 1)
         self.assertEqual(report["summary"]["table_artifact_count"], 1)
 

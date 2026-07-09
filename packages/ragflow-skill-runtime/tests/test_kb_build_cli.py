@@ -896,6 +896,10 @@ class KbBuildCliTests(unittest.TestCase):
         fields = {item["field"]: item for item in preview["fields"]}
         self.assertEqual(fields["parser_config.__language__"]["status"], "local_audit_only")
         self.assertEqual(fields["retrieval_hints.keyword_candidates"]["status"], "advisory_after_build")
+        self.assertEqual(fields["ragflow_ui.page_index"]["status"], "unknown_api_mapping")
+        self.assertEqual(fields["ragflow_ui.page_index"]["ui_label"], "PageIndex")
+        self.assertEqual(fields["ragflow_ui.table_to_html"]["status"], "native_parser_only")
+        self.assertEqual(fields["ragflow_ui.table_to_html"]["parser_path_scope"], "deepdoc_native")
         self.assertEqual(preview["dataset_create_payload"]["parser_config"]["auto_keywords"], 0)
         self.assertEqual(preview["dataset_create_payload"]["parser_config"]["auto_questions"], 0)
         consumption = payload["handoff_consumption_status"]
@@ -903,6 +907,10 @@ class KbBuildCliTests(unittest.TestCase):
         consumption_by_artifact = {item["artifact"]: item for item in consumption["artifacts"]}
         self.assertEqual(consumption_by_artifact[str(input_dir / "sample.md")]["status"], "materialized_to_ragflow")
         self.assertEqual(consumption_by_artifact[str(retrieval_hints)]["status"], "advisory_after_build")
+        consumption_parameters = {item["field"]: item for item in consumption["parameter_fields"]}
+        self.assertEqual(consumption_parameters["retrieval_hints.keyword_candidates"]["status"], "advisory_after_build")
+        self.assertEqual(consumption_parameters["ragflow_ui.page_index"]["status"], "unknown_api_mapping")
+        self.assertEqual(consumption_parameters["ragflow_ui.table_to_html"]["status"], "native_parser_only")
         inventory = payload["parameter_materialization_inventory"]
         self.assertEqual(inventory["schema"], "ragflow_parameter_materialization_inventory_v1")
         inventory_by_field = {item["field"]: item for item in inventory["fields"]}
@@ -1256,7 +1264,14 @@ class KbBuildCliTests(unittest.TestCase):
                         "profile_id": "reviewed-profile",
                         "chunk_size": 512,
                         "chunk_overlap": 64,
-                        "parser_config": {"chunk_token_num": 512, "auto_keywords": 0, "auto_questions": 0},
+                        "parser_config": {
+                            "chunk_token_num": 512,
+                            "auto_keywords": 0,
+                            "auto_questions": 0,
+                            "page_index": True,
+                            "table_to_html": True,
+                            "layout_recognize": True,
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -1290,7 +1305,15 @@ class KbBuildCliTests(unittest.TestCase):
         created_profile = FakeOptimizeBuildClient.instances[0].created[0][1]
         self.assertEqual(created_profile["parser_config"]["auto_keywords"], 0)
         self.assertEqual(created_profile["parser_config"]["auto_questions"], 0)
+        self.assertNotIn("page_index", created_profile["parser_config"])
+        self.assertNotIn("table_to_html", created_profile["parser_config"])
+        self.assertNotIn("layout_recognize", created_profile["parser_config"])
         fields = {item["field"]: item for item in payload["build_payload_preview"]["fields"]}
+        self.assertEqual(fields["parser_config.page_index"]["status"], "unsupported_or_gated")
+        self.assertEqual(fields["parser_config.table_to_html"]["status"], "unsupported_or_gated")
+        self.assertEqual(fields["parser_config.layout_recognize"]["status"], "unsupported_or_gated")
+        self.assertEqual(fields["ragflow_ui.page_index"]["status"], "unknown_api_mapping")
+        self.assertEqual(fields["ragflow_ui.table_to_html"]["status"], "native_parser_only")
         self.assertEqual(fields["retrieval_hints.keyword_candidates"]["status"], "advisory_after_build")
         self.assertEqual(fields["retrieval_hints.question_candidates"]["status"], "advisory_after_build")
         self.assertEqual(manifest["handoff_consumption_status"]["schema"], "ragflow_handoff_consumption_status_v1")

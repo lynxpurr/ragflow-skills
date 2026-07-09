@@ -1,7 +1,7 @@
 # RAGFlow KB Parameter Materialization Plan
 
-Status: active KB parameter materialization plan; P0 inventory implemented
-Date: 2026-07-09
+Status: active KB parameter materialization plan; P0 complete, P1 offline guard visibility verified
+Date: 2026-07-10
 
 ## Objective / Scope / Boundaries
 
@@ -195,8 +195,8 @@ Acceptance target:
       current materialization status, parser-path scope, and required
       verification.
 - [x] Add a read-only KB parameter read-back audit with public-safe redaction.
-- [ ] Add fake-client tests for any newly writable parser or dataset fields.
-- [ ] Extend `build_payload_preview` and handoff consumption status to show
+- [x] Add fake-client tests for any newly writable parser or dataset fields.
+- [x] Extend `build_payload_preview` and handoff consumption status to show
       candidate UI/parser fields and why each is materialized or not.
 - [ ] Add reviewed materialization for confirmed fields only.
 - [ ] Run a disposable live validation for confirmed fields after explicit user
@@ -240,6 +240,25 @@ Implemented on 2026-07-09:
 - Report surface, generated Markdown, runtime-resilience inventory, and schema
   identity coverage were updated for the new command.
 
+Implemented on 2026-07-10:
+
+- `ChunkProfile.to_dataset_payload()` now filters parser config to the reviewed
+  public RAGFlow parser keys only: `chunk_token_num`, `delimiter`,
+  `auto_keywords`, and `auto_questions`.
+- Unsupported profile parser keys such as candidate PageIndex, native table
+  parser, visual/layout, or other provider-specific controls remain visible in
+  manifests and preview reports, but are not sent to RAGFlow create payloads.
+- `build_payload_preview` now includes known RAGFlow UI/parser controls such as
+  PageIndex, image/table context windows, automatic metadata, overlap percent,
+  and table-to-HTML with `unknown_api_mapping` or `native_parser_only`
+  classifications.
+- `handoff_consumption_status` now includes a field-level
+  `parameter_fields` block and parameter status counts for ingest-plan,
+  retrieval-hint, metadata, and known UI/parser candidate fields.
+- Fake-client live-build coverage now verifies that candidate unsupported or
+  native-only parser fields do not reach `create_dataset()` payloads while the
+  dry-run and handoff reports still explain why they were blocked.
+
 Related completed evidence:
 
 - `docs/34-pipeline-consumption-gap-quality-improvement-plan.md` closed the
@@ -253,11 +272,22 @@ Related completed evidence:
 Remaining gap:
 
 - The sidecar recommendation surface is now visible in a field-level inventory,
-  and requested parser settings can now be compared with read-back evidence.
-  Candidate UI/parser options still need API mapping, fake-client coverage, and
+  requested parser settings can now be compared with read-back evidence, and
+  candidate UI/parser controls are visible in dry-run and handoff-consumption
+  reports. Candidate UI/parser options still need API mapping confirmation and
   disposable live validation before they become materialized settings.
 
 ## Validation Evidence / Residual Gated Work
+
+Verified on 2026-07-10 for the P1 offline guard-visibility slice:
+
+- `python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/profiles.py packages/ragflow-skill-runtime/src/ragflow_skill_runtime/kb_build.py skills/ragflow-kb-build/scripts/build.py`;
+- `python3 -m pytest packages/ragflow-skill-runtime/tests -q` passed with
+  668 tests and 6 subtests;
+- `python3 tools/schema_identity_check.py --report-json <temporary-report-json>`;
+- `python3 tools/release_hygiene_check.py`;
+- `git diff --check`;
+- targeted redaction scan over this document and `skills/ragflow-kb-build/SKILL.md`.
 
 Docs-only validation for this plan:
 

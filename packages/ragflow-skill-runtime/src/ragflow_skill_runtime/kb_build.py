@@ -287,6 +287,50 @@ PARAMETER_MATERIALIZATION_STATUS_VALUES = (
     "native_parser_only",
     "unknown_api_mapping",
 )
+KNOWN_RAGFLOW_UI_CONTROLS = (
+    (
+        "ragflow_ui.page_index",
+        "PageIndex",
+        "unknown_api_mapping",
+        "unknown",
+        "page_index_api_mapping_unconfirmed",
+    ),
+    (
+        "ragflow_ui.image_context_window",
+        "Image context window",
+        "unknown_api_mapping",
+        "unknown",
+        "image_context_window_api_mapping_unconfirmed",
+    ),
+    (
+        "ragflow_ui.table_context_window",
+        "Table context window",
+        "unknown_api_mapping",
+        "unknown",
+        "table_context_window_api_mapping_unconfirmed",
+    ),
+    (
+        "ragflow_ui.automatic_metadata",
+        "Automatic metadata",
+        "unknown_api_mapping",
+        "unknown",
+        "automatic_metadata_api_mapping_unconfirmed",
+    ),
+    (
+        "ragflow_ui.overlap_percent",
+        "Overlapped percent",
+        "unknown_api_mapping",
+        "unknown",
+        "overlap_percent_api_mapping_unconfirmed",
+    ),
+    (
+        "ragflow_ui.table_to_html",
+        "Table to HTML",
+        "native_parser_only",
+        "deepdoc_native",
+        "native_pdf_parser_control_not_markdown_handoff",
+    ),
+)
 PARAMETER_READ_BACK_AUDIT_STATUS_VALUES = (
     "observed_match",
     "observed_missing",
@@ -298,6 +342,29 @@ PARAMETER_READ_BACK_AUDIT_STATUS_VALUES = (
 )
 READ_BACK_DETAIL_NESTED_KEYS = ("dataset", "kb", "knowledgebase", "knowledge_base", "detail", "details", "summary")
 READ_BACK_PARSER_CONFIG_KEYS = ("parser_config", "parserConfig")
+
+
+def _known_ragflow_ui_control_fields() -> list[dict[str, Any]]:
+    return [
+        {
+            "field": field,
+            "status": status,
+            "source": "ragflow_ui_observation",
+            "target": None,
+            "parser_path_scope": scope,
+            "reason": reason,
+            "required_verification": ["api_ui_read_back_audit"],
+            "ui_label": label,
+        }
+        for field, label, status, scope, reason in KNOWN_RAGFLOW_UI_CONTROLS
+    ]
+
+
+def _field_status_counts(fields: list[Mapping[str, Any]], statuses: tuple[str, ...]) -> dict[str, int]:
+    return {
+        status: sum(1 for item in fields if item.get("status") == status)
+        for status in statuses
+    }
 
 
 def _read_back_roots(payload: Mapping[str, Any]) -> list[tuple[str, Mapping[str, Any]]]:
@@ -874,66 +941,19 @@ def make_parameter_materialization_inventory(
             required_verification=("api_field_mapping_confirmation", "ragflow_read_back_audit"),
         )
 
-    ui_controls = (
-        (
-            "ragflow_ui.page_index",
-            "PageIndex",
-            "unknown_api_mapping",
-            "unknown",
-            "page_index_api_mapping_unconfirmed",
-        ),
-        (
-            "ragflow_ui.image_context_window",
-            "Image context window",
-            "unknown_api_mapping",
-            "unknown",
-            "image_context_window_api_mapping_unconfirmed",
-        ),
-        (
-            "ragflow_ui.table_context_window",
-            "Table context window",
-            "unknown_api_mapping",
-            "unknown",
-            "table_context_window_api_mapping_unconfirmed",
-        ),
-        (
-            "ragflow_ui.automatic_metadata",
-            "Automatic metadata",
-            "unknown_api_mapping",
-            "unknown",
-            "automatic_metadata_api_mapping_unconfirmed",
-        ),
-        (
-            "ragflow_ui.overlap_percent",
-            "Overlapped percent",
-            "unknown_api_mapping",
-            "unknown",
-            "overlap_percent_api_mapping_unconfirmed",
-        ),
-        (
-            "ragflow_ui.table_to_html",
-            "Table to HTML",
-            "native_parser_only",
-            "deepdoc_native",
-            "native_pdf_parser_control_not_markdown_handoff",
-        ),
-    )
-    for field, label, status, scope, reason in ui_controls:
+    for ui_field in _known_ragflow_ui_control_fields():
         add_field(
-            field,
-            status=status,
-            source="ragflow_ui_observation",
+            str(ui_field["field"]),
+            status=str(ui_field["status"]),
+            source=str(ui_field["source"]),
             target=None,
-            parser_path_scope=scope,
-            reason=reason,
-            required_verification=("api_ui_read_back_audit",),
-            ui_label=label,
+            parser_path_scope=str(ui_field["parser_path_scope"]),
+            reason=str(ui_field["reason"]),
+            required_verification=ui_field["required_verification"],
+            ui_label=str(ui_field["ui_label"]),
         )
 
-    status_counts = {
-        status: sum(1 for item in fields if item["status"] == status)
-        for status in PARAMETER_MATERIALIZATION_STATUS_VALUES
-    }
+    status_counts = _field_status_counts(fields, PARAMETER_MATERIALIZATION_STATUS_VALUES)
     parser_path_scope_counts = {
         scope: sum(1 for item in fields if item.get("parser_path_scope") == scope)
         for scope in ("markdown_handoff", "deepdoc_native", "unknown")
@@ -990,6 +1010,9 @@ def make_build_payload_preview(
         target: str | None,
         value: Any = None,
         reason: str | None = None,
+        parser_path_scope: str | None = None,
+        required_verification: list[str] | tuple[str, ...] | None = None,
+        ui_label: str | None = None,
     ) -> None:
         record = {
             "field": field,
@@ -1001,6 +1024,12 @@ def make_build_payload_preview(
             record["value"] = value
         if reason:
             record["reason"] = reason
+        if parser_path_scope:
+            record["parser_path_scope"] = parser_path_scope
+        if required_verification:
+            record["required_verification"] = list(required_verification)
+        if ui_label:
+            record["ui_label"] = ui_label
         fields.append(record)
 
     add_field(
@@ -1082,6 +1111,19 @@ def make_build_payload_preview(
             reason="table_hints_require_profile_or_benchmark_review",
         )
 
+    for ui_field in _known_ragflow_ui_control_fields():
+        add_field(
+            str(ui_field["field"]),
+            status=str(ui_field["status"]),
+            source=str(ui_field["source"]),
+            target=None,
+            reason=str(ui_field["reason"]),
+            parser_path_scope=str(ui_field["parser_path_scope"]),
+            required_verification=ui_field["required_verification"],
+            ui_label=str(ui_field["ui_label"]),
+        )
+
+    status_counts = _field_status_counts(fields, PARAMETER_MATERIALIZATION_STATUS_VALUES)
     return {
         "schema": BUILD_PAYLOAD_PREVIEW_SCHEMA,
         "created_at": _now(),
@@ -1095,10 +1137,13 @@ def make_build_payload_preview(
         },
         "summary": {
             "field_count": len(fields),
-            "ragflow_field_count": sum(1 for item in fields if item["status"] == "materialized_to_ragflow"),
-            "local_only_field_count": sum(1 for item in fields if item["status"] == "local_audit_only"),
-            "advisory_field_count": sum(1 for item in fields if item["status"] == "advisory_after_build"),
-            "unsupported_or_gated_field_count": sum(1 for item in fields if item["status"] == "unsupported_or_gated"),
+            "status_counts": status_counts,
+            "ragflow_field_count": status_counts["materialized_to_ragflow"],
+            "local_only_field_count": status_counts["local_audit_only"],
+            "advisory_field_count": status_counts["advisory_after_build"],
+            "unsupported_or_gated_field_count": status_counts["unsupported_or_gated"],
+            "unknown_api_mapping_field_count": status_counts["unknown_api_mapping"],
+            "native_parser_only_field_count": status_counts["native_parser_only"],
             "retrieval_hint_keyword_candidate_count": _retrieval_hint_count(retrieval_hints, "keyword_candidates"),
             "retrieval_hint_question_candidate_count": _retrieval_hint_count(retrieval_hints, "question_candidates"),
         },
@@ -1252,7 +1297,37 @@ def make_handoff_consumption_status(
         except BuildError:
             manifest_payload = {}
     artifacts: list[dict[str, Any]] = []
+    parameter_fields: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
+
+    def add_parameter_field(
+        field: str,
+        *,
+        status: str,
+        source: str,
+        target: str | None,
+        parser_path_scope: str,
+        value: Any = None,
+        reason: str | None = None,
+        required_verification: list[str] | tuple[str, ...] | None = None,
+        ui_label: str | None = None,
+    ) -> None:
+        record: dict[str, Any] = {
+            "field": field,
+            "status": status,
+            "source": source,
+            "target": target,
+            "parser_path_scope": parser_path_scope,
+        }
+        if value is not None:
+            record["value"] = value
+        if reason:
+            record["reason"] = reason
+        if required_verification:
+            record["required_verification"] = list(required_verification)
+        if ui_label:
+            record["ui_label"] = ui_label
+        parameter_fields.append(record)
 
     if manifest_path is not None:
         _add_artifact_status(
@@ -1336,6 +1411,47 @@ def make_handoff_consumption_status(
             reason="summarized_for_review_not_written_to_parser_or_query_settings",
             path=str(resolved_retrieval_hints_path),
         )
+        if isinstance(retrieval_hints, Mapping):
+            add_parameter_field(
+                "retrieval_hints.keyword_candidates",
+                status="advisory_after_build",
+                source="retrieval_hints.json",
+                target=None,
+                parser_path_scope="markdown_handoff",
+                value=_retrieval_hint_count(retrieval_hints, "keyword_candidates"),
+                reason="not_silently_converted_to_auto_keywords",
+                required_verification=("benchmark_evidence", "reviewed_profile_selection"),
+            )
+            add_parameter_field(
+                "retrieval_hints.question_candidates",
+                status="advisory_after_build",
+                source="retrieval_hints.json",
+                target=None,
+                parser_path_scope="markdown_handoff",
+                value=_retrieval_hint_count(retrieval_hints, "question_candidates"),
+                reason="not_silently_converted_to_auto_questions",
+                required_verification=("benchmark_evidence", "reviewed_profile_selection"),
+            )
+            add_parameter_field(
+                "retrieval_hints.image_artifacts",
+                status="unsupported_or_gated",
+                source="retrieval_hints.json",
+                target=None,
+                parser_path_scope="markdown_handoff",
+                value=_retrieval_hint_count(retrieval_hints, "image_artifacts"),
+                reason="standard_markdown_build_does_not_upload_visual_assets_without_a_gated_visual_ingestion_path",
+                required_verification=("visual_ingestion_gate", "ragflow_read_back_audit"),
+            )
+            add_parameter_field(
+                "retrieval_hints.table_artifacts",
+                status="advisory_after_build",
+                source="retrieval_hints.json",
+                target=None,
+                parser_path_scope="markdown_handoff",
+                value=_retrieval_hint_count(retrieval_hints, "table_artifacts"),
+                reason="table_artifacts_support_review_and_sizing_not_native_table_parser_settings",
+                required_verification=("benchmark_evidence", "parser_path_mapping"),
+            )
 
     metadata_sidecar_path = _sidecar_path(
         handoff_root=handoff_root,
@@ -1354,6 +1470,15 @@ def make_handoff_consumption_status(
             exists=metadata_sidecar_path.is_file(),
             reason="metadata_is_linted_and_summarized_locally_not_sent_as_dataset_parser_config",
             path=str(metadata_sidecar_path),
+        )
+        add_parameter_field(
+            "metadata.json",
+            status="local_audit_only",
+            source="metadata.json" if not metadata_path else "build --metadata",
+            target=None,
+            parser_path_scope="markdown_handoff",
+            reason="metadata_sidecar_is_not_written_as_ragflow_automatic_metadata",
+            required_verification=("api_field_mapping_confirmation", "ragflow_read_back_audit"),
         )
 
     assistant_profile_path = _sidecar_path(
@@ -1398,6 +1523,44 @@ def make_handoff_consumption_status(
             ),
             path=str(resolved_ingest_plan_path),
         )
+        parser_profile = {}
+        if isinstance(ragflow_ingest_plan, Mapping):
+            recommended_build = (
+                ragflow_ingest_plan.get("recommended_build")
+                if isinstance(ragflow_ingest_plan.get("recommended_build"), Mapping)
+                else {}
+            )
+            parser_profile = (
+                recommended_build.get("parser_profile")
+                if isinstance(recommended_build.get("parser_profile"), Mapping)
+                else {}
+            )
+        if language:
+            add_parameter_field(
+                "ragflow_ingest_plan.recommended_build.parser_profile.language",
+                status="materialized_to_ragflow",
+                source=language_source or "ragflow_ingest_plan.recommended_build.parser_profile.language",
+                target="dataset.language",
+                parser_path_scope="markdown_handoff",
+                value=language,
+                required_verification=("fake_client_dataset_payload", "ragflow_read_back_audit"),
+            )
+        for key in ("postprocess_profile", "avoid_children_delimiter"):
+            if key in parser_profile:
+                add_parameter_field(
+                    f"ragflow_ingest_plan.recommended_build.parser_profile.{key}",
+                    status="local_audit_only" if key == "postprocess_profile" else "advisory_after_build",
+                    source="ragflow_ingest_plan.yaml",
+                    target=None,
+                    parser_path_scope="markdown_handoff",
+                    value=parser_profile.get(key),
+                    reason=(
+                        "postprocess_profile_controls_markdown_generation_not_ragflow_parser_config"
+                        if key == "postprocess_profile"
+                        else "children_delimiter_behavior_requires_api_mapping_confirmation"
+                    ),
+                    required_verification=("api_field_mapping_confirmation",),
+                )
 
     image_paths: dict[str, Path] = {}
     for document in documents:
@@ -1455,6 +1618,18 @@ def make_handoff_consumption_status(
             path=str(resolved),
         )
 
+    for ui_field in _known_ragflow_ui_control_fields():
+        add_parameter_field(
+            str(ui_field["field"]),
+            status=str(ui_field["status"]),
+            source=str(ui_field["source"]),
+            target=None,
+            parser_path_scope=str(ui_field["parser_path_scope"]),
+            reason=str(ui_field["reason"]),
+            required_verification=ui_field["required_verification"],
+            ui_label=str(ui_field["ui_label"]),
+        )
+
     status_values = [
         "materialized_to_ragflow",
         "materialized_to_manifest",
@@ -1463,19 +1638,24 @@ def make_handoff_consumption_status(
         "unsupported_or_gated",
     ]
     status_counts = {status: sum(1 for item in artifacts if item.get("status") == status) for status in status_values}
+    parameter_status_counts = _field_status_counts(parameter_fields, PARAMETER_MATERIALIZATION_STATUS_VALUES)
     return {
         "schema": HANDOFF_CONSUMPTION_STATUS_SCHEMA,
         "created_at": _now(),
         "status_values": status_values,
+        "parameter_status_values": list(PARAMETER_MATERIALIZATION_STATUS_VALUES),
         "doc_manifest": str(doc_manifest_path) if doc_manifest_path else None,
         "summary": {
             "artifact_count": len(artifacts),
             "status_counts": status_counts,
+            "parameter_field_count": len(parameter_fields),
+            "parameter_status_counts": parameter_status_counts,
             "markdown_document_count": sum(1 for item in artifacts if item.get("kind") == "markdown_document"),
             "image_asset_count": sum(1 for item in artifacts if item.get("kind") == "image_asset"),
             "table_artifact_count": sum(1 for item in artifacts if item.get("kind") == "table_artifact"),
         },
         "artifacts": artifacts,
+        "parameter_fields": parameter_fields,
         "safety": {
             "ragflow_calls": 0,
             "script_owned_llm_calls": 0,

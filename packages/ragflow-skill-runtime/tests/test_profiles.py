@@ -71,6 +71,9 @@ class ProfileTests(unittest.TestCase):
                 "parser_config": {
                     "chunk_token_num": 512,
                     "auto_keywords": 0,
+                    "page_index": True,
+                    "table_to_html": True,
+                    "layout_recognize": True,
                     "__language__": "Chinese",
                 },
             }
@@ -80,7 +83,13 @@ class ProfileTests(unittest.TestCase):
         manifest = profile.to_manifest_dict()
 
         self.assertNotIn("__language__", payload["parser_config"])
+        self.assertNotIn("page_index", payload["parser_config"])
+        self.assertNotIn("table_to_html", payload["parser_config"])
+        self.assertNotIn("layout_recognize", payload["parser_config"])
         self.assertEqual(payload["parser_config"]["chunk_token_num"], 512)
+        self.assertTrue(manifest["parser_config"]["page_index"])
+        self.assertTrue(manifest["parser_config"]["table_to_html"])
+        self.assertTrue(manifest["parser_config"]["layout_recognize"])
         self.assertEqual(manifest["parser_config"]["__language__"], "Chinese")
 
     def test_lint_profile_accepts_chunk_marker_delimiter(self) -> None:
