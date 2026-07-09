@@ -1,6 +1,7 @@
 # Standard Benchmark Dataset Integration Plan
 
-Status: proposed standard-dataset integration plan
+Status: active standard-dataset integration plan; Open RAG Benchmark seed
+validated through Stage 4 readiness
 Date: 2026-07-09
 
 ## Objective
@@ -43,6 +44,48 @@ Without a standard benchmark suite:
 
 The next quality improvement is therefore to make benchmark data acquisition,
 normalization, validation, and trend tracking first-class maintenance work.
+
+## Current Execution Progress
+
+As of 2026-07-09, the first Open RAG Benchmark seed has been exercised through
+offline readiness.
+
+Completed evidence:
+
+- Stage 0 planning baseline was accepted for standard benchmark integration.
+- Stage 1 created a one-PDF Open RAG Benchmark seed with 10 judged queries and
+  document-level qrels.
+- Stage 2 benchmark import and preflight passed with expected weak-benchmark
+  warnings. The seed remains `exploratory` because it has one target document,
+  document-level qrels, and no chunk-level ground truth.
+- Stage 3 validated the PDF-to-formal-handoff-to-dry-run path using the approved
+  MinerU formal handoff route. `builtin` PDF handling was confirmed as a
+  capability boundary, not a conversion defect. `pandoc` and new local PDF
+  extraction fallbacks remain excluded.
+- For this seed, the MinerU hybrid high-quality path is the preferred formal
+  handoff path. The table-sizing issue observed in the standard pipeline path
+  was resolved in the hybrid path: the table preflight became ready, all table
+  entries fit the 768-token profile, and no table-parent chunk oversize warning
+  remained.
+- Stage 4 readiness completed offline with a delimiter-aware profile base,
+  bounded `auto_keywords` / `auto_questions` candidates, profile lint,
+  optimization planning, cleanup planning, and readiness reporting.
+
+Current limitations and gates:
+
+- The benchmark supports workflow validation and exploratory comparison only.
+  It must not be used for profile promotion or global default strategy changes.
+- Stage 4 readiness authorizes asking for Stage 5 approval; it does not authorize
+  live RAGFlow mutation by itself.
+- Duplicate effective profiles must be collapsed before live execution. The
+  delimiter-aware base profile represents the `auto_keywords=0,
+  auto_questions=0` baseline, so Stage 5 should create only four unique
+  effective disposable candidates.
+- The remaining `docs/34` checklist item cannot be closed until the disposable
+  live enrichment comparison, public-safe retention artifacts, and cleanup
+  verification are all complete.
+- RAGFlow DeepDoc native PDF handling remains a separate live-approved
+  PDF-native/fallback baseline path, not part of the Stage 3/4 offline evidence.
 
 ## Candidate Dataset Portfolio
 
@@ -702,7 +745,7 @@ Allowed conclusion:
   - `auto_keywords=0, auto_questions=1`
   - `auto_keywords=1, auto_questions=0`
   - `auto_keywords=1, auto_questions=1`
-- 运行 profile lint，确认 candidate set 没有重复 effective profile。
+- 运行 profile lint，检测重复 effective profile，并在进入 live 前去重。
 - 运行 optimization plan。
 - 运行 cleanup plan。
 - 运行 readiness。
@@ -717,6 +760,8 @@ Allowed conclusion:
 完成标准：
 
 - 有 optimization plan、cleanup plan 和 readiness report。
+- 如果 delimiter base 与 `auto_keywords=0, auto_questions=0` 产生重复
+  effective profile，应在 Stage 5 中只创建一个代表性 disposable KB。
 - 如果 readiness 不是 `ok=true`，不进入 live comparison。
 - 如果 readiness 通过，只能进入下一阶段的显式授权流程。
 
@@ -732,7 +777,7 @@ Allowed conclusion:
 - 获得当前线程明确授权，授权范围必须限定为 disposable KB、bounded
   `auto_keywords` / `auto_questions` matrix、retention artifact generation 和
   cleanup verification。
-- 执行 4 个 candidate profile 的 disposable KB comparison。
+- 执行 4 个 unique effective candidate profile 的 disposable KB comparison。
 - 对每个候选记录：
   - hit rate；
   - recall at k；
@@ -818,16 +863,22 @@ Allowed conclusion:
 
 ## 立即执行建议
 
-第一批执行应只覆盖阶段 0 到阶段 3：
+当前已完成阶段 0 到阶段 4 的离线准备。下一步不是继续扩大离线报告，而是
+决定是否发起阶段 5 的明确 live approval。
 
-1. 接受或提交本计划作为 baseline。
-2. 准备 Open RAG Benchmark 1-PDF seed。
-3. 运行 benchmark import/preflight。
-4. 运行 PDF formal handoff 和 KB build dry-run。
-5. 汇总 public-safe 离线指标。
+阶段 5 approval 应逐条确认：
 
-只有当第一批离线证据完成后，才进入阶段 4 readiness。只有 readiness 通过并
-获得明确 live approval 后，才进入阶段 5 disposable live comparison。
+1. 允许创建 disposable RAGFlow KB，仅用于本 seed 的 bounded enrichment
+   comparison。
+2. 只创建 4 个 unique effective candidate profile；delimiter-aware baseline
+   同时代表 `auto_keywords=0, auto_questions=0`。
+3. 运行后生成 public-safe retention artifacts，不保留 raw chunks、真实
+   dataset/document IDs、KB 名称、endpoint 或 credentials 到公开仓库。
+4. 执行 cleanup，并验证 disposable KB 已删除。
+5. DeepDoc native baseline 如需执行，应作为单独 live approval 处理。
+
+如果没有明确 live approval，本计划应停留在 Stage 4 readiness 状态，并继续
+将 `docs/34` 最后一项保持为未关闭。
 
 ## Governance And Safety
 
@@ -865,8 +916,7 @@ The standard-dataset program is useful when it can answer these questions repeat
 
 ## Immediate Next Step
 
-Start with Phase A. Build a small Open RAG Benchmark seed subset and run it through
-offline import, preflight, document conversion, handoff inspection, and build dry-run.
-Only after that evidence exists should the project ask for explicit approval to run the
-remaining disposable live enrichment comparison from
+Request an explicit Stage 5 live approval only if the user wants to run the disposable
+enrichment comparison now. Without that approval, retain the current state as
+Stage 4-ready and do not close the remaining live-gated item in
 `docs/34-pipeline-consumption-gap-quality-improvement-plan.md`.
