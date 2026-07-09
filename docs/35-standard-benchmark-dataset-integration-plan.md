@@ -104,6 +104,7 @@ Current limitations and gates:
 | Stage 5 disposable enrichment comparison | Complete | Four unique effective disposable KBs were created, queried, and cleaned up after explicit approval. Public-safe retention artifacts were generated. |
 | `docs/34` disposable enrichment checklist | Complete | Stage 5 evidence closed the remaining live-gated checklist item. |
 | DeepDoc native PDF baseline | Pending / separately gated | Optional PDF-native/fallback comparison requiring separate live approval. |
+| KB parameter materialization | Pending / separate plan | Tracked in `docs/36-ragflow-kb-parameter-materialization-plan.md`; benchmark datasets provide evaluation evidence for confirmed parameter changes. |
 | Stronger Open RAG Benchmark subset | Pending | Needs more documents, more queries, expected terms, or expected chunks before promotion decisions. |
 | FinanceBench table/numeric slice | Pending | Recommended next dataset expansion for table-heavy and numeric evidence retrieval. |
 | QASPER scientific QA slice | Deferred | Useful after Open RAG Benchmark and FinanceBench adapters are stable. |
@@ -120,7 +121,10 @@ Recommended next sequence:
    evidence-page retrieval failure modes.
 3. Convert the current seed into a pinned regression smoke baseline with stable
    source hashes and repeatable public-safe trend reports.
-4. Decide separately whether a DeepDoc native PDF baseline is needed for a
+4. Use `docs/36-ragflow-kb-parameter-materialization-plan.md` to audit and
+   verify which `ragflow-doc-to-md` sidecar recommendations can become real
+   RAGFlow KB parser or UI settings.
+5. Decide separately whether a DeepDoc native PDF baseline is needed for a
    PDF-native parser comparison. This remains live-approved and should not be
    bundled into ordinary offline benchmark expansion.
 
@@ -953,5 +957,7 @@ The standard-dataset program is useful when it can answer these questions repeat
 Treat the first Open RAG Benchmark seed as a completed exploratory baseline. The next
 quality step is to strengthen the benchmark portfolio before making any profile
 promotion decision: add chunk-level or expected-term evidence to this seed, add a
-FinanceBench table/numeric slice, or run a separately approved DeepDoc native baseline
-comparison if PDF-native behavior is the question being tested.
+FinanceBench table/numeric slice, use
+`docs/36-ragflow-kb-parameter-materialization-plan.md` to verify parameter
+materialization, or run a separately approved DeepDoc native baseline comparison if
+PDF-native behavior is the question being tested.
