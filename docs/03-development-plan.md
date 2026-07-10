@@ -81,8 +81,8 @@ Partially completed and still active:
     backend execution remain future adapters.
 - Phase 31 runtime resilience
   - Report redaction and generated-report safety are closed for the current inventory.
-  - Runtime helper coverage currently tracks 102 public command surfaces: 22 `covered`,
-    0 `candidate`, 0 `deferred`, and 80 `not_applicable`.
+  - Runtime helper coverage currently tracks 104 public command surfaces: 22 `covered`,
+    0 `candidate`, 0 `deferred`, and 82 `not_applicable`.
   - The bounded non-live checkpoint/resume and partial-failure candidate inventory plus
     the approved live mutation/query helper rollout are closed; any future resilience
     expansion is future adapter scope.
@@ -261,7 +261,7 @@ remain in their owning phases below.
 
 | Track | Existing open items | Current status | Completion rule |
 | --- | --- | --- | --- |
-| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory and approved live mutation/query coverage closed | Runtime inventory stays at 21 `covered`, 0 `candidate`, 0 `deferred`, and 76 `not_applicable` command surfaces after read-only comparison/report commands, including retained-package and adaptive-summary comparison, were classified as not-applicable for runtime helpers. `ragflow-doc-to-md` runtime reports now include offline performance telemetry for conversion, asset, postprocess, package, hints, and ingest-plan stages without adding live mutation. |
+| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory and approved live mutation/query coverage closed | Runtime inventory currently covers 104 public command surfaces: 22 `covered`, 0 `candidate`, 0 `deferred`, and 82 `not_applicable`. `ragflow-doc-to-md` runtime reports include offline performance telemetry for conversion, asset, postprocess, package, hints, and ingest-plan stages without adding live mutation. |
 | RAGFlux retirement observation | docs/20 multi-sample observation matrix | Complete as an offline explicit-run-root summary path | `tools/field_trial_metrics.py` now emits `ragflow_retirement_observation_matrix_v1` for scanned, long-document, paper, contract, complex-table, image-heavy, low-quality-OCR, and multi-document handoff evidence without scanning user directories or running live mutation; field-trial and retirement matrix schema identities are covered by the release gate. |
 | Document split packaging | Phase 16 optional manifest rewrite/package mode | Complete for current CLI scope | Split outputs can be resumed and optionally repackaged without breaking existing segment-directory ingestion. |
 | Query service and agentic adapters | Phase 3 `serve`, Phase 21/30 script-owned synthesis and reflection | Host-assisted agentic retrieval and agentic-answer request/review complete; local service and script-owned answer synthesis deferred | Implement script-owned synthesis only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
@@ -1373,8 +1373,8 @@ sanitized reports and redaction sidecars should be stored and what must stay out
 transcripts.
 `tools/runtime_resilience_inventory.py` now emits
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene to track Phase 31
-runtime helper coverage without broadening live behavior. The current inventory names 97
-public commands: 21 `covered`, 0 `candidate`, 0 `deferred`, and 76 `not_applicable`, with
+runtime helper coverage without broadening live behavior. The current inventory names 104
+public commands: 22 `covered`, 0 `candidate`, 0 `deferred`, and 82 `not_applicable`, with
 no stale classification findings. Covered surfaces include `ragflow-query endpoint-report`,
 `ragflow-query ask`, `ragflow-query fallback-test`, `ragflow-query cache-report`,
 `ragflow-query centroid build`, top-level live `ragflow-kb-build`,
@@ -1427,7 +1427,7 @@ Recommended next slices:
    checkpoint/resume, `inspect-kb`, `validate`, `snapshot-chunks`, `qa validate`,
    plus `qa map-evidence` now have partial-failure coverage, and approved live
    `ragflow-kb-build` plus `ragflow-query ask` now record runtime resilience blocks. The
-   Phase 31 inventory now records 22 `covered`, 0 `candidate`, 0 `deferred`, and 80
+   Phase 31 inventory now records 22 `covered`, 0 `candidate`, 0 `deferred`, and 82
    `not_applicable` public command surfaces in
    `ragflow_runtime_resilience_inventory_v1`.
 
@@ -1638,7 +1638,7 @@ Tasks:
 Status note: `tools/report_surface_inventory.py` now emits
 `ragflow_report_surface_inventory_v1`, dynamically enumerates public argparse command
 leaves, and overlays an explicit Phase 36 classification. The verified inventory currently
-names 97 public commands: 88 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with
+names 104 public commands: 95 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with
 no uncatalogued or stale classification findings. Generated-report redaction coverage is
 now closed across inventoried public command surfaces; `ragflow-doc-to-md`
 and `ragflow-query` report commands are currently classified as covered or not applicable.
@@ -2149,3 +2149,40 @@ Future work summary:
   workflow proves Markdown passthrough into `doc_manifest.json` is insufficient.
 - Any paired live A/B, disposable KB workflow, or other live RAGFlow mutation still
   requires separate explicit approval, cleanup confirmation, and sanitized evidence.
+
+## 2026-07-10 KB Parameter Materialization Calibration
+
+The requested-versus-effective parser drift observed through the current replacement
+path opened a narrow post-closeout maintenance slice in
+`docs/36-ragflow-kb-parameter-materialization-plan.md`. This does not reopen broad
+feature construction.
+
+Completed offline maintenance:
+
+- dry-run parameter inventory, payload preview, handoff parameter status, and read-only
+  `parameter-audit` make materialized, advisory, unsupported, read-only-default, and
+  native-only controls explicit;
+- dataset create payloads remain restricted to the reviewed public parser allowlist plus
+  top-level language;
+- `parameter-audit` now records canonical input digests and optional caller-asserted
+  evidence-bundle and RAGFlow contract identity, while keeping
+  `tool_verified_same_run: false`;
+- public parameter guidance is sanitized and distinguishes create-rejected fields from
+  API-visible fields whose writeability remains unconfirmed;
+- the command inventories remain at 104 surfaces: runtime resilience is 22 covered and
+  82 not-applicable; report-surface governance is 95 covered and 9 not-applicable.
+
+Remaining gates:
+
+- investigate overlap and automatic metadata only from a pinned RAGFlow OpenAPI or server
+  request model before adding a writable mapping;
+- classify automatic metadata for model/provider, cost, asynchronous execution, and
+  governance effects before treating it as a normal dataset setting;
+- keep PageIndex, table-to-HTML, layout, and other DeepDoc/native controls on a separate
+  explicit approval path;
+- keep disposable live validation, retrieval evidence, cleanup, and public-safe live
+  retention approval-gated.
+
+This calibration changes no roadmap checkbox totals. The roadmap remains 586 completed
+items out of 601, with the original 15 product/private/LLM adapter items intentionally
+gated.

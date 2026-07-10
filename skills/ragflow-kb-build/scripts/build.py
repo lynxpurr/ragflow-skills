@@ -4173,6 +4173,9 @@ def _run_parameter_audit(args: argparse.Namespace) -> int:
         report = create_parameter_read_back_audit(
             dry_run_report=dry_run_report,
             observed_state=observed_state,
+            evidence_bundle_id=args.evidence_bundle_id,
+            ragflow_contract_version=args.ragflow_contract_version,
+            ragflow_contract_source=args.ragflow_contract_source,
         )
         if args.redaction_report:
             report, redaction_report = _sanitize_governance_report(
@@ -5070,6 +5073,19 @@ def build_parameter_audit_parser() -> argparse.ArgumentParser:
         "--refresh-report",
         dest="observed_state",
         help="Optional read-back JSON from RAGFlow dataset detail, document list, or refresh-report evidence",
+    )
+    parser.add_argument(
+        "--evidence-bundle-id",
+        help="Optional caller-generated UUID asserting that the supplied artifacts belong to one reviewed evidence bundle",
+    )
+    parser.add_argument(
+        "--ragflow-contract-version",
+        help="Optional caller-supplied RAGFlow version or contract label; requires --ragflow-contract-source",
+    )
+    parser.add_argument(
+        "--ragflow-contract-source",
+        choices=("server_reported", "openapi", "server_request_model", "operator_supplied"),
+        help="Source for --ragflow-contract-version; the audit records this identity as caller-asserted",
     )
     parser.add_argument(
         "--report-json",

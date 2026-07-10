@@ -3006,6 +3006,79 @@ def _run_no_network_checks(
         env=env,
     )
     _record_command_check(checks, "kb-build dry-run", build_result, required_output='"dry_run": true')
+    parameter_dry_run = work_root / "parameter_dry_run.json"
+    parameter_observed_state = work_root / "parameter_observed_state.json"
+    parameter_audit = work_root / "parameter_read_back_audit.json"
+    parameter_audit_md = work_root / "parameter_read_back_audit.md"
+    parameter_audit_redaction = work_root / "parameter_read_back_audit_redaction.json"
+    parameter_dry_run.write_text(str(build_result.get("stdout") or "{}"), encoding="utf-8")
+    parameter_observed_state.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_dataset_read_back_fixture_v1",
+                "data": {
+                    "language": "English",
+                    "parser_config": {
+                        "chunk_token_num": 768,
+                        "auto_keywords": 0,
+                        "auto_questions": 0,
+                    },
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    parameter_audit_result = _run_command(
+        [
+            python_executable,
+            str(build_script),
+            "parameter-audit",
+            "--dry-run-report",
+            str(parameter_dry_run),
+            "--observed-state",
+            str(parameter_observed_state),
+            "--evidence-bundle-id",
+            "12345678-1234-4678-9234-567812345678",
+            "--ragflow-contract-version",
+            "consumer-fixture-v1",
+            "--ragflow-contract-source",
+            "operator_supplied",
+            "--report-json",
+            str(parameter_audit),
+            "--report-md",
+            str(parameter_audit_md),
+            "--redaction-report",
+            str(parameter_audit_redaction),
+            "--json",
+        ],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "kb-build parameter-audit evidence binding",
+        parameter_audit_result,
+        required_output='"binding_status": "caller_asserted"',
+    )
+    _record_redaction_sidecar_check(
+        checks,
+        "kb-build parameter-audit redaction",
+        parameter_audit_redaction,
+        result=parameter_audit_result,
+        checked_paths=(parameter_audit, parameter_audit_md),
+    )
+    for path in (
+        parameter_dry_run,
+        parameter_observed_state,
+        parameter_audit,
+        parameter_audit_md,
+        parameter_audit_redaction,
+    ):
+        if path.exists():
+            produced.append(path)
     pipeline_build_result = _run_command(
         [
             python_executable,

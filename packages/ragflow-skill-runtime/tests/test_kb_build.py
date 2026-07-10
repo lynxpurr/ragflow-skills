@@ -422,6 +422,10 @@ class KbBuildTests(unittest.TestCase):
         self.assertEqual(fields["parser_config.delimiter"]["status"], "materialized_to_ragflow")
         self.assertEqual(fields["parser_config.image_context_size"]["status"], "read_only_server_default")
         self.assertEqual(fields["parser_config.image_context_size"]["target"], None)
+        self.assertEqual(
+            fields["parser_config.image_context_size"]["reason"],
+            "ragflow_api_rejects_dataset_create_for_observed_server_default",
+        )
         self.assertEqual(fields["parser_config.table_context_size"]["status"], "read_only_server_default")
         self.assertEqual(fields["parser_config.table_context_size"]["target"], None)
         self.assertEqual(fields["parser_config.page_index"]["status"], "unsupported_or_gated")
@@ -600,6 +604,13 @@ class KbBuildTests(unittest.TestCase):
         self.assertEqual(audit["summary"]["observed_missing_count"], 1)
         self.assertEqual(audit["summary"]["unknown_api_mapping_count"], 2)
         self.assertEqual(audit["summary"]["native_parser_only_count"], 2)
+        self.assertEqual(audit["evidence_binding"]["binding_status"], "unbound")
+        self.assertEqual(audit["evidence_binding"]["verification_scope"], "input_integrity_only")
+        self.assertTrue(audit["evidence_binding"]["dry_run_report_digest"].startswith("sha256:"))
+        self.assertTrue(audit["evidence_binding"]["observed_state_digest"].startswith("sha256:"))
+        self.assertIsNone(audit["evidence_binding"]["evidence_bundle_id"])
+        self.assertIsNone(audit["evidence_binding"]["ragflow_contract_identity"])
+        self.assertFalse(audit["evidence_binding"]["tool_verified_same_run"])
         by_field = {item["field"]: item for item in audit["fields"]}
         self.assertEqual(by_field["dataset.language"]["audit_status"], "observed_match")
         self.assertEqual(by_field["dataset.parser_config.chunk_token_num"]["audit_status"], "observed_match")
@@ -622,6 +633,102 @@ class KbBuildTests(unittest.TestCase):
         self.assertEqual(audit["safety"]["ragflow_calls"], 0)
         self.assertFalse(audit["safety"]["writes_live_ragflow"])
         self.assertFalse(audit["safety"]["raw_chunks_included"])
+
+    def test_parameter_read_back_audit_binds_canonical_input_digests(self) -> None:
+        dry_run_a = {
+            "schema": "ragflow_kb_build_dry_run_v1",
+            "build_payload_preview": {
+                "schema": "ragflow_kb_build_payload_preview_v1",
+                "dataset_create_payload": {"parser_config": {"delimiter": "\n\n", "chunk_token_num": 512}},
+                "fields": [],
+            },
+        }
+        dry_run_b = {
+            "build_payload_preview": {
+                "fields": [],
+                "dataset_create_payload": {"parser_config": {"chunk_token_num": 512, "delimiter": "\n\n"}},
+                "schema": "ragflow_kb_build_payload_preview_v1",
+            },
+            "schema": "ragflow_kb_build_dry_run_v1",
+        }
+        observed_a = {
+            "schema": "ragflow_dataset_read_back_fixture_v1",
+            "data": {"language": "English", "parser_config": {"delimiter": "\n\n", "chunk_token_num": 512}},
+        }
+        observed_b = {
+            "data": {"parser_config": {"chunk_token_num": 512, "delimiter": "\n\n"}, "language": "English"},
+            "schema": "ragflow_dataset_read_back_fixture_v1",
+        }
+        kwargs = {
+            "evidence_bundle_id": "12345678-1234-4678-9234-567812345678",
+            "ragflow_contract_version": "v0.21.1",
+            "ragflow_contract_source": "server_reported",
+        }
+
+        audit_a = create_parameter_read_back_audit(
+            dry_run_report=dry_run_a,
+            observed_state=observed_a,
+            **kwargs,
+        )
+        audit_b = create_parameter_read_back_audit(
+            dry_run_report=dry_run_b,
+            observed_state=observed_b,
+            **kwargs,
+        )
+
+        binding = audit_a["evidence_binding"]
+        self.assertEqual(binding["binding_status"], "caller_asserted")
+        self.assertEqual(binding["verification_scope"], "caller_asserted_correlation")
+        self.assertEqual(binding["digest_algorithm"], "sha256")
+        self.assertEqual(binding["canonicalization"], "json_sort_keys_compact_v1")
+        self.assertEqual(binding["evidence_bundle_id"], kwargs["evidence_bundle_id"])
+        self.assertEqual(
+            binding["ragflow_contract_identity"],
+            {
+                "version": "v0.21.1",
+                "source": "server_reported",
+                "assertion": "caller_asserted",
+            },
+        )
+        self.assertFalse(binding["tool_verified_same_run"])
+        self.assertEqual(binding["dry_run_report_digest"], audit_b["evidence_binding"]["dry_run_report_digest"])
+        self.assertEqual(binding["observed_state_digest"], audit_b["evidence_binding"]["observed_state_digest"])
+
+    def test_parameter_read_back_audit_rejects_invalid_binding_metadata(self) -> None:
+        dry_run = {"schema": "ragflow_kb_build_dry_run_v1", "build_payload_preview": {"fields": []}}
+
+        with self.assertRaisesRegex(BuildError, "evidence bundle id must be a UUID"):
+            create_parameter_read_back_audit(
+                dry_run_report=dry_run,
+                evidence_bundle_id="kb:private-name",
+            )
+        with self.assertRaisesRegex(BuildError, "evidence bundle id must be a UUIDv4"):
+            create_parameter_read_back_audit(
+                dry_run_report=dry_run,
+                evidence_bundle_id="12345678-1234-1678-9234-567812345678",
+            )
+        with self.assertRaisesRegex(BuildError, "evidence bundle id requires observed-state evidence"):
+            create_parameter_read_back_audit(
+                dry_run_report=dry_run,
+                evidence_bundle_id="12345678-1234-4678-9234-567812345678",
+            )
+        with self.assertRaisesRegex(BuildError, "contract version and source must be provided together"):
+            create_parameter_read_back_audit(
+                dry_run_report=dry_run,
+                ragflow_contract_version="v0.21.1",
+            )
+        with self.assertRaisesRegex(BuildError, "unsupported RAGFlow contract identity source"):
+            create_parameter_read_back_audit(
+                dry_run_report=dry_run,
+                ragflow_contract_version="v0.21.1",
+                ragflow_contract_source="guessed",
+            )
+        with self.assertRaisesRegex(BuildError, "contract version must be a short ASCII version label"):
+            create_parameter_read_back_audit(
+                dry_run_report=dry_run,
+                ragflow_contract_version="https://private.example.test/version",
+                ragflow_contract_source="operator_supplied",
+            )
 
     def test_handoff_consumption_status_classifies_core_sidecars_assets_and_tables(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

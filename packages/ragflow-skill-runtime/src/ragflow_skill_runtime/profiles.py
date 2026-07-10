@@ -366,12 +366,12 @@ def lint_profile(profile: ChunkProfile) -> ProfileLintReport:
                     code="unsupported_parser_key",
                     field=f"parser_config.{key}",
                     message=(
-                        "parser_config key is a read-only server default and is rejected in create/update payloads"
+                        "parser_config key is an observed server default rejected by observed dataset create probes"
                         if read_only_server_default
                         else "parser_config key is not part of the writable public profile contract"
                     ),
                     recommendation=(
-                        "Keep this key in manifests and read-back audits only; do not send it in create/update payloads."
+                        "Keep this key in manifests and read-back audits only; do not send it in dataset create payloads unless a future version-bound contract proves write support."
                         if read_only_server_default
                         else "Keep provider-specific parser keys in manifests only until API write support is proven."
                     ),

@@ -310,13 +310,22 @@ python scripts/convert.py adaptive \
 `chunk-markers-dense` 后处理在 Markdown 中插入数百个 `<!-- chunk -->` 语义边界标记。但 `default-zh-768` profile 使用 naive chunker 按 token 数切分，完全忽略这些标记。
 
 **实测**：delimiter 模式（`parser_config.delimiter = "`<!-- chunk -->`"`）比 naive 模式 Top-1 sim 提升 +0.008，用更少的 chunks（210 vs 256）达到更高检索精度。推荐对 doc-to-md pipeline 产出的 handoff 优先使用 delimiter profile。
-### Pitfall #11: 将 image_context_size / table_context_size 写入 RAGFlow create/update payload
+### Pitfall #11: 将 image_context_size / table_context_size 写入 RAGFlow create payload
 
-`image_context_size` 和 `table_context_size` 是 RAGFlow **只读服务器默认字段**。它们在读回 API (`GET /datasets/{id}`) 的 `parser_config` 中出现（值恒为 0），但**不能**在 `POST /datasets` 或 `PUT /datasets/{id}` 中传入 — RAGFlow 返回 code 101 "Extra inputs are not permitted"。
+`image_context_size` 和 `table_context_size` 在已观察的 Markdown handoff
+数据集读回中属于服务器默认字段。它们出现在 `GET /datasets/{id}` 的
+`parser_config` 中，但 Stage 7 的 dataset create 探针传入任一字段时均返回
+code 101 `Extra inputs are not permitted`。这份证据尚未绑定具体 RAGFlow
+版本，因此不能外推为所有未来版本的永久合同。
 
-`to_dataset_payload()` 当前会透传 profile 中的所有 `parser_config` key，若 profile 引用了这两个字段会导致 KB 创建失败（`could not extract dataset id from RAGFlow response`）。
+`to_dataset_payload()` 当前只透传 `SUPPORTED_PARSER_KEYS`，不会把这两个字段
+发送到 dataset create payload。它们仍可保留在 manifest 和 audit 中供分析。
 
-**正确做法**：`to_dataset_payload()` 应只透传 `SUPPORTED_PARSER_KEYS`（chunk_token_num, delimiter, auto_keywords, auto_questions）。profile 中若出现 `image_context_size` 或 `table_context_size`，应在 dry-run 中标记为 `read_only_server_default` 而非 `materialized_to_ragflow`。
+**正确做法**：继续只透传 `SUPPORTED_PARSER_KEYS`（`chunk_token_num`、
+`delimiter`、`auto_keywords`、`auto_questions`）。profile 中若出现
+`image_context_size` 或 `table_context_size`，应在 dry-run 中标记为
+`read_only_server_default` 而非 `materialized_to_ragflow`；只有未来版本绑定的
+API 合同和验证证据同时变化时才重新评估。
 
 详见 `references/ragflow-api-parameter-taxonomy.md`。
 

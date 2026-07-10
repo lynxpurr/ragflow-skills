@@ -1,41 +1,65 @@
 # RAGFlow API Parameter Taxonomy
 
-> **Source:** Stage 6 (read-only discovery) + Stage 7 (live write probe) — 2026-07-09
-> **Target KB:** kb:tsn-industrial-networks-hybrid (naive, delimiter, 768 tokens)
+> **Source:** Stage 6 read-only discovery plus Stage 7 dataset-create probes,
+> reviewed on 2026-07-10.
+> **Target:** Retained Markdown-handoff evidence; live identifiers are omitted.
+> **Version boundary:** The historical evidence did not retain a correlated RAGFlow
+> contract identity. Treat these findings as observed behavior, not a guarantee for
+> every RAGFlow version.
 
 ## Discovery Methodology
 
 Two-phase approach without DeepDoc baseline:
 
-1. **Stage 6 — Read-only discovery**: API `GET /datasets/{id}` to observe parser_config, then compare with dry-run `build_payload_preview` via `parameter-read-back-audit`.
-2. **Stage 7 — Live write probe**: Attempt `POST /datasets` and `PUT /datasets/{id}` with non-zero values to test writeability.
+1. **Stage 6 - Read-only discovery**: use dataset detail read-back to observe
+   `parser_config`, then compare it with dry-run `build_payload_preview` through
+   `parameter-audit`.
+2. **Stage 7 - Dataset-create probes**: attempt four disposable create profiles with
+   zero and non-zero image/table context combinations. Every create request containing
+   either context key was rejected before a disposable KB was created.
+3. Historical notes also described update rejection, but the public evidence does not
+   bind that observation to the same input bundle and RAGFlow version. Update behavior
+   therefore remains uncorrelated here rather than being promoted to a version-independent
+   fact.
 
 ## Field Classification
 
 ### Writeable (SUPPORTED_PARSER_KEYS)
 
-These 4 keys are accepted by RAGFlow create/update API and read back identically:
+These four keys form the current public profile write allowlist and matched Stage 6
+read-back evidence. Future versions still require contract-bound verification.
 
-| API Key | Stage 6 Read-Back | Stage 7 Write Probe |
+| API Key | Stage 6 read-back | Current public contract |
 |---------|:---:|:---:|
-| `chunk_token_num` | ✅ 768 ↔ 768 | ✅ Accepted |
-| `delimiter` | ✅ `<!-- chunk -->` ↔ `<!-- chunk -->` | ✅ Accepted |
-| `auto_keywords` | ✅ 0 ↔ 0 | ✅ Accepted |
-| `auto_questions` | ✅ 0 ↔ 0 | ✅ Accepted |
+| `chunk_token_num` | Exact match | Supported |
+| `delimiter` | Exact match | Supported |
+| `auto_keywords` | Exact match | Supported |
+| `auto_questions` | Exact match | Supported |
 
 ### Read-Only Server Defaults
 
-These keys appear in read-back parser_config but are **rejected** at create/update time with code 101 ("Extra inputs are not permitted"):
+These keys appeared in read-back `parser_config` and were rejected by every Stage 7
+dataset-create probe that supplied them:
 
-| API Key | Read-Back Value | Create Rejected | PUT Rejected |
+| API Key | Observed read-back | Dataset create | Update evidence |
 |---------|:---:|:---:|:---:|
-| `image_context_size` | 0 | ✅ 101 | ✅ 101 |
-| `table_context_size` | 0 | ✅ 101 | ✅ 101 |
-| `children_delimiter` | `""` | Not tested | Not tested |
-| `ext` | `{}` | Not tested | Not tested |
-| `filename_embd_weight` | 0.1 | Not tested | Not tested |
+| `image_context_size` | Server-populated default | Rejected, code 101 | Uncorrelated historical note |
+| `table_context_size` | Server-populated default | Rejected, code 101 | Uncorrelated historical note |
 
-**Implication**: `to_dataset_payload()` must filter to only SUPPORTED_PARSER_KEYS, otherwise RAGFlow rejects the payload. The code's current behavior of including all parser_config keys causes "could not extract dataset id" errors.
+**Implication**: `to_dataset_payload()` filters to `SUPPORTED_PARSER_KEYS` so these
+keys cannot break dataset creation. They remain visible in manifests and audits as
+`read_only_server_default` for the observed contract.
+
+### API-Visible, Writeability Unconfirmed
+
+These keys appeared in Stage 6 read-back but have no correlated create/update probe.
+Read-back visibility is not proof that a caller may write them.
+
+| API Key | Observed read-back | Current disposition |
+|---------|:---:|---|
+| `children_delimiter` | Empty default | Manifest/audit only; writeability unconfirmed |
+| `ext` | Empty object | Manifest/audit only; writeability unconfirmed |
+| `filename_embd_weight` | Server-populated numeric default | Manifest/audit only; writeability unconfirmed |
 
 ### API-Visible but Scope-Limited
 
@@ -88,23 +112,26 @@ SUPPORTED_PARSER_KEYS = {
 
 ### `packages/ragflow-skill-runtime/src/ragflow_skill_runtime/kb_build.py`
 
-`KNOWN_RAGFLOW_UI_CONTROLS` (line 290) needs scope updates based on Stage 6/7 findings:
+`KNOWN_RAGFLOW_UI_CONTROLS` records the Stage 6/7 scope as follows:
 
-- `ragflow_ui.image_context_window`: scope should be `markdown_handoff` (API key confirmed as `image_context_size`), but status should reflect **read-only server default**
-- `ragflow_ui.table_context_window`: same — `markdown_handoff` scope, read-only server default
-- `ragflow_ui.page_index`: scope `deepdoc_native` (API key `pages` is null for markdown handoff)
+- `ragflow_ui.image_context_window`: `markdown_handoff`, `read_only_server_default`;
+- `ragflow_ui.table_context_window`: `markdown_handoff`, `read_only_server_default`;
+- `ragflow_ui.page_index`: `deepdoc_native`, because `pages` was null for the
+  Markdown-handoff evidence.
 
 ### `to_dataset_payload()` behavior
 
-Currently passes ALL parser_config keys to the API. This causes "Extra inputs are not permitted" errors when profiles include `image_context_size` or `table_context_size`. Fix: filter to `SUPPORTED_PARSER_KEYS` only.
+Currently filters `parser_config` to `SUPPORTED_PARSER_KEYS`. Unsupported, native-only,
+unknown, and read-only default fields remain available to manifests and audit reports but
+do not reach dataset create payloads.
 
 ## API Endpoint Behavior Summary
 
-| Endpoint | image_context_size | table_context_size |
+| Endpoint | `image_context_size` | `table_context_size` |
 |----------|:---:|:---:|
-| `POST /api/v1/datasets` | ❌ 101 Extra inputs not permitted | ❌ 101 Extra inputs not permitted |
-| `PUT /api/v1/datasets/{id}` | ❌ 101 Extra inputs not permitted | ❌ 101 Extra inputs not permitted |
-| `GET /api/v1/datasets/{id}` | ✅ Returns 0 (server default) | ✅ Returns 0 (server default) |
+| Dataset create | Rejected, code 101 | Rejected, code 101 |
+| Dataset update | No correlated public evidence | No correlated public evidence |
+| Dataset detail read-back | Server default observed | Server default observed |
 | `DELETE /api/v1/datasets` | N/A | N/A |
 
 **DELETE note**: Must use `{"ids": ["<dataset_id>"]}` in body. `DELETE /api/v1/datasets/{id}` returns 405 Method Not Allowed.

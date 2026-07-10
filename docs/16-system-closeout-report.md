@@ -46,7 +46,7 @@ current CLI/archive path, collect sanitized field-trial records, and keep valida
 | Document conversion and handoff | Produce Markdown handoff directories with stable `doc_manifest.json`, quality reports, image preservation, split/package support, and backend readiness checks. | `ragflow-doc-to-md` supports passthrough, builtin conversion, MinerU Agent API, self-hosted MinerU FastAPI, MinerU v4 platform-compatible APIs, MinerU sync/local multipart, local CLI, generic remote paths, inspect, split, package, postprocess, backend probe, and warmup. | Closed for current converters; live MinerU v4 validation remains explicitly gated. |
 | KB build and governance | Build and validate KBs from handoffs while keeping mutation gated and reviewable. | `ragflow-kb-build` covers dry-run/live build gates, profile/metadata/tagset governance, benchmark lifecycle, grounded QA validation, evidence maps, optimization plans, cleanup readiness, topology advice, parse reports, and health reports. | Closed for planned public CLI behavior; future live mutation remains approval-gated. |
 | Query and orchestration | Support direct retrieval, routing, diagnostics, fusion/rewrite, host-assisted agentic flows, citation audit, and evaluation without default script-owned synthesis. | `ragflow-query` covers direct/auto/host-assisted ask, routing, route tests, assistant profiles, rewrite, session, fusion, diagnostics, rerank comparison, citation audit, answer evaluation, agentic planning, and request/review boundaries. | Closed for evidence-first CLI use; script-owned answers remain deferred. |
-| Runtime resilience and report safety | Make failures observable and sanitized without hidden retries or private leaks. | Current runtime inventory is 21 covered, 0 candidate, 0 deferred, and 76 not-applicable command surfaces after read-only comparison/report commands, including retained-package and adaptive-summary comparison, were classified outside runtime-helper scope. Redaction, generated-report safety, generated Markdown audit, endpoint reports, cache, metrics, rate-limit, circuit-breaker, partial-failure reports, and `ragflow-doc-to-md` runtime performance telemetry are covered for the current inventory. | Closed for current public surfaces; reopen only when new command/report surfaces appear. |
+| Runtime resilience and report safety | Make failures observable and sanitized without hidden retries or private leaks. | Current inventories cover 104 public command surfaces. Runtime resilience records 22 covered, 0 candidate, 0 deferred, and 82 not-applicable; report-surface governance records 95 covered, 0 needs-redaction, and 9 not-applicable. Redaction, generated-report safety, generated Markdown audit, endpoint reports, cache, metrics, rate-limit, circuit-breaker, partial-failure reports, and `ragflow-doc-to-md` runtime performance telemetry are covered for the current inventory. | Closed for current public surfaces; reopen only when new command/report surfaces appear. |
 | Release packaging and platform acceptance | Keep archives self-contained and prove installed-artifact behavior. | Release hygiene, manifest schema checks, schema identity, build checks, archive export, installed archive smoke, consumer acceptance, strict-vendor platform smoke, and optional runtime wheel smoke/export are available. | Closed for current release path; run periodically and before public changes. |
 | Post-CLI product adapters | Add service, remote conversion, provider, reranker, or web/API adapters only when one-shot CLI is insufficient or a concrete product contract exists. | `docs/13-post-cli-adapter-planning.md` and Phase 37 intake gates define the required evidence and fake-fixture path. | Deferred; observation must prove need before implementation. |
 | Optional LLM/RAGAS backend execution | Keep deterministic defaults and request/review boundaries before any script-owned model call. | Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries exist. `docs/14-optional-llm-backend-planning.md` defines the future backend gate. | Deferred; no model calls should be enabled without explicit config and fake-provider gates. |
@@ -201,6 +201,29 @@ docs/help follow-up. A live MinerU v4 validation run remains a future field-tria
 that requires an explicit user request, credentials, a throwaway fixture, and sanitized
 evidence capture. The support model is explicit: `mineru-v4` is bound to the v4
 platform-compatible protocol, not exclusively to the `mineru.net` domain.
+
+## Post-Closeout KB Parameter Materialization Checkpoint
+
+Checkpoint date: 2026-07-10
+
+Current-suite requested-versus-effective parser drift triggered a narrow release-path
+maintenance round documented in `docs/36-ragflow-kb-parameter-materialization-plan.md`:
+
+- parameter inventory, payload preview, handoff consumption status, and read-only audit
+  surfaces now expose which sidecar and UI controls are materialized or blocked;
+- the public profile write allowlist remains limited to `chunk_token_num`, `delimiter`,
+  `auto_keywords`, and `auto_questions`, plus top-level language;
+- image/table context fields remain filtered after dataset-create rejection evidence;
+- `parameter-audit` adds canonical input digests and optional caller-asserted UUIDv4 and
+  contract identity, without deriving identity from live KB names or dataset IDs and
+  without claiming same-run tool verification;
+- parameter taxonomy and owning roadmap documents were calibrated to the current code and
+  104-command inventories.
+
+This checkpoint does not authorize live mutation, DeepDoc/native PDF testing, a new
+writable field, or automatic-metadata model execution. The next ordinary step is pinned,
+read-only API contract discovery for overlap and automatic metadata. Any materialization
+or disposable validation still requires a separately satisfied contract and live gate.
 
 ## Closeout Conclusion
 

@@ -1466,8 +1466,8 @@ breaker pilots must stay default-off, read-only, and scoped to `endpoint-report`
 Inventory implemented. `tools/report_surface_inventory.py` emits
 `ragflow_report_surface_inventory_v1`, imports the public CLI parsers offline, and fails
 the inventory when a public command lacks an explicit `covered`, `not_applicable`, or
-`needs_redaction` classification. The current verified inventory names 97 public commands:
-88 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
+`needs_redaction` classification. The current verified inventory names 104 public commands:
+95 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with no uncatalogued or stale
 classification findings.
 
 `ragflow-kb-build parse-report` and `ragflow-kb-build health-report` now support
@@ -1652,8 +1652,8 @@ mutation/query rollout.
 `tools/runtime_resilience_inventory.py` now emits
 `ragflow_runtime_resilience_inventory_v1` and is run by release hygiene as a static Phase
 31 governance surface. It reuses the public command inventory and classifies current
-runtime-helper coverage as 21 covered commands, 0 candidate commands, 0 deferred
-commands, and 76 not-applicable commands with no stale classification findings. Covered
+runtime-helper coverage as 22 covered commands, 0 candidate commands, 0 deferred
+commands, and 82 not-applicable commands with no stale classification findings. Covered
 commands include the endpoint-report helper pilot, query fallback partial-failure reports,
 live `ragflow-query ask` retry/partial-failure/metrics reporting, query-output cache
 reports, centroid build checkpoints, top-level live `ragflow-kb-build` stage
@@ -1686,8 +1686,8 @@ acceptance or platform smoke coverage when release artifacts change, and generat
 hygiene.
 
 The active Phase 31 runtime-resilience inventory is closed. The runtime-resilience
-inventory is the authoritative ledger: 21 command surfaces are currently `covered`, 0 are
-`candidate`, 0 are `deferred`, and 76 are `not_applicable`.
+inventory is the authoritative ledger: 104 public command surfaces are currently tracked;
+22 are `covered`, 0 are `candidate`, 0 are `deferred`, and 82 are `not_applicable`.
 
 Finish the remaining gated work in this order:
 

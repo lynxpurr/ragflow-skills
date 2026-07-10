@@ -1,6 +1,7 @@
 # RAGFlow KB Parameter Materialization Plan
 
-Status: active KB parameter materialization plan; P0 complete, Stage 7 read-only default evidence incorporated
+Status: active KB parameter materialization plan; Stage 8A offline closeout complete,
+Stage 8B version-bound contract discovery remains evidence-gated
 Date: 2026-07-10
 
 ## Objective / Scope / Boundaries
@@ -69,8 +70,8 @@ Current supported parser materialization is intentionally narrow:
 Other evidence is currently surfaced through preview, readiness, handoff
 consumption status, or recommendations. This avoids silently writing fields
 whose writable API behavior has not been confirmed. Fields that are visible in
-read-back but rejected by create/update payloads are classified separately as
-read-only server defaults.
+read-back but rejected by the observed dataset-create probes are classified
+separately as read-only server defaults for that unversioned evidence.
 
 ## Current Field Classification
 
@@ -90,7 +91,7 @@ read-only server defaults.
 | `retrieval_hints.table_artifacts` | Advisory | Used for review and table sizing; not yet mapped to native table parser settings. |
 | `metadata.json` | Local audit/advisory | Not automatically written as RAGFlow automatic metadata. |
 | PageIndex | Native-parser-only / DeepDoc-gated | Stage 6 read-back observed `parser_config.pages`, but it is null for Markdown handoff KBs. |
-| Image/table context window settings | Read-only server defaults | Stage 6 mapped these to `parser_config.image_context_size` and `parser_config.table_context_size`; Stage 7 showed create/update rejects these keys when present, while the server auto-populates default read-back values when they are omitted. |
+| Image/table context window settings | Read-only server defaults for observed contract | Stage 6 mapped these to `parser_config.image_context_size` and `parser_config.table_context_size`; Stage 7 dataset-create probes rejected these keys, while read-back showed server-populated defaults. Update behavior and future versions require their own contract evidence. |
 | Table-to-HTML setting | Native-parser-only / DeepDoc-gated | Belongs to native PDF/DeepDoc parsing rather than the Markdown handoff create payload. |
 | DeepDoc native parser settings | Separately gated | Requires explicit DeepDoc live baseline approval. |
 
@@ -160,8 +161,8 @@ Candidate fields:
 
 Excluded by Stage 7 evidence:
 
-- image/table context window settings are API-visible but not writable through
-  the observed create/update payload path, so they must not be added to
+- image/table context window settings are API-visible but rejected through the
+  observed dataset-create path, so they must not be added to
   `SUPPORTED_PARSER_KEYS` unless a future RAGFlow API contract changes.
 
 Acceptance target:
@@ -319,7 +320,7 @@ Remaining gap:
   requested parser settings can now be compared with read-back evidence, and
   candidate UI/parser controls are visible in dry-run and handoff-consumption
   reports. Image/table context-window settings now have read-back API keys but
-  are explicitly not writable through the observed create/update payload path.
+  were rejected through the observed dataset-create payload path.
   Other candidate UI/parser options still need writable payload confirmation,
   fake-client coverage, and disposable live validation before they become
   materialized settings.
@@ -358,3 +359,150 @@ Residual gated work:
 - RAGFlow live mutation remains approval-gated.
 - DeepDoc/native PDF baseline remains separately approval-gated.
 - Script-owned LLM/RAGAS evaluation remains out of scope.
+
+## 2026-07-10 Status Review And Next-Stage Recommendation
+
+### Review Conclusion
+
+The current implementation has completed the parameter-visibility, audit, and
+payload-safety work that can be justified by the available evidence:
+
+- the Markdown handoff build path materializes only the four reviewed
+  `parser_config` keys plus top-level `language`;
+- unsupported, unknown, read-only server-default, and native-only fields remain
+  visible in manifests and review reports but are filtered from dataset create
+  payloads;
+- the parameter inventory, read-back audit, payload preview, handoff-consumption
+  status, fake-client guards, report-surface coverage, and schema identity
+  coverage are implemented;
+- Stage 7 rejected dataset create payloads containing `image_context_size` or
+  `table_context_size`; the historical update-rejection note is not correlated
+  to the same public evidence bundle and RAGFlow version, so no additional
+  writable field has yet been confirmed.
+
+The checklist is therefore five of ten items complete literally, but this does
+not mean that half of the ordinary offline implementation remains. The open
+items combine a conditional future materialization task, approval-gated live
+validation and retention work, a continuing DeepDoc separation rule, and final
+guidance closeout. The accurate state is: the offline safety layer is largely
+complete, while the plan is waiting at an API-contract and evidence gate.
+
+### Stage 8A1 - Documentation And Classification Closeout
+
+Completed in the offline Stage 8A slice:
+
+- Root guidance now states the current filtered `to_dataset_payload()` behavior
+  instead of describing the pre-fix all-key forwarding behavior.
+- The parameter taxonomy no longer contains the retained KB name. It separates
+  `children_delimiter`, `ext`, and `filename_embd_weight` as API-visible but
+  writeability-unconfirmed instead of grouping them with create-rejected
+  context-window defaults.
+- Stage 7 claims are scoped to the actual public evidence: dataset-create
+  rejection is recorded, while the uncorrelated historical update note is not
+  promoted into a version-independent guarantee.
+- The active roadmap, design calibration, and closeout report now use the
+  current 104-command inventories: runtime resilience is 22 covered and 82
+  not-applicable; report-surface governance is 95 covered and 9 not-applicable.
+- `tools/release_hygiene_check.py` scans public skill, runtime, and tooling roots,
+  but it does not treat root planning/reference Markdown as part of its normal
+  source scan. Changed public docs therefore still require an explicit targeted
+  redaction and stale-wording review.
+
+### Stage 8A2 - Offline Evidence Binding
+
+The existing `ragflow_parameter_read_back_audit_v1` report now includes an
+`evidence_binding` block without changing the schema identity:
+
+- dry-run and observed-state inputs receive deterministic `sha256:` digests over
+  canonical JSON, so retained reports can detect input drift without publishing
+  input paths, KB names, or dataset IDs as identity fields;
+- `--evidence-bundle-id` accepts only a caller-generated UUIDv4 and requires an
+  observed-state input; it records `caller_asserted` correlation rather than
+  claiming tool verification;
+- `--ragflow-contract-version` and `--ragflow-contract-source` must be supplied
+  together. Supported sources are `server_reported`, `openapi`,
+  `server_request_model`, and `operator_supplied`; the version is restricted to
+  a short ASCII version/build label rather than an endpoint, path, or free text;
+- the report always records `tool_verified_same_run: false`. A UUID does not
+  prove that two independently supplied files came from the same live run;
+- no fingerprint is derived from low-entropy KB names or dataset IDs, and no
+  network call, live mutation, or script-owned LLM call is added.
+
+This closes the offline correlation mechanism, but it does not close the
+public-safe live retention checklist item. That item still requires an approved
+run to produce correlated read-back, retrieval, cleanup, and contract/version
+artifacts.
+
+### Stage 8A Validation Record
+
+Verified on 2026-07-10 without live RAGFlow mutation:
+
+- the focused changed-surface suite passed 172 tests;
+- the complete runtime suite passed 672 tests and 6 subtests;
+- changed Python files compiled successfully;
+- manifest validation covered 3 schemas with 0 findings, and schema identity
+  covered 104 identities with 0 failures;
+- report-surface inventory covered 104 commands as 95 covered and 9
+  not-applicable, while runtime resilience covered the same 104 commands as 22
+  covered and 82 not-applicable, both with 0 findings;
+- release hygiene reported `ok: true` with 0 findings; release build checking,
+  archive export, and installed-archive consumer acceptance passed;
+- the strict-vendor environment smoke profile passed against local fake
+  services, with no live RAGFlow call or mutation;
+- `git diff --check` and the targeted public-doc redaction/stale-wording review
+  passed. Scan hits were limited to documented field names, placeholder
+  examples, safety-boundary language, and pre-existing sanitized historical
+  validation paths.
+
+The task checklist remains 5 of 10 because Stage 8A deliberately does not close
+future materialization, approved live validation/retention, the continuing
+DeepDoc separation rule, or final post-live guidance. The development roadmap
+likewise remains 586 of 601; no checklist total changed in this maintenance
+slice.
+
+### Stage 8B - Version-Bound API Contract Discovery
+
+The next normal candidate search should stay within the Markdown handoff path
+and focus on only two unresolved controls:
+
+- overlap percent or its actual API equivalent;
+- automatic metadata if RAGFlow exposes a safe dataset-level writable field.
+
+For each candidate, inspect a pinned RAGFlow version's OpenAPI definition,
+server request model, or equivalent read-only contract evidence. Record the
+exact key, payload level, type, default behavior, parser-path scope, and
+create/update/read-back expectations. Read-back visibility alone is not proof
+of writeability. If no writable contract is found, retain the current blocked
+classification instead of inventing a payload mapping.
+
+Automatic metadata must also be classified for model/provider calls, cost,
+asynchronous work, and metadata-governance semantics before it can be treated as
+an ordinary dataset setting. Stage 8B remains read-only contract discovery; it
+does not authorize write probes or disposable KB creation.
+
+PageIndex, table-to-HTML, `pages`, `html4excel`, layout controls, and other
+DeepDoc/native settings remain outside this Markdown-handoff stage. They require
+a separate native-PDF question, explicit live approval, and their own report.
+
+### Stage 8C - Guarded Materialization And Live Evidence
+
+Only after one candidate has an exact version-bound writable contract:
+
+1. Add positive and negative fake-client tests for the exact payload shape.
+2. Extend dry-run, payload preview, inventory, and audit classification for that
+   field without changing default profiles.
+3. Strengthen the benchmark evidence before promotion decisions. The existing
+   one-document Open RAG Benchmark seed remains exploratory; add expected-term
+   or expected-chunk evidence and a small FinanceBench table/numeric slice.
+4. Request explicit approval for a disposable live run and vary one field at a
+   time so acceptance and retrieval effects remain attributable.
+5. Capture create/update outcome, read-back state, retrieval metrics, cleanup
+   verification, contract/version identity, and public-safe correlated
+   retention artifacts.
+6. Update user-facing guidance and close checklist items only after the full
+   implementation, validation, cleanup, and sanitized evidence chain passes.
+
+Stage 8A is complete. The wider Stage 8 plan remains active until a candidate mapping is
+version-bound, positive and negative payload tests pass, benchmark evidence is
+strong enough to detect regressions, and any approved live resources are
+cleaned up with correlated read-back evidence.

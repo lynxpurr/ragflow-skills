@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import time
 from typing import Any, Mapping
+import uuid
 import zipfile
 
 from .manifests import DocManifest, KbDocumentEntry, KbManifest, ManifestError, load_kb_manifest
@@ -27,6 +28,15 @@ BUILD_PAYLOAD_PREVIEW_SCHEMA = "ragflow_kb_build_payload_preview_v1"
 HANDOFF_CONSUMPTION_STATUS_SCHEMA = "ragflow_handoff_consumption_status_v1"
 PARAMETER_MATERIALIZATION_INVENTORY_SCHEMA = "ragflow_parameter_materialization_inventory_v1"
 PARAMETER_READ_BACK_AUDIT_SCHEMA = "ragflow_parameter_read_back_audit_v1"
+PARAMETER_EVIDENCE_DIGEST_ALGORITHM = "sha256"
+PARAMETER_EVIDENCE_CANONICALIZATION = "json_sort_keys_compact_v1"
+RAGFLOW_CONTRACT_IDENTITY_SOURCES = {
+    "server_reported",
+    "openapi",
+    "server_request_model",
+    "operator_supplied",
+}
+RAGFLOW_CONTRACT_VERSION_RE = re.compile(r"^[A-Za-z0-9._+-]{1,128}$")
 KB_ASSET_UPLOAD_PLAN_SCHEMA = "ragflow_kb_asset_upload_plan_v2"
 KB_ASSET_INGESTION_REPORT_SCHEMA = "ragflow_kb_asset_ingestion_report_v1"
 KB_ARTIFACT_CONSISTENCY_REPORT_SCHEMA = "ragflow_kb_artifact_consistency_report_v1"
@@ -386,7 +396,7 @@ def _parser_config_field_status(key: str) -> tuple[str, str | None, str | None]:
     if key in SUPPORTED_PARSER_KEYS:
         return "materialized_to_ragflow", f"dataset.parser_config.{key}", None
     if key in READ_ONLY_SERVER_DEFAULT_PARSER_KEYS:
-        return "read_only_server_default", None, "ragflow_api_rejects_create_or_update_for_read_only_server_default"
+        return "read_only_server_default", None, "ragflow_api_rejects_dataset_create_for_observed_server_default"
     return "unsupported_or_gated", None, "unsupported_parser_config_key"
 
 
@@ -448,10 +458,75 @@ def _audit_status_counts(fields: list[Mapping[str, Any]]) -> dict[str, int]:
     }
 
 
+def _parameter_evidence_digest(payload: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(payload, Mapping):
+        return None
+    canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"{PARAMETER_EVIDENCE_DIGEST_ALGORITHM}:{digest}"
+
+
+def _normalize_evidence_bundle_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        normalized = uuid.UUID(text)
+    except ValueError as exc:
+        raise BuildError("evidence bundle id must be a UUID") from exc
+    if normalized.version != 4:
+        raise BuildError("evidence bundle id must be a UUIDv4")
+    return str(normalized)
+
+
+def _parameter_evidence_binding(
+    *,
+    dry_run_report: Mapping[str, Any],
+    observed_state: Mapping[str, Any] | None,
+    evidence_bundle_id: str | None,
+    ragflow_contract_version: str | None,
+    ragflow_contract_source: str | None,
+) -> dict[str, Any]:
+    bundle_id = _normalize_evidence_bundle_id(evidence_bundle_id)
+    if bundle_id and not isinstance(observed_state, Mapping):
+        raise BuildError("evidence bundle id requires observed-state evidence")
+    version = str(ragflow_contract_version or "").strip() or None
+    source = str(ragflow_contract_source or "").strip() or None
+    if bool(version) != bool(source):
+        raise BuildError("RAGFlow contract version and source must be provided together")
+    if version and not RAGFLOW_CONTRACT_VERSION_RE.fullmatch(version):
+        raise BuildError("RAGFlow contract version must be a short ASCII version label")
+    if source and source not in RAGFLOW_CONTRACT_IDENTITY_SOURCES:
+        raise BuildError(f"unsupported RAGFlow contract identity source: {source}")
+    contract_identity = None
+    if version and source:
+        contract_identity = {
+            "version": version,
+            "source": source,
+            "assertion": "caller_asserted",
+        }
+    return {
+        "binding_status": "caller_asserted" if bundle_id else "unbound",
+        "verification_scope": "caller_asserted_correlation" if bundle_id else "input_integrity_only",
+        "digest_algorithm": PARAMETER_EVIDENCE_DIGEST_ALGORITHM,
+        "canonicalization": PARAMETER_EVIDENCE_CANONICALIZATION,
+        "dry_run_report_digest": _parameter_evidence_digest(dry_run_report),
+        "observed_state_digest": _parameter_evidence_digest(observed_state),
+        "evidence_bundle_id": bundle_id,
+        "ragflow_contract_identity": contract_identity,
+        "tool_verified_same_run": False,
+    }
+
+
 def create_parameter_read_back_audit(
     *,
     dry_run_report: Mapping[str, Any],
     observed_state: Mapping[str, Any] | None = None,
+    evidence_bundle_id: str | None = None,
+    ragflow_contract_version: str | None = None,
+    ragflow_contract_source: str | None = None,
 ) -> dict[str, Any]:
     """Compare dry-run parameter intent with read-back evidence without mutating RAGFlow."""
 
@@ -466,6 +541,13 @@ def create_parameter_read_back_audit(
     observed_language, language_source = _extract_read_back_language(observed_state)
     observed_parser_config_available = observed_parser_config is not None
     observed_parser_config = observed_parser_config or {}
+    evidence_binding = _parameter_evidence_binding(
+        dry_run_report=dry_run_report,
+        observed_state=observed_state,
+        evidence_bundle_id=evidence_bundle_id,
+        ragflow_contract_version=ragflow_contract_version,
+        ragflow_contract_source=ragflow_contract_source,
+    )
 
     fields: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -678,6 +760,7 @@ def create_parameter_read_back_audit(
             "language_source": language_source,
             "extra_parser_config_keys": observed_extra_parser_config_keys,
         },
+        "evidence_binding": evidence_binding,
         "summary": {
             "field_count": len(fields),
             "status_counts": status_counts,
@@ -707,6 +790,14 @@ def render_parameter_read_back_audit_markdown(report: Mapping[str, Any]) -> str:
 
     summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
     observed_state = report.get("observed_state", {}) if isinstance(report.get("observed_state"), Mapping) else {}
+    evidence_binding = (
+        report.get("evidence_binding", {}) if isinstance(report.get("evidence_binding"), Mapping) else {}
+    )
+    contract_identity = (
+        evidence_binding.get("ragflow_contract_identity", {})
+        if isinstance(evidence_binding.get("ragflow_contract_identity"), Mapping)
+        else {}
+    )
     issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
     notable_statuses = {"observed_changed", "observed_missing", "unknown_api_mapping", "native_parser_only"}
     notable_fields = [
@@ -729,6 +820,18 @@ def render_parameter_read_back_audit_markdown(report: Mapping[str, Any]) -> str:
         f"- native parser only: `{summary.get('native_parser_only_count', 0)}`",
         f"- parser config source: `{observed_state.get('parser_config_source') or '-'}`",
         f"- language source: `{observed_state.get('language_source') or '-'}`",
+        "",
+        "## Evidence Binding",
+        "",
+        f"- binding status: `{evidence_binding.get('binding_status') or 'unbound'}`",
+        f"- verification scope: `{evidence_binding.get('verification_scope') or 'input_integrity_only'}`",
+        f"- evidence bundle id: `{evidence_binding.get('evidence_bundle_id') or '-'}`",
+        f"- dry-run digest: `{evidence_binding.get('dry_run_report_digest') or '-'}`",
+        f"- observed-state digest: `{evidence_binding.get('observed_state_digest') or '-'}`",
+        f"- RAGFlow contract version: `{contract_identity.get('version') or '-'}`",
+        f"- RAGFlow contract source: `{contract_identity.get('source') or '-'}`",
+        "- tool verified same run: "
+        f"`{str(bool(evidence_binding.get('tool_verified_same_run', False))).lower()}`",
         "",
         "## Field Findings",
         "",

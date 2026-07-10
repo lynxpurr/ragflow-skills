@@ -122,6 +122,12 @@ class ProfileTests(unittest.TestCase):
 
         self.assertFalse(report.ok)
         self.assertIn("unsupported_parser_key", codes)
+        context_issues = [
+            issue for issue in report.issues if issue.field == "parser_config.image_context_size"
+        ]
+        self.assertEqual(len(context_issues), 1)
+        self.assertIn("rejected by observed dataset create probes", context_issues[0].message)
+        self.assertNotIn("create/update", context_issues[0].message)
         self.assertEqual(payload["parser_config"]["delimiter"], "`<!-- chunk -->`")
         self.assertNotIn("image_context_size", payload["parser_config"])
         self.assertNotIn("table_context_size", payload["parser_config"])

@@ -3618,6 +3618,12 @@ class KbBuildCliTests(unittest.TestCase):
                     str(dry_run),
                     "--observed-state",
                     str(observed_state),
+                    "--evidence-bundle-id",
+                    "12345678-1234-4678-9234-567812345678",
+                    "--ragflow-contract-version",
+                    "v0.21.1",
+                    "--ragflow-contract-source",
+                    "server_reported",
                     "--report-json",
                     str(output),
                     "--report-md",
@@ -3645,11 +3651,53 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["observed_missing_count"], 1)
         self.assertEqual(payload["summary"]["unknown_api_mapping_count"], 1)
         self.assertEqual(payload["summary"]["native_parser_only_count"], 1)
+        self.assertEqual(payload["evidence_binding"]["binding_status"], "caller_asserted")
+        self.assertEqual(
+            payload["evidence_binding"]["evidence_bundle_id"],
+            "12345678-1234-4678-9234-567812345678",
+        )
+        self.assertEqual(payload["evidence_binding"]["ragflow_contract_identity"]["version"], "v0.21.1")
+        self.assertEqual(payload["evidence_binding"]["ragflow_contract_identity"]["source"], "server_reported")
+        self.assertFalse(payload["evidence_binding"]["tool_verified_same_run"])
+        self.assertTrue(payload["evidence_binding"]["dry_run_report_digest"].startswith("sha256:"))
+        self.assertTrue(payload["evidence_binding"]["observed_state_digest"].startswith("sha256:"))
         self.assertEqual(payload["safety"]["ragflow_calls"], 0)
         self.assertFalse(payload["safety"]["writes_live_ragflow"])
         self.assertIn("RAGFlow Parameter Read-Back Audit", markdown)
         self.assertIn("observed_changed", markdown)
+        self.assertIn("caller_asserted", markdown)
+        self.assertIn("v0.21.1", markdown)
+        self.assertIn("tool verified same run: `false`", markdown)
         self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
+
+    def test_parameter_audit_subcommand_rejects_invalid_evidence_bundle_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dry_run = root / "dry_run.json"
+            dry_run.write_text(
+                json.dumps({"schema": "ragflow_kb_build_dry_run_v1", "build_payload_preview": {"fields": []}}),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "parameter-audit",
+                    "--dry-run-report",
+                    str(dry_run),
+                    "--evidence-bundle-id",
+                    "kb:private-name",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("evidence bundle id must be a UUID", result.stdout)
 
     def test_parse_report_surfaces_refresh_zero_document_compatibility_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
