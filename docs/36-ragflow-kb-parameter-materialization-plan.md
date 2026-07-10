@@ -89,7 +89,7 @@ whose API behavior has not been confirmed.
 | `metadata.json` | Local audit/advisory | Not automatically written as RAGFlow automatic metadata. |
 | PageIndex | Native-parser-only / DeepDoc-gated | Stage 6 read-back observed `parser_config.pages`, but it is null for Markdown handoff KBs. |
 | Image/table context window settings | API mapping observed, write-gated | Stage 6 read-back mapped these to `parser_config.image_context_size` and `parser_config.table_context_size`; non-zero write behavior still needs fake-client and disposable live validation before materialization. |
-| Table-to-HTML setting | Native-parser-only | Stage 6 observed `html4excel`, but did not confirm it as the Markdown handoff table-to-HTML UI toggle. Keep native/DeepDoc-gated. |
+| Table-to-HTML setting | Unknown / likely parser-path-specific | May belong to native PDF/DeepDoc parsing rather than Markdown handoff. |
 | DeepDoc native parser settings | Separately gated | Requires explicit DeepDoc live baseline approval. |
 
 ## Update Plan
@@ -302,22 +302,6 @@ Remaining gap:
 Verified on 2026-07-10 for the P1 offline guard-visibility slice:
 
 - `python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/profiles.py packages/ragflow-skill-runtime/src/ragflow_skill_runtime/kb_build.py skills/ragflow-kb-build/scripts/build.py`;
-- `python3 -m pytest packages/ragflow-skill-runtime/tests -q` passed with
-  668 tests and 6 subtests;
-- `python3 tools/schema_identity_check.py --report-json <temporary-report-json>`;
-- `python3 tools/release_hygiene_check.py`;
-- `git diff --check`;
-- targeted redaction scan over this document and `skills/ragflow-kb-build/SKILL.md`.
-
-Verified on 2026-07-10 for the Stage 6 read-back classification
-incorporation:
-
-- focused RED/GREEN coverage for `build_payload_preview`,
-  `parameter_materialization_inventory`, `parameter-audit`, and
-  `handoff_consumption_status`;
-- `python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/kb_build.py packages/ragflow-skill-runtime/src/ragflow_skill_runtime/profiles.py skills/ragflow-kb-build/scripts/build.py`;
-- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py -q`
-  passed with 114 tests;
 - `python3 -m pytest packages/ragflow-skill-runtime/tests -q` passed with
   668 tests and 6 subtests;
 - `python3 tools/schema_identity_check.py --report-json <temporary-report-json>`;

@@ -1280,6 +1280,8 @@ class KbBuildCliTests(unittest.TestCase):
                             "chunk_token_num": 512,
                             "auto_keywords": 0,
                             "auto_questions": 0,
+                            "image_context_size": 1,
+                            "table_context_size": 2,
                             "page_index": True,
                             "table_to_html": True,
                             "layout_recognize": True,
@@ -1317,6 +1319,8 @@ class KbBuildCliTests(unittest.TestCase):
         created_profile = FakeOptimizeBuildClient.instances[0].created[0][1]
         self.assertEqual(created_profile["parser_config"]["auto_keywords"], 0)
         self.assertEqual(created_profile["parser_config"]["auto_questions"], 0)
+        self.assertEqual(created_profile["parser_config"]["image_context_size"], 1)
+        self.assertEqual(created_profile["parser_config"]["table_context_size"], 2)
         self.assertNotIn("page_index", created_profile["parser_config"])
         self.assertNotIn("table_to_html", created_profile["parser_config"])
         self.assertNotIn("layout_recognize", created_profile["parser_config"])
@@ -1324,6 +1328,8 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(fields["parser_config.page_index"]["status"], "unsupported_or_gated")
         self.assertEqual(fields["parser_config.table_to_html"]["status"], "unsupported_or_gated")
         self.assertEqual(fields["parser_config.layout_recognize"]["status"], "unsupported_or_gated")
+        self.assertEqual(fields["parser_config.image_context_size"]["status"], "materialized_to_ragflow")
+        self.assertEqual(fields["parser_config.table_context_size"]["status"], "materialized_to_ragflow")
         self.assertEqual(fields["ragflow_ui.page_index"]["status"], "native_parser_only")
         self.assertEqual(fields["ragflow_ui.page_index"]["api_key"], "parser_config.pages")
         self.assertEqual(fields["ragflow_ui.image_context_window"]["status"], "unsupported_or_gated")

@@ -23,6 +23,8 @@ SUPPORTED_PARSER_KEYS = {
     "auto_keywords",
     "auto_questions",
     "delimiter",
+    "image_context_size",
+    "table_context_size",
 }
 RAGFLOW_CHUNK_TOKEN_NUM_MAX = 2048
 BUILD_PROFILE_MATERIALIZATION_SCHEMA = "ragflow_build_profile_materialization_v1"
@@ -325,6 +327,21 @@ def lint_profile(profile: ChunkProfile) -> ProfileLintReport:
                     field=f"parser_config.{key}",
                     message=f"parser_config.{key} must be non-negative",
                     recommendation=f"Use 0 to disable {key}.",
+                )
+            )
+
+    for key in ("image_context_size", "table_context_size"):
+        value = _numeric_parser_value(profile, key)
+        if value is None:
+            continue
+        if value < 0:
+            issues.append(
+                ProfileIssue(
+                    severity="error",
+                    code=f"{key}_negative",
+                    field=f"parser_config.{key}",
+                    message=f"parser_config.{key} must be non-negative",
+                    recommendation=f"Use 0 to disable {key}, or a small reviewed integer before live validation.",
                 )
             )
 

@@ -71,6 +71,8 @@ class ProfileTests(unittest.TestCase):
                 "parser_config": {
                     "chunk_token_num": 512,
                     "auto_keywords": 0,
+                    "image_context_size": 1,
+                    "table_context_size": 2,
                     "page_index": True,
                     "table_to_html": True,
                     "layout_recognize": True,
@@ -87,6 +89,10 @@ class ProfileTests(unittest.TestCase):
         self.assertNotIn("table_to_html", payload["parser_config"])
         self.assertNotIn("layout_recognize", payload["parser_config"])
         self.assertEqual(payload["parser_config"]["chunk_token_num"], 512)
+        self.assertEqual(payload["parser_config"]["image_context_size"], 1)
+        self.assertEqual(payload["parser_config"]["table_context_size"], 2)
+        self.assertEqual(manifest["parser_config"]["image_context_size"], 1)
+        self.assertEqual(manifest["parser_config"]["table_context_size"], 2)
         self.assertTrue(manifest["parser_config"]["page_index"])
         self.assertTrue(manifest["parser_config"]["table_to_html"])
         self.assertTrue(manifest["parser_config"]["layout_recognize"])
@@ -103,6 +109,8 @@ class ProfileTests(unittest.TestCase):
                     "delimiter": "`<!-- chunk -->`",
                     "auto_keywords": 0,
                     "auto_questions": 0,
+                    "image_context_size": 1,
+                    "table_context_size": 2,
                     "__language__": "Chinese",
                 },
             }
@@ -115,6 +123,28 @@ class ProfileTests(unittest.TestCase):
         self.assertTrue(report.ok)
         self.assertNotIn("unsupported_parser_key", codes)
         self.assertEqual(payload["parser_config"]["delimiter"], "`<!-- chunk -->`")
+        self.assertEqual(payload["parser_config"]["image_context_size"], 1)
+        self.assertEqual(payload["parser_config"]["table_context_size"], 2)
+
+    def test_lint_profile_rejects_negative_context_window_sizes(self) -> None:
+        profile = ChunkProfile.from_dict(
+            {
+                "profile_id": "bad-context-window",
+                "chunk_size": 512,
+                "parser_config": {
+                    "chunk_token_num": 512,
+                    "image_context_size": -1,
+                    "table_context_size": -2,
+                },
+            }
+        )
+
+        report = lint_profile(profile)
+        codes = {issue.code for issue in report.issues}
+
+        self.assertFalse(report.ok)
+        self.assertIn("image_context_size_negative", codes)
+        self.assertIn("table_context_size_negative", codes)
 
     def test_lint_profile_reports_internal_metadata_and_mismatch(self) -> None:
         profile = ChunkProfile.from_dict(

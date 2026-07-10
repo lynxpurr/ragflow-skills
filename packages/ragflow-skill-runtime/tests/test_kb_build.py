@@ -391,6 +391,8 @@ class KbBuildTests(unittest.TestCase):
                     "delimiter": "`<!-- chunk -->`",
                     "auto_keywords": 1,
                     "auto_questions": 0,
+                    "image_context_size": 1,
+                    "table_context_size": 2,
                     "page_index": True,
                     "table_to_html": True,
                     "__language__": "Chinese",
@@ -418,6 +420,10 @@ class KbBuildTests(unittest.TestCase):
         self.assertEqual(preview["dataset_create_payload"]["language"], "Chinese")
         self.assertEqual(fields["language"]["status"], "materialized_to_ragflow")
         self.assertEqual(fields["parser_config.delimiter"]["status"], "materialized_to_ragflow")
+        self.assertEqual(fields["parser_config.image_context_size"]["status"], "materialized_to_ragflow")
+        self.assertEqual(fields["parser_config.image_context_size"]["target"], "dataset.parser_config.image_context_size")
+        self.assertEqual(fields["parser_config.table_context_size"]["status"], "materialized_to_ragflow")
+        self.assertEqual(fields["parser_config.table_context_size"]["target"], "dataset.parser_config.table_context_size")
         self.assertEqual(fields["parser_config.page_index"]["status"], "unsupported_or_gated")
         self.assertEqual(fields["parser_config.page_index"]["target"], None)
         self.assertEqual(fields["parser_config.table_to_html"]["status"], "unsupported_or_gated")
@@ -438,7 +444,7 @@ class KbBuildTests(unittest.TestCase):
         self.assertEqual(fields["ragflow_ui.table_to_html"]["parser_path_scope"], "deepdoc_native")
         self.assertEqual(fields["retrieval_hints.keyword_candidates"]["status"], "advisory_after_build")
         self.assertEqual(fields["retrieval_hints.question_candidates"]["status"], "advisory_after_build")
-        self.assertEqual(preview["summary"]["ragflow_field_count"], 6)
+        self.assertEqual(preview["summary"]["ragflow_field_count"], 8)
         self.assertEqual(preview["summary"]["unknown_api_mapping_field_count"], 2)
         self.assertEqual(preview["summary"]["unsupported_or_gated_field_count"], 4)
         self.assertEqual(preview["summary"]["native_parser_only_field_count"], 2)
@@ -455,6 +461,8 @@ class KbBuildTests(unittest.TestCase):
                     "delimiter": "`<!-- chunk -->`",
                     "auto_keywords": 0,
                     "auto_questions": 1,
+                    "image_context_size": 1,
+                    "table_context_size": 2,
                     "__language__": "English",
                 },
             }
@@ -505,6 +513,8 @@ class KbBuildTests(unittest.TestCase):
             by_field["profile.parser_config.delimiter"]["parser_path_scope"],
             "markdown_handoff",
         )
+        self.assertEqual(by_field["profile.parser_config.image_context_size"]["status"], "materialized_to_ragflow")
+        self.assertEqual(by_field["profile.parser_config.table_context_size"]["status"], "materialized_to_ragflow")
         self.assertEqual(
             by_field["profile.chunk_overlap"]["status"],
             "local_audit_only",
@@ -549,6 +559,8 @@ class KbBuildTests(unittest.TestCase):
                     "chunk_token_num": 768,
                     "delimiter": "<!-- chunk -->",
                     "auto_questions": 1,
+                    "image_context_size": 1,
+                    "table_context_size": 2,
                 },
                 "language": "en",
             }
@@ -567,6 +579,8 @@ class KbBuildTests(unittest.TestCase):
                     "chunk_token_num": 768,
                     "delimiter": "\n\n",
                     "auto_keywords": 0,
+                    "image_context_size": 1,
+                    "table_context_size": 2,
                 },
                 "language": "en",
             },
@@ -580,7 +594,7 @@ class KbBuildTests(unittest.TestCase):
         self.assertTrue(audit["advisory_only"])
         self.assertEqual(audit["mutation"], "none")
         self.assertEqual(audit["observed_state"]["parser_config_source"], "observed_state.data.parser_config")
-        self.assertEqual(audit["summary"]["observed_match_count"], 3)
+        self.assertEqual(audit["summary"]["observed_match_count"], 5)
         self.assertEqual(audit["summary"]["observed_changed_count"], 1)
         self.assertEqual(audit["summary"]["observed_missing_count"], 1)
         self.assertEqual(audit["summary"]["unknown_api_mapping_count"], 2)
@@ -592,6 +606,8 @@ class KbBuildTests(unittest.TestCase):
         self.assertEqual(by_field["dataset.parser_config.delimiter"]["requested_value"], "<!-- chunk -->")
         self.assertEqual(by_field["dataset.parser_config.delimiter"]["observed_value"], "\n\n")
         self.assertEqual(by_field["dataset.parser_config.auto_questions"]["audit_status"], "observed_missing")
+        self.assertEqual(by_field["dataset.parser_config.image_context_size"]["audit_status"], "observed_match")
+        self.assertEqual(by_field["dataset.parser_config.table_context_size"]["audit_status"], "observed_match")
         self.assertEqual(by_field["ragflow_ui.page_index"]["audit_status"], "native_parser_only")
         self.assertEqual(by_field["ragflow_ui.page_index"]["api_key"], "parser_config.pages")
         self.assertEqual(by_field["ragflow_ui.page_index"]["ui_label"], "PageIndex")
