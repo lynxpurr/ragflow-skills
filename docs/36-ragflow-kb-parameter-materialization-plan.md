@@ -1,6 +1,6 @@
 # RAGFlow KB Parameter Materialization Plan
 
-Status: active KB parameter materialization plan; P0 complete, P1 offline guard visibility verified
+Status: active KB parameter materialization plan; P0 complete, P1 read-back discovery incorporated
 Date: 2026-07-10
 
 ## Objective / Scope / Boundaries
@@ -87,9 +87,9 @@ whose API behavior has not been confirmed.
 | `retrieval_hints.image_artifacts` | Gated/advisory | Standard Markdown build does not upload image assets as visual documents. |
 | `retrieval_hints.table_artifacts` | Advisory | Used for review and table sizing; not yet mapped to native table parser settings. |
 | `metadata.json` | Local audit/advisory | Not automatically written as RAGFlow automatic metadata. |
-| PageIndex | Unknown / candidate mapping | Needs API/UI read-back audit and parser-path classification. |
-| Image/table context window settings | Unknown / candidate mapping | Needs API field discovery and retrieval-impact validation. |
-| Table-to-HTML setting | Unknown / likely parser-path-specific | May belong to native PDF/DeepDoc parsing rather than Markdown handoff. |
+| PageIndex | Native-parser-only / DeepDoc-gated | Stage 6 read-back observed `parser_config.pages`, but it is null for Markdown handoff KBs. |
+| Image/table context window settings | API mapping observed, write-gated | Stage 6 read-back mapped these to `parser_config.image_context_size` and `parser_config.table_context_size`; non-zero write behavior still needs fake-client and disposable live validation before materialization. |
+| Table-to-HTML setting | Native-parser-only | Stage 6 observed `html4excel`, but did not confirm it as the Markdown handoff table-to-HTML UI toggle. Keep native/DeepDoc-gated. |
 | DeepDoc native parser settings | Separately gated | Requires explicit DeepDoc live baseline approval. |
 
 ## Update Plan
@@ -259,6 +259,25 @@ Implemented on 2026-07-10:
   native-only parser fields do not reach `create_dataset()` payloads while the
   dry-run and handoff reports still explain why they were blocked.
 
+Read-only Stage 6 evidence incorporated on 2026-07-10:
+
+- A retained Markdown handoff KB was inspected through read-only RAGFlow
+  read-back; no create, update, delete, upload, parse, reparse, DeepDoc
+  baseline, or script-owned LLM/RAGAS call was performed.
+- Read-back confirmed exact matches for the currently materialized fields:
+  `chunk_token_num`, `delimiter`, `auto_keywords`, `auto_questions`, and
+  top-level `language`.
+- `parser_config.image_context_size` and
+  `parser_config.table_context_size` were observed as API-visible mappings for
+  the image and table context-window UI controls, so these controls are no
+  longer classified as unknown mappings. They remain write-gated until
+  fake-client payload coverage and disposable live validation prove non-zero
+  values are accepted and useful.
+- `parser_config.pages` was observed for PageIndex, but it was null for the
+  Markdown handoff KB, so PageIndex is classified as DeepDoc/native-path gated.
+- Automatic metadata and overlap percent remain unknown API mappings for this
+  Markdown handoff path.
+
 Related completed evidence:
 
 - `docs/34-pipeline-consumption-gap-quality-improvement-plan.md` closed the
@@ -274,7 +293,8 @@ Remaining gap:
 - The sidecar recommendation surface is now visible in a field-level inventory,
   requested parser settings can now be compared with read-back evidence, and
   candidate UI/parser controls are visible in dry-run and handoff-consumption
-  reports. Candidate UI/parser options still need API mapping confirmation and
+  reports. Some candidate UI/parser options now have read-back API keys, but
+  they still need writable payload confirmation, fake-client coverage, and
   disposable live validation before they become materialized settings.
 
 ## Validation Evidence / Residual Gated Work
@@ -282,6 +302,22 @@ Remaining gap:
 Verified on 2026-07-10 for the P1 offline guard-visibility slice:
 
 - `python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/profiles.py packages/ragflow-skill-runtime/src/ragflow_skill_runtime/kb_build.py skills/ragflow-kb-build/scripts/build.py`;
+- `python3 -m pytest packages/ragflow-skill-runtime/tests -q` passed with
+  668 tests and 6 subtests;
+- `python3 tools/schema_identity_check.py --report-json <temporary-report-json>`;
+- `python3 tools/release_hygiene_check.py`;
+- `git diff --check`;
+- targeted redaction scan over this document and `skills/ragflow-kb-build/SKILL.md`.
+
+Verified on 2026-07-10 for the Stage 6 read-back classification
+incorporation:
+
+- focused RED/GREEN coverage for `build_payload_preview`,
+  `parameter_materialization_inventory`, `parameter-audit`, and
+  `handoff_consumption_status`;
+- `python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/kb_build.py packages/ragflow-skill-runtime/src/ragflow_skill_runtime/profiles.py skills/ragflow-kb-build/scripts/build.py`;
+- `python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py -q`
+  passed with 114 tests;
 - `python3 -m pytest packages/ragflow-skill-runtime/tests -q` passed with
   668 tests and 6 subtests;
 - `python3 tools/schema_identity_check.py --report-json <temporary-report-json>`;

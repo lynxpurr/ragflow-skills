@@ -291,23 +291,26 @@ KNOWN_RAGFLOW_UI_CONTROLS = (
     (
         "ragflow_ui.page_index",
         "PageIndex",
-        "unknown_api_mapping",
-        "unknown",
-        "page_index_api_mapping_unconfirmed",
+        "native_parser_only",
+        "deepdoc_native",
+        "page_index_pages_api_key_null_for_markdown_handoff",
+        "parser_config.pages",
     ),
     (
         "ragflow_ui.image_context_window",
         "Image context window",
-        "unknown_api_mapping",
-        "unknown",
-        "image_context_window_api_mapping_unconfirmed",
+        "unsupported_or_gated",
+        "markdown_handoff",
+        "image_context_window_api_key_confirmed_write_gated",
+        "parser_config.image_context_size",
     ),
     (
         "ragflow_ui.table_context_window",
         "Table context window",
-        "unknown_api_mapping",
-        "unknown",
-        "table_context_window_api_mapping_unconfirmed",
+        "unsupported_or_gated",
+        "markdown_handoff",
+        "table_context_window_api_key_confirmed_write_gated",
+        "parser_config.table_context_size",
     ),
     (
         "ragflow_ui.automatic_metadata",
@@ -315,6 +318,7 @@ KNOWN_RAGFLOW_UI_CONTROLS = (
         "unknown_api_mapping",
         "unknown",
         "automatic_metadata_api_mapping_unconfirmed",
+        None,
     ),
     (
         "ragflow_ui.overlap_percent",
@@ -322,6 +326,7 @@ KNOWN_RAGFLOW_UI_CONTROLS = (
         "unknown_api_mapping",
         "unknown",
         "overlap_percent_api_mapping_unconfirmed",
+        None,
     ),
     (
         "ragflow_ui.table_to_html",
@@ -329,6 +334,7 @@ KNOWN_RAGFLOW_UI_CONTROLS = (
         "native_parser_only",
         "deepdoc_native",
         "native_pdf_parser_control_not_markdown_handoff",
+        None,
     ),
 )
 PARAMETER_READ_BACK_AUDIT_STATUS_VALUES = (
@@ -345,8 +351,9 @@ READ_BACK_PARSER_CONFIG_KEYS = ("parser_config", "parserConfig")
 
 
 def _known_ragflow_ui_control_fields() -> list[dict[str, Any]]:
-    return [
-        {
+    fields: list[dict[str, Any]] = []
+    for field, label, status, scope, reason, api_key in KNOWN_RAGFLOW_UI_CONTROLS:
+        record = {
             "field": field,
             "status": status,
             "source": "ragflow_ui_observation",
@@ -356,8 +363,10 @@ def _known_ragflow_ui_control_fields() -> list[dict[str, Any]]:
             "required_verification": ["api_ui_read_back_audit"],
             "ui_label": label,
         }
-        for field, label, status, scope, reason in KNOWN_RAGFLOW_UI_CONTROLS
-    ]
+        if api_key:
+            record["api_key"] = api_key
+        fields.append(record)
+    return fields
 
 
 def _field_status_counts(fields: list[Mapping[str, Any]], statuses: tuple[str, ...]) -> dict[str, int]:
@@ -558,6 +567,15 @@ def create_parameter_read_back_audit(
             }
             if "ui_label" in item:
                 record["ui_label"] = item.get("ui_label")
+            api_key = item.get("api_key")
+            if isinstance(api_key, str) and api_key:
+                record["api_key"] = api_key
+                prefix = "parser_config."
+                if api_key.startswith(prefix) and observed_parser_config_available:
+                    key = api_key[len(prefix) :]
+                    record["observed_source"] = parser_config_source or "observed_state.parser_config"
+                    if key in observed_parser_config:
+                        record["observed_value"] = observed_parser_config.get(key)
             if "value" in item:
                 record["requested_value"] = item.get("value")
             add_field(record)
@@ -749,6 +767,7 @@ def make_parameter_materialization_inventory(
         reason: str | None = None,
         required_verification: list[str] | tuple[str, ...] | None = None,
         ui_label: str | None = None,
+        api_key: str | None = None,
     ) -> None:
         record: dict[str, Any] = {
             "field": field,
@@ -765,6 +784,8 @@ def make_parameter_materialization_inventory(
             record["required_verification"] = list(required_verification)
         if ui_label:
             record["ui_label"] = ui_label
+        if api_key:
+            record["api_key"] = api_key
         fields.append(record)
 
     if language.get("value") is not None:
@@ -951,6 +972,7 @@ def make_parameter_materialization_inventory(
             reason=str(ui_field["reason"]),
             required_verification=ui_field["required_verification"],
             ui_label=str(ui_field["ui_label"]),
+            api_key=str(ui_field["api_key"]) if ui_field.get("api_key") else None,
         )
 
     status_counts = _field_status_counts(fields, PARAMETER_MATERIALIZATION_STATUS_VALUES)
@@ -1013,6 +1035,7 @@ def make_build_payload_preview(
         parser_path_scope: str | None = None,
         required_verification: list[str] | tuple[str, ...] | None = None,
         ui_label: str | None = None,
+        api_key: str | None = None,
     ) -> None:
         record = {
             "field": field,
@@ -1030,6 +1053,8 @@ def make_build_payload_preview(
             record["required_verification"] = list(required_verification)
         if ui_label:
             record["ui_label"] = ui_label
+        if api_key:
+            record["api_key"] = api_key
         fields.append(record)
 
     add_field(
@@ -1121,6 +1146,7 @@ def make_build_payload_preview(
             parser_path_scope=str(ui_field["parser_path_scope"]),
             required_verification=ui_field["required_verification"],
             ui_label=str(ui_field["ui_label"]),
+            api_key=str(ui_field["api_key"]) if ui_field.get("api_key") else None,
         )
 
     status_counts = _field_status_counts(fields, PARAMETER_MATERIALIZATION_STATUS_VALUES)
@@ -1311,6 +1337,7 @@ def make_handoff_consumption_status(
         reason: str | None = None,
         required_verification: list[str] | tuple[str, ...] | None = None,
         ui_label: str | None = None,
+        api_key: str | None = None,
     ) -> None:
         record: dict[str, Any] = {
             "field": field,
@@ -1327,6 +1354,8 @@ def make_handoff_consumption_status(
             record["required_verification"] = list(required_verification)
         if ui_label:
             record["ui_label"] = ui_label
+        if api_key:
+            record["api_key"] = api_key
         parameter_fields.append(record)
 
     if manifest_path is not None:
@@ -1628,6 +1657,7 @@ def make_handoff_consumption_status(
             reason=str(ui_field["reason"]),
             required_verification=ui_field["required_verification"],
             ui_label=str(ui_field["ui_label"]),
+            api_key=str(ui_field["api_key"]) if ui_field.get("api_key") else None,
         )
 
     status_values = [

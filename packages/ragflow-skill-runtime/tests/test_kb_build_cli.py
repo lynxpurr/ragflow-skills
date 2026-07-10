@@ -896,8 +896,13 @@ class KbBuildCliTests(unittest.TestCase):
         fields = {item["field"]: item for item in preview["fields"]}
         self.assertEqual(fields["parser_config.__language__"]["status"], "local_audit_only")
         self.assertEqual(fields["retrieval_hints.keyword_candidates"]["status"], "advisory_after_build")
-        self.assertEqual(fields["ragflow_ui.page_index"]["status"], "unknown_api_mapping")
+        self.assertEqual(fields["ragflow_ui.page_index"]["status"], "native_parser_only")
+        self.assertEqual(fields["ragflow_ui.page_index"]["api_key"], "parser_config.pages")
         self.assertEqual(fields["ragflow_ui.page_index"]["ui_label"], "PageIndex")
+        self.assertEqual(fields["ragflow_ui.image_context_window"]["status"], "unsupported_or_gated")
+        self.assertEqual(fields["ragflow_ui.image_context_window"]["api_key"], "parser_config.image_context_size")
+        self.assertEqual(fields["ragflow_ui.table_context_window"]["status"], "unsupported_or_gated")
+        self.assertEqual(fields["ragflow_ui.table_context_window"]["api_key"], "parser_config.table_context_size")
         self.assertEqual(fields["ragflow_ui.table_to_html"]["status"], "native_parser_only")
         self.assertEqual(fields["ragflow_ui.table_to_html"]["parser_path_scope"], "deepdoc_native")
         self.assertEqual(preview["dataset_create_payload"]["parser_config"]["auto_keywords"], 0)
@@ -909,7 +914,9 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(consumption_by_artifact[str(retrieval_hints)]["status"], "advisory_after_build")
         consumption_parameters = {item["field"]: item for item in consumption["parameter_fields"]}
         self.assertEqual(consumption_parameters["retrieval_hints.keyword_candidates"]["status"], "advisory_after_build")
-        self.assertEqual(consumption_parameters["ragflow_ui.page_index"]["status"], "unknown_api_mapping")
+        self.assertEqual(consumption_parameters["ragflow_ui.page_index"]["status"], "native_parser_only")
+        self.assertEqual(consumption_parameters["ragflow_ui.image_context_window"]["status"], "unsupported_or_gated")
+        self.assertEqual(consumption_parameters["ragflow_ui.table_context_window"]["status"], "unsupported_or_gated")
         self.assertEqual(consumption_parameters["ragflow_ui.table_to_html"]["status"], "native_parser_only")
         inventory = payload["parameter_materialization_inventory"]
         self.assertEqual(inventory["schema"], "ragflow_parameter_materialization_inventory_v1")
@@ -922,7 +929,12 @@ class KbBuildCliTests(unittest.TestCase):
             inventory_by_field["retrieval_hints.image_artifacts"]["status"],
             "unsupported_or_gated",
         )
-        self.assertEqual(inventory_by_field["ragflow_ui.page_index"]["status"], "unknown_api_mapping")
+        self.assertEqual(inventory_by_field["ragflow_ui.page_index"]["status"], "native_parser_only")
+        self.assertEqual(inventory_by_field["ragflow_ui.page_index"]["api_key"], "parser_config.pages")
+        self.assertEqual(inventory_by_field["ragflow_ui.image_context_window"]["status"], "unsupported_or_gated")
+        self.assertEqual(inventory_by_field["ragflow_ui.image_context_window"]["api_key"], "parser_config.image_context_size")
+        self.assertEqual(inventory_by_field["ragflow_ui.table_context_window"]["status"], "unsupported_or_gated")
+        self.assertEqual(inventory_by_field["ragflow_ui.table_context_window"]["api_key"], "parser_config.table_context_size")
         self.assertEqual(inventory_by_field["ragflow_ui.table_to_html"]["parser_path_scope"], "deepdoc_native")
         self.assertEqual(inventory["safety"]["ragflow_calls"], 0)
 
@@ -1312,7 +1324,12 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(fields["parser_config.page_index"]["status"], "unsupported_or_gated")
         self.assertEqual(fields["parser_config.table_to_html"]["status"], "unsupported_or_gated")
         self.assertEqual(fields["parser_config.layout_recognize"]["status"], "unsupported_or_gated")
-        self.assertEqual(fields["ragflow_ui.page_index"]["status"], "unknown_api_mapping")
+        self.assertEqual(fields["ragflow_ui.page_index"]["status"], "native_parser_only")
+        self.assertEqual(fields["ragflow_ui.page_index"]["api_key"], "parser_config.pages")
+        self.assertEqual(fields["ragflow_ui.image_context_window"]["status"], "unsupported_or_gated")
+        self.assertEqual(fields["ragflow_ui.image_context_window"]["api_key"], "parser_config.image_context_size")
+        self.assertEqual(fields["ragflow_ui.table_context_window"]["status"], "unsupported_or_gated")
+        self.assertEqual(fields["ragflow_ui.table_context_window"]["api_key"], "parser_config.table_context_size")
         self.assertEqual(fields["ragflow_ui.table_to_html"]["status"], "native_parser_only")
         self.assertEqual(fields["retrieval_hints.keyword_candidates"]["status"], "advisory_after_build")
         self.assertEqual(fields["retrieval_hints.question_candidates"]["status"], "advisory_after_build")
