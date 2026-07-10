@@ -1,7 +1,6 @@
 # RAGFlow KB Parameter Materialization Plan
 
-Status: active KB parameter materialization plan; Stage 8A offline closeout complete,
-Stage 8B version-bound contract discovery remains evidence-gated
+Status: active KB parameter materialization plan; Stage 8A offline closeout complete, Stage 8B contract audit design approved
 Date: 2026-07-10
 
 ## Objective / Scope / Boundaries
@@ -387,6 +386,10 @@ validation and retention work, a continuing DeepDoc separation rule, and final
 guidance closeout. The accurate state is: the offline safety layer is largely
 complete, while the plan is waiting at an API-contract and evidence gate.
 
+The initial review-time verification ran 165 focused tests successfully and
+confirmed the 104-command report/runtime inventories. The Stage 8A validation
+record below supersedes this review snapshot after implementation.
+
 ### Stage 8A1 - Documentation And Classification Closeout
 
 Completed in the offline Stage 8A slice:
@@ -433,33 +436,6 @@ public-safe live retention checklist item. That item still requires an approved
 run to produce correlated read-back, retrieval, cleanup, and contract/version
 artifacts.
 
-### Stage 8A Validation Record
-
-Verified on 2026-07-10 without live RAGFlow mutation:
-
-- the focused changed-surface suite passed 172 tests;
-- the complete runtime suite passed 672 tests and 6 subtests;
-- changed Python files compiled successfully;
-- manifest validation covered 3 schemas with 0 findings, and schema identity
-  covered 104 identities with 0 failures;
-- report-surface inventory covered 104 commands as 95 covered and 9
-  not-applicable, while runtime resilience covered the same 104 commands as 22
-  covered and 82 not-applicable, both with 0 findings;
-- release hygiene reported `ok: true` with 0 findings; release build checking,
-  archive export, and installed-archive consumer acceptance passed;
-- the strict-vendor environment smoke profile passed against local fake
-  services, with no live RAGFlow call or mutation;
-- `git diff --check` and the targeted public-doc redaction/stale-wording review
-  passed. Scan hits were limited to documented field names, placeholder
-  examples, safety-boundary language, and pre-existing sanitized historical
-  validation paths.
-
-The task checklist remains 5 of 10 because Stage 8A deliberately does not close
-future materialization, approved live validation/retention, the continuing
-DeepDoc separation rule, or final post-live guidance. The development roadmap
-likewise remains 586 of 601; no checklist total changed in this maintenance
-slice.
-
 ### Stage 8B - Version-Bound API Contract Discovery
 
 The next normal candidate search should stay within the Markdown handoff path
@@ -502,7 +478,8 @@ Only after one candidate has an exact version-bound writable contract:
 6. Update user-facing guidance and close checklist items only after the full
    implementation, validation, cleanup, and sanitized evidence chain passes.
 
-Stage 8A is complete. The wider Stage 8 plan remains active until a candidate mapping is
+Stage 8A is complete after its implementation and release-facing validation
+pass. The wider Stage 8 plan remains active until a candidate mapping is
 version-bound, positive and negative payload tests pass, benchmark evidence is
 strong enough to detect regressions, and any approved live resources are
 cleaned up with correlated read-back evidence.

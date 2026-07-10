@@ -23,6 +23,7 @@ DOC_VERSION_PATHS = (
     Path("docs/12-release-archive-forward-test-prompts.md"),
 )
 VERSION_RE = re.compile(r"\bv(?P<version>\d+\.\d+\.\d+)(?:-rc\d+)?\b")
+STABLE_RELEASE_RE = re.compile(r"\bstable\b", flags=re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -149,7 +150,14 @@ def _doc_versions(root: Path, doc_paths: Iterable[Path]) -> dict[str, list[str]]
         text = _read_text(path)
         if not text:
             continue
-        matches = sorted({match.group("version") for match in VERSION_RE.finditer(text)})
+        stable_release_lines = (line for line in text.splitlines() if STABLE_RELEASE_RE.search(line))
+        matches = sorted(
+            {
+                match.group("version")
+                for line in stable_release_lines
+                for match in VERSION_RE.finditer(line)
+            }
+        )
         if matches:
             versions[_relative(path, root)] = matches
     return versions

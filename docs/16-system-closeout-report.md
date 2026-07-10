@@ -220,10 +220,20 @@ maintenance round documented in `docs/36-ragflow-kb-parameter-materialization-pl
 - parameter taxonomy and owning roadmap documents were calibrated to the current code and
   104-command inventories.
 
-This checkpoint does not authorize live mutation, DeepDoc/native PDF testing, a new
-writable field, or automatic-metadata model execution. The next ordinary step is pinned,
-read-only API contract discovery for overlap and automatic metadata. Any materialization
-or disposable validation still requires a separately satisfied contract and live gate.
+Stage 8B completed that pinned, read-only discovery against deployed/upstream RAGFlow
+`v0.25.5` source with a deterministic offline contract audit. The reviewed source layers
+agree that the parser consumes `overlapped_percent`, but the strict dataset request model
+does not accept it; automatic metadata has conflicting request, service-compatibility,
+frontend, and runtime shapes plus model/cost/async/governance side effects. Both remain
+blocked and no candidate is eligible for Stage 8C.
+
+Deployment evidence collection copied only the eight approved source files to a private
+temporary audit root. It did not write into the local RAGFlow container or image, alter
+configuration, environment, databases, datasets, or documents, call a RAGFlow API, or
+trigger parse/reparse work. The next ordinary work is release-health observation or an
+optional Hermes L0 source-audit replay. Any L1 read-only HTTP evidence, Stage 8C
+materialization, or disposable validation still requires its own satisfied contract and
+approval gate.
 
 ## Closeout Conclusion
 

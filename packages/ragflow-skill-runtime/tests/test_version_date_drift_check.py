@@ -97,6 +97,21 @@ class VersionDateDriftCheckTests(unittest.TestCase):
         self.assertIn("skill_metadata_version_matches_package", checks)
         self.assertIn("skill_metadata_date_matches_release_manifest", checks)
 
+    def test_external_product_version_does_not_count_as_stable_release(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_minimal_repo(root)
+            (root / "docs" / "03-development-plan.md").write_text(
+                "Stable release is `v0.1.0`.\n"
+                "The reviewed RAGFlow `v0.25.5` source is pinned for contract evidence.\n",
+                encoding="utf-8",
+            )
+
+            report = run_version_date_drift_check(root=root, public_skills=PUBLIC_SKILLS)
+
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["observed"]["doc_versions"], {"docs/03-development-plan.md": ["0.1.0"]})
+
 
 if __name__ == "__main__":
     unittest.main()

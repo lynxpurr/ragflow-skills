@@ -2186,3 +2186,31 @@ Remaining gates:
 This calibration changes no roadmap checkbox totals. The roadmap remains 586 completed
 items out of 601, with the original 15 product/private/LLM adapter items intentionally
 gated.
+
+### Stage 8B Version-Bound Contract Audit
+
+The completed offline slice adds `ragflow_parameter_contract_audit_v1` as a standalone
+maintainer report without adding a public skill command or changing the 104-command
+inventory. It compares explicit deployment/upstream source roots, records only public
+version identities, relative source coordinates, and SHA-256 digests, and performs no
+RAGFlow or LLM call.
+
+The reviewed RAGFlow `v0.25.5` source classifies overlap as
+`runtime_only_not_api_writable` and automatic metadata as `contract_conflict`. The latter
+also remains gated by chat-model/provider dependency, potential cost, asynchronous
+per-chunk parse work, reparse requirements, and metadata governance. No candidate is
+eligible for Stage 8C and no roadmap checkbox changes in this slice.
+
+The final validation passed 682 runtime tests and 11 subtests, covered 105 schema
+identities with 0 failures, kept both public command inventories at 104, and completed
+release hygiene with 0 findings. Deployment-source acquisition copied only the eight
+approved source files out to a private temporary audit root. It did not write into the
+local RAGFlow container or image, change configuration, environment, databases,
+datasets, or documents, call a RAGFlow API, or trigger parse/reparse work.
+
+Hermes can independently replay the L0 source audit using
+`docs/37-ragflow-kb-parameter-contract-audit-hermes-test.md`. L1 read-only HTTP evidence
+and L2 disposable mutation require separate approval and cannot be inferred from an L0
+pass. Until a new version-bound writable contract exists, the ordinary next work is
+release-health observation or optional Hermes L0 corroboration, not Stage 8C
+materialization.

@@ -1710,6 +1710,11 @@ Current calibration:
   disposable validation track is closed. The remaining roadmap checkboxes are
   intentionally outside that default path: optional script-owned LLM/RAGAS backends,
   post-CLI deployment adapters, and private dedao bridging.
+- The post-closeout KB parameter Stage 8B audit is complete for deployed/upstream
+  RAGFlow `v0.25.5`. Overlap remains runtime-only and not API-writable; automatic
+  metadata remains a contract conflict with model, cost, asynchronous execution, and
+  governance gates. No candidate is eligible for Stage 8C, and the audit made no change
+  to the local RAGFlow deployment.
 - The current open task list has 15 items across four gated categories: 2 local service or
   post-CLI host-wrapper items, 4 other post-CLI product-adapter items, 7 optional
   script-owned LLM/backend items, and 2 private dedao bridge items.

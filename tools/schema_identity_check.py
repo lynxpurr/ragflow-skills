@@ -793,6 +793,16 @@ EXPECTED_IDENTITIES = (
         source_roots=(Path("tools/version_date_drift_check.py"),),
     ),
     SchemaIdentity(
+        key="parameter_contract_audit",
+        group="kb_build",
+        identity="ragflow_parameter_contract_audit_v1",
+        source_patterns=("ragflow_parameter_contract_audit_v1", "SCHEMA"),
+        coverage_patterns=("ragflow_parameter_contract_audit_v1", "audit_parameter_contract"),
+        description="Offline version-bound audit of RAGFlow overlap and automatic-metadata contract layers.",
+        source_roots=(Path("tools/ragflow_parameter_contract_audit.py"),),
+        coverage_roots=(Path("packages/ragflow-skill-runtime/tests/test_ragflow_parameter_contract_audit.py"),),
+    ),
+    SchemaIdentity(
         key="generated_report_safety_check",
         group="release",
         identity="ragflow_generated_report_safety_check_v1",
