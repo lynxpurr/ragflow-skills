@@ -2172,12 +2172,14 @@ Completed offline maintenance:
 - the command inventories remain at 104 surfaces: runtime resilience is 22 covered and
   82 not-applicable; report-surface governance is 95 covered and 9 not-applicable.
 
-Remaining gates:
+Remaining gates after the completed Stage 8B audit:
 
-- investigate overlap and automatic metadata only from a pinned RAGFlow OpenAPI or server
-  request model before adding a writable mapping;
-- classify automatic metadata for model/provider, cost, asynchronous execution, and
-  governance effects before treating it as a normal dataset setting;
+- keep overlap blocked on RAGFlow `v0.25.5` because the runtime field is absent from the
+  strict dataset request model, and reopen it only for a newly pinned contract that
+  explicitly declares one writable payload shape;
+- keep automatic metadata blocked on RAGFlow `v0.25.5` because the request, service,
+  frontend, persistence, and runtime layers conflict and the model/provider, cost,
+  asynchronous execution, and governance gates remain unresolved;
 - keep PageIndex, table-to-HTML, layout, and other DeepDoc/native controls on a separate
   explicit approval path;
 - keep disposable live validation, retrieval evidence, cleanup, and public-safe live

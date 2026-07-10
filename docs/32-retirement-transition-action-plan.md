@@ -1,7 +1,8 @@
 # RAGFlux And ragflow-kb-ops Retirement Transition Action Plan
 
-Status: active transition plan
+Status: active broad-corpus transition observation; representative-sample checkpoint complete
 Date: 2026-07-08
+Last calibrated: 2026-07-11
 
 ## Objective / Scope / Boundaries
 
@@ -263,33 +264,33 @@ evidence exists and validation has been run.
 ### Baseline And Evidence
 
 - [ ] Create or identify one public-safe transition record for each required sample class.
-- [ ] Record retained RAGFlux package comparison for at least the representative document
+- [x] Record retained RAGFlux package comparison for at least the representative document
   classes where RAGFlux was historically used.
-- [ ] Record retired `ragflow-kb-ops` comparison evidence only where it reveals current
+- [x] Record retired `ragflow-kb-ops` comparison evidence only where it reveals current
   suite reporting or validation needs.
 - [ ] Aggregate at least five meaningful transition runs with `tools/field_trial_metrics.py`.
 
 ### Current-Suite Handoff Quality
 
-- [ ] Confirm formal `doc-to-md` outputs include local assets, quality report, runtime
+- [x] Confirm formal `doc-to-md` outputs include local assets, quality report, runtime
   report, retrieval hints, chunk profile report, and ingest plan for representative
   formal-ingest samples.
-- [ ] Confirm `PASS_WITH_REVIEW` warnings stay specific and actionable for table-heavy or
+- [x] Confirm `PASS_WITH_REVIEW` warnings stay specific and actionable for table-heavy or
   low-quality OCR samples.
 - [ ] Confirm no sample class has unexplained missing image assets or empty Markdown.
 
 ### Current-Suite KB Build Quality
 
-- [ ] Confirm `inspect-handoff` readiness aligns with dry-run outcomes.
-- [ ] Confirm requested/effective parser profile visibility exists for live or observed
+- [x] Confirm `inspect-handoff` readiness aligns with dry-run outcomes.
+- [x] Confirm requested/effective parser profile visibility exists for live or observed
   parse evidence.
-- [ ] Confirm current `snapshot-chunks` review covers table fragmentation, duplicate
+- [x] Confirm current `snapshot-chunks` review covers table fragmentation, duplicate
   table-like chunks, missing table evidence, visible delimiters, and image-only chunks.
-- [ ] Confirm disposable cleanup succeeds for every approved live transition run.
+- [x] Confirm disposable cleanup succeeds for every approved live transition run.
 
 ### Retrieval Quality
 
-- [ ] Confirm smoke validation passes for every approved live transition KB.
+- [x] Confirm smoke validation passes for every approved live transition KB.
 - [ ] Confirm benchmark or regression validation exists for at least the highest-risk
   sample classes.
 - [ ] Confirm zero-result, wrong-document, pollution, strict chunk recall, and citation
@@ -297,11 +298,35 @@ evidence exists and validation has been run.
 
 ### Release And Safety
 
-- [ ] Run release-facing checks before declaring either legacy skill fully retired from
+- [x] Run release-facing checks before declaring either legacy skill fully retired from
   the default workflow.
-- [ ] Run targeted redaction scans before publishing any transition summary.
-- [ ] Confirm no public docs or reports contain live endpoints, keys, private paths,
+- [x] Run targeted redaction scans before publishing any transition summary.
+- [x] Confirm no public docs or reports contain live endpoints, keys, private paths,
   dataset identifiers, document identifiers, KB names, or raw retrieved chunks.
+
+### 2026-07-11 Checklist Calibration
+
+The twelve completed rows above are closed only for the existing representative-sample
+and current implementation scope. They are supported by the Phase 41 representative PDF
+field trial, the retained-package and retired-consumer records in
+`docs/15-field-trial-observation-plan.md`, the current requested/effective parameter
+audit, focused `snapshot-chunks` tests, cleanup/smoke evidence, and release/redaction
+gates. The retained RAGFlux evidence is a static package comparison plus a live current
+replacement-path run; a strict paired live RAGFlux/RAGFlow A/B was not run.
+
+Five observation items remain open:
+
+- complete the required sample-class matrix;
+- aggregate at least five meaningful transition runs;
+- confirm that every covered sample class has no unexplained empty Markdown or missing
+  assets;
+- add benchmark or regression evidence for the highest-risk sample classes;
+- review zero-result, wrong-document, pollution, strict chunk recall, and citation
+  support before defaulting a new profile or handoff mode.
+
+These open rows preserve the distinction between representative-sample acceptance and a
+broad corpus-quality guarantee. They do not reopen legacy-skill maintenance or authorize
+live mutation, paired live A/B, provider/LLM work, or post-CLI adapters.
 
 ## Retirement Decision Gates
 

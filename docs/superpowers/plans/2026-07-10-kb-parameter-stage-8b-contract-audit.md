@@ -1,5 +1,9 @@
 # KB Parameter Stage 8B Contract Audit Implementation Plan
 
+Status: completed
+Implementation commit: `7bd0b94`
+Independent Hermes L0 corroboration recorded by: `f9daf91`
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a deterministic offline audit that compares deployed and upstream RAGFlow source contracts for overlap and automatic metadata, records the v0.25.5 conflict evidence, and produces a safe Hermes L0 replay instruction without enabling live mutation.

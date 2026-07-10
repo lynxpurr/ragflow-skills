@@ -1,7 +1,8 @@
 # Dedao/Pandoc EPUB Quality Improvement Plan
 
-Status: active improvement plan
+Status: complete for P0-P2 public offline work; next-round tracks remain separately gated
 Date: 2026-07-08
+Completed: 2026-07-09
 Scope: `ragflow-doc-to-md` -> `ragflow-kb-build`
 
 ## Objective / Scope / Boundaries

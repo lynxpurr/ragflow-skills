@@ -2,6 +2,7 @@
 
 Status: active roadmap for v0.2+
 Date: 2026-06-24
+Last calibrated: 2026-07-11
 
 ## Objective
 
@@ -512,7 +513,7 @@ Tasks:
 - [x] Add `segment-plan` command.
 - [x] Add `split` command that materializes `segments/*.md`.
 - [x] Add consumer acceptance coverage for quality reports and segmentation commands.
-- [ ] Add optional manifest rewrite/package mode for split outputs.
+- [x] Add optional manifest rewrite/package mode for split outputs.
 
 Exit criteria:
 
@@ -521,7 +522,9 @@ Exit criteria:
 
 Implementation note:
 
-- The current MVP keeps segmentation manifest rewriting deferred. This avoids surprising mutation of an existing handoff while still allowing safe ingestion of `segments/*.md`.
+- Split can preserve the original segment-directory path or write a separate split
+  `doc_manifest.json` through `--manifest-output`; it does not rewrite the source handoff
+  in place. Consumer acceptance and platform smoke cover the packaged path.
 
 ### Phase 14: RAGFlow Diagnostics and Safe Maintenance
 
@@ -609,7 +612,7 @@ Tasks:
 - [x] Add `ragflow-query route-test`.
 - [x] Wire `ask --mode auto` to the route resolver.
 - [x] Add deterministic route regression fixtures.
-- [ ] Add optional centroid fields without requiring centroid computation.
+- [x] Add optional centroid fields without requiring centroid computation.
 
 Exit criteria:
 
@@ -617,7 +620,10 @@ Exit criteria:
 
 Implementation note:
 
-- The current MVP uses deterministic hint/token scoring, optional default KB fallback, route-test accuracy reports, and route-selected retrieval params. Explicit `--dataset-id`, `--kb`, and `--kb-manifest` still take precedence. Regex hints and centroid routing remain deferred.
+- Deterministic hint/token routing remains the default, while optional user-owned centroid
+  indexes can break equal positive-hint ties. `centroid build --plan-only` requires no
+  embedding call, bounded execution consumes only user-owned vectors, and explicit
+  `--dataset-id`, `--kb`, and `--kb-manifest` still take precedence.
 
 ### Phase 18: Agentic Observability
 

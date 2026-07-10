@@ -1,7 +1,9 @@
 # KB Parameter Stage 8B Contract Audit Design
 
-Status: approved design
+Status: implemented and independently corroborated
 Date: 2026-07-10
+Implementation commit: `7bd0b94`
+Hermes L0 corroboration recorded by: `f9daf91`
 
 ## Objective
 

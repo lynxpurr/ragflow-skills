@@ -2,6 +2,7 @@
 
 Status: active KB parameter materialization plan; Stage 8B offline contract audit complete, Stage 8C remains contract- and approval-gated
 Date: 2026-07-10
+Last calibrated: 2026-07-11
 
 ## Objective / Scope / Boundaries
 
@@ -208,13 +209,21 @@ Acceptance target:
       candidate UI/parser fields and why each is materialized or not.
 - [x] Incorporate Stage 7 live rejection evidence for image/table context
       windows and classify them as read-only server defaults.
-- [ ] Add reviewed materialization for future confirmed writable fields only.
-- [ ] Run a disposable live validation for confirmed fields after explicit user
-      approval.
-- [ ] Record retrieval and read-back evidence in public-safe retention artifacts.
-- [ ] Keep DeepDoc/native parser options as a separate approval path unless the
-      current run explicitly targets DeepDoc.
-- [ ] Update user-facing guidance after implementation and verification.
+- [ ] **Conditional / contract-blocked:** Add reviewed materialization for future
+      confirmed writable fields only.
+- [ ] **Live-gated:** Run a disposable live validation for confirmed fields after
+      explicit user approval.
+- [ ] **Depends on approved live validation:** Record retrieval and read-back evidence
+      in public-safe retention artifacts.
+- [ ] **Continuing invariant:** Keep DeepDoc/native parser options as a separate approval
+      path unless the current run explicitly targets DeepDoc.
+- [ ] **Post-materialization closeout:** Update user-facing guidance after implementation
+      and verification.
+
+The five open rows are not five ordinary offline implementation tasks. On the reviewed
+RAGFlow `v0.25.5` contract there are zero Stage 8C-eligible candidates, so the first three
+and final guidance row have no executable materialization slice. The DeepDoc row is a
+continuing safety boundary rather than a feature waiting to be implemented.
 
 ## Current Development Progress
 
@@ -284,8 +293,9 @@ Read-only Stage 6 evidence incorporated on 2026-07-10:
   behavior.
 - `parser_config.pages` was observed for PageIndex, but it was null for the
   Markdown handoff KB, so PageIndex is classified as DeepDoc/native-path gated.
-- Automatic metadata and overlap percent remain unknown API mappings for this
-  Markdown handoff path.
+- Subsequent Stage 8B source-contract review classified overlap as
+  `runtime_only_not_api_writable` and automatic metadata as `contract_conflict` for
+  RAGFlow `v0.25.5`; neither is an unknown mapping or a Stage 8C candidate.
 
 Related completed evidence:
 
@@ -313,16 +323,16 @@ Stage 7 writable validation evidence incorporated on 2026-07-10:
   server defaults: visible in dry-run/audit reports, preserved in manifests
   when supplied for analysis, but filtered from `create_dataset()` payloads.
 
-Remaining gap:
+Remaining gap after Stage 8B:
 
 - The sidecar recommendation surface is now visible in a field-level inventory,
   requested parser settings can now be compared with read-back evidence, and
   candidate UI/parser controls are visible in dry-run and handoff-consumption
-  reports. Image/table context-window settings now have read-back API keys but
-  were rejected through the observed dataset-create payload path.
-  Other candidate UI/parser options still need writable payload confirmation,
-  fake-client coverage, and disposable live validation before they become
-  materialized settings.
+  reports. Image/table context-window settings have read-back API keys but were
+  rejected through the observed dataset-create payload path. The pinned `v0.25.5`
+  audit also blocks overlap and automatic metadata, leaving zero current Stage 8C
+  candidates. Future materialization requires a newly pinned writable contract or an
+  upstream contract change before fake-client and disposable live validation can begin.
 
 ## Validation Evidence / Residual Gated Work
 
@@ -436,25 +446,19 @@ public-safe live retention checklist item. That item still requires an approved
 run to produce correlated read-back, retrieval, cleanup, and contract/version
 artifacts.
 
-### Stage 8B - Version-Bound API Contract Discovery
+### Stage 8B - Version-Bound API Contract Discovery (Complete)
 
-The next normal candidate search should stay within the Markdown handoff path
-and focus on only two unresolved controls:
+The pinned RAGFlow `v0.25.5` source-contract audit completed the Markdown-handoff
+candidate search for overlap and automatic metadata. Overlap is
+`runtime_only_not_api_writable`; automatic metadata is `contract_conflict` with
+model/provider, potential cost, asynchronous per-chunk parse work, reparse, and metadata
+governance side effects. No candidate is eligible for Stage 8C.
 
-- overlap percent or its actual API equivalent;
-- automatic metadata if RAGFlow exposes a safe dataset-level writable field.
-
-For each candidate, inspect a pinned RAGFlow version's OpenAPI definition,
-server request model, or equivalent read-only contract evidence. Record the
-exact key, payload level, type, default behavior, parser-path scope, and
-create/update/read-back expectations. Read-back visibility alone is not proof
-of writeability. If no writable contract is found, retain the current blocked
-classification instead of inventing a payload mapping.
-
-Automatic metadata must also be classified for model/provider calls, cost,
-asynchronous work, and metadata-governance semantics before it can be treated as
-an ordinary dataset setting. Stage 8B remains read-only contract discovery; it
-does not authorize write probes or disposable KB creation.
+This result remains version-bound. Reopen contract discovery only when the deployed
+RAGFlow version changes or an upstream contract change explicitly aligns the request,
+service, persistence, frontend, and runtime layers. Read-back or runtime visibility alone
+is not proof of writeability, and a new audit still does not authorize write probes or
+disposable KB creation.
 
 PageIndex, table-to-HTML, `pages`, `html4excel`, layout controls, and other
 DeepDoc/native settings remain outside this Markdown-handoff stage. They require
@@ -478,11 +482,12 @@ Only after one candidate has an exact version-bound writable contract:
 6. Update user-facing guidance and close checklist items only after the full
    implementation, validation, cleanup, and sanitized evidence chain passes.
 
-Stage 8A is complete after its implementation and release-facing validation
-pass. The wider Stage 8 plan remains active until a candidate mapping is
-version-bound, positive and negative payload tests pass, benchmark evidence is
-strong enough to detect regressions, and any approved live resources are
-cleaned up with correlated read-back evidence.
+Stage 8A and Stage 8B are complete after implementation, release-facing validation, and
+independent L0 corroboration. The wider Stage 8 plan remains conditionally open, but with
+zero current candidates there is no Stage 8C materialization task to execute. If a future
+version produces a writable candidate, positive and negative payload tests, stronger
+benchmark evidence, explicit live approval, cleanup, and correlated read-back evidence
+remain mandatory.
 
 ### Stage 8B Implementation And Hermes L0 Corroboration Record
 

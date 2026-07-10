@@ -1,5 +1,8 @@
 # KB Parameter Stage 8A Implementation Plan
 
+Status: completed
+Implementation commit: `efa4b89`
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Close the offline documentation drift and add public-safe evidence binding to the existing KB parameter read-back audit without enabling live RAGFlow mutation.

@@ -1,7 +1,8 @@
 # Hermes E2E Improvement Follow-Up Plan
 
-Status: P0 retest closed; P1 improvement tracking active
+Status: P0/P1 complete; optional P2 routing validation remains request-gated
 Date: 2026-07-08
+Last calibrated: 2026-07-11
 Scope: `ragflow-doc-to-md` -> `ragflow-kb-build`
 
 ## Objective / Scope / Boundaries
@@ -173,8 +174,8 @@ Run deployment-specific checks only after the focused P0 chain passes:
   built with a model-neutral profile (`profile_embedding_model_missing`); this is a
   reviewed finding, not a rebuild blocker — future builds that use the model-specific
   profile template will carry embedding-model evidence into the manifest.
-- [ ] Keep route config, route tests, and `ragflow-query` validation as optional follow-up
-  scope unless the user asks to test retrieval routing.
+- [ ] **Optional / request-gated:** Keep route config, route tests, and `ragflow-query`
+  validation as follow-up scope unless the user asks to test retrieval routing.
 
 ## Current Development Progress
 
