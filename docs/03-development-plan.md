@@ -2214,3 +2214,10 @@ and L2 disposable mutation require separate approval and cannot be inferred from
 pass. Until a new version-bound writable contract exists, the ordinary next work is
 release-health observation or optional Hermes L0 corroboration, not Stage 8C
 materialization.
+
+The Hermes L0 replay independently reproduced the 8/8 source parity and both blocked
+classifications without calling or modifying RAGFlow. Maintainer review accepted the
+generated audit artifacts but rejected the original agent-authored prose as public-safe
+evidence because it disclosed private execution identifiers and created unauthorized,
+technically incorrect repository documentation. Those repository changes were discarded;
+the replay changes neither the 586/601 roadmap count nor the Stage 8C gate.

@@ -1,6 +1,6 @@
 # RAGFlow KB Parameter Materialization Plan
 
-Status: active KB parameter materialization plan; Stage 8A offline closeout complete, Stage 8B contract audit design approved
+Status: active KB parameter materialization plan; Stage 8B offline contract audit complete, Stage 8C remains contract- and approval-gated
 Date: 2026-07-10
 
 ## Objective / Scope / Boundaries
@@ -483,3 +483,41 @@ pass. The wider Stage 8 plan remains active until a candidate mapping is
 version-bound, positive and negative payload tests pass, benchmark evidence is
 strong enough to detect regressions, and any approved live resources are
 cleaned up with correlated read-back evidence.
+
+### Stage 8B Implementation And Hermes L0 Corroboration Record
+
+Stage 8B is complete for deployed/upstream RAGFlow `v0.25.5`. The local audit
+and an independent Hermes L0 replay both established:
+
+- all 8 required deployment/upstream source-file pairs are present and have
+  identical SHA-256 digests;
+- overlap is `runtime_only_not_api_writable` because the frontend and Markdown
+  runtime consume `parser_config.overlapped_percent`, while strict
+  `ParserConfig(extra="forbid")` does not declare it;
+- automatic metadata is `contract_conflict` across the top-level request,
+  strict parser model, frontend payload, legacy service mapping, dedicated
+  persistence route, and asynchronous LLM-backed runtime path;
+- 0 candidates are Stage 8C eligible;
+- the replay made 0 RAGFlow API calls, 0 RAGFlow writes, and 0 script-owned
+  LLM/RAGAS calls. It copied only the eight approved source files out of the
+  deployment and did not modify the local RAGFlow container, image,
+  configuration, environment, database, datasets, or documents;
+- the committed focused suite passed 9 tests and 5 subtests, while the owning
+  Stage 8B validation passed 682 runtime tests and 11 subtests, 105 schema
+  identities, both 104-command inventories, and release hygiene with 0
+  findings.
+
+The generated audit JSON, Markdown, and redaction sidecar are accepted as
+private corroborating evidence. The original Hermes prose summary is not a
+public-safe artifact: it disclosed a deployment identifier and an absolute
+host path, wrote its private run root inside the ignored repository `.local`
+directory instead of outside the repository, and modified three repository
+documents after its initial clean-worktree check. Maintainer review discarded
+those unauthorized and technically incorrect document changes and retained
+only the sanitized audit facts above.
+
+This corroboration does not authorize L1 read-only HTTP evidence, Stage 8C
+materialization, or L2 disposable mutation. Future Hermes runs must use a
+repository-external private run root, avoid repository edits, sanitize the
+agent-authored final prose separately from tool sidecars, and run a final
+`git status --short --branch` after all reporting work.

@@ -235,6 +235,14 @@ optional Hermes L0 source-audit replay. Any L1 read-only HTTP evidence, Stage 8C
 materialization, or disposable validation still requires its own satisfied contract and
 approval gate.
 
+The first Hermes L0 replay reproduced all 8 source digests and both blocked
+classifications with no RAGFlow call or deployment mutation. Its generated audit
+artifacts are valid private corroboration, but the agent-authored prose and post-run
+repository edits failed public-report hygiene. Maintainer review removed the unauthorized
+and incorrect edits and retained only sanitized facts. Future replays must use a private
+run root outside the repository, avoid repository modification, sanitize final prose, and
+verify final worktree state after reporting.
+
 ## Closeout Conclusion
 
 The project is no longer in a broad feature-construction phase. The current public suite
