@@ -14,7 +14,14 @@ from typing import Any, Mapping
 import zipfile
 
 from .manifests import DocManifest, KbDocumentEntry, KbManifest, ManifestError, load_kb_manifest
-from .profiles import ChunkProfile, ProfileError, SUPPORTED_PARSER_KEYS, load_profile, normalize_profile_language
+from .profiles import (
+    ChunkProfile,
+    ProfileError,
+    READ_ONLY_SERVER_DEFAULT_PARSER_KEYS,
+    SUPPORTED_PARSER_KEYS,
+    load_profile,
+    normalize_profile_language,
+)
 
 BUILD_PAYLOAD_PREVIEW_SCHEMA = "ragflow_kb_build_payload_preview_v1"
 HANDOFF_CONSUMPTION_STATUS_SCHEMA = "ragflow_handoff_consumption_status_v1"
@@ -284,6 +291,7 @@ PARAMETER_MATERIALIZATION_STATUS_VALUES = (
     "local_audit_only",
     "advisory_after_build",
     "unsupported_or_gated",
+    "read_only_server_default",
     "native_parser_only",
     "unknown_api_mapping",
 )
@@ -299,17 +307,17 @@ KNOWN_RAGFLOW_UI_CONTROLS = (
     (
         "ragflow_ui.image_context_window",
         "Image context window",
-        "unsupported_or_gated",
+        "read_only_server_default",
         "markdown_handoff",
-        "image_context_window_api_key_confirmed_write_gated",
+        "image_context_window_is_read_only_server_default",
         "parser_config.image_context_size",
     ),
     (
         "ragflow_ui.table_context_window",
         "Table context window",
-        "unsupported_or_gated",
+        "read_only_server_default",
         "markdown_handoff",
-        "table_context_window_api_key_confirmed_write_gated",
+        "table_context_window_is_read_only_server_default",
         "parser_config.table_context_size",
     ),
     (
@@ -348,8 +356,6 @@ PARAMETER_READ_BACK_AUDIT_STATUS_VALUES = (
 )
 READ_BACK_DETAIL_NESTED_KEYS = ("dataset", "kb", "knowledgebase", "knowledge_base", "detail", "details", "summary")
 READ_BACK_PARSER_CONFIG_KEYS = ("parser_config", "parserConfig")
-
-
 def _known_ragflow_ui_control_fields() -> list[dict[str, Any]]:
     fields: list[dict[str, Any]] = []
     for field, label, status, scope, reason, api_key in KNOWN_RAGFLOW_UI_CONTROLS:
@@ -374,6 +380,22 @@ def _field_status_counts(fields: list[Mapping[str, Any]], statuses: tuple[str, .
         status: sum(1 for item in fields if item.get("status") == status)
         for status in statuses
     }
+
+
+def _parser_config_field_status(key: str) -> tuple[str, str | None, str | None]:
+    if key in SUPPORTED_PARSER_KEYS:
+        return "materialized_to_ragflow", f"dataset.parser_config.{key}", None
+    if key in READ_ONLY_SERVER_DEFAULT_PARSER_KEYS:
+        return "read_only_server_default", None, "ragflow_api_rejects_create_or_update_for_read_only_server_default"
+    return "unsupported_or_gated", None, "unsupported_parser_config_key"
+
+
+def _required_verification_for_parser_status(status: str) -> tuple[str, ...]:
+    if status == "materialized_to_ragflow":
+        return ("fake_client_dataset_payload", "ragflow_read_back_audit")
+    if status == "read_only_server_default":
+        return ("ragflow_live_rejection_evidence",)
+    return ("api_field_mapping_confirmation",)
 
 
 def _read_back_roots(payload: Mapping[str, Any]) -> list[tuple[str, Mapping[str, Any]]]:
@@ -576,6 +598,15 @@ def create_parameter_read_back_audit(
                     record["observed_source"] = parser_config_source or "observed_state.parser_config"
                     if key in observed_parser_config:
                         record["observed_value"] = observed_parser_config.get(key)
+            elif status == "read_only_server_default" and observed_parser_config_available:
+                field_name = str(item.get("field") or "")
+                prefix = "profile.parser_config."
+                if field_name.startswith(prefix):
+                    key = field_name[len(prefix) :]
+                    if key in READ_ONLY_SERVER_DEFAULT_PARSER_KEYS:
+                        record["observed_source"] = parser_config_source or "observed_state.parser_config"
+                        if key in observed_parser_config:
+                            record["observed_value"] = observed_parser_config.get(key)
             if "value" in item:
                 record["requested_value"] = item.get("value")
             add_field(record)
@@ -816,20 +847,16 @@ def make_parameter_materialization_inventory(
                 required_verification=("dry_run_payload_preview",),
             )
             continue
-        status = "materialized_to_ragflow" if key in SUPPORTED_PARSER_KEYS else "unsupported_or_gated"
+        status, target, reason = _parser_config_field_status(key)
         add_field(
             field,
             status=status,
             source=field,
-            target=f"dataset.parser_config.{key}" if status == "materialized_to_ragflow" else None,
+            target=target,
             parser_path_scope="markdown_handoff",
             value=value,
-            reason=None if status == "materialized_to_ragflow" else "unsupported_parser_config_key",
-            required_verification=(
-                ("fake_client_dataset_payload", "ragflow_read_back_audit")
-                if status == "materialized_to_ragflow"
-                else ("api_field_mapping_confirmation",)
-            ),
+            reason=reason,
+            required_verification=_required_verification_for_parser_status(status),
         )
 
     add_field(
@@ -996,6 +1023,7 @@ def make_parameter_materialization_inventory(
             "status_counts": status_counts,
             "parser_path_scope_counts": parser_path_scope_counts,
             "materialized_to_ragflow_count": status_counts["materialized_to_ragflow"],
+            "read_only_server_default_count": status_counts["read_only_server_default"],
             "unknown_api_mapping_count": status_counts["unknown_api_mapping"],
             "native_parser_only_count": status_counts["native_parser_only"],
         },
@@ -1085,14 +1113,14 @@ def make_build_payload_preview(
                 reason="internal_parser_metadata_not_sent",
             )
             continue
-        status = "materialized_to_ragflow" if key in SUPPORTED_PARSER_KEYS else "unsupported_or_gated"
+        status, target, reason = _parser_config_field_status(key)
         add_field(
             field,
             status=status,
             source=field,
-            target=f"dataset.parser_config.{key}" if status == "materialized_to_ragflow" else None,
+            target=target,
             value=value,
-            reason=None if status == "materialized_to_ragflow" else "unsupported_parser_config_key",
+            reason=reason,
         )
     add_field(
         "chunk_overlap",
@@ -1168,6 +1196,7 @@ def make_build_payload_preview(
             "local_only_field_count": status_counts["local_audit_only"],
             "advisory_field_count": status_counts["advisory_after_build"],
             "unsupported_or_gated_field_count": status_counts["unsupported_or_gated"],
+            "read_only_server_default_field_count": status_counts["read_only_server_default"],
             "unknown_api_mapping_field_count": status_counts["unknown_api_mapping"],
             "native_parser_only_field_count": status_counts["native_parser_only"],
             "retrieval_hint_keyword_candidate_count": _retrieval_hint_count(retrieval_hints, "keyword_candidates"),

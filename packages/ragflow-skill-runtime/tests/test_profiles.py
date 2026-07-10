@@ -88,9 +88,9 @@ class ProfileTests(unittest.TestCase):
         self.assertNotIn("page_index", payload["parser_config"])
         self.assertNotIn("table_to_html", payload["parser_config"])
         self.assertNotIn("layout_recognize", payload["parser_config"])
+        self.assertNotIn("image_context_size", payload["parser_config"])
+        self.assertNotIn("table_context_size", payload["parser_config"])
         self.assertEqual(payload["parser_config"]["chunk_token_num"], 512)
-        self.assertEqual(payload["parser_config"]["image_context_size"], 1)
-        self.assertEqual(payload["parser_config"]["table_context_size"], 2)
         self.assertEqual(manifest["parser_config"]["image_context_size"], 1)
         self.assertEqual(manifest["parser_config"]["table_context_size"], 2)
         self.assertTrue(manifest["parser_config"]["page_index"])
@@ -120,11 +120,11 @@ class ProfileTests(unittest.TestCase):
         codes = {issue.code for issue in report.issues}
         payload = profile.to_dataset_payload()
 
-        self.assertTrue(report.ok)
-        self.assertNotIn("unsupported_parser_key", codes)
+        self.assertFalse(report.ok)
+        self.assertIn("unsupported_parser_key", codes)
         self.assertEqual(payload["parser_config"]["delimiter"], "`<!-- chunk -->`")
-        self.assertEqual(payload["parser_config"]["image_context_size"], 1)
-        self.assertEqual(payload["parser_config"]["table_context_size"], 2)
+        self.assertNotIn("image_context_size", payload["parser_config"])
+        self.assertNotIn("table_context_size", payload["parser_config"])
 
     def test_lint_profile_rejects_negative_context_window_sizes(self) -> None:
         profile = ChunkProfile.from_dict(

@@ -1,6 +1,6 @@
 # RAGFlow KB Parameter Materialization Plan
 
-Status: active KB parameter materialization plan; P0 complete, P1 read-back discovery incorporated
+Status: active KB parameter materialization plan; P0 complete, Stage 7 read-only default evidence incorporated
 Date: 2026-07-10
 
 ## Objective / Scope / Boundaries
@@ -68,7 +68,9 @@ Current supported parser materialization is intentionally narrow:
 
 Other evidence is currently surfaced through preview, readiness, handoff
 consumption status, or recommendations. This avoids silently writing fields
-whose API behavior has not been confirmed.
+whose writable API behavior has not been confirmed. Fields that are visible in
+read-back but rejected by create/update payloads are classified separately as
+read-only server defaults.
 
 ## Current Field Classification
 
@@ -88,8 +90,8 @@ whose API behavior has not been confirmed.
 | `retrieval_hints.table_artifacts` | Advisory | Used for review and table sizing; not yet mapped to native table parser settings. |
 | `metadata.json` | Local audit/advisory | Not automatically written as RAGFlow automatic metadata. |
 | PageIndex | Native-parser-only / DeepDoc-gated | Stage 6 read-back observed `parser_config.pages`, but it is null for Markdown handoff KBs. |
-| Image/table context window settings | API mapping observed, write-gated | Stage 6 read-back mapped these to `parser_config.image_context_size` and `parser_config.table_context_size`; non-zero write behavior still needs fake-client and disposable live validation before materialization. |
-| Table-to-HTML setting | Unknown / likely parser-path-specific | May belong to native PDF/DeepDoc parsing rather than Markdown handoff. |
+| Image/table context window settings | Read-only server defaults | Stage 6 mapped these to `parser_config.image_context_size` and `parser_config.table_context_size`; Stage 7 showed create/update rejects these keys when present, while the server auto-populates default read-back values when they are omitted. |
+| Table-to-HTML setting | Native-parser-only / DeepDoc-gated | Belongs to native PDF/DeepDoc parsing rather than the Markdown handoff create payload. |
 | DeepDoc native parser settings | Separately gated | Requires explicit DeepDoc live baseline approval. |
 
 ## Update Plan
@@ -104,6 +106,7 @@ recommendation and its current disposition:
 - `local_audit_only`;
 - `advisory_after_build`;
 - `unsupported_or_gated`;
+- `read_only_server_default`;
 - `native_parser_only`;
 - `unknown_api_mapping`.
 
@@ -153,9 +156,13 @@ Candidate fields:
 - overlap percent or API-equivalent overlap setting;
 - automatic metadata if the API supports a safe dataset-level field;
 - PageIndex if the API supports it for the selected parser path;
-- image/table context window settings if the API supports them and retrieval
-  evidence justifies the change;
 - table parser settings only when parser-path compatibility is proven.
+
+Excluded by Stage 7 evidence:
+
+- image/table context window settings are API-visible but not writable through
+  the observed create/update payload path, so they must not be added to
+  `SUPPORTED_PARSER_KEYS` unless a future RAGFlow API contract changes.
 
 Acceptance target:
 
@@ -195,10 +202,13 @@ Acceptance target:
       current materialization status, parser-path scope, and required
       verification.
 - [x] Add a read-only KB parameter read-back audit with public-safe redaction.
-- [x] Add fake-client tests for any newly writable parser or dataset fields.
+- [x] Add fake-client tests and payload guards for candidate parser or dataset
+      fields.
 - [x] Extend `build_payload_preview` and handoff consumption status to show
       candidate UI/parser fields and why each is materialized or not.
-- [ ] Add reviewed materialization for confirmed fields only.
+- [x] Incorporate Stage 7 live rejection evidence for image/table context
+      windows and classify them as read-only server defaults.
+- [ ] Add reviewed materialization for future confirmed writable fields only.
 - [ ] Run a disposable live validation for confirmed fields after explicit user
       approval.
 - [ ] Record retrieval and read-back evidence in public-safe retention artifacts.
@@ -270,9 +280,8 @@ Read-only Stage 6 evidence incorporated on 2026-07-10:
 - `parser_config.image_context_size` and
   `parser_config.table_context_size` were observed as API-visible mappings for
   the image and table context-window UI controls, so these controls are no
-  longer classified as unknown mappings. They remain write-gated until
-  fake-client payload coverage and disposable live validation prove non-zero
-  values are accepted and useful.
+  longer classified as unknown mappings. Stage 6 alone did not prove writable
+  behavior.
 - `parser_config.pages` was observed for PageIndex, but it was null for the
   Markdown handoff KB, so PageIndex is classified as DeepDoc/native-path gated.
 - Automatic metadata and overlap percent remain unknown API mappings for this
@@ -288,22 +297,40 @@ Related completed evidence:
   benchmark evidence path and completed the first exploratory Open RAG Benchmark
   seed through a disposable live comparison.
 
+Stage 7 writable validation evidence incorporated on 2026-07-10:
+
+- A disposable live validation was attempted for four context-window profiles:
+  a zero-value control and three non-zero image/table combinations.
+- RAGFlow rejected every create payload that included
+  `parser_config.image_context_size` or `parser_config.table_context_size`,
+  including zero values, with an extra-input validation error.
+- No disposable KB was created, so no retrieval comparison or cleanup deletion
+  was needed for these profiles.
+- Creating the same Markdown handoff profile without these keys remains the
+  supported path; RAGFlow read-back may still show server-populated default
+  values.
+- Code and public guidance must therefore treat these fields as read-only
+  server defaults: visible in dry-run/audit reports, preserved in manifests
+  when supplied for analysis, but filtered from `create_dataset()` payloads.
+
 Remaining gap:
 
 - The sidecar recommendation surface is now visible in a field-level inventory,
   requested parser settings can now be compared with read-back evidence, and
   candidate UI/parser controls are visible in dry-run and handoff-consumption
-  reports. Some candidate UI/parser options now have read-back API keys, but
-  they still need writable payload confirmation, fake-client coverage, and
-  disposable live validation before they become materialized settings.
+  reports. Image/table context-window settings now have read-back API keys but
+  are explicitly not writable through the observed create/update payload path.
+  Other candidate UI/parser options still need writable payload confirmation,
+  fake-client coverage, and disposable live validation before they become
+  materialized settings.
 
 ## Validation Evidence / Residual Gated Work
 
-Verified on 2026-07-10 for the P1 offline guard-visibility slice:
+Verified on 2026-07-10 for the Stage 7 read-only server-default repair:
 
 - `python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/profiles.py packages/ragflow-skill-runtime/src/ragflow_skill_runtime/kb_build.py skills/ragflow-kb-build/scripts/build.py`;
 - `python3 -m pytest packages/ragflow-skill-runtime/tests -q` passed with
-  668 tests and 6 subtests;
+  669 tests and 6 subtests;
 - `python3 tools/schema_identity_check.py --report-json <temporary-report-json>`;
 - `python3 tools/release_hygiene_check.py`;
 - `git diff --check`;

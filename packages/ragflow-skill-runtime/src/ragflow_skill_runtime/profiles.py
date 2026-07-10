@@ -23,6 +23,8 @@ SUPPORTED_PARSER_KEYS = {
     "auto_keywords",
     "auto_questions",
     "delimiter",
+}
+READ_ONLY_SERVER_DEFAULT_PARSER_KEYS = {
     "image_context_size",
     "table_context_size",
 }
@@ -357,13 +359,22 @@ def lint_profile(profile: ChunkProfile) -> ProfileLintReport:
             )
             continue
         if key not in SUPPORTED_PARSER_KEYS:
+            read_only_server_default = key in READ_ONLY_SERVER_DEFAULT_PARSER_KEYS
             issues.append(
                 ProfileIssue(
-                    severity="warning",
+                    severity="error" if read_only_server_default else "warning",
                     code="unsupported_parser_key",
                     field=f"parser_config.{key}",
-                    message="parser_config key is not part of the public profile contract",
-                    recommendation="Keep provider-specific parser keys only when a live probe or benchmark requires them.",
+                    message=(
+                        "parser_config key is a read-only server default and is rejected in create/update payloads"
+                        if read_only_server_default
+                        else "parser_config key is not part of the writable public profile contract"
+                    ),
+                    recommendation=(
+                        "Keep this key in manifests and read-back audits only; do not send it in create/update payloads."
+                        if read_only_server_default
+                        else "Keep provider-specific parser keys in manifests only until API write support is proven."
+                    ),
                 )
             )
 

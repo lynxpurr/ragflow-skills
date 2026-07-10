@@ -310,8 +310,23 @@ python scripts/convert.py adaptive \
 `chunk-markers-dense` 后处理在 Markdown 中插入数百个 `<!-- chunk -->` 语义边界标记。但 `default-zh-768` profile 使用 naive chunker 按 token 数切分，完全忽略这些标记。
 
 **实测**：delimiter 模式（`parser_config.delimiter = "`<!-- chunk -->`"`）比 naive 模式 Top-1 sim 提升 +0.008，用更少的 chunks（210 vs 256）达到更高检索精度。推荐对 doc-to-md pipeline 产出的 handoff 优先使用 delimiter profile。
+### Pitfall #11: 将 image_context_size / table_context_size 写入 RAGFlow create/update payload
 
-详见 `references/pdf-pipeline-abc-benchmark-2026-07-09.md` 的 D 管线章节。
+`image_context_size` 和 `table_context_size` 是 RAGFlow **只读服务器默认字段**。它们在读回 API (`GET /datasets/{id}`) 的 `parser_config` 中出现（值恒为 0），但**不能**在 `POST /datasets` 或 `PUT /datasets/{id}` 中传入 — RAGFlow 返回 code 101 "Extra inputs are not permitted"。
+
+`to_dataset_payload()` 当前会透传 profile 中的所有 `parser_config` key，若 profile 引用了这两个字段会导致 KB 创建失败（`could not extract dataset id from RAGFlow response`）。
+
+**正确做法**：`to_dataset_payload()` 应只透传 `SUPPORTED_PARSER_KEYS`（chunk_token_num, delimiter, auto_keywords, auto_questions）。profile 中若出现 `image_context_size` 或 `table_context_size`，应在 dry-run 中标记为 `read_only_server_default` 而非 `materialized_to_ragflow`。
+
+详见 `references/ragflow-api-parameter-taxonomy.md`。
+
+### Pitfall #12: DELETE /datasets/{id} 路径返回 405
+
+RAGFlow 不支持 `DELETE /api/v1/datasets/{dataset_id}` 路径（返回 405 Method Not Allowed）。正确方式是 `DELETE /api/v1/datasets` 并在 JSON body 中传 `{"ids": ["<dataset_id>"]}`。
+
+- `references/ragflow-skills-e2e-test-checklist.md` — Hermes 端到端测试检查清单 + docs/N checklist 关闭工作流
+- `references/pdf-pipeline-abc-benchmark-2026-07-09.md` — PDF 四管线 A/B/C/D 基准对比
+- `references/ragflow-api-parameter-taxonomy.md` — RAGFlow parser_config 字段分类：可写、只读服务器默认、DeepDoc native-only、API 不可见字段
 
 ## 常用验证命令
 
