@@ -3,6 +3,12 @@
 Status: active standard-dataset integration plan; Open RAG Benchmark seed
 validated through Stage 5 disposable comparison
 Date: 2026-07-09
+Last calibrated: 2026-07-11
+
+Execution follow-up: `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`
+owns the Open RAG strict-evidence, FinanceBench offline slice, initial regression
+portfolio, transition-validation, and later Hermes replay work. This document remains the
+dataset, licensing, normalization, and benchmark-maturity design source.
 
 ## Objective
 
@@ -104,7 +110,7 @@ Current limitations and gates:
 | Stage 5 disposable enrichment comparison | Complete | Four unique effective disposable KBs were created, queried, and cleaned up after explicit approval. Public-safe retention artifacts were generated. |
 | `docs/34` disposable enrichment checklist | Complete | Stage 5 evidence closed the remaining live-gated checklist item. |
 | DeepDoc native PDF baseline | Pending / separately gated | Optional PDF-native/fallback comparison requiring separate live approval. |
-| KB parameter materialization | Pending / separate plan | Tracked in `docs/36-ragflow-kb-parameter-materialization-plan.md`; benchmark datasets provide evaluation evidence for confirmed parameter changes. |
+| KB parameter materialization | Contract-audited / conditionally blocked | `docs/36-ragflow-kb-parameter-materialization-plan.md` Stage 8B is complete for RAGFlow `v0.25.5`; zero candidates are Stage 8C eligible. Benchmark datasets remain prerequisite evaluation evidence if a future pinned contract exposes a writable candidate. |
 | Stronger Open RAG Benchmark subset | Pending | Needs more documents, more queries, expected terms, or expected chunks before promotion decisions. |
 | FinanceBench table/numeric slice | Pending | Recommended next dataset expansion for table-heavy and numeric evidence retrieval. |
 | QASPER scientific QA slice | Deferred | Useful after Open RAG Benchmark and FinanceBench adapters are stable. |
@@ -115,18 +121,20 @@ Current limitations and gates:
 
 Recommended next sequence:
 
-1. Strengthen the current Open RAG Benchmark seed by adding expected terms or
-   expected chunk hashes for the 10 existing queries.
-2. Add one small FinanceBench slice to test table-heavy, numeric, and
-   evidence-page retrieval failure modes.
-3. Convert the current seed into a pinned regression smoke baseline with stable
-   source hashes and repeatable public-safe trend reports.
-4. Use `docs/36-ragflow-kb-parameter-materialization-plan.md` to audit and
-   verify which `ragflow-doc-to-md` sidecar recommendations can become real
-   RAGFlow KB parser or UI settings.
-5. Decide separately whether a DeepDoc native PDF baseline is needed for a
-   PDF-native parser comparison. This remains live-approved and should not be
-   bundled into ordinary offline benchmark expansion.
+1. Execute the artifact-contract and explicit-input portfolio work in
+   `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`.
+2. Strengthen the current Open RAG Benchmark seed with reviewed expected terms and,
+   only when a reviewed snapshot exists, expected chunk hashes for the existing
+   stable queries.
+3. Add one bounded FinanceBench slice for table-heavy, numeric, and evidence-page
+   retrieval failure modes, then form the initial two-subset regression portfolio.
+4. Keep `docs/36-ragflow-kb-parameter-materialization-plan.md` as a conditional gate.
+   Its pinned RAGFlow `v0.25.5` Stage 8B audit is complete with zero Stage 8C-eligible
+   candidates; reopen contract discovery only for a new deployed version or an explicit
+   upstream contract change.
+5. Decide separately whether a DeepDoc native PDF baseline is needed for a PDF-native
+   parser comparison. This remains live-approved and must not be bundled into ordinary
+   offline benchmark expansion.
 
 ## Candidate Dataset Portfolio
 
@@ -955,9 +963,11 @@ The standard-dataset program is useful when it can answer these questions repeat
 ## Immediate Next Step
 
 Treat the first Open RAG Benchmark seed as a completed exploratory baseline. The next
-quality step is to strengthen the benchmark portfolio before making any profile
-promotion decision: add chunk-level or expected-term evidence to this seed, add a
-FinanceBench table/numeric slice, use
-`docs/36-ragflow-kb-parameter-materialization-plan.md` to verify parameter
-materialization, or run a separately approved DeepDoc native baseline comparison if
-PDF-native behavior is the question being tested.
+ordinary offline quality step is the independently tracked execution wave in
+`docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`: complete
+the attribution/selection contract, strengthen the seed, add a FinanceBench
+table/numeric slice, and form an explicit two-subset portfolio before any profile
+promotion decision. `docs/36-ragflow-kb-parameter-materialization-plan.md` remains
+contract-blocked with zero current Stage 8C candidates. A DeepDoc native baseline remains
+a separate, explicitly approved live comparison only when PDF-native behavior is the
+question being tested.

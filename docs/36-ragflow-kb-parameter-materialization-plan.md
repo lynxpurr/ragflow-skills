@@ -473,7 +473,10 @@ Only after one candidate has an exact version-bound writable contract:
    field without changing default profiles.
 3. Strengthen the benchmark evidence before promotion decisions. The existing
    one-document Open RAG Benchmark seed remains exploratory; add expected-term
-   or expected-chunk evidence and a small FinanceBench table/numeric slice.
+   or expected-chunk evidence and a small FinanceBench table/numeric slice. Track that
+   separate evidence round through
+   `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`;
+   benchmark progress alone does not make a field Stage 8C eligible.
 4. Request explicit approval for a disposable live run and vary one field at a
    time so acceptance and retrieval effects remain attributable.
 5. Capture create/update outcome, read-back state, retrieval metrics, cleanup

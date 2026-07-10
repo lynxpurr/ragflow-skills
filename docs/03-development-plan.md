@@ -2223,3 +2223,20 @@ generated audit artifacts but rejected the original agent-authored prose as publ
 evidence because it disclosed private execution identifiers and created unauthorized,
 technically incorrect repository documentation. Those repository changes were discarded;
 the replay changes neither the 586/601 roadmap count nor the Stage 8C gate.
+
+## 2026-07-11 Benchmark Evidence Strengthening Planning Baseline
+
+The next ordinary offline evidence round is tracked in
+`docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`, with the
+task-level execution sequence in
+`docs/superpowers/plans/2026-07-11-benchmark-evidence-strengthening.md`.
+
+The round will complete benchmark attribution/selection artifacts, add an explicit-input
+multi-subset portfolio report, strengthen the Open RAG seed, build one FinanceBench
+table/numeric offline slice, and use those artifacts to advance broad-corpus transition
+observation. It does not add a current Stage 8C candidate, authorize a default profile,
+or open live RAGFlow, DeepDoc, LLM/RAGAS, post-CLI adapter, or private bridge work.
+
+This planning baseline adds no completed roadmap checkbox and does not change the
+586/601 count. Future checklist changes require implementation, verification, and the
+public-safe evidence named by the owning plan.

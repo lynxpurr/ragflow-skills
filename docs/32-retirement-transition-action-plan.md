@@ -11,6 +11,11 @@ This plan defines the transition period for retiring the two legacy comparison s
 - `ragflux`
 - `ragflow-kb-ops`
 
+The current broad-corpus evidence wave is tracked in
+`docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`. That plan
+may close rows here only after the corresponding benchmark, sample-matrix, redaction, and
+release evidence exists.
+
 The target replacement path is the current public three-skill suite:
 
 ```text

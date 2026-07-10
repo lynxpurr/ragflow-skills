@@ -1,0 +1,377 @@
+# Benchmark Evidence Strengthening And Transition Validation Plan
+
+Status: approved execution baseline; implementation not started
+Date: 2026-07-11
+
+## Objective / Scope / Boundaries
+
+This plan owns the next evidence-strengthening round after KB parameter Stage 8B. It does
+not reopen Stage 8C materialization. Its purpose is to turn the existing exploratory
+benchmark and representative retirement evidence into a reproducible, offline-first
+portfolio that can detect table, numeric, document, chunk, pollution, and citation
+regressions before any future profile or parameter promotion.
+
+The plan coordinates four existing owners without replacing them:
+
+- `docs/35-standard-benchmark-dataset-integration-plan.md` remains the dataset portfolio,
+  normalization, licensing, and benchmark-maturity design source;
+- `docs/32-retirement-transition-action-plan.md` remains the broad-corpus retirement
+  observation checklist;
+- `docs/36-ragflow-kb-parameter-materialization-plan.md` remains the contract and live
+  materialization gate;
+- `docs/15-field-trial-observation-plan.md` remains the sanitized real-run evidence
+  format and trigger source.
+
+In scope:
+
+- add first-class normalized `source_attribution.json` and `selection_report.json`
+  support to the benchmark import/sample lifecycle;
+- add a deterministic, explicit-input benchmark portfolio summary across multiple
+  normalized subsets;
+- strengthen the existing Open RAG Benchmark seed with expected terms and, when a
+  reviewed chunk snapshot exists, expected chunk aliases or hashes;
+- build one small FinanceBench table/numeric slice from operator-selected public source
+  material kept outside the repository;
+- aggregate benchmark strength, table/numeric evidence, wrong-document, pollution,
+  strict chunk recall, citation-support, and release-health evidence;
+- define a later Hermes offline replay only after the synthetic fixtures and commands are
+  stable.
+
+Out of scope by default:
+
+- no RAGFlow dataset creation, update, upload, parse, reparse, delete, or cleanup;
+- no DeepDoc/native PDF baseline;
+- no script-owned LLM/RAGAS generation or evaluation;
+- no default profile, parser, enrichment, or parameter promotion;
+- no raw FinanceBench/Open RAG dataset dump, source PDF, private path, endpoint,
+  credential, KB name, dataset/document identifier, or raw retrieved chunk in the public
+  repository;
+- no automatic Stage 8C eligibility decision from benchmark results.
+
+## Problem Description
+
+The current repository has strong single-subset benchmark primitives but no single
+execution owner for this evidence round:
+
+1. The first Open RAG Benchmark seed is exploratory: one PDF, ten judged queries, and
+   mostly document-level evidence.
+2. FinanceBench is designed in `docs/35`, but no normalized table/numeric slice is yet
+   retained as a reproducible private-source/public-safe-evidence workflow.
+3. `benchmark import` currently normalizes `queries.json`, `qrels.json`, and `qa.json`,
+   while the `docs/35` artifact contract also requires `source_attribution.json` and
+   `selection_report.json`.
+4. Existing benchmark commands operate on one subset at a time. Release-health review
+   needs an explicit-input portfolio summary without scanning user directories or
+   calling RAGFlow.
+5. The retirement checklist still lacks the full sample matrix, five meaningful runs,
+   highest-risk benchmark evidence, and a combined review of zero-result,
+   wrong-document, pollution, strict chunk recall, and citation support.
+6. `docs/36` correctly has zero Stage 8C candidates. Stronger benchmark evidence is a
+   future prerequisite, not authorization to materialize a blocked field.
+
+## Update Plan
+
+### P0 - Complete The Normalized Benchmark Artifact Contract
+
+Extend the existing benchmark import/sample path rather than creating a parallel dataset
+normalizer.
+
+Add two versioned artifacts:
+
+- `ragflow_benchmark_source_attribution_v1`:
+  - dataset name and public upstream project identifiers;
+  - license label;
+  - selected public source IDs;
+  - source hash labels where available;
+  - human/LLM/mixed authorship provenance;
+  - public-safe notes only.
+- `ragflow_benchmark_selection_report_v1`:
+  - selected subset ID;
+  - selection criteria;
+  - included query types and modalities;
+  - excluded case counts and reasons;
+  - intended decision tier: `smoke`, `exploratory`, `promotion_candidate`, or
+    `regression_baseline`.
+
+`benchmark import` should accept these as optional explicit JSON inputs, copy normalized
+versions into the output directory, and reference them from
+`ragflow_benchmark_manifest_v1.artifacts`. `benchmark sample` should preserve attribution
+and write a derived selection report that records the parent subset and deterministic
+sampling parameters.
+
+Acceptance target:
+
+- old query/qrels-only imports remain backward compatible;
+- invalid schema, missing license, empty selection criteria, or unsafe values fail
+  closed;
+- no source PDF or dataset dump is copied into release artifacts;
+- import/sample JSON, Markdown, and redaction behavior remains deterministic.
+
+### P0 - Add An Offline Benchmark Portfolio Summary
+
+Add `tools/benchmark_portfolio.py` as a standalone repository tool, not a public skill
+command. It reads one explicit portfolio config and the subset artifacts named by that
+config. It must not discover directories, download data, call RAGFlow, or invoke an LLM.
+
+The private/operator-owned input config uses
+`ragflow_benchmark_portfolio_config_v1` and names each subset with:
+
+- stable subset ID and dataset label;
+- license and decision tier;
+- sample types;
+- benchmark manifest;
+- source attribution and selection report;
+- optional preflight, validation, retention, citation, and field-trial report paths.
+
+The public-safe output uses `ragflow_benchmark_portfolio_v1` and retains only stable
+labels, artifact basenames, canonical input digests, source hashes already approved for
+publication, counts, status, metrics, missing-evidence classes, and safety flags. It must
+not retain input roots or private identifiers.
+
+Required portfolio summary dimensions:
+
+- subset and dataset count;
+- query, judged-query, qrel, and QA counts;
+- decision-tier distribution;
+- query-type and modality coverage;
+- expected-term and expected-chunk coverage;
+- table/numeric query coverage;
+- negative/unanswerable coverage;
+- preflight and benchmark-strength status;
+- zero-result, wrong-document, pollution, strict chunk recall, expected-term,
+  table-term, and citation-support metrics when supplied;
+- field-trial sample-type coverage and missing classes;
+- `ready`, `ready_with_review`, or `blocked` assessment with explicit reasons.
+
+Declared expected-chunk coverage and observed strict chunk evidence must remain separate.
+The portfolio may count declared expected chunk IDs or hashes from qrels, but it must not
+report verified strict chunk recall unless a supplied validation report contains the
+corresponding observed metric, including metrics computed against a candidate snapshot.
+
+The tool may report evidence readiness, but it must never recommend a default profile or
+mark a Stage 8C field writable.
+
+### P1 - Strengthen The Open RAG Benchmark Seed
+
+Use the existing private seed source and public-safe normalized artifacts. Do not commit
+the source PDF or raw retrieved evidence.
+
+Required evidence improvements:
+
+- preserve the current stable query IDs and document qrels;
+- add expected terms for core text, table, image/mixed, and abstractive queries;
+- add source section/page metadata where the public dataset provides it;
+- add negative or no-match coverage when supported by the selected subset;
+- after an offline or separately approved chunk snapshot exists, map core evidence to
+  candidate snapshot aliases or stable chunk hashes;
+- rerun benchmark import, preflight, deterministic sampling, and portfolio summary.
+
+The Open RAG slice remains `exploratory` until strict evidence and query diversity meet
+the Level 2 requirements in `docs/35`.
+
+### P1 - Build A FinanceBench Table/Numeric Slice
+
+Select one small or medium public filing and a bounded set of evidence-rich questions.
+Raw dataset rows, PDFs, and evidence text stay in a repository-external private run root.
+
+Normalize:
+
+- question to benchmark query;
+- document name to document qrel;
+- evidence page to qrel/QA metadata;
+- evidence text to expected terms and grounded QA evidence;
+- answer to grounded QA answer;
+- table/numeric case type to query metadata;
+- one or more wrong-document or distractor cases where the selected public sample permits
+  a deterministic judgment.
+
+Offline acceptance target:
+
+- benchmark import succeeds with attribution and selection artifacts;
+- preflight reports table/numeric and expected-term coverage;
+- formal handoff conversion, `inspect-handoff`, and KB dry-run pass or produce specific
+  review warnings;
+- no live KB or chunk snapshot is required to close the offline slice;
+- any later live snapshot/benchmark run remains separately approval-gated.
+
+### P2 - Form The Initial Regression Portfolio
+
+Combine the strengthened Open RAG seed and FinanceBench slice in the explicit portfolio
+config. Add QASPER only in a later slice after the two-subset baseline is stable.
+
+The first regression portfolio must record:
+
+- pinned subset identifiers and source hashes;
+- licenses and selection criteria;
+- reproducible handoff and parser profile labels;
+- benchmark strength and intended decision tier;
+- current release-health command results;
+- missing live evidence without treating it as a tooling failure;
+- pinned per-subset benchmark validation reports that remain suitable for future
+  `benchmark trend` and `benchmark delta` inputs.
+
+Portfolio completion is a release-health evidence milestone. It is not a profile
+promotion, broad-corpus retirement guarantee, or Stage 8C authorization.
+Without observed per-subset validation reports, the initial output is an artifact/evidence
+baseline with `ready_with_review`, not a Level 3 retrieval-quality regression baseline.
+
+### P2 - Close Transition Observation Gaps
+
+Use only sanitized explicit run roots with `tools/field_trial_metrics.py`.
+
+The evidence round should:
+
+- reach at least five meaningful transition runs;
+- improve coverage for currently missing sample classes;
+- confirm that covered classes have no unexplained empty Markdown or missing assets;
+- include benchmark/regression evidence for the highest-risk table/numeric class;
+- review zero-result, wrong-document, pollution, strict chunk recall, expected-term, and
+  citation-support evidence before changing recommended guidance.
+
+Only update `docs/32` checkboxes after the corresponding public-safe reports and release
+checks exist.
+
+### P2 - Prepare A Hermes Offline Replay
+
+Create a copy-paste Hermes instruction only after the portfolio tool, synthetic fixtures,
+and offline command chain pass locally.
+
+The first instruction should authorize only:
+
+- clean-worktree preflight;
+- focused unit/CLI tests;
+- synthetic benchmark import/preflight/sample;
+- portfolio JSON/Markdown/redaction generation;
+- repository-external artifact roots;
+- separate sensitive-value scans for tool output and agent-authored prose;
+- final clean-worktree verification.
+
+It must not authorize dataset download into the repository, RAGFlow HTTP calls, live
+mutation, DeepDoc, LLM/RAGAS, or Stage 8C. A later private-source or live instruction is
+generated separately after review.
+
+## Task Checklist
+
+### Artifact Contract And Offline Tooling
+
+- [ ] Add source-attribution and selection-report schemas, validation, import support,
+  and backward-compatible manifest references.
+- [ ] Preserve attribution and derive deterministic selection evidence during benchmark
+  sampling.
+- [ ] Add synthetic table/numeric, expected-term, expected-chunk, negative, and
+  multimodal fixtures.
+- [ ] Add `ragflow_benchmark_portfolio_v1` JSON, Markdown, CLI, and redaction outputs from
+  explicit inputs only.
+- [ ] Add schema identity, focused tests, generated-Markdown safety, and release hygiene
+  coverage for all new report identities.
+
+### Open RAG Evidence
+
+- [ ] Add public-safe source attribution and selection evidence for the existing Open RAG
+  seed.
+- [ ] Add expected-term coverage for core query types without publishing raw source or
+  retrieved evidence.
+- [ ] Add expected-chunk or candidate-snapshot evidence only after a reviewed snapshot is
+  available.
+- [ ] Rerun import, preflight, deterministic sample, and portfolio summary for the
+  strengthened seed.
+
+### FinanceBench Evidence
+
+- [ ] Select one bounded FinanceBench filing/question slice and record license,
+  selection, provenance, and source hashes outside raw public artifacts.
+- [ ] Normalize table/numeric queries, document qrels, evidence-page metadata, expected
+  terms, grounded QA, and deterministic distractor cases.
+- [ ] Run formal conversion, handoff inspection, benchmark import/preflight, and KB
+  dry-run without live mutation.
+- [ ] Add the FinanceBench subset to the initial portfolio and retain public-safe reports.
+
+### Regression And Transition Validation
+
+- [ ] Produce the two-subset Open RAG + FinanceBench regression baseline.
+- [ ] Aggregate at least five meaningful transition runs and review sample-type coverage.
+- [ ] Review zero-result, wrong-document, pollution, strict chunk recall, expected-term,
+  table-term, and citation-support evidence before guidance changes.
+- [ ] Update `docs/32`, `docs/35`, and `docs/16` only when evidence changes their current
+  status or closes an existing row.
+
+### Hermes And Release Closure
+
+- [ ] Add a repository-safe Hermes offline replay instruction after the local synthetic
+  chain is stable.
+- [ ] Run focused tests, full runtime tests when code changes, schema identity, generated
+  Markdown audit, release hygiene, build checks, consumer acceptance, and strict-vendor
+  platform smoke as required by the changed surface.
+- [ ] Record a closeout that separates completed offline work from private-source fill,
+  observation work, and separately approved live validation.
+
+## Current Development Progress
+
+Planning baseline on 2026-07-11:
+
+- the Open RAG Stage 0-5 exploratory seed and disposable enrichment comparison are
+  complete;
+- existing runtime support already covers benchmark import/sample/preflight,
+  expected-term metrics, expected chunks, candidate snapshot matching, table-term
+  metrics, wrong-document/pollution metrics, trend/delta/gate reports, and sanitized
+  retention;
+- the missing public offline work is artifact-contract completion plus multi-subset
+  portfolio aggregation;
+- the missing evidence work is stronger Open RAG qrels, one FinanceBench table/numeric
+  slice, broader transition coverage, and a stable regression baseline;
+- `docs/36` has zero Stage 8C candidates, so no parameter materialization or live probe is
+  part of this plan.
+
+No checklist item is complete at plan creation time. Existing capabilities are baseline
+dependencies, not completion evidence for the new work above.
+
+## Validation Evidence / Residual Gated Work
+
+Minimum validation for docs-only planning changes:
+
+```bash
+git diff --check
+python3 tools/release_hygiene_check.py
+```
+
+Expected implementation validation when the report/artifact surfaces change:
+
+```bash
+python3 -m py_compile \
+  packages/ragflow-skill-runtime/src/ragflow_skill_runtime/benchmark_governance.py \
+  skills/ragflow-kb-build/scripts/build.py \
+  tools/benchmark_portfolio.py
+python3 -m pytest \
+  packages/ragflow-skill-runtime/tests/test_benchmark_governance.py \
+  packages/ragflow-skill-runtime/tests/test_benchmark_portfolio.py \
+  packages/ragflow-skill-runtime/tests/test_validation.py \
+  packages/ragflow-skill-runtime/tests/test_schema_identity_check.py -q
+python3 tools/schema_identity_check.py
+python3 tools/release_hygiene_check.py
+git diff --check
+```
+
+Run consumer acceptance and strict-vendor platform smoke when benchmark CLI artifacts or
+packaged templates change. Run the full runtime suite before calling the tooling slice
+broadly verified.
+
+Residual gates remain separate:
+
+- public source download and private raw dataset preparation are operator-owned data-fill
+  work;
+- MinerU/private-source execution requires available user-owned inputs and services;
+- RAGFlow read-only HTTP evidence requires its own instruction when needed;
+- any disposable RAGFlow mutation requires explicit approval, exact cleanup, and
+  sanitized retention;
+- DeepDoc/native comparison remains a separate approved baseline;
+- script-owned LLM/RAGAS remains out of scope;
+- Stage 8C remains blocked until a new pinned RAGFlow contract produces a
+  `writable_contract_confirmed` candidate.
+
+## Closeout / Retrospective
+
+Complete this section only after the offline tooling, two-subset baseline, required
+transition evidence, validation chain, and sanitized reports are complete. Record which
+work was closed publicly, which private-source fills remain, whether any live run was
+separately approved, and whether the evidence changes retirement, profile, release, or
+parameter-materialization decisions.
