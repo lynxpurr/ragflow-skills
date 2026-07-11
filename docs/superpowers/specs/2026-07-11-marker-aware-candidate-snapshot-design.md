@@ -149,17 +149,19 @@ The splitter applies these rules:
 3. Leading, trailing, or adjacent delimiters do not create empty chunks.
    Empty means the segment has no content after the existing whitespace normalization
    used by stable chunk hashing.
-4. A delimiter inside a complete HTML table is removed but does not split the table; the
+4. A delimiter line inside a fenced code block is literal content, not a boundary; it is
+   retained and counted as `ignored_fenced_marker_count`.
+5. A delimiter inside a complete HTML table is removed but does not split the table; the
    report increments `suppressed_table_boundary_count`.
-5. A table opening and closing on the same line remains atomic.
-6. Nested, repeated, mixed-case, attributed, and self-closing table tags use the existing
+6. A table opening and closing on the same line remains atomic.
+7. Nested, repeated, mixed-case, attributed, and self-closing table tags use the existing
    HTML parser semantics rather than manual line regex counting.
-7. Fenced code blocks do not contribute HTML table ranges. Inline-code masking is not
+8. Fenced code blocks do not contribute HTML table ranges. Inline-code masking is not
    added in this round; a literal table tag in inline code may conservatively make the
    structure unsafe and cause forced mode to fail or automatic mode to fall back.
-8. Unbalanced table structure is an error in `markers` mode and a documented fallback
+9. Unbalanced table structure is an error in `markers` mode and a documented fallback
    reason in `auto` mode.
-9. Markdown pipe tables are not given new atomicity semantics in this round; only HTML
+10. Markdown pipe tables are not given new atomicity semantics in this round; only HTML
    table atomicity is required by the owning handoff.
 
 Line endings are normalized by Python text reading, but other content is retained. Stable
@@ -177,6 +179,8 @@ visibility remains available as a review warning.
 
 Require marker-aware splitting. The command fails closed if no canonical marker exists,
 no non-empty candidate chunk can be produced, or HTML table structure is unbalanced.
+For a Markdown directory, every document must satisfy these requirements; one unsafe
+document fails the forced operation rather than silently mixing modes.
 
 ### `auto`
 
@@ -210,6 +214,12 @@ Whitespace-only segments are suppressed before counting, so a separate
 `empty_candidate_chunk` fallback would duplicate `insufficient_nonempty_chunks` and is
 not part of the contract.
 
+Automatic decisions are evaluated per Markdown document. The aggregate effective mode
+is `markers` when every document selects markers, `file` when every document falls back,
+and `mixed` when both outcomes occur. Aggregate public decision metadata records only
+document-mode and reason-code counts; it does not add source filenames or paths. Chunk
+items retain the existing document provenance inside the snapshot contract.
+
 Automatic selection is deterministic and does not invoke an LLM. A host AI may explain
 the resulting decision report, but it must not silently override a failed safety check.
 
@@ -222,8 +232,10 @@ written snapshot item:
 - `document_id`: the existing source-file identifier used by the Markdown reader;
 - `chunk_id`: unset, because this field may represent a RAGFlow server chunk identity in
   existing retrieval and validation paths;
-- `source_chunk_id`: deterministic document-local offline ordinal such as
-  `marker-0001`, retained on the snapshot item and in aliases;
+- `source_chunk_id`: deterministic offline identity such as
+  `marker-<relative-path-digest>-0001`, retained on the snapshot item and in aliases.
+  The digest is derived from the source path relative to the explicit Markdown input
+  root, preventing cross-document ordinal collisions without publishing the path;
 - `content`: the complete candidate chunk text.
 
 The existing snapshot writer continues to derive:
@@ -250,6 +262,7 @@ The `boundary` object should include:
 - source marker count;
 - emitted candidate chunk count;
 - suppressed table-boundary count;
+- ignored fenced-marker count;
 - fallback reason when applicable;
 - zero RAGFlow calls, zero live writes, and zero script-owned LLM calls.
 
@@ -324,8 +337,9 @@ Implementation must use test-driven development. Required focused coverage:
   `html_tables.py` for balanced table ranges and fenced-code masking.
 - [ ] Add deterministic marker splitting with empty-segment suppression.
 - [ ] Add table-boundary suppression and unbalanced-table failure behavior.
-- [ ] Preserve document provenance, deterministic `source_chunk_id` ordinals, ordering,
-  aliases, and stable hashes without populating candidate values into `chunk_id`.
+- [ ] Preserve document provenance, deterministic non-colliding `source_chunk_id`
+  identities, ordering, aliases, and stable hashes without populating candidate values
+  into `chunk_id`.
 - [ ] Keep JSON/validation inputs and legacy Markdown behavior unchanged.
 
 ### C. Automatic Selection
