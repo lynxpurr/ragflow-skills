@@ -402,14 +402,14 @@ git commit -m "feat(kb-build): expose automatic snapshot boundaries"
 **Files:**
 - Modify: `packages/ragflow-skill-runtime/tests/test_benchmark_governance.py`
 
-- [ ] **Step 1: Extend the previously RED end-to-end test with reproducibility assertions**
+- [x] **Step 1: Extend the previously RED end-to-end test with reproducibility assertions**
 
 Run the Task 2 evidence-mapping test once before adding these assertions to confirm its
 original mapping path is already green. Then add a second snapshot generation and assert
 identical ordered `(stable_hash, source_chunk_id, content)` tuples, identical boundary
 objects, and `observed_ragflow_chunks=False`.
 
-- [ ] **Step 2: Verify the new reproducibility assertion is meaningful**
+- [x] **Step 2: Verify the new reproducibility assertion is meaningful**
 
 ```bash
 python3 -m pytest packages/ragflow-skill-runtime/tests/test_benchmark_governance.py -k marker_snapshot_maps_grounded_evidence -q
@@ -420,11 +420,11 @@ temporarily compare the first tuple with reversed second-run order and verify th
 fails, then restore the correct assertion and rerun to PASS. Do not commit the temporary
 mutation.
 
-- [ ] **Step 3: Apply the smallest correction if the restored assertion fails**
+- [x] **Step 3: Apply the smallest correction if the restored assertion fails**
 
 Do not weaken exact-span matching and do not use content previews for full evidence. Re-run the test and expect PASS.
 
-- [ ] **Step 4: Run all focused tests**
+- [x] **Step 4: Run all focused tests**
 
 ```bash
 python3 -m pytest packages/ragflow-skill-runtime/tests/test_html_tables.py packages/ragflow-skill-runtime/tests/test_benchmark_governance.py packages/ragflow-skill-runtime/tests/test_kb_build_cli.py packages/ragflow-skill-runtime/tests/test_schema_identity_check.py packages/ragflow-skill-runtime/tests/test_report_surface_inventory.py packages/ragflow-skill-runtime/tests/test_runtime_resilience_inventory.py -q
@@ -432,7 +432,7 @@ python3 -m pytest packages/ragflow-skill-runtime/tests/test_html_tables.py packa
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/ragflow-skill-runtime/tests/test_benchmark_governance.py

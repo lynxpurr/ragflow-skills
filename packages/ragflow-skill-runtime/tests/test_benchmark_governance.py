@@ -647,6 +647,7 @@ class BenchmarkGovernanceTests(unittest.TestCase):
             root = Path(tmp)
             source = root / "source.md"
             snapshot_path = root / "snapshot.json"
+            repeated_snapshot_path = root / "snapshot-repeated.json"
             qa_path = root / "qa.json"
             evidence_map_path = root / "evidence_map.json"
             source.write_text(
@@ -690,11 +691,17 @@ class BenchmarkGovernanceTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            snapshot_chunks(
+            snapshot_report = snapshot_chunks(
                 input_path=source,
                 output_path=snapshot_path,
                 include_content=True,
-                markdown_boundary_mode="markers",
+                markdown_boundary_mode="auto",
+            )
+            repeated_snapshot_report = snapshot_chunks(
+                input_path=source,
+                output_path=repeated_snapshot_path,
+                include_content=True,
+                markdown_boundary_mode="auto",
             )
             mapping_report = map_grounded_qa_evidence(
                 qa_path=qa_path,
@@ -702,6 +709,8 @@ class BenchmarkGovernanceTests(unittest.TestCase):
                 output_path=evidence_map_path,
             )
             evidence_map = json.loads(evidence_map_path.read_text(encoding="utf-8"))
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            repeated_snapshot = json.loads(repeated_snapshot_path.read_text(encoding="utf-8"))
 
         self.assertEqual(mapping_report["summary"]["evidence_mapping_coverage"], 1.0)
         self.assertEqual(mapping_report["summary"]["mapped_span_count"], 2)
@@ -712,6 +721,19 @@ class BenchmarkGovernanceTests(unittest.TestCase):
                 for item in evidence_map["items"]
                 for value in item["expected_chunks"]
             )
+        )
+        self.assertEqual(snapshot_report["boundary"]["effective_mode"], "markers")
+        self.assertEqual(snapshot_report["boundary"], repeated_snapshot_report["boundary"])
+        self.assertFalse(snapshot_report["boundary"]["observed_ragflow_chunks"])
+        self.assertEqual(
+            [
+                (item["stable_hash"], item["source_chunk_id"], item["content"])
+                for item in snapshot["chunks"]
+            ],
+            [
+                (item["stable_hash"], item["source_chunk_id"], item["content"])
+                for item in repeated_snapshot["chunks"]
+            ],
         )
 
     def test_snapshot_markdown_markers_suppress_empty_segments_and_keep_inline_text(self) -> None:
