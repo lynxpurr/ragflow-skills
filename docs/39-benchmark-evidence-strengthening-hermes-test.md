@@ -1,7 +1,8 @@
 # Hermes L0 Test For Benchmark Evidence Strengthening
 
-Status: ready for independent repository-only L0 replay
+Status: independent repository-only L0 replay passed
 Date: 2026-07-11
+Last independently replayed: 2026-07-11 at repository commit `3b94d93`
 
 ## Purpose And Boundary
 
@@ -50,6 +51,39 @@ The committed synthetic portfolio contains:
 
 Declared expected-chunk coverage is synthetic contract coverage only. It is not observed
 strict chunk recall and must not be reported as live retrieval evidence.
+
+## Independent Replay Evidence
+
+Hermes independently replayed this instruction against commit `3b94d93` from an
+initially clean worktree. The final worktree remained clean and the replay did not modify
+the repository.
+
+Verified results:
+
+- Python compile: pass for the three required files;
+- governance, portfolio, and schema tests: 47 passed with 17 subtests;
+- benchmark import/sample CLI tests: 2 passed;
+- Open RAG synthetic import: 3 queries, 3 judged queries, 6 qrels, and 3 QA items;
+- Open RAG preflight: `promotable` with zero errors;
+- deterministic sample: `stratified`, seed `7`, size `2`, with sorted IDs and matching
+  QA filtering;
+- Finance synthetic import: 3 queries, 3 judged queries, 6 qrels, and 3 QA items;
+- Finance preflight: `exploratory` with the expected single warning;
+- portfolio: 2 subsets, 2 datasets, 6 queries, 6 judged queries, 12 qrels, 6 QA items,
+  6 expected-term queries, 6 declared expected-chunk queries, 4 table/numeric queries,
+  and 1 negative/unanswerable query;
+- assessment: `ready_with_review` with `missing_observed_validation`;
+- safety: zero RAGFlow HTTP calls, zero live writes, zero DeepDoc/MinerU service calls,
+  zero script-owned LLM calls, zero directory discovery, and zero Stage 8C actions;
+- sensitive review: no unresolved private path, endpoint, credential, or real
+  dataset/document/KB identifier in tool reports or agent-authored prose;
+- portfolio redaction findings: zero; import/preflight/sample findings were applied
+  config-path redactions with no secret or bearer-token value retained.
+
+The retained report basename was `hermes-final-report.txt`; the private run root was
+reported only by its label, `ragflow-benchmark-evidence-hermes-l0-20260711T002112Z`.
+The replay confirms the synthetic offline contract but leaves
+`private_source_fill_required` and `transition_observation_fill_required` unchanged.
 
 ## Copy-Paste Hermes Task
 

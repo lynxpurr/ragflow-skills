@@ -7,7 +7,7 @@ Last calibrated: 2026-07-11
 
 Execution follow-up: `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`
 owns the Open RAG strict-evidence, FinanceBench offline slice, initial regression
-portfolio, transition-validation, and later Hermes replay work. This document remains the
+portfolio, transition-validation, and Hermes replay status. This document remains the
 dataset, licensing, normalization, and benchmark-maturity design source.
 
 ## Objective
@@ -126,6 +126,7 @@ Current limitations and gates:
 | Regression portfolio | Pending | Current seed can become a smoke/exploratory baseline; broader portfolio still needs pinned subsets and trend reporting. |
 | Attribution/selection artifact contract | Complete | Import and deterministic sampling now preserve normalized source and selection provenance with schema/release governance. |
 | Synthetic Stage 6/7 rehearsal | Complete | Neutral two-subset portfolio produced 6 queries, 12 qrels, 6 QA items, table/numeric and negative coverage, and `ready_with_review` without live calls. |
+| Independent Hermes L0 replay | Complete | Commit `3b94d93` reproduced the synthetic chain from a clean worktree with zero RAGFlow/DeepDoc/LLM/Stage 8C actions and no unresolved sensitive findings. |
 | Private Stage 6/7 evidence fill | Blocked on operator input | `private_source_fill_required`; no reviewed FinanceBench/Open RAG source root was supplied in this round. |
 
 ### Follow-Up Work Plan
@@ -936,6 +937,11 @@ portfolio 为 `ready_with_review`，原因是缺少 observed validation；它只
 artifact contract，不是 Stage 7 的 retrieval-quality regression baseline。真实
 Stage 7 仍需要 reviewed Open RAG + FinanceBench subsets、可供 trend/delta 使用的
 per-subset validation reports，以及后续 transition observation evidence。
+
+同日 Hermes 已在 clean commit `3b94d93` 上独立复验该 synthetic 链。复验重现了
+2 subsets、6 queries、12 qrels、6 QA 和相同的 `ready_with_review` 判断，安全计数
+全部为零，初始/最终工作区一致。该结果关闭 L0 可复现性疑问，但不改变真实 Stage
+7 evidence fill 的门禁。
 
 ## 立即执行建议
 

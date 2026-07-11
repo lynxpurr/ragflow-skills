@@ -338,6 +338,10 @@ Implementation update on 2026-07-11:
   it is not a Level 3 retrieval regression baseline;
 - `docs/39-benchmark-evidence-strengthening-hermes-test.md` now provides the
   repository-only L0 replay instruction;
+- Hermes independently replayed the instruction against commit `3b94d93` from a clean
+  worktree: 47 governance/portfolio/schema tests with 17 subtests and 2 benchmark CLI
+  tests passed, the expected 2-subset/6-query portfolio was reproduced, all safety
+  counters remained zero, and the final worktree remained clean;
 - focused validation passed with 72 tests and 17 subtests; the complete runtime suite
   passed with 698 tests and 28 subtests; release hygiene, build/export, consumer
   acceptance, and strict-vendor smoke all passed;
@@ -399,7 +403,8 @@ Public offline closeout on 2026-07-11:
   release governance, and the Hermes L0 replay instruction;
 - verified: compile, focused tests, full runtime tests, manifest/schema identity,
   generated Markdown, release hygiene, release build/export, consumer acceptance, and
-  strict-vendor smoke;
+  strict-vendor smoke, plus an independent Hermes L0 replay with separate tool-report
+  and agent-prose sensitive scans;
 - still open: reviewed Open RAG seed strengthening, operator-selected FinanceBench
   conversion and normalization, pinned observed per-subset validation, a true
   two-subset regression baseline, and five meaningful transition runs;

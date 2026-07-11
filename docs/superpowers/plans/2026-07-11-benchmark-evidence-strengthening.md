@@ -577,6 +577,12 @@ repository-external run root, initial/final `git status`, separate tool/prose se
 scans, and zero RAGFlow/LLM calls. Require `approval_required` for any source download,
 private-source conversion, RAGFlow HTTP call, DeepDoc, or live mutation.
 
+Independent replay evidence on 2026-07-11: Hermes ran the instruction against clean
+commit `3b94d93`; 47 governance/portfolio/schema tests with 17 subtests and 2 benchmark
+CLI tests passed, the expected portfolio and sampling provenance were reproduced, all
+safety counters remained zero, sensitive scans found no unresolved exposure, and the
+final worktree remained clean. The replay does not close Task 7.
+
 ### Task 7: Execute The Private-Source Offline Evidence Fill
 
 **Files:**
