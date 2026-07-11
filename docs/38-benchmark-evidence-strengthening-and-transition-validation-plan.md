@@ -377,6 +377,19 @@ Implementation update on 2026-07-11:
   assessment is still `insufficient_samples`;
 - no RAGFlow HTTP call, live mutation, DeepDoc run, script-owned LLM/RAGAS call, or
   Stage 8C action was performed.
+- the public offline marker-aware candidate snapshot engine now supports compatible
+  `file`, fail-closed `markers`, and deterministic per-document `auto` modes, including
+  aggregate `mixed` decisions for Markdown directories. It preserves balanced HTML
+  tables, fenced marker literals, stable hashes, and non-colliding offline source chunk
+  aliases while leaving RAGFlow-facing `chunk_id` unset;
+- a neutral two-span grounded-QA fixture mapped both spans to stable expected-chunk
+  hashes with full coverage, and repeated snapshots reproduced ordered content, source
+  IDs, hashes, and boundary decisions. This is candidate/offline evidence only;
+- focused validation passed with 179 tests and 17 subtests, the complete runtime suite
+  passed with 715 tests and 33 subtests, and schema identity, release hygiene, manifest
+  schema, build/export, consumer acceptance, and strict-vendor smoke all passed. The
+  reviewed expected-chunk row remains open because private Open RAG/FinanceBench mapping,
+  normalized qrels approval, and observed validation were not performed.
 
 ## Validation Evidence / Residual Gated Work
 

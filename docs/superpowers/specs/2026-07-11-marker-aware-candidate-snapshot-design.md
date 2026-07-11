@@ -1,6 +1,6 @@
 # Marker-Aware Candidate Snapshot And Automatic Selection Design
 
-Status: reviewed with amendments; awaiting final user approval
+Status: implemented and verified for public offline scope
 Date: 2026-07-11
 Owning roadmap row: `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`
 
@@ -322,43 +322,43 @@ Implementation must use test-driven development. Required focused coverage:
 
 ### A. Baseline And Contract
 
-- [ ] Add a failing focused test that proves current marker-bearing Markdown produces one
+- [x] Add a failing focused test that proves current marker-bearing Markdown produces one
   chunk under legacy/default behavior.
-- [ ] Add tests for the new mode argument, invalid input combinations, and additive
+- [x] Add tests for the new mode argument, invalid input combinations, and additive
   decision metadata before changing runtime code.
-- [ ] Confirm the existing snapshot schema and consumers accept a `boundary` child
+- [x] Confirm the existing snapshot schema and consumers accept a `boundary` child
   object, and confirm `schema_identity_check` still passes without a new identity. If a
   consumer rejects additive fields, stop and update the design before introducing a new
   schema identity.
 
 ### B. Marker-Aware Runtime
 
-- [ ] Add the canonical delimiter recognizer and reuse or narrowly extend
+- [x] Add the canonical delimiter recognizer and reuse or narrowly extend
   `html_tables.py` for balanced table ranges and fenced-code masking.
-- [ ] Add deterministic marker splitting with empty-segment suppression.
-- [ ] Add table-boundary suppression and unbalanced-table failure behavior.
-- [ ] Preserve document provenance, deterministic non-colliding `source_chunk_id`
+- [x] Add deterministic marker splitting with empty-segment suppression.
+- [x] Add table-boundary suppression and unbalanced-table failure behavior.
+- [x] Preserve document provenance, deterministic non-colliding `source_chunk_id`
   identities, ordering, aliases, and stable hashes without populating candidate values
   into `chunk_id`.
-- [ ] Keep JSON/validation inputs and legacy Markdown behavior unchanged.
+- [x] Keep JSON/validation inputs and legacy Markdown behavior unchanged.
 
 ### C. Automatic Selection
 
-- [ ] Add `file`, `markers`, and `auto` runtime modes with `file` as the compatible
+- [x] Add `file`, `markers`, and `auto` runtime modes with `file` as the compatible
   low-level default.
-- [ ] Add deterministic selection and fallback reason codes.
-- [ ] Add ordered selection checks, fixed fallback priority, and candidate/offline,
+- [x] Add deterministic selection and fallback reason codes.
+- [x] Add ordered selection checks, fixed fallback priority, and candidate/offline,
   non-observed, and zero-call safety metadata under the `boundary` object.
-- [ ] Verify a host AI can explain the decision entirely from the public-safe report,
-  without raw chunk content or an LLM call inside the script.
+- [x] Verify the public-safe report contains all decision data needed by a host AI to
+  explain the outcome, without raw chunk content or an LLM call inside the script.
 
 ### D. CLI And Public Guidance
 
-- [ ] Add `--markdown-boundary-mode` to `snapshot-chunks` with concise help.
-- [ ] Document `auto` as the intended high-level workflow choice and the other modes as
+- [x] Add `--markdown-boundary-mode` to `snapshot-chunks` with concise help.
+- [x] Document `auto` as the intended high-level workflow choice and the other modes as
   expert overrides.
-- [ ] Preserve all existing commands and examples when the option is omitted.
-- [ ] Review schema identity, report-surface inventory, generated Markdown audit, runtime
+- [x] Preserve all existing commands and examples when the option is omitted.
+- [x] Review schema identity, report-surface inventory, generated Markdown audit, runtime
   resilience inventory, consumer acceptance, and platform smoke impact.
   Adding an option or additive report field does not automatically require an inventory
   count change; update inventory expectations only if the command's output categories or
@@ -366,24 +366,43 @@ Implementation must use test-driven development. Required focused coverage:
 
 ### E. Offline Evidence Proof
 
-- [ ] Create neutral synthetic Markdown with canonical markers, narrative text, and a
+- [x] Create neutral synthetic Markdown with canonical markers, narrative text, and a
   complete HTML table.
-- [ ] Generate a content-bearing candidate snapshot outside committed artifacts.
-- [ ] Run `qa map-evidence` and verify that grounded spans map to stable hashes with full
+- [x] Generate a content-bearing candidate snapshot outside committed artifacts.
+- [x] Run `qa map-evidence` and verify that grounded spans map to stable hashes with full
   synthetic coverage.
-- [ ] Re-run snapshot generation and confirm identical semantic chunks and hashes.
-- [ ] Record sanitized counts, reason codes, and safety flags only.
+- [x] Re-run snapshot generation and confirm identical semantic chunks and hashes.
+- [x] Record sanitized counts, reason codes, and safety flags only.
 
 ### F. Validation And Documentation
 
-- [ ] Run focused runtime and CLI tests.
-- [ ] Run the complete runtime suite when code changes.
-- [ ] Run `git diff --check`.
-- [ ] Run schema identity and release hygiene with zero findings.
-- [ ] Run consumer acceptance and strict-vendor platform smoke if public CLI/report
+- [x] Run focused runtime and CLI tests.
+- [x] Run the complete runtime suite when code changes.
+- [x] Run `git diff --check`.
+- [x] Run schema identity and release hygiene with zero findings.
+- [x] Run consumer acceptance and strict-vendor platform smoke if public CLI/report
   inventory changes require them.
-- [ ] Update this document and the owning roadmap row only after implementation and
+- [x] Update this document and the owning roadmap row only after implementation and
   verification are complete.
+
+## Public Offline Implementation Evidence
+
+Verified on 2026-07-11:
+
+- `file` remains the compatible low-level default; `markers` is fail-closed and `auto`
+  makes per-document deterministic decisions with aggregate `mixed` support.
+- Canonical boundaries preserve balanced HTML tables, ignore fenced-code marker
+  literals, suppress whitespace-only segments, and retain non-colliding
+  `source_chunk_id` aliases without populating RAGFlow-facing `chunk_id`.
+- A neutral two-span grounded-QA fixture mapped both spans to stable `sha256:` expected
+  chunks with 100% mapping coverage; repeated snapshots preserved ordered content,
+  source IDs, stable hashes, and boundary decisions.
+- Focused runtime/CLI/schema/inventory validation passed with 179 tests and 17 subtests.
+- The complete runtime suite passed with 715 tests and 33 subtests.
+- Schema identity, release hygiene, manifest schema, release build/export, consumer
+  acceptance, and strict-vendor platform smoke passed with zero findings.
+- No RAGFlow HTTP call, live mutation, DeepDoc run, script-owned LLM/RAGAS call, Stage 8C
+  action, private-source acquisition, or public raw-content retention occurred.
 
 ### G. Separately Gated Evidence Follow-Up
 

@@ -445,7 +445,7 @@ git commit -m "test(benchmark): prove marker snapshot evidence mapping"
 - Modify: `docs/superpowers/specs/2026-07-11-marker-aware-candidate-snapshot-design.md`
 - Modify: `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`
 
-- [ ] **Step 1: Compile and run the complete runtime suite**
+- [x] **Step 1: Compile and run the complete runtime suite**
 
 ```bash
 python3 -m py_compile packages/ragflow-skill-runtime/src/ragflow_skill_runtime/html_tables.py packages/ragflow-skill-runtime/src/ragflow_skill_runtime/benchmark_governance.py skills/ragflow-kb-build/scripts/build.py
@@ -454,7 +454,7 @@ python3 -m pytest packages/ragflow-skill-runtime/tests -q
 
 Expected: exit 0 and zero failed tests.
 
-- [ ] **Step 2: Run schema, hygiene, and diff gates**
+- [x] **Step 2: Run schema, hygiene, and diff gates**
 
 ```bash
 git diff --check
@@ -464,7 +464,7 @@ python3 tools/release_hygiene_check.py >/tmp/marker-snapshot-final-hygiene.json
 
 Expected: both reports `ok=true`, zero failed identities, zero findings.
 
-- [ ] **Step 3: Run release-facing acceptance sequentially**
+- [x] **Step 3: Run release-facing acceptance sequentially**
 
 ```bash
 python3 tools/manifest_schema_check.py
@@ -476,11 +476,11 @@ python3 tools/platform_smoke_matrix.py --profile strict-vendor-env --work-dir /t
 
 Expected: every command exits 0. Do not run release artifact commands in parallel.
 
-- [ ] **Step 4: Update progress without closing gated rows**
+- [x] **Step 4: Update progress without closing gated rows**
 
 Mark design A-F rows complete only after the corresponding command evidence is green. Leave G private evidence and H default promotion unchecked. In `docs/38`, record public offline implementation and synthetic mapping metrics, but keep the expected-chunk row open because private Open RAG/FinanceBench mapping, qrels approval, and observed validation were not performed.
 
-- [ ] **Step 5: Validate docs safety**
+- [x] **Step 5: Validate docs safety**
 
 ```bash
 git diff --check
@@ -490,7 +490,7 @@ python3 tools/release_hygiene_check.py >/tmp/marker-snapshot-docs-hygiene.json
 
 Expected: only benign field-name hits after manual review; hygiene `ok=true`, zero findings.
 
-- [ ] **Step 6: Commit docs and verify branch**
+- [x] **Step 6: Commit docs and verify branch**
 
 ```bash
 git add docs/superpowers/specs/2026-07-11-marker-aware-candidate-snapshot-design.md docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md
