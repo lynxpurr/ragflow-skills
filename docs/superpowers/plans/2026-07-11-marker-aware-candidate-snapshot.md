@@ -32,7 +32,7 @@ Safety boundary: offline files and neutral fixtures only. Do not call RAGFlow, a
 - Modify: `packages/ragflow-skill-runtime/src/ragflow_skill_runtime/html_tables.py`
 - Create: `packages/ragflow-skill-runtime/tests/test_html_tables.py`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Create:
 
@@ -63,7 +63,7 @@ class HtmlTableAnalysisTests(unittest.TestCase):
         self.assertEqual(analysis.unexpected_close_count, 1)
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -73,7 +73,7 @@ python3 -m pytest packages/ragflow-skill-runtime/tests/test_html_tables.py -q
 
 Expected: FAIL because `analyze_html_table_structure` is absent.
 
-- [ ] **Step 3: Implement the minimal structural API**
+- [x] **Step 3: Implement the minimal structural API**
 
 Add:
 
@@ -128,7 +128,7 @@ def parse_html_tables(text: str) -> list[HtmlTableArtifact]:
     return list(analyze_html_table_structure(text).tables)
 ```
 
-- [ ] **Step 4: Verify GREEN and legacy consumers**
+- [x] **Step 4: Verify GREEN and legacy consumers**
 
 ```bash
 python3 -m pytest \
@@ -139,7 +139,7 @@ python3 -m pytest \
 
 Expected: PASS with unchanged legacy table counts.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/ragflow-skill-runtime/src/ragflow_skill_runtime/html_tables.py packages/ragflow-skill-runtime/tests/test_html_tables.py

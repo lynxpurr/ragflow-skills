@@ -44,6 +44,15 @@ class HtmlTableArtifact:
         return payload
 
 
+@dataclass(frozen=True)
+class HtmlTableAnalysis:
+    tables: tuple[HtmlTableArtifact, ...]
+    balanced: bool
+    unclosed_table_count: int
+    unexpected_close_count: int
+    fenced_line_numbers: tuple[int, ...]
+
+
 @dataclass
 class _Cell:
     is_header: bool
@@ -76,16 +85,27 @@ class _TableDraft:
     thead_depth: int = 0
 
 
-def _masked_fenced_code(text: str) -> str:
+def _masked_fenced_code_with_lines(text: str) -> tuple[str, tuple[int, ...]]:
     masked: list[str] = []
+    fenced_lines: list[int] = []
     in_fence = False
-    for line in text.splitlines():
+    for line_number, line in enumerate(text.splitlines(), start=1):
         if FENCE_RE.match(line):
             masked.append("")
+            fenced_lines.append(line_number)
             in_fence = not in_fence
             continue
-        masked.append("" if in_fence else line)
-    return "\n".join(masked)
+        if in_fence:
+            masked.append("")
+            fenced_lines.append(line_number)
+        else:
+            masked.append(line)
+    return "\n".join(masked), tuple(fenced_lines)
+
+
+def _masked_fenced_code(text: str) -> str:
+    masked, _fenced_lines = _masked_fenced_code_with_lines(text)
+    return masked
 
 
 def _compact_text(value: str, *, limit: int = 40) -> str:
@@ -111,6 +131,7 @@ class _HtmlTableParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self._stack: list[_TableDraft] = []
         self.tables: list[HtmlTableArtifact] = []
+        self.unexpected_table_close_count = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         name = tag.lower()
@@ -141,6 +162,9 @@ class _HtmlTableParser(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         name = tag.lower()
+        if name == "table" and not self._stack:
+            self.unexpected_table_close_count += 1
+            return
         if not self._stack:
             return
         table = self._stack[-1]
@@ -241,16 +265,31 @@ def _finalize_table(table: _TableDraft, *, line_end: int) -> HtmlTableArtifact:
     )
 
 
+def analyze_html_table_structure(text: str) -> HtmlTableAnalysis:
+    """Return parsed tables plus balanced-structure and fenced-line diagnostics."""
+
+    masked, fenced_line_numbers = _masked_fenced_code_with_lines(text)
+    parser = _HtmlTableParser()
+    unclosed_table_count = 0
+    try:
+        parser.feed(masked)
+        parser.close()
+        unclosed_table_count = len(parser._stack)
+    finally:
+        parser.finish(final_line=max(1, len(masked.splitlines())))
+    unexpected_close_count = parser.unexpected_table_close_count
+    return HtmlTableAnalysis(
+        tables=tuple(sorted(parser.tables, key=lambda item: (item.line_start, item.line_end))),
+        balanced=unclosed_table_count == 0 and unexpected_close_count == 0,
+        unclosed_table_count=unclosed_table_count,
+        unexpected_close_count=unexpected_close_count,
+        fenced_line_numbers=fenced_line_numbers,
+    )
+
+
 def parse_html_tables(text: str) -> list[HtmlTableArtifact]:
     """Parse HTML table artifacts embedded in Markdown text."""
 
     if "<table" not in text.lower():
         return []
-    masked = _masked_fenced_code(text)
-    parser = _HtmlTableParser()
-    try:
-        parser.feed(masked)
-        parser.close()
-    finally:
-        parser.finish(final_line=max(1, len(masked.splitlines())))
-    return parser.tables
+    return list(analyze_html_table_structure(text).tables)
