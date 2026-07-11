@@ -276,6 +276,9 @@ generated separately after review.
   retrieved evidence.
 - [ ] Add expected-chunk or candidate-snapshot evidence only after a reviewed snapshot is
   available.
+  The marker-aware offline design and progress checklist are tracked in
+  `docs/superpowers/specs/2026-07-11-marker-aware-candidate-snapshot-design.md`; this row
+  remains open until private evidence mapping and normalized qrels review are complete.
 - [x] Rerun import, preflight, deterministic sample, and portfolio summary for the
   strengthened seed.
 
