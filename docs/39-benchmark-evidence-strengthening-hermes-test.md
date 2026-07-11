@@ -84,9 +84,9 @@ The retained report basename was `hermes-final-report.txt`; the private run root
 reported only by its label, `ragflow-benchmark-evidence-hermes-l0-20260711T002112Z`.
 The replay confirms the synthetic offline contract. Subsequent public status in
 `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md` records the
-private source fill and five-run transition aggregation as complete. The current
-residual gates are reviewed expected chunks, pinned observed per-subset validation, and
-completion of the transition sample-class matrix.
+private source fill, reviewed expected chunks, and five-run transition aggregation as
+complete. The current residual gates are pinned observed per-subset validation, complete
+metric review, and completion of the transition sample-class matrix.
 
 ## Copy-Paste Hermes Task
 

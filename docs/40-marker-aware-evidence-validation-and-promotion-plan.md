@@ -1,6 +1,6 @@
 # Marker-Aware Evidence Validation And Promotion Plan
 
-Status: Hermes L0 independently replayed and maintainer-accepted; L1-L4 separately gated
+Status: Hermes L0 and private offline L1 complete; L2-L4 separately gated
 Date: 2026-07-11
 Owning prior work:
 `docs/superpowers/specs/2026-07-11-marker-aware-candidate-snapshot-design.md`
@@ -253,14 +253,14 @@ an `auto` fallback or invent a successful marker decision.
 
 ### L1 Private Offline Candidate Evidence
 
-- [ ] Obtain separate authorization naming the private Open RAG and FinanceBench source
+- [x] Obtain separate authorization naming the private Open RAG and FinanceBench source
   and artifact scope.
-- [ ] Generate repeatable private candidate snapshots and review automatic boundary
+- [x] Generate repeatable private candidate snapshots and review automatic boundary
   decisions and table integrity.
-- [ ] Map grounded QA evidence and manually approve aliases and stable hashes.
-- [ ] Approve normalized qrels changes, then rerun import, preflight, and portfolio
+- [x] Map grounded QA evidence and manually approve aliases and stable hashes.
+- [x] Approve normalized qrels changes, then rerun import, preflight, and portfolio
   reports.
-- [ ] Close the `docs/38` reviewed expected-chunk row only after both subset reviews and
+- [x] Close the `docs/38` reviewed expected-chunk row only after both subset reviews and
   public-safe evidence are complete.
 
 ### L2/L3 Observed Validation
@@ -320,11 +320,29 @@ Baseline recorded on 2026-07-11:
   status, zero RAGFlow/LLM calls, no live writes, and no repository modification. The
   retained public-safe run label is
   `ragflow-marker-aware-hermes-l0-20260711T103549Z`;
-- no private source, network service, RAGFlow endpoint, MinerU backend, DeepDoc path,
-  LLM/RAGAS backend, or Stage 8C action has been accessed or authorized by this plan;
-- the three open `docs/38` rows remain open: reviewed expected chunks, a true two-subset
-  observed retrieval-quality baseline, and complete metric review before guidance
-  changes;
+- L1 was separately authorized for the retained private Open RAG and FinanceBench source
+  and artifact scope. The original ephemeral evidence root was unavailable, so the run
+  used retained local source/artifact copies and prior reviewed local records without
+  reacquisition or a conversion-backend call;
+- repeated `auto` snapshots were semantically identical. Open RAG produced 17 candidate
+  chunks from 16 markers with no duplicate hash; FinanceBench produced 492 candidate
+  chunks from 491 markers and retained 487 unique hashes after five repeated-heading
+  duplicates were skipped;
+- exact structural review confirmed all 9 Open RAG and 110 FinanceBench HTML tables were
+  balanced, unfragmented, and contained by exactly one emitted chunk. The generic
+  adjacent-table heuristic remained advisory for these multi-table documents;
+- Open RAG mapped 16 of 16 grounded spans and FinanceBench mapped 9 of 9 reviewed formal-
+  handoff spans. Every span matched one chunk, every match retained a marker ordinal
+  alias and a `sha256:` stable hash, and each subset mapped to five unique hashes;
+- all 10 Open RAG and 7 FinanceBench qrels now carry reviewed candidate-only
+  `expected_chunks`. Import and preflight passed with full expected-term, grounded-QA,
+  and expected-chunk query coverage; the refreshed portfolio contains 17 judged queries,
+  35 document/chunk qrels, and 8 table/numeric queries;
+- the portfolio remains `ready_with_review` solely because observed validation is absent.
+  No network, RAGFlow, MinerU/DeepDoc, LLM/RAGAS, Stage 8C, or default-changing action
+  occurred during L1;
+- two `docs/38` rows remain open: a true two-subset observed retrieval-quality baseline
+  and complete metric review before guidance changes;
 - the low-level default remains `file`; high-level callers may explicitly use the
   implemented `auto` mode, but no new default decision has been made.
 
@@ -345,8 +363,8 @@ Residual work remains classified as follows:
 
 - completed public offline work: marker-aware implementation, local instruction
   calibration, and independent Hermes L0 replay;
-- private offline work: Open RAG and FinanceBench candidate snapshots, QA mapping review,
-  and normalized qrels approval under L1;
+- completed private offline work: Open RAG and FinanceBench candidate snapshots, QA
+  mapping review, stable-hash approval, normalized qrels, and portfolio replay under L1;
 - read-only live work: pinned observed RAGFlow validation under L2;
 - live mutation work: disposable build/query/cleanup only under L3;
 - decision work: high-level and possible low-level automatic-default promotion under L4;
@@ -365,5 +383,24 @@ L0 closed on 2026-07-11 after independent replay and maintainer artifact review:
   Stage 8C, default, repository, commit, or push change;
 - no `docs/38` row closes from L0 because reviewed private expected chunks and observed
   retrieval evidence remain absent;
-- the next actionable gate is L1, but it remains closed until a separate instruction
-  explicitly authorizes the private Open RAG and FinanceBench scope.
+- at L0 closeout the next actionable gate was L1. That gate was later separately
+  authorized and completed without changing the L0 result or inheriting L2 authority.
+
+## L1 Closeout / Retrospective
+
+L1 closed on 2026-07-11 after private artifact reconstruction, repeated candidate
+generation, exact evidence review, qrels approval, and portfolio replay:
+
+- both documents selected `markers` under `auto`, repeated snapshots and evidence-map
+  templates were semantically identical, and all zero-call/non-mutation fields remained
+  explicit;
+- FinanceBench source evidence used plain-text tables while the formal handoff used HTML.
+  The original normalized QA remained unchanged; a private candidate-map QA copy bound
+  reviewed evidence to exact formal-Markdown paragraphs or complete HTML tables;
+- five duplicate FinanceBench candidates were repeated short headings, not tables or
+  mapped evidence, so stable-hash deduplication did not remove a reviewed target;
+- report redaction sidecars were successful, the public-safe portfolio had zero findings,
+  and no content-bearing artifact or private execution path was added to the repository;
+- L1 closes only candidate expected-chunk evidence. It does not establish observed strict
+  chunk recall, authorize RAGFlow HTTP, open a disposable lifecycle, or support a default
+  change.

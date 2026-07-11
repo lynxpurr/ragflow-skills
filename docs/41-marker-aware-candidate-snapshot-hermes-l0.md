@@ -4,6 +4,9 @@ Status: independent Hermes L0 replay passed and maintainer-accepted
 Date: 2026-07-11
 Owning plan: `docs/40-marker-aware-evidence-validation-and-promotion-plan.md`
 
+Subsequent status: the separately authorized L1 private candidate review later completed
+and is recorded in `docs/40`; this does not change the historical L0 evidence below.
+
 **Goal:** Independently replay the committed marker-aware candidate snapshot and grounded
 QA mapping path without network access, private data, RAGFlow, MinerU, LLMs, or repository
 modification.

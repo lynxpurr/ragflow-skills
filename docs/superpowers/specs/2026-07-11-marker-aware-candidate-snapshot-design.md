@@ -421,16 +421,23 @@ Verified on 2026-07-11:
 
 ### G. Separately Gated Evidence Follow-Up
 
-- [ ] Under a separate instruction that defines the allowed private-source scope,
+- [x] Under a separate instruction that defines the allowed private-source scope,
   confirm the retained private sources/handoffs are available; restore or reacquire only
   if the approved evidence is absent.
-- [ ] Generate private content-bearing Open RAG and FinanceBench candidate snapshots.
-- [ ] Run and manually review grounded-QA evidence mappings.
-- [ ] Add reviewed `expected_chunks` to normalized qrels only after stable hashes and
+- [x] Generate private content-bearing Open RAG and FinanceBench candidate snapshots.
+- [x] Run and manually review grounded-QA evidence mappings.
+- [x] Add reviewed `expected_chunks` to normalized qrels only after stable hashes and
   evidence spans are approved.
-- [ ] Re-run import, preflight, and portfolio reports.
-- [ ] Keep the result candidate/offline and leave observed validation, the two-subset
+- [x] Re-run import, preflight, and portfolio reports.
+- [x] Keep the result candidate/offline and leave observed validation, the two-subset
   regression baseline, and guidance changes open.
+
+Private L1 evidence on 2026-07-11 confirmed deterministic `markers` selection for both
+approved subsets. Repeated snapshots matched semantically; 119 HTML tables were balanced
+and atomic; 25 of 25 reviewed spans mapped one-to-one to stable hashes; and all 17 qrels
+gained candidate-only expected chunks. FinanceBench retained 487 unique chunks after five
+repeated-heading hashes were skipped. The refreshed portfolio remains
+`ready_with_review` because no observed validation report was supplied.
 
 ### H. Later Default-Promotion Gate
 
@@ -455,5 +462,6 @@ This implementation round is complete when:
 7. No live RAGFlow, DeepDoc, LLM/RAGAS, Stage 8C, private-source acquisition, or public
    raw-content retention occurs.
 
-The owning expected-chunk roadmap row remains open until the separately gated private
-evidence follow-up is restored, reviewed, and its normalized qrels changes are approved.
+The owning expected-chunk roadmap row is closed by the separately authorized L1 review.
+Observed validation, the retrieval-quality regression baseline, and default promotion
+remain separately gated.

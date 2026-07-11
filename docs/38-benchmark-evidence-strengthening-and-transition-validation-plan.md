@@ -1,9 +1,9 @@
 # Benchmark Evidence Strengthening And Transition Validation Plan
 
-Status: public offline tooling, synthetic L0, reviewed Open RAG strengthening, normalized
-FinanceBench portfolio, and five-run transition aggregation are complete; FinanceBench
-formal conversion, handoff inspection, benchmark replay, and KB dry-run are complete;
-observed validation and transition sample coverage remain gated
+Status: public offline tooling, synthetic L0, reviewed Open RAG/FinanceBench expected
+chunks, normalized portfolio, and five-run transition aggregation are complete;
+FinanceBench formal conversion, handoff inspection, benchmark replay, and KB dry-run are
+complete; observed validation and transition sample coverage remain gated
 Date: 2026-07-11
 
 ## Objective / Scope / Boundaries
@@ -274,11 +274,12 @@ generated separately after review.
   seed.
 - [x] Add expected-term coverage for core query types without publishing raw source or
   retrieved evidence.
-- [ ] Add expected-chunk or candidate-snapshot evidence only after a reviewed snapshot is
+- [x] Add expected-chunk or candidate-snapshot evidence only after a reviewed snapshot is
   available.
   The marker-aware offline design and progress checklist are tracked in
-  `docs/superpowers/specs/2026-07-11-marker-aware-candidate-snapshot-design.md`; this row
-  remains open until private evidence mapping and normalized qrels review are complete.
+  `docs/superpowers/specs/2026-07-11-marker-aware-candidate-snapshot-design.md`; the
+  separately authorized private mapping and normalized qrels review completed on
+  2026-07-11 without observed RAGFlow claims.
 - [x] Rerun import, preflight, deterministic sample, and portfolio summary for the
   strengthened seed.
 
@@ -388,10 +389,19 @@ Implementation update on 2026-07-11:
   IDs, hashes, and boundary decisions. This is candidate/offline evidence only;
 - focused validation passed with 185 tests and 17 subtests, the complete runtime suite
   passed with 721 tests and 33 subtests, and schema identity, release hygiene, manifest
-  schema, build/export, consumer acceptance, and strict-vendor smoke all passed. The
-  reviewed expected-chunk row remains open because private Open RAG/FinanceBench mapping,
-  and normalized qrels approval were not performed. Observed validation remains a
-  separate open regression-baseline gate.
+  schema, build/export, consumer acceptance, and strict-vendor smoke all passed;
+- the separately authorized L1 private follow-up generated two semantically identical
+  `auto` snapshots per subset. Open RAG retained 17 unique candidates; FinanceBench
+  retained 487 unique candidates from 492 emitted segments after five benign repeated-
+  heading hashes were skipped;
+- exact table review confirmed 119 balanced HTML tables were each contained by one
+  chunk. QA mapping covered all 16 Open RAG and 9 FinanceBench reviewed spans, with one
+  exact chunk match per span and five unique mapped hashes per subset;
+- all 17 judged queries now have reviewed candidate-only `expected_chunks`. Refreshed
+  import/preflight reported full expected-chunk query coverage, and the two-subset
+  portfolio contains 35 document/chunk qrels while remaining `ready_with_review` only
+  because observed validation is absent. Observed validation remains a separate open
+  regression-baseline gate.
 
 ## Validation Evidence / Residual Gated Work
 
@@ -441,7 +451,7 @@ Residual gates remain separate:
 
 ## Closeout / Retrospective
 
-Public offline closeout on 2026-07-11:
+Offline closeout and private L1 evidence update on 2026-07-11:
 
 - closed: normalized attribution/selection contracts, deterministic sampling
   provenance, standalone portfolio aggregation, neutral synthetic fixtures, schema and
@@ -451,12 +461,13 @@ Public offline closeout on 2026-07-11:
   strict-vendor smoke, plus an independent Hermes L0 replay with separate tool-report
   and agent-prose sensitive scans;
 - closed after private evidence review: Open RAG attribution, selection, expected-term,
-  exact-span QA, deterministic sample, and portfolio rerun; FinanceBench filing/question
-  selection, normalization, source-grounded expected terms, exact-span QA, import,
-  preflight, and initial portfolio inclusion;
-- still open: reviewed expected chunks, pinned observed per-subset validation, a true
-  retrieval-quality regression baseline, and completion of the transition sample-class
-  matrix;
+  exact-span QA, deterministic sample, candidate snapshot, reviewed expected chunks, and
+  portfolio rerun; FinanceBench filing/question selection, normalization, source-grounded
+  expected terms, exact-span QA, formal-handoff candidate mapping, reviewed expected
+  chunks, import, preflight, and portfolio inclusion;
+- still open: pinned observed per-subset validation, a true retrieval-quality regression
+  baseline, complete metric review before guidance changes, and completion of the
+  transition sample-class matrix;
 - private/live decision: source acquisition and normalization remained offline. MinerU
   was used only for the approved private conversion and produced the formal handoff; its
   temporary config was deleted afterward. No DeepDoc, RAGFlow, LLM/RAGAS, or Stage 8C

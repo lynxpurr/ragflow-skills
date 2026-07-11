@@ -1,5 +1,8 @@
 # Marker-Aware Candidate Snapshot Implementation Plan
 
+Status: public implementation and validation complete; separately authorized private L1
+expected-chunk evidence later completed under `docs/40`
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use Markdown checkbox syntax for tracking.
 
 **Goal:** Add a backward-compatible, deterministic `file / markers / auto` Markdown boundary engine for offline candidate chunk snapshots, with HTML-table atomicity, stable provenance, explainable fallback, and no live RAGFlow behavior.
@@ -24,7 +27,7 @@ Safety boundary: offline files and neutral fixtures only. Do not call RAGFlow, a
 - `packages/ragflow-skill-runtime/tests/test_kb_build_cli.py`: CLI, Markdown, and redaction coverage.
 - `skills/ragflow-kb-build/SKILL.md`: concise user guidance.
 - `docs/superpowers/specs/2026-07-11-marker-aware-candidate-snapshot-design.md`: verified progress tracking.
-- `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`: sanitized status while the expected-chunk row remains open.
+- `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`: sanitized status; the row remained open during implementation and later closed after L1 review.
 
 ### Task 1: Expose HTML Table Structural Diagnostics
 

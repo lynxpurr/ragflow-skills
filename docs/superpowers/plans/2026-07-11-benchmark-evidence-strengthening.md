@@ -11,7 +11,8 @@
 Status: public implementation, release validation, synthetic replay, reviewed Open RAG
 strengthening, normalized FinanceBench portfolio, and five-run transition aggregation
 complete; FinanceBench formal conversion, handoff inspection, benchmark replay, and KB
-dry-run are also complete, while observed validation and transition sample coverage
+dry-run are also complete; a later separately authorized L1 review added private
+candidate-only expected chunks, while observed validation and transition sample coverage
 remain gated
 Design source: `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`
 
