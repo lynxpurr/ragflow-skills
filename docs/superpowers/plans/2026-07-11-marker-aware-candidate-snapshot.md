@@ -266,7 +266,7 @@ git commit -m "feat(benchmark): add marker-aware candidate snapshots"
 - Modify: `packages/ragflow-skill-runtime/tests/test_benchmark_governance.py`
 - Modify: `packages/ragflow-skill-runtime/tests/test_schema_identity_check.py`
 
-- [ ] **Step 1: Write failing auto tests**
+- [x] **Step 1: Write failing auto tests**
 
 Cover successful `markers_selected`, all four ordered fallback codes, forced-mode errors, JSON rejection, and a directory with one marker file plus one marker-free file. Assert the directory result is:
 
@@ -281,7 +281,7 @@ Cover successful `markers_selected`, all four ordered fallback codes, forced-mod
 
 Also assert candidate/offline scope, `observed_ragflow_chunks=False`, and all three zero-call/write counters.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 python3 -m pytest packages/ragflow-skill-runtime/tests/test_benchmark_governance.py -k 'snapshot_markdown_auto or directory_mixed or json_rejects_markdown_boundary' -q
@@ -289,7 +289,7 @@ python3 -m pytest packages/ragflow-skill-runtime/tests/test_benchmark_governance
 
 Expected: FAIL because auto aggregation is absent.
 
-- [ ] **Step 3: Implement deterministic aggregation**
+- [x] **Step 3: Implement deterministic aggregation**
 
 Classify input as Markdown file, Markdown directory, or JSON before parsing. Reject `markers/auto` for JSON. Evaluate Markdown per document, require every document to pass forced `markers`, and aggregate:
 
@@ -315,7 +315,7 @@ boundary = {
 
 Store the same object in snapshot and report. Use `mixed` only as an aggregate effective mode. Do not add document names or paths to `boundary`.
 
-- [ ] **Step 4: Verify GREEN and additive schema compatibility**
+- [x] **Step 4: Verify GREEN and additive schema compatibility**
 
 Add a test loading a snapshot containing `boundary` through `load_chunk_snapshot`. Run:
 
@@ -326,7 +326,7 @@ python3 tools/schema_identity_check.py --report-json /tmp/marker-snapshot-schema
 
 Expected: PASS and schema report `ok=true`; do not create a new schema identity.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/ragflow-skill-runtime/src/ragflow_skill_runtime/benchmark_governance.py packages/ragflow-skill-runtime/tests/test_benchmark_governance.py packages/ragflow-skill-runtime/tests/test_schema_identity_check.py

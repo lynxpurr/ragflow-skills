@@ -2084,7 +2084,12 @@ def _table_line_numbers(text: str) -> tuple[set[int], HtmlTableAnalysis]:
     return line_numbers, analysis
 
 
-def _marker_boundary_result(path: Path, *, source_root: Path) -> _MarkdownBoundaryResult:
+def _marker_boundary_result(
+    path: Path,
+    *,
+    source_root: Path,
+    fail_closed: bool,
+) -> _MarkdownBoundaryResult:
     text = path.read_text(encoding="utf-8")
     table_lines, analysis = _table_line_numbers(text)
     fenced_lines = set(analysis.fenced_line_numbers)
@@ -2092,6 +2097,7 @@ def _marker_boundary_result(path: Path, *, source_root: Path) -> _MarkdownBounda
     active_marker_count = 0
     suppressed_table_boundary_count = 0
     ignored_fenced_marker_count = 0
+    split_boundary_lines: list[int] = []
     segments: list[str] = []
     current: list[str] = []
 
@@ -2114,26 +2120,42 @@ def _marker_boundary_result(path: Path, *, source_root: Path) -> _MarkdownBounda
         if line_number in table_lines:
             suppressed_table_boundary_count += 1
             continue
+        split_boundary_lines.append(line_number)
         flush()
     flush()
 
+    table_atomicity_preserved = not any(
+        line_number in table_lines for line_number in split_boundary_lines
+    )
     checks = (
         {"code": "canonical_markers_available", "passed": active_marker_count > 0},
         {"code": "sufficient_nonempty_chunks", "passed": len(segments) >= 2},
         {"code": "balanced_html_table", "passed": analysis.balanced},
-        {"code": "table_atomicity_preserved", "passed": True},
+        {"code": "table_atomicity_preserved", "passed": table_atomicity_preserved},
     )
+    fallback_code = None
     if not analysis.balanced:
-        raise BenchmarkGovernanceError(
-            "markdown boundary mode markers rejected a document: unbalanced_html_table"
-        )
-    if active_marker_count <= 0:
-        raise BenchmarkGovernanceError(
-            "markdown boundary mode markers rejected a document: no_canonical_markers"
-        )
-    if len(segments) < 2:
-        raise BenchmarkGovernanceError(
-            "markdown boundary mode markers rejected a document: insufficient_nonempty_chunks"
+        fallback_code = "unbalanced_html_table"
+    elif not table_atomicity_preserved:
+        fallback_code = "table_atomicity_violation"
+    elif active_marker_count <= 0:
+        fallback_code = "no_canonical_markers"
+    elif len(segments) < 2:
+        fallback_code = "insufficient_nonempty_chunks"
+    if fallback_code:
+        if fail_closed:
+            raise BenchmarkGovernanceError(
+                f"markdown boundary mode markers rejected a document: {fallback_code}"
+            )
+        file_result = _file_boundary_result(path)
+        return _MarkdownBoundaryResult(
+            chunks=file_result.chunks,
+            effective_mode="file",
+            decision_code=fallback_code,
+            selection_checks=checks,
+            source_marker_count=source_marker_count,
+            suppressed_table_boundary_count=suppressed_table_boundary_count,
+            ignored_fenced_marker_count=ignored_fenced_marker_count,
         )
 
     document_key = _document_key(path, source_root)
@@ -2211,7 +2233,11 @@ def _read_markdown_snapshot_input(
     results = [
         _file_boundary_result(path)
         if requested_mode == "file"
-        else _marker_boundary_result(path, source_root=source)
+        else _marker_boundary_result(
+            path,
+            source_root=source,
+            fail_closed=requested_mode == "markers",
+        )
         for path in paths
     ]
     chunks = [chunk for result in results for chunk in result.chunks]
@@ -2282,6 +2308,10 @@ def _read_snapshot_input(
             requested_mode=markdown_boundary_mode,
         )
         return chunks, [source], boundary
+    if markdown_boundary_mode in {"markers", "auto"}:
+        raise BenchmarkGovernanceError(
+            "markdown boundary mode markers/auto requires a Markdown file or Markdown directory"
+        )
     payload = _read_json(source)
     boundary = {
         "requested_mode": markdown_boundary_mode,
@@ -2493,8 +2523,6 @@ def snapshot_chunks(
         raise BenchmarkGovernanceError(
             f"markdown boundary mode must be one of {sorted(MARKDOWN_BOUNDARY_MODES)}"
         )
-    if markdown_boundary_mode == "auto":
-        raise BenchmarkGovernanceError("markdown boundary mode auto is not implemented")
     chunks, source_paths, boundary = _read_snapshot_input(
         input_path,
         markdown_boundary_mode=markdown_boundary_mode,

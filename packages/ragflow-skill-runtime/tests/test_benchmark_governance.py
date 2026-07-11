@@ -41,6 +41,7 @@ from ragflow_skill_runtime.benchmark_governance import (
     trend_benchmark_reports,
     validate_grounded_qa,
 )
+from ragflow_skill_runtime.validation import load_chunk_snapshot
 
 
 class BenchmarkGovernanceTests(unittest.TestCase):
@@ -780,6 +781,153 @@ class BenchmarkGovernanceTests(unittest.TestCase):
                     output_path=output,
                     markdown_boundary_mode="markers",
                 )
+
+    def test_snapshot_markdown_auto_selects_markers_with_offline_safety_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.md"
+            output = root / "snapshot.json"
+            source.write_text("alpha\n<!-- chunk -->\nbeta\n", encoding="utf-8")
+
+            report = snapshot_chunks(
+                input_path=source,
+                output_path=output,
+                markdown_boundary_mode="auto",
+            )
+
+        boundary = report["boundary"]
+        self.assertEqual(boundary["requested_mode"], "auto")
+        self.assertEqual(boundary["effective_mode"], "markers")
+        self.assertEqual(boundary["decision_code_counts"], {"markers_selected": 1})
+        self.assertEqual(boundary["evidence_scope"], "candidate_offline")
+        self.assertFalse(boundary["observed_ragflow_chunks"])
+        self.assertEqual(boundary["ragflow_calls"], 0)
+        self.assertFalse(boundary["writes_live_ragflow"])
+        self.assertEqual(boundary["script_owned_llm_calls"], 0)
+        self.assertEqual(
+            list(boundary["selection_check_counts"]),
+            [
+                "balanced_html_table",
+                "canonical_markers_available",
+                "sufficient_nonempty_chunks",
+                "table_atomicity_preserved",
+            ],
+        )
+
+    def test_snapshot_markdown_auto_falls_back_with_ordered_reason_codes(self) -> None:
+        cases = {
+            "no_canonical_markers": "alpha\n",
+            "insufficient_nonempty_chunks": "<!-- chunk -->\nalpha\n",
+            "unbalanced_html_table": "<table><tr><td>open\n",
+        }
+        for reason_code, content in cases.items():
+            with self.subTest(reason_code=reason_code), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / "source.md"
+                output = root / "snapshot.json"
+                source.write_text(content, encoding="utf-8")
+
+                report = snapshot_chunks(
+                    input_path=source,
+                    output_path=output,
+                    include_content=True,
+                    markdown_boundary_mode="auto",
+                )
+                payload = json.loads(output.read_text(encoding="utf-8"))
+
+            self.assertEqual(report["boundary"]["effective_mode"], "file")
+            self.assertEqual(report["boundary"]["decision_code_counts"], {reason_code: 1})
+            self.assertEqual(payload["summary"]["chunk_count"], 1)
+            self.assertEqual(payload["chunks"][0]["content"], content)
+
+    def test_snapshot_markdown_directory_auto_reports_mixed_without_id_collisions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            first = documents / "a" / "source.md"
+            second = documents / "b" / "source.md"
+            fallback = documents / "plain.md"
+            first.parent.mkdir(parents=True)
+            second.parent.mkdir(parents=True)
+            first.write_text("alpha\n<!-- chunk -->\nbeta\n", encoding="utf-8")
+            second.write_text("gamma\n<!-- chunk -->\ndelta\n", encoding="utf-8")
+            fallback.write_text("plain fallback\n", encoding="utf-8")
+            output = root / "snapshot.json"
+
+            report = snapshot_chunks(
+                input_path=documents,
+                output_path=output,
+                markdown_boundary_mode="auto",
+            )
+            payload = json.loads(output.read_text(encoding="utf-8"))
+
+        boundary = report["boundary"]
+        self.assertEqual(boundary["effective_mode"], "mixed")
+        self.assertEqual(boundary["document_mode_counts"], {"file": 1, "markers": 2})
+        self.assertEqual(
+            boundary["decision_code_counts"],
+            {"markers_selected": 2, "no_canonical_markers": 1},
+        )
+        source_chunk_ids = [
+            item["source_chunk_id"] for item in payload["chunks"] if item.get("source_chunk_id")
+        ]
+        self.assertEqual(len(source_chunk_ids), 4)
+        self.assertEqual(len({value.rsplit("-", 1)[0] for value in source_chunk_ids}), 2)
+        fallback_chunks = [item for item in payload["chunks"] if "source_chunk_id" not in item]
+        self.assertEqual(len(fallback_chunks), 1)
+
+    def test_snapshot_markdown_directory_forced_markers_rejects_unsafe_document(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            documents.mkdir()
+            (documents / "safe.md").write_text("alpha\n<!-- chunk -->\nbeta\n", encoding="utf-8")
+            (documents / "unsafe.md").write_text("plain fallback\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(BenchmarkGovernanceError, "no_canonical_markers"):
+                snapshot_chunks(
+                    input_path=documents,
+                    output_path=root / "snapshot.json",
+                    markdown_boundary_mode="markers",
+                )
+
+    def test_snapshot_json_rejects_markdown_boundary_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "chunks.json"
+            source.write_text(json.dumps({"chunks": [{"content": "alpha"}]}), encoding="utf-8")
+            for mode in ("markers", "auto"):
+                with self.subTest(mode=mode), self.assertRaisesRegex(
+                    BenchmarkGovernanceError,
+                    "requires a Markdown file or Markdown directory",
+                ):
+                    snapshot_chunks(
+                        input_path=source,
+                        output_path=root / f"snapshot-{mode}.json",
+                        markdown_boundary_mode=mode,
+                    )
+
+    def test_chunk_snapshot_loader_accepts_additive_boundary_object(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "snapshot.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_chunk_snapshot_v1",
+                        "boundary": {
+                            "requested_mode": "auto",
+                            "effective_mode": "markers",
+                            "observed_ragflow_chunks": False,
+                        },
+                        "chunks": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            payload = load_chunk_snapshot(path)
+
+        self.assertEqual(payload["boundary"]["effective_mode"], "markers")
 
     def test_snapshot_chunks_reviews_table_fragmentation_duplicates_and_delimiters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
