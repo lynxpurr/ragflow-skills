@@ -3,7 +3,8 @@
 Status: active standard-dataset integration plan; Open RAG Benchmark seed validated
 through Stage 5 and strengthened with reviewed expected terms; the normalized
 FinanceBench slice, formal handoff, dry-run, and initial artifact portfolio are complete,
-while observed retrieval validation remains open
+Open RAG now has a pinned read-only observed checkpoint, and FinanceBench observed
+validation remains open behind a separately approved disposable lifecycle
 Date: 2026-07-09
 Last calibrated: 2026-07-11
 
@@ -107,8 +108,9 @@ Current limitations and gates:
 - The synthetic rehearsal still proves only the Stage 6/7 tooling path. A subsequent
   private evidence fill now provides reviewed Open RAG expected terms and a real
   normalized FinanceBench slice. FinanceBench formal conversion, inspect-handoff, KB
-  dry-run, and reviewed private expected chunks are complete; observed strict chunk
-  recall and a retrieval-quality regression baseline remain open.
+  dry-run, and reviewed private expected chunks are complete. Open RAG now has observed
+  strict chunk evidence; FinanceBench observed evidence and a true two-subset retrieval-
+  quality regression baseline remain open.
 
 ### Session Status Matrix
 
@@ -123,23 +125,23 @@ Current limitations and gates:
 | `docs/34` disposable enrichment checklist | Complete | Stage 5 evidence closed the remaining live-gated checklist item. |
 | DeepDoc native PDF baseline | Pending / separately gated | Optional PDF-native/fallback comparison requiring separate live approval. |
 | KB parameter materialization | Contract-audited / conditionally blocked | `docs/36-ragflow-kb-parameter-materialization-plan.md` Stage 8B is complete for RAGFlow `v0.25.5`; zero candidates are Stage 8C eligible. Benchmark datasets remain prerequisite evaluation evidence if a future pinned contract exposes a writable candidate. |
-| Stronger Open RAG Benchmark subset | Expected-term/chunk evidence complete / observed validation pending | Existing 10 stable query IDs have reviewed source attribution, selection evidence, 21 source-grounded expected terms, 16 reviewed grounded spans, deterministic sampling, and candidate-only expected chunks with full preflight coverage. |
-| FinanceBench table/numeric slice | Offline formal/chunk evidence complete / observed validation pending | One bounded filing contributes 7 judged queries, 25 source-grounded expected terms, evidence-page metadata, 9 reviewed formal-handoff spans, deterministic distractors, and candidate-only expected chunks. The formal handoff retained 491 dense markers and 111 table boundary signals; inspect-handoff, KB dry-run, import, and preflight passed without live mutation. |
+| Stronger Open RAG Benchmark subset | Read-only observed checkpoint complete | Existing 10 stable query IDs have reviewed source attribution, expected terms, candidate chunks, and observed chunks. Two equivalent existing KBs reproduced the same 24 observed stable hashes and metrics; all 16 grounded spans mapped, strict chunk recall at 3 was 0.95, and expected-term/table-term recall was 1.0. |
+| FinanceBench table/numeric slice | Offline evidence complete / L3 required for observed validation | One bounded filing contributes 7 judged queries, 25 source-grounded expected terms, evidence-page metadata, 9 reviewed formal-handoff spans, deterministic distractors, and candidate-only expected chunks. Read-only L2 discovery found no exactly pinnable existing dataset, so build/query/cleanup evidence requires separate L3 approval. |
 | QASPER scientific QA slice | Deferred | Useful after Open RAG Benchmark and FinanceBench adapters are stable. |
 | TREC-COVID IR reference slice | Deferred | Later retrieval-metric and qrels-format calibration work. |
-| Regression portfolio | Initial artifact baseline complete / retrieval baseline pending | The reviewed two-subset portfolio has 17 judged queries and 8 table/numeric queries with `ready_with_review`; observed per-subset validation is still required for trend/delta and Level 3 claims. |
+| Regression portfolio | Open RAG observed checkpoint complete / two-subset baseline pending | The reviewed portfolio has 17 judged queries and 8 table/numeric queries with `ready_with_review`. Open RAG has pinned observed evidence; FinanceBench observed validation and cross-subset review remain required for trend/delta and Level 3 claims. |
 | Attribution/selection artifact contract | Complete | Import and deterministic sampling now preserve normalized source and selection provenance with schema/release governance. |
 | Synthetic Stage 6/7 rehearsal | Complete | Neutral two-subset portfolio produced 6 queries, 12 qrels, 6 QA items, table/numeric and negative coverage, and `ready_with_review` without live calls. |
 | Independent Hermes L0 replay | Complete | Commit `3b94d93` reproduced the synthetic chain from a clean worktree with zero RAGFlow/DeepDoc/LLM/Stage 8C actions and no unresolved sensitive findings. |
-| Private Stage 6/7 evidence fill | Offline evidence complete / observation work pending | Reviewed source acquisition and normalization, Open RAG/FinanceBench expected chunks, FinanceBench formal conversion/dry-run, the two-subset artifact portfolio, and five transition records are complete. Remaining gates are license confirmation before promotion, observed per-subset validation, and three missing transition sample classes. |
+| Private Stage 6/7 evidence fill | Offline evidence complete / observation work pending | Reviewed source acquisition and normalization, Open RAG/FinanceBench expected chunks, FinanceBench formal conversion/dry-run, the two-subset artifact portfolio, and five transition records are complete. Remaining gates are license confirmation before promotion, FinanceBench observed validation plus cross-subset review, and three missing transition sample classes. |
 
 ### Follow-Up Work Plan
 
 Recommended next sequence:
 
-1. Produce pinned observed per-subset validation reports under a separate L2 instruction
-   before calling the current
-   two-subset artifact portfolio a retrieval-quality regression baseline.
+1. Retain the completed Open RAG read-only observed checkpoint. Obtain separate L3
+   approval for a disposable FinanceBench build/query/cleanup lifecycle before calling
+   the current two-subset artifact portfolio a retrieval-quality regression baseline.
 2. Keep `docs/36-ragflow-kb-parameter-materialization-plan.md` as a conditional gate.
    Its pinned RAGFlow `v0.25.5` Stage 8B audit is complete with zero Stage 8C-eligible
    candidates; reopen contract discovery only for a new deployed version or an explicit
@@ -960,9 +962,11 @@ reviewed Open RAG expected-term strengthening、FinanceBench normalization 和�
 两子集 artifact portfolio。下一步不应从 `ready_with_review` 结果推广默认 profile，
 而应补齐剩余证据：
 
-1. 在单独 L2 授权下生成 pinned observed per-subset validation reports。
-2. 审阅 zero-result、wrong-document、pollution、strict chunk recall、table-term 与
-   citation-support 指标，再决定是否调整 guidance。
+1. 保留已完成的 Open RAG L2 read-only observed checkpoint；FinanceBench 因没有可
+   精确绑定的既有 KB，需要单独 L3 build/query/cleanup 授权。
+2. 在两子集都具备 observed evidence 后，再完成 zero-result、wrong-document、
+   pollution、strict chunk recall、table-term 与 citation-support 评审并决定是否
+   调整 guidance。
 3. 如需 PDF native/fallback 对照，单独申请 DeepDoc live baseline approval。
 4. 将当前 seed 固化为 regression smoke/exploratory baseline，并在后续 release
    health review 中重复运行。
@@ -1007,10 +1011,11 @@ Treat the strengthened Open RAG Benchmark seed and normalized FinanceBench slice
 completed initial artifact/evidence baseline. The public attribution/selection contract,
 explicit-input portfolio, synthetic replay, Hermes L0 instruction, reviewed expected
 terms, exact-span QA checks, reviewed private expected chunks, and the two-subset private
-portfolio are complete. The next evidence step is pinned observed per-subset validation
-under a separate L2 instruction, followed by metric review and a true two-subset
-retrieval regression baseline. Ordinary public work remains observation and release-path
-maintenance.
+portfolio are complete. The next evidence step is the remaining pinned observed
+validation for FinanceBench through a separately approved L3 disposable lifecycle, followed by
+cross-subset metric review and a true two-subset retrieval regression baseline. The Open
+RAG read-only checkpoint is complete. Ordinary public work remains observation and
+release-path maintenance.
 `docs/36-ragflow-kb-parameter-materialization-plan.md` remains
 contract-blocked with zero current Stage 8C candidates. A DeepDoc native baseline remains
 a separate, explicitly approved live comparison only when PDF-native behavior is the

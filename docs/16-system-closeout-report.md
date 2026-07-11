@@ -243,6 +243,28 @@ and incorrect edits and retained only sanitized facts. Future replays must use a
 run root outside the repository, avoid repository modification, sanitize final prose, and
 verify final worktree state after reporting.
 
+## Post-Closeout Marker-Aware L2 Checkpoint
+
+Checkpoint date: 2026-07-11
+
+A separately authorized read-only RAGFlow evidence pass completed the Open RAG portion of
+the marker-aware validation plan. Two equivalent existing baseline KBs reproduced the
+same 24 observed chunk hashes and metrics. All 16 reviewed grounded spans mapped to
+observed chunks; strict chunk recall at 3 was 0.95, expected chunk and term coverage were
+complete, and no zero-result or wrong-document evidence appeared.
+
+The pass also provided release-health trigger evidence for two focused fixes. Ranking
+metrics now deduplicate repeated chunks that match one document qrel, keeping precision
+and nDCG within their valid semantics. Validation and public-safe retention reports now
+record actual read-only RAGFlow/retrieval call counts and explicit non-mutation state.
+Independent merge review also moved all local benchmark and observed-state loading ahead
+of retrieval, so invalid local evidence fails without a RAGFlow call.
+
+FinanceBench had no exactly pinnable existing KB, so the evidence round stopped at the L2
+boundary. A true two-subset baseline requires separately approved L3 disposable mutation
+and cleanup proof. This checkpoint does not reopen product adapters, script-owned LLMs,
+Stage 8C, DeepDoc comparison, or default promotion.
+
 ## Closeout Conclusion
 
 The project is no longer in a broad feature-construction phase. The current public suite

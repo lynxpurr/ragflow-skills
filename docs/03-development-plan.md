@@ -2264,3 +2264,24 @@ subset retrieval baseline, metric review before guidance changes, and default pr
 remain open. This closeout adds no product/private/LLM adapter task and does not change
 the roadmap count: 586 of 601 items remain complete, with the same 15 intentionally gated
 items.
+
+### 2026-07-11 Marker-Aware L2 Read-Only Checkpoint
+
+The separately authorized L2 pass completed pinned Open RAG observed validation without
+mutation. Two equivalent existing baseline KBs produced identical 24-chunk stable-hash
+sets and metrics; all 16 reviewed evidence spans mapped to observed chunks. At k=3, hit
+rate, expected chunk hit rate, expected-term recall, and table-term recall were 1.0;
+strict chunk recall was 0.95, and zero-result and wrong-document rates were 0.
+
+The evidence run found and fixed two narrow public validation defects with TDD:
+document-level qrel matches are now counted once per ranked target so precision and nDCG
+cannot be inflated by duplicate chunks, and validation/retention reports now record real
+read-only RAGFlow call counts plus `writes_live_ragflow=false` instead of claiming zero
+calls. Independent review added a third fail-before-network regression: all local
+benchmark and observed-state inputs are now loaded and validated before any retrieval.
+
+FinanceBench had no exactly pinnable existing KB, so the true two-subset baseline and
+cross-subset metric review remain open. Completing them requires a separately authorized
+L3 disposable build/query/cleanup lifecycle with post-cleanup proof. This checkpoint does
+not change the 586/601 roadmap count, open Stage 8C, authorize L3/L4, or change any
+default.

@@ -3,7 +3,8 @@
 Status: public offline tooling, synthetic L0, reviewed Open RAG/FinanceBench expected
 chunks, normalized portfolio, and five-run transition aggregation are complete;
 FinanceBench formal conversion, handoff inspection, benchmark replay, and KB dry-run are
-complete; observed validation and transition sample coverage remain gated
+complete; Open RAG has a pinned read-only observed checkpoint, while FinanceBench
+observed validation and transition sample coverage remain gated
 Date: 2026-07-11
 
 ## Objective / Scope / Boundaries
@@ -400,8 +401,8 @@ Implementation update on 2026-07-11:
 - all 17 judged queries now have reviewed candidate-only `expected_chunks`. Refreshed
   import/preflight reported full expected-chunk query coverage, and the two-subset
   portfolio contains 35 document/chunk qrels while remaining `ready_with_review` only
-  because observed validation is absent. Observed validation remains a separate open
-  regression-baseline gate.
+  because complete two-subset observed validation is absent. Open RAG now has a pinned
+  read-only observed checkpoint; FinanceBench remains the open regression-baseline gate.
 
 ## Validation Evidence / Residual Gated Work
 
@@ -441,7 +442,9 @@ Residual gates remain separate:
   dry-run are complete. The built-in converter remains an invalid PDF fallback, and any
   future rerun must continue to pin the reviewed MinerU protocol and deployed language
   model setting;
-- RAGFlow read-only HTTP evidence requires its own instruction when needed;
+- Open RAG read-only HTTP evidence is complete for the pinned existing baseline;
+- FinanceBench had no exactly pinnable existing dataset under L2, so its observed report
+  requires a separately approved disposable lifecycle;
 - any disposable RAGFlow mutation requires explicit approval, exact cleanup, and
   sanitized retention;
 - DeepDoc/native comparison remains a separate approved baseline;
@@ -465,13 +468,40 @@ Offline closeout and private L1 evidence update on 2026-07-11:
   portfolio rerun; FinanceBench filing/question selection, normalization, source-grounded
   expected terms, exact-span QA, formal-handoff candidate mapping, reviewed expected
   chunks, import, preflight, and portfolio inclusion;
-- still open: pinned observed per-subset validation, a true retrieval-quality regression
-  baseline, complete metric review before guidance changes, and completion of the
-  transition sample-class matrix;
+- completed read-only subset evidence: two equivalent existing Open RAG KBs reproduced
+  the same 24 observed stable hashes and metrics; 16 of 16 grounded spans mapped to five
+  observed chunks, strict chunk recall at 3 was 0.95, and zero-result and wrong-document
+  rates were both 0;
+- still open: FinanceBench observed validation, a true two-subset retrieval-quality
+  regression baseline, complete cross-subset metric review before guidance changes, and
+  completion of the transition sample-class matrix;
 - private/live decision: source acquisition and normalization remained offline. MinerU
   was used only for the approved private conversion and produced the formal handoff; its
-  temporary config was deleted afterward. No DeepDoc, RAGFlow, LLM/RAGAS, or Stage 8C
-  action was performed;
+  temporary config was deleted afterward. RAGFlow activity was limited to the separately
+  approved L2 read-only discovery and retrieval calls; no RAGFlow mutation, DeepDoc,
+  LLM/RAGAS, or Stage 8C action was performed;
 - roadmap effect: no `docs/32` retirement row and no `docs/36` Stage 8C row closes from
   synthetic evidence alone. The current profile, retirement, and parameter
   materialization decisions remain unchanged.
+
+## L2 Read-Only Observed Checkpoint
+
+The separately authorized L2 pass made only read-only RAGFlow calls. It scanned existing
+datasets/documents, pinned two equivalent Open RAG baseline KBs, replayed the ten reviewed
+queries, and retained only sanitized aggregate evidence in this repository. The two KBs
+produced identical 24-chunk stable-hash sets and identical metrics. All reviewed evidence
+spans mapped to observed chunks; expected chunk hit rate, expected-term recall, and
+table-term recall were 1.0, while one two-chunk query produced aggregate strict chunk
+recall at 3 of 0.95.
+
+The pass also found and fixed two public validation defects with focused tests: repeated
+chunks from one document qrel could inflate precision and nDCG above 1, and public-safe
+retention reports incorrectly hard-coded zero RAGFlow calls. Validation and retention
+reports now record actual read-only call counts and `writes_live_ragflow=false`.
+Independent merge review added a separate fail-before-network test and fix: qrels, gate,
+baseline, chunk-snapshot, and observed-state inputs are validated before retrieval.
+
+FinanceBench had no exactly pinnable existing dataset. No dataset creation, upload,
+parse, reparse, update, delete, or cleanup was attempted. Therefore both regression rows
+above remain open, and FinanceBench requires a separate L3 instruction with exact
+disposable scope and cleanup proof.

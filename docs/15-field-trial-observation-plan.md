@@ -432,3 +432,44 @@ a throwaway small fixture, no private corpus disclosure, and sanitized evidence 
 
 The system-level closeout baseline and ongoing observation/improvement backlog are
 recorded in `docs/16-system-closeout-report.md`.
+
+### 2026-07-11 run-005
+
+Workflow:
+- `ragflow-kb-build` read-only benchmark validation for marker-aware observed evidence.
+
+Input summary:
+- One reviewed Open RAG target document with ten queries and grounded evidence.
+- One reviewed FinanceBench target was searched for but had no suitable existing KB.
+- Private endpoints, credentials, KB names, dataset/document IDs, paths, queries, and raw
+  chunks were excluded from this record.
+
+Results:
+- Read-only compatibility and discovery passed across 186 existing datasets.
+- Two equivalent Open RAG baseline KBs reproduced the same 24 observed chunk hashes and
+  the same metrics.
+- All 16 grounded spans mapped to observed chunks. At k=3, strict chunk recall was 0.95;
+  expected chunk hit rate, expected-term recall, and table-term recall were 1.0; empty
+  result and wrong-document rates were 0.
+- Public-safe review/retention outputs passed sensitive scans with zero endpoint,
+  credential, private path/identifier, raw-query, or raw-chunk matches.
+- No create, upload, parse, reparse, update, delete, cleanup, MinerU, DeepDoc, LLM/RAGAS,
+  Stage 8C, or default-changing action occurred.
+
+Friction:
+- Duplicate chunks from one document qrel could inflate precision and nDCG beyond valid
+  bounds; the metric now counts each ranked qrel target once.
+- Public-safe retention incorrectly reported zero RAGFlow calls; validation and retention
+  outputs now retain accurate read-only call counts and explicit non-mutation state.
+- Independent merge review found that invalid local benchmark inputs were loaded after
+  retrieval. The CLI now validates qrels, gate, baseline, chunk-snapshot, and observed-
+  state inputs before constructing the live validation path.
+
+Gated trigger:
+- FinanceBench observed validation requires a separately approved disposable L3
+  build/query/cleanup lifecycle because no exactly pinnable existing KB was available.
+
+Decision:
+- Accept the Open RAG result as a pinned read-only subset checkpoint only. Keep the true
+  two-subset baseline, cross-subset guidance review, and all default-promotion decisions
+  open until FinanceBench observed evidence and cleanup proof exist.

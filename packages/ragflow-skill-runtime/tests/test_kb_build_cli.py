@@ -10823,6 +10823,83 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertIn("requires --queries", payload["error"])
 
+    def test_validate_benchmark_rejects_invalid_local_inputs_before_retrieval(self) -> None:
+        optional_inputs = (
+            "qrels",
+            "gate-config",
+            "baseline-report",
+            "chunk-snapshot",
+            "observed-state",
+        )
+        for invalid_input in optional_inputs:
+            with self.subTest(invalid_input=invalid_input), tempfile.TemporaryDirectory() as tmp:
+                module = load_validate_module()
+
+                class CountingValidationClient(FakeValidationClient):
+                    retrieval_calls = 0
+
+                    def retrieve(self, *, question, dataset_ids, top_k=3):
+                        type(self).retrieval_calls += 1
+                        return super().retrieve(question=question, dataset_ids=dataset_ids, top_k=top_k)
+
+                module.RAGFlowClient = CountingValidationClient
+                root = Path(tmp)
+                manifest = root / "kb_manifest.json"
+                manifest.write_text(
+                    json.dumps(
+                        {
+                            "version": "0.1",
+                            "dataset": {"id": "ds-1", "name": "kb:test"},
+                            "documents": [],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                queries = root / "queries.json"
+                queries.write_text(
+                    json.dumps(
+                        {
+                            "queries": [
+                                {
+                                    "id": "q1",
+                                    "question": "Known",
+                                    "expected_terms": ["known term"],
+                                    "expected_documents": ["source.md"],
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                qrels = root / "qrels.json"
+                qrels.write_text(
+                    json.dumps({"qrels": [{"query_id": "q1", "document": "source.md"}]}),
+                    encoding="utf-8",
+                )
+                invalid = root / f"invalid-{invalid_input}.json"
+                invalid.write_text("{", encoding="utf-8")
+                args = [
+                    "--kb-manifest",
+                    str(manifest),
+                    "--level",
+                    "benchmark",
+                    "--queries",
+                    str(queries),
+                    "--qrels",
+                    str(invalid if invalid_input == "qrels" else qrels),
+                    "--base-url",
+                    "https://ragflow.example.test",
+                ]
+                if invalid_input != "qrels":
+                    args.extend([f"--{invalid_input}", str(invalid)])
+
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    code = module.main(args)
+
+                self.assertEqual(code, 2, stdout.getvalue())
+                self.assertEqual(CountingValidationClient.retrieval_calls, 0)
+
     def test_validate_regression_with_query_set_via_fake_client(self) -> None:
         module = load_validate_module()
         module.RAGFlowClient = FakeValidationClient
@@ -10903,6 +10980,8 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertTrue(payload["metadata_summary"]["ok"])
         self.assertEqual(payload["metadata_summary"]["tag_count"], 1)
         self.assertIn("q1", report_text)
+        self.assertIn("ragflow_calls: `1`", report_text)
+        self.assertIn("writes_live_ragflow: `false`", report_text)
         self.assertIn("runtime_partial_failure_status: `completed`", report_text)
         self.assertIn("Metadata Summary", report_text)
 
@@ -10960,20 +11039,29 @@ class KbBuildCliTests(unittest.TestCase):
                         str(retention_md),
                     ]
             )
+            validation_payload = json.loads(stdout.getvalue())
             retention_payload = json.loads(retention_json.read_text(encoding="utf-8"))
             retention_md_text = retention_md.read_text(encoding="utf-8")
             retention_text = retention_json.read_text(encoding="utf-8") + retention_md_text
 
         self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(validation_payload["safety"]["ragflow_calls"], 1)
+        self.assertEqual(validation_payload["safety"]["retrieval_calls"], 1)
+        self.assertFalse(validation_payload["safety"]["writes_live_ragflow"])
         self.assertEqual(retention_payload["schema"], "ragflow_public_query_result_retention_v1")
         self.assertEqual(retention_payload["summary"]["query_count"], 1)
         self.assertEqual(retention_payload["queries"][0]["query_id"], "q-retention")
+        self.assertEqual(retention_payload["safety"]["ragflow_calls"], 1)
+        self.assertEqual(retention_payload["safety"]["retrieval_calls"], 1)
+        self.assertFalse(retention_payload["safety"]["writes_live_ragflow"])
         self.assertFalse(retention_payload["safety"]["raw_query_text_retained"])
         self.assertFalse(retention_payload["safety"]["raw_chunk_text_retained"])
         self.assertTrue(retention_payload["safety"]["identifiers_hashed"])
         self.assertNotIn(private_dataset_id, retention_text)
         self.assertNotIn(private_question, retention_text)
         self.assertIn("Public Query Result Retention", retention_md_text)
+        self.assertIn("ragflow_calls: `1`", retention_md_text)
+        self.assertIn("writes_live_ragflow: `false`", retention_md_text)
 
     def test_validate_regression_reports_partial_runtime_failures_via_fake_client(self) -> None:
         module = load_validate_module()

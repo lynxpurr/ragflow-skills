@@ -554,6 +554,22 @@ def make_public_query_result_retention_payload(validation_payload: Mapping[str, 
     benchmark = validation_payload.get("benchmark") if isinstance(validation_payload.get("benchmark"), Mapping) else None
     benchmark_by_query = _benchmark_metrics_by_query(benchmark)
     dataset = validation_payload.get("dataset") if isinstance(validation_payload.get("dataset"), Mapping) else {}
+    validation_safety = (
+        validation_payload.get("safety") if isinstance(validation_payload.get("safety"), Mapping) else {}
+    )
+    ragflow_calls = validation_safety.get("ragflow_calls", 0)
+    retrieval_calls = validation_safety.get("retrieval_calls", ragflow_calls)
+    script_owned_llm_calls = validation_safety.get("script_owned_llm_calls", 0)
+    if not isinstance(ragflow_calls, int) or isinstance(ragflow_calls, bool) or ragflow_calls < 0:
+        ragflow_calls = 0
+    if not isinstance(retrieval_calls, int) or isinstance(retrieval_calls, bool) or retrieval_calls < 0:
+        retrieval_calls = ragflow_calls
+    if (
+        not isinstance(script_owned_llm_calls, int)
+        or isinstance(script_owned_llm_calls, bool)
+        or script_owned_llm_calls < 0
+    ):
+        script_owned_llm_calls = 0
     retained_queries: list[dict[str, Any]] = []
     retained_result_count = 0
     for case in cases:
@@ -610,8 +626,10 @@ def make_public_query_result_retention_payload(validation_payload: Mapping[str, 
             ),
         },
         "safety": {
-            "ragflow_calls": 0,
-            "script_owned_llm_calls": 0,
+            "ragflow_calls": ragflow_calls,
+            "retrieval_calls": retrieval_calls,
+            "writes_live_ragflow": bool(validation_safety.get("writes_live_ragflow", False)),
+            "script_owned_llm_calls": script_owned_llm_calls,
             "raw_query_text_retained": False,
             "raw_chunk_text_retained": False,
             "raw_dataset_ids_retained": False,
@@ -627,12 +645,16 @@ def render_public_query_result_retention_markdown(payload: Mapping[str, Any]) ->
     """Render a compact Markdown summary for a public-safe retention report."""
 
     summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
+    safety = payload.get("safety") if isinstance(payload.get("safety"), Mapping) else {}
     lines = [
         "# Public Query Result Retention",
         "",
         f"- schema: `{payload.get('schema', '')}`",
         f"- query_count: `{summary.get('query_count', 0)}`",
         f"- retained_result_count: `{summary.get('retained_result_count', 0)}`",
+        f"- ragflow_calls: `{safety.get('ragflow_calls', 0)}`",
+        f"- retrieval_calls: `{safety.get('retrieval_calls', 0)}`",
+        f"- writes_live_ragflow: `{str(bool(safety.get('writes_live_ragflow'))).lower()}`",
         "- raw_query_text_retained: `false`",
         "- raw_chunk_text_retained: `false`",
         "- identifiers_hashed: `true`",
@@ -1563,12 +1585,21 @@ def _query_benchmark_metrics(
     result_modality_distribution = _modality_distribution(ranked_chunks)
     expected_modalities = _query_expected_modalities(case.query, positive_qrels)
     multimodal_category = _query_multimodal_category(case.query, positive_qrels)
+    relevance_by_target: dict[str, float] = {}
+    for qrel in ranking_qrels:
+        relevance_by_target[qrel.key] = max(relevance_by_target.get(qrel.key, 0.0), qrel.relevance)
     rel_by_rank: list[float] = []
     matched_targets: list[str | None] = []
+    ranked_target_hits: set[str] = set()
     for chunk in ranked_chunks:
         match = _best_matching_qrel(chunk, ranking_qrels, snapshot_index=snapshot_index)
-        rel_by_rank.append(match.relevance if match else 0.0)
-        matched_targets.append(match.key if match else None)
+        target = match.key if match else None
+        relevance = 0.0
+        if target is not None and target not in ranked_target_hits:
+            relevance = relevance_by_target[target]
+            ranked_target_hits.add(target)
+        rel_by_rank.append(relevance)
+        matched_targets.append(target)
 
     relevant_retrieved = sum(1 for relevance in rel_by_rank if relevance > 0)
     first_relevant_rank = next(
@@ -1586,7 +1617,7 @@ def _query_benchmark_metrics(
         unique_hits_so_far += 1
         precision_sum += unique_hits_so_far / index
 
-    ideal_relevances = sorted((qrel.relevance for qrel in ranking_qrels), reverse=True)[:cutoff]
+    ideal_relevances = sorted(relevance_by_target.values(), reverse=True)[:cutoff]
     dcg = _dcg(rel_by_rank)
     idcg = _dcg(ideal_relevances)
     recall = len(unique_hits) / len(relevant_keys)

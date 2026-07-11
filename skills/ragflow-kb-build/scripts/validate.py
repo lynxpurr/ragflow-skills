@@ -125,6 +125,7 @@ def _render_markdown_from_payload(payload: dict[str, Any]) -> str:
         if isinstance(runtime_partial.get("summary"), dict)
         else {}
     )
+    safety = payload.get("safety") if isinstance(payload.get("safety"), dict) else {}
     lines = [
         "# RAGFlow Validation Report",
         "",
@@ -137,6 +138,9 @@ def _render_markdown_from_payload(payload: dict[str, Any]) -> str:
         f"- runtime_partial_failure_failures: `{runtime_partial_summary.get('failure_count', 0)}`",
         f"- runtime_partial_failure_timeouts: `{runtime_partial_summary.get('timeout_count', 0)}`",
         f"- runtime_partial_failure_warnings: `{runtime_partial_summary.get('warning_count', 0)}`",
+        f"- ragflow_calls: `{safety.get('ragflow_calls', 0)}`",
+        f"- retrieval_calls: `{safety.get('retrieval_calls', 0)}`",
+        f"- writes_live_ragflow: `{str(bool(safety.get('writes_live_ragflow'))).lower()}`",
         "",
         "| id | status | chunks | missing terms | missing documents |",
         "|---|---:|---:|---|---|",
@@ -285,6 +289,22 @@ def _run(args: argparse.Namespace) -> int:
                 raise ValidationError("benchmark validation requires --qrels")
             queries = load_validation_queries(args.queries)
 
+        qrels = None
+        gate = None
+        baseline = None
+        chunk_snapshot = None
+        if args.level == "benchmark":
+            qrels = load_benchmark_qrels(args.qrels)
+            gate = load_benchmark_gate(args.gate_config) if args.gate_config else None
+            baseline = load_benchmark_baseline(args.baseline_report) if args.baseline_report else None
+            chunk_snapshot = load_chunk_snapshot(args.chunk_snapshot) if args.chunk_snapshot else None
+        observed_report = None
+        if args.observed_state:
+            try:
+                observed_report = load_kb_refresh_report(args.observed_state)
+            except BuildError as exc:
+                raise ValidationError(str(exc)) from exc
+
         config = _load_config(args)
         client = RAGFlowClient(config)
         stage_start = time.monotonic()
@@ -297,10 +317,6 @@ def _run(args: argparse.Namespace) -> int:
             top_k=args.top_k,
         )
         if args.level == "benchmark":
-            qrels = load_benchmark_qrels(args.qrels)
-            gate = load_benchmark_gate(args.gate_config) if args.gate_config else None
-            baseline = load_benchmark_baseline(args.baseline_report) if args.baseline_report else None
-            chunk_snapshot = load_chunk_snapshot(args.chunk_snapshot) if args.chunk_snapshot else None
             report = attach_benchmark_evaluation(
                 report,
                 qrels=qrels,
@@ -323,13 +339,15 @@ def _run(args: argparse.Namespace) -> int:
                 }
             ],
         )
+        payload["safety"] = {
+            "ragflow_calls": len(queries),
+            "retrieval_calls": len(queries),
+            "writes_live_ragflow": False,
+            "script_owned_llm_calls": 0,
+        }
         if metadata_summary:
             payload["metadata_summary"] = metadata_summary
-        if args.observed_state:
-            try:
-                observed_report = load_kb_refresh_report(args.observed_state)
-            except BuildError as exc:
-                raise ValidationError(str(exc)) from exc
+        if observed_report is not None:
             payload["observed_state"] = summarize_kb_refresh_observed_state(
                 observed_report,
                 dataset_id=manifest.dataset.id,

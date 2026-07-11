@@ -1,6 +1,7 @@
 # Marker-Aware Evidence Validation And Promotion Plan
 
-Status: Hermes L0 and private offline L1 complete; L2-L4 separately gated
+Status: Hermes L0 and private offline L1 complete; Open RAG L2 read-only checkpoint
+complete, FinanceBench requires separate L3, and L4 remains gated
 Date: 2026-07-11
 Owning prior work:
 `docs/superpowers/specs/2026-07-11-marker-aware-candidate-snapshot-design.md`
@@ -50,7 +51,9 @@ In scope:
 - maintain one checklist that distinguishes completed public offline behavior from
   residual private, read-only, live, and promotion work.
 
-Out of scope for the current approved slice:
+Out of scope for the original plan-writing and L0 authorization below. L1 and L2 were
+later authorized separately as recorded in this document; neither authorization opened
+L3 or L4:
 
 - no Open RAG or FinanceBench private source access;
 - no network access or RAGFlow HTTP call, including read-only calls;
@@ -265,7 +268,7 @@ an `auto` fallback or invent a successful marker decision.
 
 ### L2/L3 Observed Validation
 
-- [ ] Obtain separate L2 authorization for pinned read-only RAGFlow observed evidence.
+- [x] Obtain separate L2 authorization for pinned read-only RAGFlow observed evidence.
 - [ ] Review per-subset strict retrieval, wrong-document, pollution, term, table, and
   citation-support metrics without mutation.
 - [ ] Open L3 only if a disposable live lifecycle is necessary and separately approved.
@@ -341,6 +344,26 @@ Baseline recorded on 2026-07-11:
 - the portfolio remains `ready_with_review` solely because observed validation is absent.
   No network, RAGFlow, MinerU/DeepDoc, LLM/RAGAS, Stage 8C, or default-changing action
   occurred during L1;
+- L2 was separately authorized for read-only RAGFlow observation. The compatibility probe
+  passed, and exact discovery reviewed 186 existing datasets and 11,339 observed documents
+  without mutation. Four existing Open RAG document matches were found; no exactly
+  pinnable FinanceBench document was present;
+- two equivalent Open RAG baseline KBs produced identical 24-chunk stable-hash sets and
+  identical metrics. All 16 reviewed grounded spans mapped to five observed chunks;
+  hit rate, expected chunk hit rate, expected-term recall, and table-term recall were 1.0,
+  zero-result and wrong-document rates were 0, and strict chunk recall at 3 was 0.95;
+- the L2 metric review exposed two public defects and closed them with focused tests:
+  duplicate chunks from one document target no longer inflate precision/nDCG, and
+  validation plus public-safe retention reports now record actual read-only RAGFlow call
+  counts with `writes_live_ragflow=false`;
+- independent merge review added a third fail-before-network hardening fix: qrels, gate,
+  baseline, chunk-snapshot, and observed-state inputs are validated before retrieval;
+- L2 made 280 RAGFlow calls: 220 GET calls and 60 read-only retrieval POST calls. It made
+  zero create, upload, parse, reparse, update, delete, cleanup, MinerU, DeepDoc, LLM/RAGAS,
+  Stage 8C, or default-changing calls/actions;
+- FinanceBench observed validation remains absent because no suitable existing KB was
+  available. This activates the documented `l3_required` stop condition but does not
+  authorize L3;
 - two `docs/38` rows remain open: a true two-subset observed retrieval-quality baseline
   and complete metric review before guidance changes;
 - the low-level default remains `file`; high-level callers may explicitly use the
@@ -365,8 +388,9 @@ Residual work remains classified as follows:
   calibration, and independent Hermes L0 replay;
 - completed private offline work: Open RAG and FinanceBench candidate snapshots, QA
   mapping review, stable-hash approval, normalized qrels, and portfolio replay under L1;
-- read-only live work: pinned observed RAGFlow validation under L2;
-- live mutation work: disposable build/query/cleanup only under L3;
+- completed read-only live work: pinned Open RAG observed validation under L2;
+- remaining live mutation work: FinanceBench disposable build/query/cleanup only under a
+  separate L3 instruction;
 - decision work: high-level and possible low-level automatic-default promotion under L4;
 - separately blocked work: DeepDoc/native comparison, script-owned LLM/RAGAS, Stage 8C,
   private adapters, and unrelated post-CLI surfaces.
@@ -404,3 +428,29 @@ generation, exact evidence review, qrels approval, and portfolio replay:
 - L1 closes only candidate expected-chunk evidence. It does not establish observed strict
   chunk recall, authorize RAGFlow HTTP, open a disposable lifecycle, or support a default
   change.
+
+## L2 Partial Closeout / Retrospective
+
+L2 completed the maximum evidence available without mutation:
+
+- existing Open RAG data was suitable and reproducible across two equivalent baseline
+  KBs;
+- candidate and observed identities remained separate, and observed qrels were derived
+  only after exact grounded evidence mapped to server-observed stable hashes;
+- the retrieval-evidence citation-support proxy was 1.0 because every query retrieved at
+  least one mapped grounded-evidence chunk; no answer-level citation audit was claimed;
+- tag-pollution evidence was unavailable for the single-document, no-tag-qrel subset, so
+  no broad pollution conclusion was inferred from a zero wrong-document rate;
+- FinanceBench could not be completed under L2 because no existing dataset matched the
+  reviewed source identity. The two-subset baseline and guidance review remain open;
+- all public-safe review artifacts passed separate endpoint, credential, private path,
+  identifier, raw-query, and raw-chunk scans with zero matches.
+- final branch verification passed 723 runtime tests with 38 subtests, 109 of 109 schema
+  identity checks, 3 manifest schema checks, release hygiene with zero findings, release
+  build/export for all three archives, 264 of 264 consumer-acceptance checks, and 154 of
+  154 strict-vendor smoke checks.
+
+The next actionable gate is a separately reviewed L3 instruction limited to a disposable
+FinanceBench build, seven benchmark queries, exact cleanup confirmation, post-cleanup
+absence proof, and sanitized retention. No L4 decision should begin before that evidence
+exists.

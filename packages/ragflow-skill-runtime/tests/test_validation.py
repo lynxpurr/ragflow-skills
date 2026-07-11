@@ -386,6 +386,45 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(benchmark["baseline"]["delta"]["mrr"], 0.5)
         self.assertIn("## Benchmark", render_markdown_report(benchmarked))
 
+    def test_benchmark_document_qrel_counts_duplicate_chunks_once_for_ranking_metrics(self) -> None:
+        chunks = normalize_retrieval_response(
+            {
+                "data": {
+                    "chunks": [
+                        {"content": f"relevant chunk {index}", "document_name": "source.md"}
+                        for index in range(3)
+                    ]
+                }
+            }
+        )
+        report = ValidationReport(
+            level="benchmark",
+            dataset_id="ds-1",
+            dataset_name="kb:test",
+            cases=[
+                ValidationCaseResult(
+                    query=ValidationQuery(id="q1", question="Known"),
+                    passed=True,
+                    chunk_count=len(chunks),
+                    chunks=chunks,
+                )
+            ],
+        )
+
+        benchmarked = attach_benchmark_evaluation(
+            report,
+            qrels={"q1": load_benchmark_qrels_dict_item("source.md")},
+            cutoff=3,
+        )
+        benchmark = benchmarked.to_dict()["benchmark"]
+        metrics = benchmark["metrics"]
+        per_query = benchmark["per_query"][0]
+
+        self.assertEqual(per_query["matched_targets"], 1)
+        self.assertEqual(metrics["recall_at_k"], 1.0)
+        self.assertAlmostEqual(metrics["precision_at_k"], 1 / 3)
+        self.assertEqual(metrics["ndcg_at_k"], 1.0)
+
     def test_benchmark_strict_chunk_recall_matches_stable_hash_snapshot(self) -> None:
         chunks = normalize_retrieval_response(
             {
