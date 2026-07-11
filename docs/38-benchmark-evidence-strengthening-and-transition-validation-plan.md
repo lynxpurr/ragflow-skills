@@ -2,7 +2,8 @@
 
 Status: public offline tooling, synthetic L0, reviewed Open RAG strengthening, normalized
 FinanceBench portfolio, and five-run transition aggregation are complete; FinanceBench
-formal conversion, observed validation, and transition sample coverage remain gated
+formal conversion, handoff inspection, benchmark replay, and KB dry-run are complete;
+observed validation and transition sample coverage remain gated
 Date: 2026-07-11
 
 ## Objective / Scope / Boundaries
@@ -284,7 +285,7 @@ generated separately after review.
   selection, provenance, and source hashes outside raw public artifacts.
 - [x] Normalize table/numeric queries, document qrels, evidence-page metadata, expected
   terms, grounded QA, and deterministic distractor cases.
-- [ ] Run formal conversion, handoff inspection, benchmark import/preflight, and KB
+- [x] Run formal conversion, handoff inspection, benchmark import/preflight, and KB
   dry-run without live mutation.
 - [x] Add the FinanceBench subset to the initial portfolio and retain public-safe reports.
 
@@ -358,9 +359,15 @@ Implementation update on 2026-07-11:
   and 8 table/numeric queries. It remains `ready_with_review` solely because observed
   validation is absent and therefore is not a Level 3 retrieval regression baseline;
 - FinanceBench source inspection classified the 190-page filing as table-heavy,
-  long-document, high-complexity, and unsuitable for the built-in converter. Formal
-  conversion, handoff inspection, and KB dry-run remain gated on a reviewed PDF-capable
-  backend;
+  long-document, high-complexity, and unsuitable for the built-in converter. An approved
+  MinerU FastAPI protocol-v2 backend passed a read-only health probe and completed the
+  reviewed `hybrid-auto-engine` high-table-quality path after backend and language config
+  propagation were aligned with the deployed service. The formal handoff contains one
+  document, 134 files, 15 formal sidecars, 491 dense chunk markers, and 111 detected
+  tables. Handoff inspection reported complete rich/pipeline sidecars,
+  `PASS_WITH_REVIEW`, 115 artifacts, and 379 retrieval hints; KB dry-run passed for one
+  document with an estimated 841 chunks. The only retained review warnings are manual
+  quality review and the selected default profile treating dense markers as advisory;
 - five explicit, public-safe transition records were aggregated with zero findings and
   zero triggered tracks. Five of eight required sample classes were observed; office
   table, mixed-language, and low-quality-OCR samples remain missing, so the retirement
@@ -402,9 +409,10 @@ Residual gates remain separate:
 
 - reviewed public source acquisition and private normalization are complete for the
   current Open RAG and FinanceBench slices;
-- FinanceBench PDF conversion requires a reviewed PDF-capable backend; the built-in
-  converter is not a valid PDF fallback, and MinerU/private-service execution still
-  requires an explicit service/config decision;
+- FinanceBench formal conversion, handoff inspection, import/preflight replay, and KB
+  dry-run are complete. The built-in converter remains an invalid PDF fallback, and any
+  future rerun must continue to pin the reviewed MinerU protocol and deployed language
+  model setting;
 - RAGFlow read-only HTTP evidence requires its own instruction when needed;
 - any disposable RAGFlow mutation requires explicit approval, exact cleanup, and
   sanitized retention;
@@ -428,12 +436,13 @@ Public offline closeout on 2026-07-11:
   exact-span QA, deterministic sample, and portfolio rerun; FinanceBench filing/question
   selection, normalization, source-grounded expected terms, exact-span QA, import,
   preflight, and initial portfolio inclusion;
-- still open: FinanceBench formal conversion, handoff inspection and KB dry-run, reviewed
-  expected chunks, pinned observed per-subset validation, a true retrieval-quality
-  regression baseline, and completion of the transition sample-class matrix;
-- private/live decision: source acquisition and normalization remained offline. The
-  built-in converter cannot process the selected PDF, so the round stopped before any
-  MinerU/DeepDoc, RAGFlow, LLM/RAGAS, or Stage 8C action;
+- still open: reviewed expected chunks, pinned observed per-subset validation, a true
+  retrieval-quality regression baseline, and completion of the transition sample-class
+  matrix;
+- private/live decision: source acquisition and normalization remained offline. MinerU
+  was used only for the approved private conversion and produced the formal handoff; its
+  temporary config was deleted afterward. No DeepDoc, RAGFlow, LLM/RAGAS, or Stage 8C
+  action was performed;
 - roadmap effect: no `docs/32` retirement row and no `docs/36` Stage 8C row closes from
   synthetic evidence alone. The current profile, retirement, and parameter
   materialization decisions remain unchanged.

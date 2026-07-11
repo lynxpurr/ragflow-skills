@@ -10,8 +10,9 @@
 
 Status: public implementation, release validation, synthetic replay, reviewed Open RAG
 strengthening, normalized FinanceBench portfolio, and five-run transition aggregation
-complete; FinanceBench formal conversion, observed validation, and transition sample
-coverage remain gated
+complete; FinanceBench formal conversion, handoff inspection, benchmark replay, and KB
+dry-run are also complete, while observed validation and transition sample coverage
+remain gated
 Design source: `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`
 
 ---
@@ -593,7 +594,7 @@ final worktree remained clean. The replay does not close Task 7.
 - Update only when rows close: `docs/32-retirement-transition-action-plan.md`
 - Update only when a closeout decision changes: `docs/16-system-closeout-report.md`
 
-- [ ] **Step 1: Prepare the repository-external source layout**
+- [x] **Step 1: Prepare the repository-external source layout**
 
 Use this exact private root layout; do not create it inside the repository:
 
@@ -619,8 +620,10 @@ source inputs. Do not download or invent source evidence inside the implementati
 
 Evidence update on 2026-07-11: the operator approved reviewed Open RAG and FinanceBench
 public sources, and the repository-external directory layout, source inventory, and
-hash list were created. The reviewed PDF-capable `private-conversion.yaml` is still
-absent, so Step 1 remains open as an umbrella preparation step.
+hash list were created. A minimal reviewed MinerU FastAPI conversion config was then
+created with owner-only permissions, used only for the approved FinanceBench attempts,
+and deleted after the successful run. The reviewed source layout, backend/config
+lifecycle, and private artifact boundary are complete for this evidence fill.
 
 - [x] **Step 2: Strengthen the Open RAG subset offline**
 
@@ -663,7 +666,7 @@ hash, 16 of 16 QA spans passed exact-source validation, import and preflight pas
 the stratified size-5 sample with seed 7 was reproduced. Expected-chunk coverage remains
 zero by design.
 
-- [ ] **Step 3: Build the FinanceBench offline slice**
+- [x] **Step 3: Build the FinanceBench offline slice**
 
 Select one filing and bounded questions from the operator-prepared public sample. Create
 attribution, selection, queries, qrels, and QA artifacts; run formal conversion,
@@ -676,11 +679,12 @@ Use the fixed private root from Step 1. When a reviewed conversion config is ava
 
 ```bash
 python3 skills/ragflow-doc-to-md/scripts/convert.py pipeline \
-  --input /tmp/ragflow-benchmark-evidence-private-20260711/sources/financebench \
+  --input /tmp/ragflow-benchmark-evidence-private-20260711/sources/financebench/pdfs/BOEING_2022_10K.pdf \
   --output /tmp/ragflow-benchmark-evidence-private-20260711/handoffs/financebench \
   --config /tmp/ragflow-benchmark-evidence-private-20260711/private-conversion.yaml \
-  --backend auto \
+  --backend mineru-fastapi \
   --table-quality high \
+  --postprocess-profile chunk-markers-dense \
   --redaction-report /tmp/ragflow-benchmark-evidence-private-20260711/reports/financebench-convert.redaction.json \
   --json
 python3 skills/ragflow-kb-build/scripts/build.py inspect-handoff \
@@ -720,9 +724,23 @@ Partial evidence on 2026-07-11: a bounded 7-question filing slice was normalized
 operator-approved expected terms, evidence-page metadata, grounded QA, and deterministic
 wrong-document alternates. Import and preflight passed, and 9 of 9 QA spans matched the
 human-annotated evidence. Source inspection classified the 190-page PDF as table-heavy,
-long-document, high-complexity, and unavailable to the built-in converter. No reviewed
-PDF-capable conversion config was present, so formal conversion, inspect-handoff, and KB
-dry-run were not executed and Step 3 remains open.
+long-document, high-complexity, and unavailable to the built-in converter. The approved
+MinerU FastAPI protocol-v2 backend passed a read-only health probe, and the reviewed
+high-table-quality path used `hybrid-auto-engine`, `markdown_assets`, and
+`chunk-markers-dense` without fallback. Preflight diagnostics corrected two config
+propagation issues before the accepted run: the command now pins `mineru-fastapi`
+instead of allowing `auto` to select the sync protocol, and it preserves the language
+model setting available on the deployed backend. The final conversion produced one
+document, 134 private handoff files, 15 formal sidecars, 491 chunk markers, 111 detected
+tables, and zero conversion-redaction findings. `inspect-handoff` reported one document,
+115 artifacts, 379 retrieval hints, complete rich/pipeline sidecars, and
+`PASS_WITH_REVIEW`; table-parent preflight was ready with a maximum estimated parent
+chunk size of 606 tokens. KB dry-run passed for one document with an estimated 841
+chunks and two explicit review warnings: the quality gate requires manual review, and
+the selected default profile treats dense markers as advisory. FinanceBench import and
+preflight reran successfully with seven judged queries and the expected exploratory
+document-only/single-document warnings. No RAGFlow HTTP request or write was made, and
+the temporary config was deleted.
 
 - [x] **Step 4: Produce the initial two-subset portfolio**
 

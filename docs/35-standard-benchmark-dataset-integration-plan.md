@@ -2,8 +2,8 @@
 
 Status: active standard-dataset integration plan; Open RAG Benchmark seed validated
 through Stage 5 and strengthened with reviewed expected terms; the normalized
-FinanceBench slice and initial artifact portfolio are complete, while formal conversion
-and observed retrieval validation remain open
+FinanceBench slice, formal handoff, dry-run, and initial artifact portfolio are complete,
+while observed retrieval validation remains open
 Date: 2026-07-09
 Last calibrated: 2026-07-11
 
@@ -123,31 +123,28 @@ Current limitations and gates:
 | DeepDoc native PDF baseline | Pending / separately gated | Optional PDF-native/fallback comparison requiring separate live approval. |
 | KB parameter materialization | Contract-audited / conditionally blocked | `docs/36-ragflow-kb-parameter-materialization-plan.md` Stage 8B is complete for RAGFlow `v0.25.5`; zero candidates are Stage 8C eligible. Benchmark datasets remain prerequisite evaluation evidence if a future pinned contract exposes a writable candidate. |
 | Stronger Open RAG Benchmark subset | Expected-term strengthening complete / chunk evidence pending | Existing 10 stable query IDs now have reviewed source attribution, selection evidence, 21 source-grounded expected terms, exact-span QA validation, deterministic sampling, and refreshed preflight. Expected chunks remain absent. |
-| FinanceBench table/numeric slice | Normalized / formal conversion pending | One bounded filing contributes 7 judged queries, 25 source-grounded expected terms, evidence-page metadata, grounded QA, deterministic distractors, and passing import/preflight. Formal conversion, inspect-handoff, and KB dry-run remain open. |
+| FinanceBench table/numeric slice | Offline formal slice complete / observed validation pending | One bounded filing contributes 7 judged queries, 25 source-grounded expected terms, evidence-page metadata, grounded QA, deterministic distractors, and passing import/preflight. The approved MinerU FastAPI high-table-quality path produced a one-document formal handoff with 491 dense markers and 111 detected tables; inspect-handoff and KB dry-run passed with explicit review warnings and no live mutation. |
 | QASPER scientific QA slice | Deferred | Useful after Open RAG Benchmark and FinanceBench adapters are stable. |
 | TREC-COVID IR reference slice | Deferred | Later retrieval-metric and qrels-format calibration work. |
 | Regression portfolio | Initial artifact baseline complete / retrieval baseline pending | The reviewed two-subset portfolio has 17 judged queries and 8 table/numeric queries with `ready_with_review`; observed per-subset validation is still required for trend/delta and Level 3 claims. |
 | Attribution/selection artifact contract | Complete | Import and deterministic sampling now preserve normalized source and selection provenance with schema/release governance. |
 | Synthetic Stage 6/7 rehearsal | Complete | Neutral two-subset portfolio produced 6 queries, 12 qrels, 6 QA items, table/numeric and negative coverage, and `ready_with_review` without live calls. |
 | Independent Hermes L0 replay | Complete | Commit `3b94d93` reproduced the synthetic chain from a clean worktree with zero RAGFlow/DeepDoc/LLM/Stage 8C actions and no unresolved sensitive findings. |
-| Private Stage 6/7 evidence fill | In progress | Reviewed source acquisition and normalization are complete, and five transition records were aggregated. Remaining gates are a reviewed PDF-capable FinanceBench conversion backend/config, license confirmation before promotion, observed per-subset validation, and three missing transition sample classes. |
+| Private Stage 6/7 evidence fill | Offline slice complete / observation work pending | Reviewed source acquisition and normalization, Open RAG strengthening, FinanceBench formal conversion/dry-run, the two-subset artifact portfolio, and five transition records are complete. Remaining gates are license confirmation before promotion, reviewed expected chunks, observed per-subset validation, and three missing transition sample classes. |
 
 ### Follow-Up Work Plan
 
 Recommended next sequence:
 
-1. Complete FinanceBench formal conversion, inspect-handoff, and KB dry-run with a
-   reviewed PDF-capable backend; do not use the built-in text/HTML converter as a PDF
-   fallback.
-2. Add expected chunk hashes only when a reviewed snapshot exists for the stable Open
+1. Add expected chunk hashes only when a reviewed offline snapshot exists for the stable Open
    RAG or FinanceBench queries.
-3. Produce pinned observed per-subset validation reports before calling the current
+2. Produce pinned observed per-subset validation reports before calling the current
    two-subset artifact portfolio a retrieval-quality regression baseline.
-4. Keep `docs/36-ragflow-kb-parameter-materialization-plan.md` as a conditional gate.
+3. Keep `docs/36-ragflow-kb-parameter-materialization-plan.md` as a conditional gate.
    Its pinned RAGFlow `v0.25.5` Stage 8B audit is complete with zero Stage 8C-eligible
    candidates; reopen contract discovery only for a new deployed version or an explicit
    upstream contract change.
-5. Decide separately whether a DeepDoc native PDF baseline is needed for a PDF-native
+4. Decide separately whether a DeepDoc native PDF baseline is needed for a PDF-native
    parser comparison. This remains live-approved and must not be bundled into ordinary
    offline benchmark expansion.
 
