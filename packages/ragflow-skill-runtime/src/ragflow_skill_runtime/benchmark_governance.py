@@ -2038,7 +2038,11 @@ class _MarkdownBoundaryResult:
 
 def _markdown_paths(path: Path) -> list[Path]:
     if path.is_dir():
-        return sorted(path.rglob("*.md"))
+        return sorted(
+            item
+            for item in path.rglob("*")
+            if item.is_file() and item.suffix.lower() in {".md", ".markdown"}
+        )
     return [path]
 
 
@@ -2230,6 +2234,10 @@ def _read_markdown_snapshot_input(
     requested_mode: str,
 ) -> tuple[list[NormalizedChunk], dict[str, Any]]:
     paths = _markdown_paths(source)
+    if not paths:
+        raise BenchmarkGovernanceError(
+            "chunk snapshot input did not contain any Markdown files"
+        )
     results = [
         _file_boundary_result(path)
         if requested_mode == "file"

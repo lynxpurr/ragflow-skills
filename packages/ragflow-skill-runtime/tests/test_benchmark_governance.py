@@ -913,6 +913,41 @@ class BenchmarkGovernanceTests(unittest.TestCase):
                     markdown_boundary_mode="markers",
                 )
 
+    def test_snapshot_markdown_directory_accepts_markdown_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            documents.mkdir()
+            (documents / "source.markdown").write_text(
+                "alpha\n<!-- chunk -->\nbeta\n",
+                encoding="utf-8",
+            )
+
+            report = snapshot_chunks(
+                input_path=documents,
+                output_path=root / "snapshot.json",
+                markdown_boundary_mode="auto",
+            )
+
+        self.assertEqual(report["boundary"]["effective_mode"], "markers")
+        self.assertEqual(report["summary"]["chunk_count"], 2)
+
+    def test_snapshot_markdown_directory_rejects_empty_input_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            documents = root / "documents"
+            documents.mkdir()
+
+            with self.assertRaisesRegex(
+                BenchmarkGovernanceError,
+                "did not contain any Markdown files",
+            ):
+                snapshot_chunks(
+                    input_path=documents,
+                    output_path=root / "snapshot.json",
+                    markdown_boundary_mode="auto",
+                )
+
     def test_snapshot_json_rejects_markdown_boundary_modes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
