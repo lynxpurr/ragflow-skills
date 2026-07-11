@@ -4845,6 +4845,197 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("RAGFlow Benchmark Retrieval Suggestions", suggest_md_text)
         self.assertIn("Benchmark Artifact Suggestions", suggest_md_text)
 
+    def test_benchmark_import_and_sample_contract_inputs_via_build_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            qa = root / "qa.json"
+            source_attribution = root / "source_attribution.json"
+            selection_report = root / "selection_report.json"
+            benchmark_dir = root / "benchmark"
+            inherited_sample_dir = root / "inherited-sample"
+            explicit_sample_dir = root / "explicit-sample"
+            import_md = root / "import.md"
+            inherited_sample_md = root / "inherited-sample.md"
+            explicit_sample_md = root / "explicit-sample.md"
+            import_redaction = root / "import.redaction.json"
+            inherited_sample_redaction = root / "inherited-sample.redaction.json"
+            explicit_sample_redaction = root / "explicit-sample.redaction.json"
+            queries.write_text(
+                json.dumps(
+                    {
+                        "queries": [
+                            {"id": "q1", "question": "Which value?", "metadata": {"type": "table_lookup"}},
+                            {"id": "q2", "question": "Which source?", "metadata": {"type": "fact"}},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            qrels.write_text(
+                json.dumps({"q1": {"filing-001.md": 1}, "q2": {"filing-001.md": 1}}),
+                encoding="utf-8",
+            )
+            qa.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_grounded_qa_v1",
+                        "items": [
+                            {"query_id": "q1", "answer": "42 percent"},
+                            {"query_id": "q2", "answer": "filing-001"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            source_attribution.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_benchmark_source_attribution_v1",
+                        "dataset_name": "finance-table-synthetic",
+                        "upstream_projects": ["public-project-label"],
+                        "license": "CC-BY-NC-4.0",
+                        "selected_source_ids": ["filing-001"],
+                        "source_hashes": ["sha256:" + "1" * 64],
+                        "authorship": "human",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            selection_report.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_benchmark_selection_report_v1",
+                        "subset_id": "finance-table-synthetic-v1",
+                        "selection_criteria": ["table evidence"],
+                        "query_types": ["table_lookup", "fact"],
+                        "modalities": ["table", "text"],
+                        "excluded_case_counts": {},
+                        "decision_tier": "exploratory",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            import_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "import",
+                    "--queries",
+                    str(queries),
+                    "--qrels",
+                    str(qrels),
+                    "--qa",
+                    str(qa),
+                    "--source-attribution",
+                    str(source_attribution),
+                    "--selection-report",
+                    str(selection_report),
+                    "--output",
+                    str(benchmark_dir),
+                    "--report-md",
+                    str(import_md),
+                    "--redaction-report",
+                    str(import_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            inherited_sample_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "sample",
+                    "--manifest",
+                    str(benchmark_dir / "manifest.json"),
+                    "--output",
+                    str(inherited_sample_dir),
+                    "--size",
+                    "1",
+                    "--name",
+                    "inherited-sample-v1",
+                    "--report-md",
+                    str(inherited_sample_md),
+                    "--redaction-report",
+                    str(inherited_sample_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            explicit_sample_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "benchmark",
+                    "sample",
+                    "--queries",
+                    str(queries),
+                    "--qrels",
+                    str(qrels),
+                    "--qa",
+                    str(qa),
+                    "--source-attribution",
+                    str(source_attribution),
+                    "--selection-report",
+                    str(selection_report),
+                    "--output",
+                    str(explicit_sample_dir),
+                    "--size",
+                    "1",
+                    "--name",
+                    "explicit-sample-v1",
+                    "--report-md",
+                    str(explicit_sample_md),
+                    "--redaction-report",
+                    str(explicit_sample_redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            results = (import_result, inherited_sample_result, explicit_sample_result)
+            manifest = json.loads((benchmark_dir / "manifest.json").read_text(encoding="utf-8")) if benchmark_dir.exists() else {}
+            inherited_selection = (
+                json.loads((inherited_sample_dir / "selection_report.json").read_text(encoding="utf-8"))
+                if inherited_sample_dir.exists()
+                else {}
+            )
+            explicit_selection = (
+                json.loads((explicit_sample_dir / "selection_report.json").read_text(encoding="utf-8"))
+                if explicit_sample_dir.exists()
+                else {}
+            )
+            report_text = "\n".join(
+                [
+                    *(result.stdout for result in results),
+                    *(path.read_text(encoding="utf-8") for path in (import_md, inherited_sample_md, explicit_sample_md) if path.exists()),
+                    *(path.read_text(encoding="utf-8") for path in (import_redaction, inherited_sample_redaction, explicit_sample_redaction) if path.exists()),
+                ]
+            )
+
+        for result in results:
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(manifest["artifacts"]["source_attribution"], "source_attribution.json")
+        self.assertEqual(manifest["artifacts"]["selection_report"], "selection_report.json")
+        self.assertEqual(inherited_selection["parent_subset_id"], "finance-table-synthetic-v1")
+        self.assertEqual(explicit_selection["parent_subset_id"], "finance-table-synthetic-v1")
+        self.assertIn("ragflow_benchmark_source_attribution_v1", report_text)
+        self.assertIn("ragflow_benchmark_selection_report_v1", report_text)
+        self.assertIn("exploratory", report_text)
+        self.assertNotIn(str(root), report_text)
+
     def test_benchmark_import_checkpoint_resume_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

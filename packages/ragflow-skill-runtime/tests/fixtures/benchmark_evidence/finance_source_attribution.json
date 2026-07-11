@@ -1,0 +1,15 @@
+{
+  "schema": "ragflow_benchmark_source_attribution_v1",
+  "dataset_name": "finance-table-synthetic",
+  "upstream_projects": [
+    "public-finance-label"
+  ],
+  "license": "CC-BY-NC-4.0",
+  "selected_source_ids": [
+    "filing-a.md"
+  ],
+  "source_hashes": [
+    "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+  ],
+  "authorship": "human"
+}

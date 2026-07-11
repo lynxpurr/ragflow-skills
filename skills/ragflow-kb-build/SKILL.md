@@ -43,6 +43,7 @@ python scripts/build.py tagset lint --tagset ./run/tagset.template.json --report
 python scripts/build.py tagset export --tagset ./run/tagset.template.json --format csv --output ./run/tagset.csv
 python scripts/build.py tagset report --tagset ./run/tagset.template.json --metadata ./run/metadata.merged.json --report-md ./run/tagset_report.md
 python scripts/build.py benchmark import --queries ./templates/benchmark-queries.example.json --qrels ./templates/qrels.example.json --output ./run/benchmark
+python scripts/build.py benchmark import --queries ./run/queries.json --qrels ./run/qrels.json --qa ./run/qa.json --source-attribution ./run/source_attribution.json --selection-report ./run/selection_report.json --output ./run/benchmark --report-md ./run/benchmark_import.md --redaction-report ./run/benchmark_import.redaction.json
 python scripts/build.py benchmark import --queries ./templates/benchmark-queries.example.json --qrels ./templates/qrels.example.json --output ./run/benchmark --checkpoint ./run/benchmark-import.checkpoint.json --batch-size 25
 python scripts/build.py benchmark import --queries ./templates/benchmark-queries.example.json --qrels ./templates/qrels.example.json --output ./run/benchmark --checkpoint ./run/benchmark-import.checkpoint.json --resume --batch-size 25
 python scripts/build.py benchmark preflight --manifest ./run/benchmark/manifest.json --gate-config ./templates/benchmark-gate.example.json --report-md ./run/benchmark_preflight.md

@@ -3401,6 +3401,8 @@ def _run_no_network_checks(
     benchmark_queries = work_root / "benchmark_queries.json"
     benchmark_qrels = work_root / "benchmark_qrels.json"
     benchmark_qa = work_root / "benchmark_qa.json"
+    benchmark_source_attribution = work_root / "benchmark_source_attribution.json"
+    benchmark_selection_report = work_root / "benchmark_selection_report.json"
     segment_metadata_plan = work_root / "segment_metadata_plan.json"
     benchmark_gate = work_root / "benchmark_gate.json"
     benchmark_chunk_input = work_root / "benchmark_chunks.json"
@@ -3474,6 +3476,34 @@ def _run_no_network_checks(
                         ],
                     }
                 ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    benchmark_source_attribution.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_benchmark_source_attribution_v1",
+                "dataset_name": "consumer-acceptance-synthetic",
+                "upstream_projects": ["public-fixture"],
+                "license": "CC-BY-NC-4.0",
+                "selected_source_ids": ["fixture-001"],
+                "source_hashes": ["sha256:" + "1" * 64],
+                "authorship": "human",
+            }
+        ),
+        encoding="utf-8",
+    )
+    benchmark_selection_report.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_benchmark_selection_report_v1",
+                "subset_id": "consumer-acceptance-synthetic-v1",
+                "selection_criteria": ["portable release fixture"],
+                "query_types": ["fact"],
+                "modalities": ["text"],
+                "excluded_case_counts": {},
+                "decision_tier": "smoke",
             }
         ),
         encoding="utf-8",
@@ -3760,6 +3790,10 @@ raise SystemExit(code)
             str(benchmark_qrels),
             "--qa",
             str(benchmark_qa),
+            "--source-attribution",
+            str(benchmark_source_attribution),
+            "--selection-report",
+            str(benchmark_selection_report),
             "--output",
             str(benchmark_dir),
             "--report-md",
@@ -3783,6 +3817,20 @@ raise SystemExit(code)
         benchmark_import_redaction,
         result=benchmark_import_result,
         checked_paths=(benchmark_import_md,),
+    )
+    _record_json_path_check(
+        checks,
+        "kb-build benchmark import attribution",
+        benchmark_dir / "source_attribution.json",
+        ("schema",),
+        expected="ragflow_benchmark_source_attribution_v1",
+    )
+    _record_json_path_check(
+        checks,
+        "kb-build benchmark import selection",
+        benchmark_dir / "selection_report.json",
+        ("subset_id",),
+        expected="consumer-acceptance-synthetic-v1",
     )
     qa_generate_result = _run_command(
         [
@@ -4351,6 +4399,20 @@ raise SystemExit(code)
         result=benchmark_sample_result,
         checked_paths=(benchmark_sample_md,),
     )
+    _record_json_path_check(
+        checks,
+        "kb-build benchmark sample attribution",
+        benchmark_sample_dir / "source_attribution.json",
+        ("schema",),
+        expected="ragflow_benchmark_source_attribution_v1",
+    )
+    _record_json_path_check(
+        checks,
+        "kb-build benchmark sample selection provenance",
+        benchmark_sample_dir / "selection_report.json",
+        ("parent_subset_id",),
+        expected="consumer-acceptance-synthetic-v1",
+    )
     benchmark_summary_result = _run_command(
         [
             python_executable,
@@ -4522,10 +4584,14 @@ raise SystemExit(code)
         benchmark_dir / "queries.json",
         benchmark_dir / "qrels.json",
         benchmark_dir / "qa.json",
+        benchmark_dir / "source_attribution.json",
+        benchmark_dir / "selection_report.json",
         benchmark_sample_dir / "manifest.json",
         benchmark_sample_dir / "queries.json",
         benchmark_sample_dir / "qrels.json",
         benchmark_sample_dir / "qa.json",
+        benchmark_sample_dir / "source_attribution.json",
+        benchmark_sample_dir / "selection_report.json",
         benchmark_chunk_snapshot,
         benchmark_chunk_snapshot_md,
         benchmark_chunk_snapshot_redaction,

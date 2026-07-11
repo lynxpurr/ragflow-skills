@@ -1,0 +1,46 @@
+{
+  "queries": [
+    {
+      "id": "open-text-001",
+      "question": "Which synthetic text states the alpha revenue label?",
+      "expected_terms": [
+        "alpha revenue"
+      ],
+      "metadata": {
+        "type": "fact",
+        "expected_modalities": [
+          "text"
+        ]
+      }
+    },
+    {
+      "id": "open-table-001",
+      "question": "Which synthetic table reports the 42 percent value?",
+      "expected_terms": [
+        "42 percent"
+      ],
+      "metadata": {
+        "type": "table_lookup",
+        "expected_modalities": [
+          "table",
+          "text"
+        ]
+      }
+    },
+    {
+      "id": "open-mixed-001",
+      "question": "Which mixed synthetic record includes the caption evidence label?",
+      "expected_terms": [
+        "caption evidence"
+      ],
+      "metadata": {
+        "type": "mixed_table_plus_image",
+        "expected_modalities": [
+          "mixed",
+          "table",
+          "image"
+        ]
+      }
+    }
+  ]
+}

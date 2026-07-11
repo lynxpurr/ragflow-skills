@@ -1,0 +1,24 @@
+{
+  "schema": "ragflow_benchmark_selection_report_v1",
+  "subset_id": "open-rag-synthetic-v1",
+  "selection_criteria": [
+    "text evidence",
+    "table evidence",
+    "mixed modality evidence"
+  ],
+  "query_types": [
+    "fact",
+    "table_lookup",
+    "mixed_table_plus_image"
+  ],
+  "modalities": [
+    "text",
+    "table",
+    "image",
+    "mixed"
+  ],
+  "excluded_case_counts": {
+    "non_synthetic_source": 0
+  },
+  "decision_tier": "exploratory"
+}

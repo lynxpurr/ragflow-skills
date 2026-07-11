@@ -172,7 +172,27 @@ def _record_command_check(
     return ok
 
 
-def _record_redaction_sidecar_check(checks: list[dict[str, Any]], name: str, path: Path) -> bool:
+def _record_artifact_check(checks: list[dict[str, Any]], name: str, path: Path) -> bool:
+    ok = path.exists()
+    checks.append(
+        {
+            "name": name,
+            "ok": ok,
+            "returncode": 0 if ok else 1,
+            "error": "" if ok else f"missing {path}",
+        }
+    )
+    return ok
+
+
+def _record_redaction_sidecar_check(
+    checks: list[dict[str, Any]],
+    name: str,
+    path: Path,
+    *,
+    checked_paths: tuple[Path, ...] = (),
+    forbidden_literals: tuple[str, ...] = (),
+) -> bool:
     error = ""
     ok = path.exists()
     if not ok:
@@ -187,6 +207,15 @@ def _record_redaction_sidecar_check(checks: list[dict[str, Any]], name: str, pat
             ok = payload.get("schema") == "ragflow_report_redaction_report_v1"
             if not ok:
                 error = "unexpected redaction sidecar schema"
+    if ok:
+        combined = path.read_text(encoding="utf-8")
+        for checked_path in checked_paths:
+            if checked_path.exists():
+                combined += "\n" + checked_path.read_text(encoding="utf-8")
+        leaked = [literal for literal in forbidden_literals if literal and literal in combined]
+        if leaked:
+            ok = False
+            error = f"redaction output leaked forbidden literal {leaked[0]!r}"
     checks.append(
         {
             "name": name,
@@ -3232,6 +3261,39 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     benchmark_dir = artifacts_dir / "benchmark"
     qrels_path = _write_qrels(artifacts_dir)
     qa_path = _write_grounded_qa(artifacts_dir)
+    source_attribution_path = artifacts_dir / "benchmark_source_attribution.json"
+    selection_report_path = artifacts_dir / "benchmark_selection_report.json"
+    source_attribution_path.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_benchmark_source_attribution_v1",
+                "dataset_name": "platform-smoke-synthetic",
+                "upstream_projects": ["public-fixture"],
+                "license": "CC-BY-NC-4.0",
+                "selected_source_ids": ["fixture-001"],
+                "source_hashes": ["sha256:" + "2" * 64],
+                "authorship": "human",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    selection_report_path.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_benchmark_selection_report_v1",
+                "subset_id": "platform-smoke-synthetic-v1",
+                "selection_criteria": ["portable strict-vendor fixture"],
+                "query_types": ["fact"],
+                "modalities": ["text"],
+                "excluded_case_counts": {},
+                "decision_tier": "smoke",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    benchmark_import_md = artifacts_dir / "benchmark_import.md"
     benchmark_import_redaction = artifacts_dir / "benchmark_import_redaction.json"
     benchmark_import_result = _run_command(
         [
@@ -3245,8 +3307,14 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             str(qrels_path),
             "--qa",
             str(qa_path),
+            "--source-attribution",
+            str(source_attribution_path),
+            "--selection-report",
+            str(selection_report_path),
             "--output",
             str(benchmark_dir),
+            "--report-md",
+            str(benchmark_import_md),
             "--redaction-report",
             str(benchmark_import_redaction),
             "--json",
@@ -3260,7 +3328,23 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         benchmark_import_result,
         required_stdout='"schema": "ragflow_benchmark_import_report_v1"',
     )
-    _record_redaction_sidecar_check(checks, "kb benchmark import redaction", benchmark_import_redaction)
+    _record_redaction_sidecar_check(
+        checks,
+        "kb benchmark import redaction",
+        benchmark_import_redaction,
+        checked_paths=(benchmark_import_md,),
+        forbidden_literals=(str(workspace),),
+    )
+    _record_artifact_check(
+        checks,
+        "kb benchmark import attribution",
+        benchmark_dir / "source_attribution.json",
+    )
+    _record_artifact_check(
+        checks,
+        "kb benchmark import selection",
+        benchmark_dir / "selection_report.json",
+    )
     qa_generated = artifacts_dir / "qa.generated.json"
     qa_generate_checkpoint = artifacts_dir / "qa_generate.checkpoint.json"
     qa_generate_result = _run_command(
@@ -3766,6 +3850,7 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
     )
     _record_redaction_sidecar_check(checks, "kb optimize readiness redaction", optimization_readiness_redaction)
     benchmark_sample_dir = artifacts_dir / "benchmark-sample"
+    benchmark_sample_md = artifacts_dir / "benchmark_sample.md"
     benchmark_sample_redaction = artifacts_dir / "benchmark_sample_redaction.json"
     benchmark_sample_result = _run_command(
         [
@@ -3781,6 +3866,8 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
             "1",
             "--seed",
             "7",
+            "--report-md",
+            str(benchmark_sample_md),
             "--redaction-report",
             str(benchmark_sample_redaction),
             "--json",
@@ -3794,7 +3881,36 @@ def run_profile(profile: PlatformProfile, *, dist_dir: Path, work_root: Path) ->
         benchmark_sample_result,
         required_stdout='"schema": "ragflow_benchmark_sample_report_v1"',
     )
-    _record_redaction_sidecar_check(checks, "kb benchmark sample redaction", benchmark_sample_redaction)
+    _record_redaction_sidecar_check(
+        checks,
+        "kb benchmark sample redaction",
+        benchmark_sample_redaction,
+        checked_paths=(benchmark_sample_md,),
+        forbidden_literals=(str(workspace),),
+    )
+    _record_artifact_check(
+        checks,
+        "kb benchmark sample attribution",
+        benchmark_sample_dir / "source_attribution.json",
+    )
+    sample_selection_path = benchmark_sample_dir / "selection_report.json"
+    sample_selection_ok = False
+    sample_selection_error = ""
+    try:
+        sample_selection = json.loads(sample_selection_path.read_text(encoding="utf-8"))
+        sample_selection_ok = sample_selection.get("parent_subset_id") == "platform-smoke-synthetic-v1"
+        if not sample_selection_ok:
+            sample_selection_error = "sample selection report did not preserve parent subset identity"
+    except (OSError, json.JSONDecodeError) as exc:
+        sample_selection_error = f"invalid sample selection report: {exc}"
+    checks.append(
+        {
+            "name": "kb benchmark sample selection provenance",
+            "ok": sample_selection_ok,
+            "returncode": 0 if sample_selection_ok else 1,
+            "error": sample_selection_error,
+        }
+    )
     current_benchmark_report = _write_benchmark_report(artifacts_dir / "benchmark_current.json", mrr=1.0)
     baseline_benchmark_report = _write_benchmark_report(artifacts_dir / "benchmark_baseline.json", mrr=0.8)
     benchmark_delta_redaction = artifacts_dir / "benchmark_delta_redaction.json"

@@ -46,6 +46,10 @@ class SchemaIdentityCheckTests(unittest.TestCase):
         self.assertIn("kb_refresh_report", keys)
         self.assertIn("parameter_read_back_audit", keys)
         self.assertIn("parameter_contract_audit", keys)
+        self.assertIn("benchmark_source_attribution", keys)
+        self.assertIn("benchmark_selection_report", keys)
+        self.assertIn("benchmark_portfolio_config", keys)
+        self.assertIn("benchmark_portfolio", keys)
 
     def test_retirement_observation_matrix_coverage_matches_schema_literal(self) -> None:
         report = run_schema_identity_check()

@@ -47,6 +47,14 @@ GROUNDED_QA_SUGGESTION_REVIEW_REPORT_SCHEMA = "ragflow_grounded_qa_suggestion_re
 BENCHMARK_IMPORT_REPORT_SCHEMA = "ragflow_benchmark_import_report_v1"
 BENCHMARK_IMPORT_CHECKPOINT_SCHEMA = "ragflow_benchmark_import_checkpoint_v1"
 BENCHMARK_SAMPLE_REPORT_SCHEMA = "ragflow_benchmark_sample_report_v1"
+BENCHMARK_SOURCE_ATTRIBUTION_SCHEMA = "ragflow_benchmark_source_attribution_v1"
+BENCHMARK_SELECTION_REPORT_SCHEMA = "ragflow_benchmark_selection_report_v1"
+BENCHMARK_DECISION_TIERS = {
+    "smoke",
+    "exploratory",
+    "promotion_candidate",
+    "regression_baseline",
+}
 BENCHMARK_PREFLIGHT_REPORT_SCHEMA = "ragflow_benchmark_preflight_report_v1"
 BENCHMARK_STRENGTH_SCHEMA = "ragflow_benchmark_strength_v1"
 BENCHMARK_SUMMARY_REPORT_SCHEMA = "ragflow_benchmark_summary_report_v1"
@@ -89,6 +97,36 @@ _SUPPRESSION_STOPWORDS = STOPWORDS | {
     "which",
     "why",
     "wrong",
+}
+_BENCHMARK_AUTHORSHIP_VALUES = {"human", "llm", "mixed"}
+_BENCHMARK_SOURCE_HASH_RE = re.compile(r"^sha256:[0-9a-fA-F]{64}$")
+_BENCHMARK_UNSAFE_LITERAL_RE = re.compile(
+    r"(?i)(?:/home/|/users/|/tmp/|192\.168\.|127\.0\.0\.1|"
+    r"\bapi[_-]?key\b|\bbearer\b|\btoken\b|\bpassword\b|\bsecret\b|"
+    r"\bauthorization\b|\bdataset_id\b|\bdocument_id\b|kb:)"
+)
+_BENCHMARK_SOURCE_ATTRIBUTION_FIELDS = {
+    "schema",
+    "dataset_name",
+    "upstream_projects",
+    "license",
+    "selected_source_ids",
+    "source_hashes",
+    "authorship",
+    "notes",
+}
+_BENCHMARK_SELECTION_REPORT_FIELDS = {
+    "schema",
+    "subset_id",
+    "selection_criteria",
+    "query_types",
+    "modalities",
+    "excluded_case_counts",
+    "decision_tier",
+    "notes",
+    "parent_subset_id",
+    "sampling",
+    "selected_query_ids",
 }
 
 
@@ -177,6 +215,178 @@ def _qa_payload(path: str | Path | None) -> dict[str, Any]:
     if isinstance(raw, list):
         return {"schema": GROUNDED_QA_SCHEMA, "items": raw}
     raise BenchmarkGovernanceError("qa file must be a JSON object or list")
+
+
+def _benchmark_contract_string(payload: Mapping[str, Any], key: str, *, artifact: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise BenchmarkGovernanceError(f"{artifact} {key} must be a non-empty string")
+    return value.strip()
+
+
+def _benchmark_contract_string_list(
+    payload: Mapping[str, Any],
+    key: str,
+    *,
+    artifact: str,
+    required: bool = True,
+) -> list[str]:
+    value = payload.get(key)
+    if value is None and not required:
+        return []
+    if not isinstance(value, list):
+        raise BenchmarkGovernanceError(f"{artifact} {key} must be a list of strings")
+    if not value and required:
+        raise BenchmarkGovernanceError(f"{artifact} {key} must be a non-empty list of strings")
+    items = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise BenchmarkGovernanceError(f"{artifact} {key} must contain only non-empty strings")
+        items.append(item.strip())
+    return sorted(dict.fromkeys(items))
+
+
+def _validate_benchmark_contract_safety(payload: Mapping[str, Any], *, artifact: str) -> None:
+    def walk(value: Any) -> Iterable[str]:
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, Mapping):
+            for item in value.values():
+                yield from walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                yield from walk(item)
+
+    for value in walk(payload):
+        if _BENCHMARK_UNSAFE_LITERAL_RE.search(value):
+            raise BenchmarkGovernanceError(f"{artifact} contains an unsafe private or credential-shaped value")
+
+
+def _load_benchmark_source_attribution(path: str | Path | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    raw = _read_json(path)
+    if not isinstance(raw, Mapping):
+        raise BenchmarkGovernanceError("source_attribution must be a JSON object")
+    unknown_fields = sorted(set(raw) - _BENCHMARK_SOURCE_ATTRIBUTION_FIELDS)
+    if unknown_fields:
+        raise BenchmarkGovernanceError(
+            "source_attribution contains unsupported field(s): " + ", ".join(unknown_fields)
+        )
+    if raw.get("schema") != BENCHMARK_SOURCE_ATTRIBUTION_SCHEMA:
+        raise BenchmarkGovernanceError(
+            f"source_attribution schema must be {BENCHMARK_SOURCE_ATTRIBUTION_SCHEMA}"
+        )
+    dataset_name = _benchmark_contract_string(raw, "dataset_name", artifact="source_attribution")
+    upstream_projects = _benchmark_contract_string_list(
+        raw, "upstream_projects", artifact="source_attribution"
+    )
+    license_label = _benchmark_contract_string(raw, "license", artifact="source_attribution")
+    selected_source_ids = _benchmark_contract_string_list(
+        raw, "selected_source_ids", artifact="source_attribution"
+    )
+    source_hashes = _benchmark_contract_string_list(
+        raw,
+        "source_hashes",
+        artifact="source_attribution",
+        required=False,
+    )
+    invalid_hashes = [value for value in source_hashes if not _BENCHMARK_SOURCE_HASH_RE.fullmatch(value)]
+    if invalid_hashes:
+        raise BenchmarkGovernanceError("source_attribution source_hashes must use sha256: plus 64 hex characters")
+    authorship = _benchmark_contract_string(raw, "authorship", artifact="source_attribution")
+    if authorship not in _BENCHMARK_AUTHORSHIP_VALUES:
+        raise BenchmarkGovernanceError(
+            "source_attribution authorship must be one of human, llm, mixed"
+        )
+    normalized: dict[str, Any] = {
+        "schema": BENCHMARK_SOURCE_ATTRIBUTION_SCHEMA,
+        "dataset_name": dataset_name,
+        "upstream_projects": upstream_projects,
+        "license": license_label,
+        "selected_source_ids": selected_source_ids,
+        "source_hashes": [value.lower() for value in source_hashes],
+        "authorship": authorship,
+    }
+    if "notes" in raw:
+        normalized["notes"] = _benchmark_contract_string(raw, "notes", artifact="source_attribution")
+    _validate_benchmark_contract_safety(normalized, artifact="source_attribution")
+    return normalized
+
+
+def _load_benchmark_selection_report(path: str | Path | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    raw = _read_json(path)
+    if not isinstance(raw, Mapping):
+        raise BenchmarkGovernanceError("selection_report must be a JSON object")
+    unknown_fields = sorted(set(raw) - _BENCHMARK_SELECTION_REPORT_FIELDS)
+    if unknown_fields:
+        raise BenchmarkGovernanceError(
+            "selection_report contains unsupported field(s): " + ", ".join(unknown_fields)
+        )
+    if raw.get("schema") != BENCHMARK_SELECTION_REPORT_SCHEMA:
+        raise BenchmarkGovernanceError(
+            f"selection_report schema must be {BENCHMARK_SELECTION_REPORT_SCHEMA}"
+        )
+    subset_id = _benchmark_contract_string(raw, "subset_id", artifact="selection_report")
+    selection_criteria = _benchmark_contract_string_list(
+        raw, "selection_criteria", artifact="selection_report"
+    )
+    query_types = _benchmark_contract_string_list(
+        raw, "query_types", artifact="selection_report", required=False
+    )
+    modalities = _benchmark_contract_string_list(
+        raw, "modalities", artifact="selection_report", required=False
+    )
+    decision_tier = _benchmark_contract_string(raw, "decision_tier", artifact="selection_report")
+    if decision_tier not in BENCHMARK_DECISION_TIERS:
+        raise BenchmarkGovernanceError(
+            "selection_report decision_tier must be one of " + ", ".join(sorted(BENCHMARK_DECISION_TIERS))
+        )
+    excluded_case_counts = raw.get("excluded_case_counts", {})
+    if not isinstance(excluded_case_counts, Mapping):
+        raise BenchmarkGovernanceError("selection_report excluded_case_counts must be an object")
+    normalized_counts: dict[str, int] = {}
+    for key, value in excluded_case_counts.items():
+        if not isinstance(key, str) or not key.strip():
+            raise BenchmarkGovernanceError("selection_report excluded_case_counts keys must be non-empty strings")
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise BenchmarkGovernanceError("selection_report excluded_case_counts values must be non-negative integers")
+        normalized_counts[key.strip()] = value
+    normalized: dict[str, Any] = {
+        "schema": BENCHMARK_SELECTION_REPORT_SCHEMA,
+        "subset_id": subset_id,
+        "selection_criteria": selection_criteria,
+        "query_types": query_types,
+        "modalities": modalities,
+        "excluded_case_counts": dict(sorted(normalized_counts.items())),
+        "decision_tier": decision_tier,
+    }
+    if "notes" in raw:
+        normalized["notes"] = _benchmark_contract_string(raw, "notes", artifact="selection_report")
+    if "parent_subset_id" in raw:
+        normalized["parent_subset_id"] = _benchmark_contract_string(
+            raw, "parent_subset_id", artifact="selection_report"
+        )
+    if "sampling" in raw:
+        sampling = raw.get("sampling")
+        if not isinstance(sampling, Mapping):
+            raise BenchmarkGovernanceError("selection_report sampling must be an object")
+        strategy = _benchmark_contract_string(sampling, "strategy", artifact="selection_report sampling")
+        seed = sampling.get("seed")
+        size = sampling.get("size")
+        if not isinstance(seed, int) or isinstance(seed, bool):
+            raise BenchmarkGovernanceError("selection_report sampling seed must be an integer")
+        if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+            raise BenchmarkGovernanceError("selection_report sampling size must be a positive integer")
+        normalized["sampling"] = {"strategy": strategy, "seed": seed, "size": size}
+    if "selected_query_ids" in raw:
+        normalized["selected_query_ids"] = _benchmark_contract_string_list(
+            raw, "selected_query_ids", artifact="selection_report"
+        )
+    _validate_benchmark_contract_safety(normalized, artifact="selection_report")
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -2178,6 +2388,8 @@ def _write_benchmark_artifacts(
     queries: list[ValidationQuery],
     qrels: Mapping[str, list[BenchmarkQrel]],
     qa: Mapping[str, Any],
+    source_attribution: Mapping[str, Any] | None = None,
+    selection_report: Mapping[str, Any] | None = None,
     output_dir: str | Path,
     name: str,
     description: str,
@@ -2206,26 +2418,55 @@ def _write_benchmark_artifacts(
     _write_json(qrels_output, qrels_payload)
     _write_json(qa_output, qa_payload)
 
+    source_attribution_output = output / "source_attribution.json"
+    selection_report_output = output / "selection_report.json"
+    if source_attribution:
+        _write_json(source_attribution_output, source_attribution)
+    if selection_report:
+        _write_json(selection_report_output, selection_report)
+
     query_ids = {query.id for query in queries}
     judged_query_ids = set(qrels)
+    manifest_artifacts = {
+        "queries": "queries.json",
+        "qrels": "qrels.json",
+        "qa": "qa.json",
+    }
+    if source_attribution:
+        manifest_artifacts["source_attribution"] = "source_attribution.json"
+    if selection_report:
+        manifest_artifacts["selection_report"] = "selection_report.json"
+    summary: dict[str, Any] = {
+        "query_count": len(queries),
+        "judged_query_count": len(judged_query_ids),
+        "qrel_count": sum(len(items) for items in qrels.values()),
+        "qa_count": len(qa_payload.get("items", [])) if isinstance(qa_payload.get("items"), list) else 0,
+        "queries_without_qrels": sorted(query_ids - judged_query_ids),
+        "qrels_without_queries": sorted(judged_query_ids - query_ids),
+    }
+    if source_attribution:
+        summary.update(
+            {
+                "source_attribution_schema": source_attribution.get("schema"),
+                "source_dataset_name": source_attribution.get("dataset_name"),
+                "source_license": source_attribution.get("license"),
+            }
+        )
+    if selection_report:
+        summary.update(
+            {
+                "selection_report_schema": selection_report.get("schema"),
+                "selection_subset_id": selection_report.get("subset_id"),
+                "selection_decision_tier": selection_report.get("decision_tier"),
+            }
+        )
     manifest: dict[str, Any] = {
         "schema": BENCHMARK_MANIFEST_SCHEMA,
         "created_at": _now(),
         "name": name,
         "description": description,
-        "artifacts": {
-            "queries": "queries.json",
-            "qrels": "qrels.json",
-            "qa": "qa.json",
-        },
-        "summary": {
-            "query_count": len(queries),
-            "judged_query_count": len(judged_query_ids),
-            "qrel_count": sum(len(items) for items in qrels.values()),
-            "qa_count": len(qa_payload.get("items", [])) if isinstance(qa_payload.get("items"), list) else 0,
-            "queries_without_qrels": sorted(query_ids - judged_query_ids),
-            "qrels_without_queries": sorted(judged_query_ids - query_ids),
-        },
+        "artifacts": manifest_artifacts,
+        "summary": summary,
         "source_hashes": _source_hashes(source_paths),
     }
     if sampling:
@@ -2233,15 +2474,20 @@ def _write_benchmark_artifacts(
     manifest_output = output / "manifest.json"
     _write_json(manifest_output, manifest)
 
+    artifact_paths = {
+        "manifest": str(manifest_output),
+        "queries": str(queries_output),
+        "qrels": str(qrels_output),
+        "qa": str(qa_output),
+    }
+    if source_attribution:
+        artifact_paths["source_attribution"] = str(source_attribution_output)
+    if selection_report:
+        artifact_paths["selection_report"] = str(selection_report_output)
     return {
         "benchmark_manifest": str(manifest_output),
         "output_dir": str(output),
-        "artifacts": {
-            "manifest": str(manifest_output),
-            "queries": str(queries_output),
-            "qrels": str(qrels_output),
-            "qa": str(qa_output),
-        },
+        "artifacts": artifact_paths,
         "summary": dict(manifest["summary"]),
         "source_hashes": manifest["source_hashes"],
         **({"sampling": dict(sampling)} if sampling else {}),
@@ -2327,6 +2573,8 @@ def import_benchmark_dataset(
     name: str = "benchmark",
     description: str = "",
     qa_path: str | Path | None = None,
+    source_attribution_path: str | Path | None = None,
+    selection_report_path: str | Path | None = None,
     checkpoint_path: str | Path | None = None,
     resume: bool = False,
     batch_size: int | None = None,
@@ -2341,7 +2589,15 @@ def import_benchmark_dataset(
     queries = load_validation_queries(queries_path)
     qrels = load_benchmark_qrels(qrels_path)
     qa = _qa_payload(qa_path)
-    source_paths = [queries_path, qrels_path, qa_path]
+    source_attribution = _load_benchmark_source_attribution(source_attribution_path)
+    selection_report = _load_benchmark_selection_report(selection_report_path)
+    source_paths = [
+        queries_path,
+        qrels_path,
+        qa_path,
+        source_attribution_path,
+        selection_report_path,
+    ]
     source_hashes = _source_hash_map(source_paths)
 
     checkpoint: dict[str, Any] | None = None
@@ -2382,6 +2638,8 @@ def import_benchmark_dataset(
         queries=selected_queries,
         qrels=selected_qrels,
         qa=selected_qa,
+        source_attribution=source_attribution,
+        selection_report=selection_report,
         output_dir=output_dir,
         name=name,
         description=description,
@@ -2573,6 +2831,8 @@ def sample_benchmark_dataset(
     queries_path: str | Path | None = None,
     qrels_path: str | Path | None = None,
     qa_path: str | Path | None = None,
+    source_attribution_path: str | Path | None = None,
+    selection_report_path: str | Path | None = None,
     name: str = "benchmark-sample",
     description: str = "",
 ) -> dict[str, Any]:
@@ -2583,6 +2843,8 @@ def sample_benchmark_dataset(
         queries_path=queries_path,
         qrels_path=qrels_path,
         qa_path=qa_path,
+        source_attribution_path=source_attribution_path,
+        selection_report_path=selection_report_path,
     )
     if not artifacts["queries"]:
         raise BenchmarkGovernanceError("benchmark sample requires queries")
@@ -2592,6 +2854,8 @@ def sample_benchmark_dataset(
     queries = load_validation_queries(artifacts["queries"])
     qrels = load_benchmark_qrels(artifacts["qrels"])
     qa = _qa_payload(artifacts["qa"])
+    source_attribution = _load_benchmark_source_attribution(artifacts["source_attribution"])
+    parent_selection = _load_benchmark_selection_report(artifacts["selection_report"])
     count = _sample_count(total=len(queries), sample_size=sample_size, sample_fraction=sample_fraction)
     selected_queries = _select_sample_queries(queries, count=count, strategy=strategy, seed=seed)
     selected_query_ids = {query.id for query in selected_queries}
@@ -2610,11 +2874,29 @@ def sample_benchmark_dataset(
         sample_size=sample_size,
         sample_fraction=sample_fraction,
     )
-    source_paths = [manifest_path, artifacts["queries"], artifacts["qrels"], artifacts["qa"]]
+    derived_selection = None
+    if parent_selection:
+        derived_selection = {
+            **parent_selection,
+            "subset_id": name,
+            "parent_subset_id": parent_selection["subset_id"],
+            "sampling": {"strategy": strategy, "seed": seed, "size": count},
+            "selected_query_ids": sorted(selected_query_ids),
+        }
+    source_paths = [
+        manifest_path,
+        artifacts["queries"],
+        artifacts["qrels"],
+        artifacts["qa"],
+        artifacts["source_attribution"],
+        artifacts["selection_report"],
+    ]
     artifact_report = _write_benchmark_artifacts(
         queries=selected_queries,
         qrels=selected_qrels,
         qa=selected_qa,
+        source_attribution=source_attribution,
+        selection_report=derived_selection,
         output_dir=output_dir,
         name=name,
         description=description,
@@ -2651,6 +2933,8 @@ def resolve_benchmark_artifacts(
     queries_path: str | Path | None = None,
     qrels_path: str | Path | None = None,
     qa_path: str | Path | None = None,
+    source_attribution_path: str | Path | None = None,
+    selection_report_path: str | Path | None = None,
 ) -> dict[str, Path | None]:
     """Resolve benchmark artifact paths from either a manifest or explicit paths."""
 
@@ -2658,11 +2942,21 @@ def resolve_benchmark_artifacts(
         queries = _manifest_artifact_path(manifest_path, "queries")
         qrels = _manifest_artifact_path(manifest_path, "qrels")
         qa = _manifest_artifact_path(manifest_path, "qa")
+        source_attribution = _manifest_artifact_path(manifest_path, "source_attribution")
+        selection_report = _manifest_artifact_path(manifest_path, "selection_report")
     else:
         queries = Path(queries_path) if queries_path else None
         qrels = Path(qrels_path) if qrels_path else None
         qa = Path(qa_path) if qa_path else None
-    return {"queries": queries, "qrels": qrels, "qa": qa}
+        source_attribution = Path(source_attribution_path) if source_attribution_path else None
+        selection_report = Path(selection_report_path) if selection_report_path else None
+    return {
+        "queries": queries,
+        "qrels": qrels,
+        "qa": qa,
+        "source_attribution": source_attribution,
+        "selection_report": selection_report,
+    }
 
 
 def _query_type_from_metadata(metadata: Mapping[str, Any]) -> str:

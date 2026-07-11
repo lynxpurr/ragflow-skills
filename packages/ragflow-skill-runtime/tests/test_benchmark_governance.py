@@ -44,6 +44,73 @@ from ragflow_skill_runtime.benchmark_governance import (
 
 
 class BenchmarkGovernanceTests(unittest.TestCase):
+    @staticmethod
+    def _write_minimal_benchmark_inputs(root: Path) -> tuple[Path, Path, Path]:
+        queries = root / "queries.json"
+        qrels = root / "qrels.json"
+        qa = root / "qa.json"
+        queries.write_text(
+            json.dumps(
+                {
+                    "queries": [
+                        {
+                            "id": "q1",
+                            "question": "Which value is supported?",
+                            "expected_terms": ["42 percent"],
+                            "metadata": {"type": "table_lookup"},
+                        },
+                        {
+                            "id": "q2",
+                            "question": "Which source is relevant?",
+                            "metadata": {"type": "fact"},
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        qrels.write_text(
+            json.dumps({"q1": {"filing-001.md": 1}, "q2": {"filing-001.md": 1}}),
+            encoding="utf-8",
+        )
+        qa.write_text(
+            json.dumps(
+                {
+                    "schema": "ragflow_grounded_qa_v1",
+                    "items": [
+                        {"query_id": "q1", "answer": "42 percent"},
+                        {"query_id": "q2", "answer": "filing-001"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return queries, qrels, qa
+
+    @staticmethod
+    def _source_attribution_payload() -> dict[str, object]:
+        return {
+            "schema": "ragflow_benchmark_source_attribution_v1",
+            "dataset_name": "finance-table-synthetic",
+            "upstream_projects": ["public-project-label"],
+            "license": "CC-BY-NC-4.0",
+            "selected_source_ids": ["filing-001"],
+            "source_hashes": ["sha256:" + "1" * 64],
+            "authorship": "human",
+        }
+
+    @staticmethod
+    def _selection_report_payload() -> dict[str, object]:
+        return {
+            "schema": "ragflow_benchmark_selection_report_v1",
+            "subset_id": "finance-table-synthetic-v1",
+            "selection_criteria": ["table evidence", "numeric evidence"],
+            "query_types": ["table_lookup", "numeric_reasoning"],
+            "modalities": ["table", "text"],
+            "excluded_case_counts": {"missing_public_source": 1},
+            "decision_tier": "exploratory",
+        }
+
     def test_import_and_preflight_benchmark_dataset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -62,13 +129,183 @@ class BenchmarkGovernanceTests(unittest.TestCase):
                 output_dir=output,
                 name="example-benchmark",
             )
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
             preflight = preflight_benchmark_dataset(manifest_path=output / "manifest.json")
 
         self.assertEqual(import_report["schema"], BENCHMARK_IMPORT_REPORT_SCHEMA)
         self.assertTrue(import_report["ok"])
         self.assertEqual(import_report["summary"]["query_count"], 1)
+        self.assertNotIn("source_attribution", manifest["artifacts"])
+        self.assertNotIn("selection_report", manifest["artifacts"])
         self.assertEqual(preflight["schema"], BENCHMARK_PREFLIGHT_REPORT_SCHEMA)
         self.assertTrue(preflight["ok"], preflight["issues"])
+
+    def test_import_benchmark_preserves_source_attribution_and_selection_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queries, qrels, qa = self._write_minimal_benchmark_inputs(root)
+            source_attribution = root / "source_attribution.json"
+            selection_report = root / "selection_report.json"
+            output = root / "benchmark"
+            source_attribution.write_text(json.dumps(self._source_attribution_payload()), encoding="utf-8")
+            selection_report.write_text(json.dumps(self._selection_report_payload()), encoding="utf-8")
+
+            report = import_benchmark_dataset(
+                queries_path=queries,
+                qrels_path=qrels,
+                qa_path=qa,
+                source_attribution_path=source_attribution,
+                selection_report_path=selection_report,
+                output_dir=output,
+            )
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            normalized_attribution = json.loads((output / "source_attribution.json").read_text(encoding="utf-8"))
+            normalized_selection = json.loads((output / "selection_report.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest["artifacts"]["source_attribution"], "source_attribution.json")
+        self.assertEqual(manifest["artifacts"]["selection_report"], "selection_report.json")
+        self.assertEqual(normalized_attribution["license"], "CC-BY-NC-4.0")
+        self.assertEqual(normalized_selection["decision_tier"], "exploratory")
+        self.assertEqual(report["summary"]["source_attribution_schema"], "ragflow_benchmark_source_attribution_v1")
+        self.assertEqual(report["summary"]["selection_report_schema"], "ragflow_benchmark_selection_report_v1")
+        self.assertEqual(report["summary"]["selection_subset_id"], "finance-table-synthetic-v1")
+        self.assertEqual(report["summary"]["selection_decision_tier"], "exploratory")
+
+    def test_import_benchmark_rejects_invalid_source_attribution_contracts(self) -> None:
+        invalid_cases = (
+            ("wrong schema", {"schema": "wrong"}, "schema"),
+            ("empty license", {"license": ""}, "license"),
+            ("empty selected sources", {"selected_source_ids": []}, "selected_source_ids"),
+            ("invalid authorship", {"authorship": "unknown"}, "authorship"),
+            ("invalid source hash", {"source_hashes": ["sha256:not-a-digest"]}, "source_hashes"),
+        )
+        for label, updates, expected_error in invalid_cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                queries, qrels, qa = self._write_minimal_benchmark_inputs(root)
+                source_attribution = root / "source_attribution.json"
+                payload = self._source_attribution_payload()
+                payload.update(updates)
+                source_attribution.write_text(json.dumps(payload), encoding="utf-8")
+
+                with self.assertRaisesRegex(BenchmarkGovernanceError, expected_error):
+                    import_benchmark_dataset(
+                        queries_path=queries,
+                        qrels_path=qrels,
+                        qa_path=qa,
+                        source_attribution_path=source_attribution,
+                        output_dir=root / "benchmark",
+                    )
+
+    def test_import_benchmark_rejects_invalid_selection_report_contracts(self) -> None:
+        invalid_cases = (
+            ("wrong schema", {"schema": "wrong"}, "schema"),
+            ("empty criteria", {"selection_criteria": []}, "selection_criteria"),
+            ("invalid tier", {"decision_tier": "default_profile"}, "decision_tier"),
+        )
+        for label, updates, expected_error in invalid_cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                queries, qrels, qa = self._write_minimal_benchmark_inputs(root)
+                selection_report = root / "selection_report.json"
+                payload = self._selection_report_payload()
+                payload.update(updates)
+                selection_report.write_text(json.dumps(payload), encoding="utf-8")
+
+                with self.assertRaisesRegex(BenchmarkGovernanceError, expected_error):
+                    import_benchmark_dataset(
+                        queries_path=queries,
+                        qrels_path=qrels,
+                        qa_path=qa,
+                        selection_report_path=selection_report,
+                        output_dir=root / "benchmark",
+                    )
+
+    def test_import_benchmark_allows_empty_optional_contract_lists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queries, qrels, qa = self._write_minimal_benchmark_inputs(root)
+            source_attribution = root / "source_attribution.json"
+            selection_report = root / "selection_report.json"
+            source_payload = self._source_attribution_payload()
+            source_payload["source_hashes"] = []
+            selection_payload = self._selection_report_payload()
+            selection_payload["query_types"] = []
+            selection_payload["modalities"] = []
+            source_attribution.write_text(json.dumps(source_payload), encoding="utf-8")
+            selection_report.write_text(json.dumps(selection_payload), encoding="utf-8")
+
+            report = import_benchmark_dataset(
+                queries_path=queries,
+                qrels_path=qrels,
+                qa_path=qa,
+                source_attribution_path=source_attribution,
+                selection_report_path=selection_report,
+                output_dir=root / "benchmark",
+            )
+
+        self.assertTrue(report["ok"])
+
+    def test_import_benchmark_rejects_unsafe_contract_literals(self) -> None:
+        invalid_cases = (
+            ("private path", "source", {"notes": "/home/private/source.pdf"}),
+            ("private endpoint", "source", {"upstream_projects": ["http://127.0.0.1:8080/source"]}),
+            ("credential", "selection", {"notes": "api_key=secret-value"}),
+            ("raw evidence", "selection", {"raw_evidence": "verbatim source paragraph"}),
+        )
+        for label, artifact, updates in invalid_cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                queries, qrels, qa = self._write_minimal_benchmark_inputs(root)
+                source_attribution = root / "source_attribution.json"
+                selection_report = root / "selection_report.json"
+                source_payload = self._source_attribution_payload()
+                selection_payload = self._selection_report_payload()
+                (source_payload if artifact == "source" else selection_payload).update(updates)
+                source_attribution.write_text(json.dumps(source_payload), encoding="utf-8")
+                selection_report.write_text(json.dumps(selection_payload), encoding="utf-8")
+
+                with self.assertRaisesRegex(BenchmarkGovernanceError, "unsafe|unsupported"):
+                    import_benchmark_dataset(
+                        queries_path=queries,
+                        qrels_path=qrels,
+                        qa_path=qa,
+                        source_attribution_path=source_attribution,
+                        selection_report_path=selection_report,
+                        output_dir=root / "benchmark",
+                    )
+
+    def test_import_checkpoint_rejects_source_attribution_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queries, qrels, qa = self._write_minimal_benchmark_inputs(root)
+            source_attribution = root / "source_attribution.json"
+            checkpoint = root / "checkpoint.json"
+            source_attribution.write_text(json.dumps(self._source_attribution_payload()), encoding="utf-8")
+            import_benchmark_dataset(
+                queries_path=queries,
+                qrels_path=qrels,
+                qa_path=qa,
+                source_attribution_path=source_attribution,
+                output_dir=root / "benchmark",
+                checkpoint_path=checkpoint,
+                batch_size=1,
+            )
+            changed = self._source_attribution_payload()
+            changed["license"] = "Apache-2.0"
+            source_attribution.write_text(json.dumps(changed), encoding="utf-8")
+
+            with self.assertRaisesRegex(BenchmarkGovernanceError, "source hashes do not match"):
+                import_benchmark_dataset(
+                    queries_path=queries,
+                    qrels_path=qrels,
+                    qa_path=qa,
+                    source_attribution_path=source_attribution,
+                    output_dir=root / "benchmark",
+                    checkpoint_path=checkpoint,
+                    resume=True,
+                    batch_size=1,
+                )
 
     def test_preflight_reports_weak_document_only_benchmark_strength(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1029,6 +1266,76 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertEqual(set(item["query_id"] for item in sampled_qa["items"]), set(selected_ids))
         self.assertEqual(manifest["sampling"]["strategy"], "stratified")
         self.assertEqual(manifest["sampling"]["seed"], 7)
+
+    def test_sample_preserves_attribution_and_derives_selection_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queries, qrels, qa = self._write_minimal_benchmark_inputs(root)
+            source_attribution = root / "source_attribution.json"
+            selection_report = root / "selection_report.json"
+            imported = root / "benchmark"
+            sampled = root / "sampled"
+            source_attribution.write_text(json.dumps(self._source_attribution_payload()), encoding="utf-8")
+            selection_report.write_text(json.dumps(self._selection_report_payload()), encoding="utf-8")
+            import_benchmark_dataset(
+                queries_path=queries,
+                qrels_path=qrels,
+                qa_path=qa,
+                source_attribution_path=source_attribution,
+                selection_report_path=selection_report,
+                output_dir=imported,
+            )
+
+            report = sample_benchmark_dataset(
+                manifest_path=imported / "manifest.json",
+                output_dir=sampled,
+                sample_size=2,
+                strategy="stratified",
+                seed=7,
+                name="finance-table-synthetic-sample-v1",
+            )
+            parent_attribution = json.loads((imported / "source_attribution.json").read_text(encoding="utf-8"))
+            sample_attribution = json.loads((sampled / "source_attribution.json").read_text(encoding="utf-8"))
+            sample_selection = json.loads((sampled / "selection_report.json").read_text(encoding="utf-8"))
+            sample_manifest = json.loads((sampled / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(sample_attribution, parent_attribution)
+        self.assertEqual(sample_manifest["artifacts"]["source_attribution"], "source_attribution.json")
+        self.assertEqual(sample_manifest["artifacts"]["selection_report"], "selection_report.json")
+        self.assertEqual(sample_selection["subset_id"], "finance-table-synthetic-sample-v1")
+        self.assertEqual(sample_selection["parent_subset_id"], "finance-table-synthetic-v1")
+        self.assertEqual(sample_selection["sampling"], {"strategy": "stratified", "seed": 7, "size": 2})
+        self.assertEqual(sample_selection["selected_query_ids"], sorted(sample_selection["selected_query_ids"]))
+        self.assertEqual(report["summary"]["selection_subset_id"], "finance-table-synthetic-sample-v1")
+
+    def test_sample_accepts_explicit_attribution_and_selection_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queries, qrels, qa = self._write_minimal_benchmark_inputs(root)
+            source_attribution = root / "source_attribution.json"
+            selection_report = root / "selection_report.json"
+            sampled = root / "sampled"
+            source_attribution.write_text(json.dumps(self._source_attribution_payload()), encoding="utf-8")
+            selection_report.write_text(json.dumps(self._selection_report_payload()), encoding="utf-8")
+
+            sample_benchmark_dataset(
+                queries_path=queries,
+                qrels_path=qrels,
+                qa_path=qa,
+                source_attribution_path=source_attribution,
+                selection_report_path=selection_report,
+                output_dir=sampled,
+                sample_size=1,
+                strategy="first",
+                seed=3,
+                name="explicit-sample-v1",
+            )
+            sample_selection = json.loads((sampled / "selection_report.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(sample_selection["subset_id"], "explicit-sample-v1")
+        self.assertEqual(sample_selection["parent_subset_id"], "finance-table-synthetic-v1")
+        self.assertEqual(sample_selection["sampling"], {"strategy": "first", "seed": 3, "size": 1})
+        self.assertEqual(sample_selection["selected_query_ids"], ["q1"])
 
     def test_preflight_fails_when_query_has_no_qrels(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

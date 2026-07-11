@@ -1,6 +1,7 @@
 # Benchmark Evidence Strengthening And Transition Validation Plan
 
-Status: approved execution baseline; implementation not started
+Status: public offline tooling and synthetic L0 baseline complete; private-source and
+transition evidence fills remain gated
 Date: 2026-07-11
 
 ## Objective / Scope / Boundaries
@@ -254,15 +255,15 @@ generated separately after review.
 
 ### Artifact Contract And Offline Tooling
 
-- [ ] Add source-attribution and selection-report schemas, validation, import support,
+- [x] Add source-attribution and selection-report schemas, validation, import support,
   and backward-compatible manifest references.
-- [ ] Preserve attribution and derive deterministic selection evidence during benchmark
+- [x] Preserve attribution and derive deterministic selection evidence during benchmark
   sampling.
-- [ ] Add synthetic table/numeric, expected-term, expected-chunk, negative, and
+- [x] Add synthetic table/numeric, expected-term, expected-chunk, negative, and
   multimodal fixtures.
-- [ ] Add `ragflow_benchmark_portfolio_v1` JSON, Markdown, CLI, and redaction outputs from
+- [x] Add `ragflow_benchmark_portfolio_v1` JSON, Markdown, CLI, and redaction outputs from
   explicit inputs only.
-- [ ] Add schema identity, focused tests, generated-Markdown safety, and release hygiene
+- [x] Add schema identity, focused tests, generated-Markdown safety, and release hygiene
   coverage for all new report identities.
 
 ### Open RAG Evidence
@@ -292,17 +293,17 @@ generated separately after review.
 - [ ] Aggregate at least five meaningful transition runs and review sample-type coverage.
 - [ ] Review zero-result, wrong-document, pollution, strict chunk recall, expected-term,
   table-term, and citation-support evidence before guidance changes.
-- [ ] Update `docs/32`, `docs/35`, and `docs/16` only when evidence changes their current
+- [x] Update `docs/32`, `docs/35`, and `docs/16` only when evidence changes their current
   status or closes an existing row.
 
 ### Hermes And Release Closure
 
-- [ ] Add a repository-safe Hermes offline replay instruction after the local synthetic
+- [x] Add a repository-safe Hermes offline replay instruction after the local synthetic
   chain is stable.
-- [ ] Run focused tests, full runtime tests when code changes, schema identity, generated
+- [x] Run focused tests, full runtime tests when code changes, schema identity, generated
   Markdown audit, release hygiene, build checks, consumer acceptance, and strict-vendor
   platform smoke as required by the changed surface.
-- [ ] Record a closeout that separates completed offline work from private-source fill,
+- [x] Record a closeout that separates completed offline work from private-source fill,
   observation work, and separately approved live validation.
 
 ## Current Development Progress
@@ -322,8 +323,29 @@ Planning baseline on 2026-07-11:
 - `docs/36` has zero Stage 8C candidates, so no parameter materialization or live probe is
   part of this plan.
 
-No checklist item is complete at plan creation time. Existing capabilities are baseline
-dependencies, not completion evidence for the new work above.
+Implementation update on 2026-07-11:
+
+- `benchmark import` and `benchmark sample` now support normalized source attribution
+  and selection artifacts while preserving legacy inputs;
+- deterministic samples preserve attribution and derive parent-bound selection evidence;
+- `tools/benchmark_portfolio.py` produces explicit-input-only, public-safe JSON,
+  Markdown, and redaction reports without RAGFlow, directory discovery, or LLM calls;
+- committed neutral fixtures exercise text, table, numeric, mixed-modality,
+  expected-term, declared expected-chunk, and negative coverage;
+- the local synthetic replay produced two subsets, six queries, twelve qrels, six QA
+  items, four table/numeric queries, and one negative/unanswerable query;
+- the synthetic portfolio is `ready_with_review` because observed validation is absent;
+  it is not a Level 3 retrieval regression baseline;
+- `docs/39-benchmark-evidence-strengthening-hermes-test.md` now provides the
+  repository-only L0 replay instruction;
+- focused validation passed with 72 tests and 17 subtests; the complete runtime suite
+  passed with 698 tests and 28 subtests; release hygiene, build/export, consumer
+  acceptance, and strict-vendor smoke all passed;
+- the fixed private evidence root and five transition run roots were not supplied, so
+  `private_source_fill_required` and `transition_observation_fill_required` remain the
+  active evidence gates;
+- no RAGFlow HTTP call, live mutation, DeepDoc run, script-owned LLM/RAGAS call, or
+  Stage 8C action was performed.
 
 ## Validation Evidence / Residual Gated Work
 
@@ -370,8 +392,20 @@ Residual gates remain separate:
 
 ## Closeout / Retrospective
 
-Complete this section only after the offline tooling, two-subset baseline, required
-transition evidence, validation chain, and sanitized reports are complete. Record which
-work was closed publicly, which private-source fills remain, whether any live run was
-separately approved, and whether the evidence changes retirement, profile, release, or
-parameter-materialization decisions.
+Public offline closeout on 2026-07-11:
+
+- closed: normalized attribution/selection contracts, deterministic sampling
+  provenance, standalone portfolio aggregation, neutral synthetic fixtures, schema and
+  release governance, and the Hermes L0 replay instruction;
+- verified: compile, focused tests, full runtime tests, manifest/schema identity,
+  generated Markdown, release hygiene, release build/export, consumer acceptance, and
+  strict-vendor smoke;
+- still open: reviewed Open RAG seed strengthening, operator-selected FinanceBench
+  conversion and normalization, pinned observed per-subset validation, a true
+  two-subset regression baseline, and five meaningful transition runs;
+- private/live decision: no private-source input was present and no live approval was
+  requested, so the round stopped before conversion, RAGFlow, DeepDoc, LLM/RAGAS, and
+  Stage 8C work;
+- roadmap effect: no `docs/32` retirement row and no `docs/36` Stage 8C row closes from
+  synthetic evidence alone. The current profile, retirement, and parameter
+  materialization decisions remain unchanged.

@@ -8,7 +8,8 @@
 
 **Tech Stack:** Python 3.11 standard library, existing `ragflow_skill_runtime.benchmark_governance`, `argparse`, JSON/Markdown reports, shared report sanitizer, pytest, schema identity, consumer acceptance, strict-vendor platform smoke, release hygiene.
 
-Status: ready for implementation
+Status: public implementation, release validation, synthetic replay, and documentation
+closeout complete; private-source and transition evidence fills remain gated
 Design source: `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`
 
 ---
@@ -19,7 +20,7 @@ Design source: `docs/38-benchmark-evidence-strengthening-and-transition-validati
 - Modify: `packages/ragflow-skill-runtime/src/ragflow_skill_runtime/benchmark_governance.py`
 - Modify: `packages/ragflow-skill-runtime/tests/test_benchmark_governance.py`
 
-- [ ] **Step 1: Write failing import-contract tests**
+- [x] **Step 1: Write failing import-contract tests**
 
 Add `test_import_benchmark_preserves_source_attribution_and_selection_report` using a
 temporary query/qrels/QA set plus these two inputs:
@@ -66,7 +67,7 @@ assert json.loads((output / "source_attribution.json").read_text())["license"] =
 assert json.loads((output / "selection_report.json").read_text())["decision_tier"] == "exploratory"
 ```
 
-- [ ] **Step 2: Write fail-closed validation tests**
+- [x] **Step 2: Write fail-closed validation tests**
 
 Add independent tests for:
 
@@ -80,7 +81,7 @@ Add independent tests for:
   either normalized artifact;
 - legacy imports with neither optional artifact still succeeding unchanged.
 
-- [ ] **Step 3: Run the new tests and verify RED**
+- [x] **Step 3: Run the new tests and verify RED**
 
 Run:
 
@@ -93,7 +94,7 @@ python3 -m pytest \
 Expected: FAIL because the new function arguments, schemas, and manifest artifacts do
 not exist.
 
-- [ ] **Step 4: Implement the artifact validators and import support**
+- [x] **Step 4: Implement the artifact validators and import support**
 
 Add constants:
 
@@ -135,7 +136,7 @@ public-safe summary fields for attribution schema, selection schema, subset ID, 
 and decision tier so the existing Markdown renderer can expose the contract without
 embedding source paths or raw selection content.
 
-- [ ] **Step 5: Run focused runtime tests to GREEN**
+- [x] **Step 5: Run focused runtime tests to GREEN**
 
 Run:
 
@@ -151,7 +152,7 @@ Expected: PASS.
 - Modify: `packages/ragflow-skill-runtime/src/ragflow_skill_runtime/benchmark_governance.py`
 - Modify: `packages/ragflow-skill-runtime/tests/test_benchmark_governance.py`
 
-- [ ] **Step 1: Write a failing sample-provenance test**
+- [x] **Step 1: Write a failing sample-provenance test**
 
 Create an imported benchmark with both new artifacts, then call
 `sample_benchmark_dataset(..., name="finance-table-synthetic-sample-v1",
@@ -168,7 +169,7 @@ assert sample_selection["sampling"] == {"strategy": "stratified", "seed": 7, "si
 assert sample_selection["selected_query_ids"] == sorted(sample_selection["selected_query_ids"])
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run:
 
@@ -181,7 +182,7 @@ python3 -m pytest \
 Expected: FAIL because `resolve_benchmark_artifacts` and sampling do not resolve or write
 the new artifacts.
 
-- [ ] **Step 3: Extend artifact resolution and derived selection output**
+- [x] **Step 3: Extend artifact resolution and derived selection output**
 
 Extend `resolve_benchmark_artifacts` to return `source_attribution` and
 `selection_report`. Preserve the attribution object unchanged. Derive a new selection
@@ -192,7 +193,7 @@ attribution/selection paths for the existing no-manifest input mode. When a mani
 used, resolve both artifacts from the manifest; do not require duplicate CLI arguments.
 Do not copy excluded raw cases or source text.
 
-- [ ] **Step 4: Run import/sample/preflight tests**
+- [x] **Step 4: Run import/sample/preflight tests**
 
 Run:
 
@@ -209,7 +210,7 @@ Expected: PASS.
 - Modify: `packages/ragflow-skill-runtime/tests/test_kb_build_cli.py`
 - Modify: `skills/ragflow-kb-build/SKILL.md`
 
-- [ ] **Step 1: Write failing CLI tests**
+- [x] **Step 1: Write failing CLI tests**
 
 Extend the benchmark import/sample subprocess coverage to pass:
 
@@ -222,7 +223,7 @@ Assert the output manifest references both files, generated Markdown lists their
 and decision tier, and the redaction sidecar removes any temporary input path. Add one
 legacy CLI test proving the options remain optional.
 
-- [ ] **Step 2: Run focused CLI tests and verify RED**
+- [x] **Step 2: Run focused CLI tests and verify RED**
 
 Run:
 
@@ -234,7 +235,7 @@ python3 -m pytest \
 
 Expected: FAIL because the options are unknown.
 
-- [ ] **Step 3: Add CLI parser and sanitizer wiring**
+- [x] **Step 3: Add CLI parser and sanitizer wiring**
 
 Add `--source-attribution` and `--selection-report` to `benchmark import` and to the
 explicit-input mode of `benchmark sample`. Forward them to runtime functions and include
@@ -242,7 +243,7 @@ them in `input_paths`/`context_json_paths` for report sanitization. Manifest-bas
 commands continue to inherit both artifacts from `manifest.json`. Update the concise
 public skill examples without adding a real endpoint, source path, or dataset identifier.
 
-- [ ] **Step 4: Run runtime and CLI tests**
+- [x] **Step 4: Run runtime and CLI tests**
 
 Run:
 
@@ -261,7 +262,7 @@ Expected: PASS.
 - Create: `tools/benchmark_portfolio.py`
 - Create: `packages/ragflow-skill-runtime/tests/test_benchmark_portfolio.py`
 
-- [ ] **Step 1: Write the main failing portfolio test**
+- [x] **Step 1: Write the main failing portfolio test**
 
 Create two synthetic normalized subset directories and a config:
 
@@ -313,7 +314,7 @@ assert report["safety"]["writes_live_ragflow"] is False
 
 Also assert the report JSON and Markdown contain no absolute temporary root.
 
-- [ ] **Step 2: Add fail-closed tests**
+- [x] **Step 2: Add fail-closed tests**
 
 Cover:
 
@@ -328,7 +329,7 @@ Cover:
 - missing live validation produces `ready_with_review`, not `blocked` and not `ready`;
 - a failed preflight or missing qrels produces `blocked`.
 
-- [ ] **Step 3: Run the new test file and verify RED**
+- [x] **Step 3: Run the new test file and verify RED**
 
 Run:
 
@@ -338,7 +339,7 @@ python3 -m pytest packages/ragflow-skill-runtime/tests/test_benchmark_portfolio.
 
 Expected: collection/import failure because the tool does not exist.
 
-- [ ] **Step 4: Implement the report builder and Markdown renderer**
+- [x] **Step 4: Implement the report builder and Markdown renderer**
 
 Define:
 
@@ -367,7 +368,7 @@ redaction context and with private hosts derived from URLs discovered in explici
 objects. Keep declared expected-chunk coverage separate from observed strict chunk-recall
 metrics supplied by validation reports.
 
-- [ ] **Step 5: Run compile and focused tests to GREEN**
+- [x] **Step 5: Run compile and focused tests to GREEN**
 
 Run:
 
@@ -392,7 +393,7 @@ Expected: PASS.
 - Verify: `packages/ragflow-skill-runtime/tests/test_runtime_resilience_inventory.py`
 - Verify: `packages/ragflow-skill-runtime/tests/test_generated_markdown_audit.py`
 
-- [ ] **Step 1: Add schema identity entries and failing tests**
+- [x] **Step 1: Add schema identity entries and failing tests**
 
 Register:
 
@@ -407,7 +408,7 @@ Use source roots in `benchmark_governance.py` or `tools/benchmark_portfolio.py` 
 coverage roots in their focused tests. Extend the schema-identity unit test to assert all
 four keys.
 
-- [ ] **Step 2: Add acceptance and strict-vendor smoke fixtures**
+- [x] **Step 2: Add acceptance and strict-vendor smoke fixtures**
 
 Use tiny synthetic JSON only. In consumer acceptance and strict-vendor smoke, verify the
 public benchmark CLI changes only:
@@ -422,7 +423,7 @@ the installed/public command count remains 104, the report inventory has zero
 `needs_redaction` entries, the runtime inventory has zero candidates, and the generated
 Markdown audit remains healthy.
 
-- [ ] **Step 3: Run focused governance tests**
+- [x] **Step 3: Run focused governance tests**
 
 Run:
 
@@ -438,7 +439,7 @@ python3 -m pytest \
 
 Expected: PASS.
 
-- [ ] **Step 4: Run direct governance tools**
+- [x] **Step 4: Run direct governance tools**
 
 Run:
 
@@ -474,7 +475,7 @@ at 104 commands with zero candidate/needs-redaction findings.
 - Create: `packages/ragflow-skill-runtime/tests/fixtures/benchmark_evidence/portfolio_config.example.json`
 - Create: `docs/39-benchmark-evidence-strengthening-hermes-test.md`
 
-- [ ] **Step 1: Add neutral fixture content**
+- [x] **Step 1: Add neutral fixture content**
 
 Use fake public labels and no copied dataset text. Include:
 
@@ -516,14 +517,14 @@ Use fake public labels and no copied dataset text. Include:
 }
 ```
 
-- [ ] **Step 2: Add a repository-only replay test**
+- [x] **Step 2: Add a repository-only replay test**
 
 Extend `test_benchmark_portfolio.py` to copy the example config into a temporary run root,
 then invoke import, preflight, sample, and portfolio generation from the fixtures. Assert
 deterministic counts, QA preservation/filtering, derived selection provenance, and that
 every output is public-safe.
 
-- [ ] **Step 3: Run the complete synthetic chain**
+- [x] **Step 3: Run the complete synthetic chain**
 
 Use `/tmp/ragflow-benchmark-evidence-synthetic-20260711` as the run root and execute:
 
@@ -569,7 +570,7 @@ python3 tools/benchmark_portfolio.py \
 Expected: all commands exit 0, the portfolio is `ready_with_review`, and redaction has
 zero unresolved findings.
 
-- [ ] **Step 4: Write the Hermes instruction**
+- [x] **Step 4: Write the Hermes instruction**
 
 Authorize repository-only L0 replay of focused tests and the synthetic chain. Require a
 repository-external run root, initial/final `git status`, separate tool/prose sensitive
@@ -748,7 +749,7 @@ classes without inventing evidence, and has zero unresolved redaction findings.
 - Modify as justified by evidence: `docs/16-system-closeout-report.md`
 - Verify: `docs/36-ragflow-kb-parameter-materialization-plan.md`
 
-- [ ] **Step 1: Run focused and full runtime validation**
+- [x] **Step 1: Run focused and full runtime validation**
 
 Run:
 
@@ -767,7 +768,7 @@ python3 -m pytest packages/ragflow-skill-runtime/tests -q
 
 Expected: all pass.
 
-- [ ] **Step 2: Run release-facing validation sequentially**
+- [x] **Step 2: Run release-facing validation sequentially**
 
 Run:
 
@@ -790,14 +791,14 @@ python3 tools/platform_smoke_matrix.py \
 Expected: all pass with no hygiene findings and the public command inventory unchanged at
 104.
 
-- [ ] **Step 3: Update owning docs without over-closing gates**
+- [x] **Step 3: Update owning docs without over-closing gates**
 
 Mark only implemented and verified public-offline rows complete in `docs/38`. Update
 `docs/32` only for evidence actually produced. Record Stage 6/7 progress in `docs/35`.
 Keep all `docs/36` Stage 8C, live, DeepDoc, and post-materialization rows open unless a
 new pinned writable contract and separately approved live run exist.
 
-- [ ] **Step 4: Run final safety and checklist review**
+- [x] **Step 4: Run final safety and checklist review**
 
 Run:
 

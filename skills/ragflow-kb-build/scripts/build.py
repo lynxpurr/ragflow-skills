@@ -2956,6 +2956,8 @@ def _run_benchmark_import(args: argparse.Namespace) -> int:
             queries_path=args.queries,
             qrels_path=args.qrels,
             qa_path=args.qa,
+            source_attribution_path=args.source_attribution,
+            selection_report_path=args.selection_report,
             output_dir=args.output,
             name=args.name,
             description=args.description or "",
@@ -2967,8 +2969,22 @@ def _run_benchmark_import(args: argparse.Namespace) -> int:
             report, redaction_report = _sanitize_benchmark_report(
                 report,
                 args,
-                input_paths=[args.queries, args.qrels, args.qa, args.output, args.checkpoint],
-                context_json_paths=[args.queries, args.qrels, args.qa],
+                input_paths=[
+                    args.queries,
+                    args.qrels,
+                    args.qa,
+                    args.source_attribution,
+                    args.selection_report,
+                    args.output,
+                    args.checkpoint,
+                ],
+                context_json_paths=[
+                    args.queries,
+                    args.qrels,
+                    args.qa,
+                    args.source_attribution,
+                    args.selection_report,
+                ],
             )
             _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
@@ -3038,6 +3054,8 @@ def _run_benchmark_sample(args: argparse.Namespace) -> int:
             queries_path=args.queries,
             qrels_path=args.qrels,
             qa_path=args.qa,
+            source_attribution_path=args.source_attribution,
+            selection_report_path=args.selection_report,
             output_dir=args.output,
             sample_size=args.size,
             sample_fraction=args.fraction,
@@ -3050,8 +3068,23 @@ def _run_benchmark_sample(args: argparse.Namespace) -> int:
             report, redaction_report = _sanitize_benchmark_report(
                 report,
                 args,
-                input_paths=[args.manifest, args.queries, args.qrels, args.qa, args.output],
-                context_json_paths=[args.manifest, args.queries, args.qrels, args.qa],
+                input_paths=[
+                    args.manifest,
+                    args.queries,
+                    args.qrels,
+                    args.qa,
+                    args.source_attribution,
+                    args.selection_report,
+                    args.output,
+                ],
+                context_json_paths=[
+                    args.manifest,
+                    args.queries,
+                    args.qrels,
+                    args.qa,
+                    args.source_attribution,
+                    args.selection_report,
+                ],
             )
             _write_json_file(args.redaction_report, redaction_report)
         _write_json_file(args.report_json, report)
@@ -4553,6 +4586,8 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     import_cmd.add_argument("--queries", required=True, help="Input benchmark query set JSON")
     import_cmd.add_argument("--qrels", required=True, help="Input benchmark qrels JSON")
     import_cmd.add_argument("--qa", help="Optional grounded QA JSON")
+    import_cmd.add_argument("--source-attribution", help="Optional benchmark source attribution JSON")
+    import_cmd.add_argument("--selection-report", help="Optional benchmark subset selection report JSON")
     import_cmd.add_argument("--output", required=True, help="Output benchmark directory")
     import_cmd.add_argument("--name", default="benchmark", help="Benchmark name recorded in manifest")
     import_cmd.add_argument("--description", help="Optional benchmark description")
@@ -4583,6 +4618,14 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     sample.add_argument("--queries", help="Benchmark queries JSON when no manifest is provided")
     sample.add_argument("--qrels", help="Benchmark qrels JSON when no manifest is provided")
     sample.add_argument("--qa", help="Optional grounded QA JSON when no manifest is provided")
+    sample.add_argument(
+        "--source-attribution",
+        help="Optional source attribution JSON when no manifest is provided",
+    )
+    sample.add_argument(
+        "--selection-report",
+        help="Optional selection report JSON when no manifest is provided",
+    )
     sample.add_argument("--output", required=True, help="Output sampled benchmark directory")
     sample.add_argument("--size", type=int, help="Number of queries to sample")
     sample.add_argument("--fraction", type=float, help="Fraction of queries to sample")
