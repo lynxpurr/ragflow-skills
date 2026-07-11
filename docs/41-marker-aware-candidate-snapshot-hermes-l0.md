@@ -1,6 +1,6 @@
 # Hermes L0 Test For Marker-Aware Candidate Snapshots
 
-Status: prepared and locally reviewed; independent Hermes execution not yet run
+Status: independent Hermes L0 replay passed and maintainer-accepted
 Date: 2026-07-11
 Owning plan: `docs/40-marker-aware-evidence-validation-and-promotion-plan.md`
 
@@ -799,9 +799,51 @@ The instruction was locally calibrated before commit without running Hermes:
 - no network, private source, RAGFlow, MinerU, DeepDoc, LLM/RAGAS, Stage 8C, default
   change, or repository mutation was part of calibration.
 
-This proves that the instruction is executable against the current implementation. It is
-not independent Hermes evidence and does not close any L0 execution checkbox in
-`docs/40`.
+This local calibration proves that the instruction is executable against the current
+implementation. By itself, it is not independent Hermes evidence and does not close any
+L0 execution checkbox in `docs/40`.
+
+## Independent Hermes Replay Evidence
+
+Hermes independently replayed this instruction on 2026-07-11 against commit `fb38de2`.
+The initial and final porcelain states were empty, the final commit matched the captured
+base commit, and the repository was not modified.
+
+Verified results:
+
+- benchmark-governance selection: 16 passed with 5 subtests;
+- KB-build CLI selection: 4 passed;
+- omitted/default and explicit `file`: one chunk each with matching stable hashes;
+- forced `markers`: three chunks, four source markers, one suppressed table boundary,
+  one ignored fenced marker, and no RAGFlow-facing `chunk_id` values;
+- directory `auto`: `mixed` across three documents with two marker-selected documents
+  and one deterministic file fallback;
+- `.markdown`, duplicate-basename isolation, nested/mixed-case/same-line/self-closing
+  table shapes, unbalanced fallback, and insufficient-chunk fallback passed;
+- all four negative commands returned code 2 with their expected failure classes;
+- repeated snapshots matched on ordered content, stable hashes, source IDs, and boundary
+  decisions;
+- neutral QA mapping covered 2 of 2 evidence spans and emitted only `sha256:` expected
+  chunks;
+- `evidence_scope=candidate_offline`, `observed_ragflow_chunks=false`,
+  `ragflow_calls=0`, `writes_live_ragflow=false`, and
+  `script_owned_llm_calls=0` remained explicit;
+- path/endpoint and raw-content scans had no matches. Credential and identifier scans
+  contained only reviewed zero counters, schema/coverage labels, redaction JSON paths,
+  sanitized config-path values, or equivalent descriptive prose; unresolved sensitive
+  findings were zero;
+- no private source, network, RAGFlow, MinerU, DeepDoc, LLM/RAGAS, Stage 8C, default
+  change, Git mutation, commit, or push occurred.
+
+The retained public-safe run label is
+`ragflow-marker-aware-hermes-l0-20260711T103549Z`. Maintainer review inspected the final
+report, focused test logs, negative return codes and errors, key snapshot and evidence-map
+artifacts, redaction sidecars, and separate tool/prose scan logs, then reran the committed
+semantic verification block successfully.
+
+This replay closes only the L0 execution rows in `docs/40`. L1 private candidate review,
+L2 observed validation, optional L3 disposable validation, and L4 promotion remain
+separately authorization-gated.
 
 ## Acceptance Criteria
 

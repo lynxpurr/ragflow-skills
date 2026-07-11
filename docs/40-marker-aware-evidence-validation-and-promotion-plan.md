@@ -1,6 +1,6 @@
 # Marker-Aware Evidence Validation And Promotion Plan
 
-Status: approved plan; Hermes L0 instruction documented, independent execution pending
+Status: Hermes L0 independently replayed and maintainer-accepted; L1-L4 separately gated
 Date: 2026-07-11
 Owning prior work:
 `docs/superpowers/specs/2026-07-11-marker-aware-candidate-snapshot-design.md`
@@ -242,14 +242,14 @@ an `auto` fallback or invent a successful marker decision.
 
 ### L0 Independent Repository Replay
 
-- [ ] Run the approved Hermes L0 instruction from the current committed clean checkout.
-- [ ] Verify legacy `file`, deterministic `markers`/`auto`/`mixed`, Markdown extension,
+- [x] Run the approved Hermes L0 instruction from the current committed clean checkout.
+- [x] Verify legacy `file`, deterministic `markers`/`auto`/`mixed`, Markdown extension,
   duplicate-basename, empty-directory, table, fence, and unbalanced-input cases.
-- [ ] Verify repeated snapshot identity and neutral `qa map-evidence` stable-hash output.
-- [ ] Verify JSON, Markdown, redaction, zero-call, non-mutation, and sensitive-scan
+- [x] Verify repeated snapshot identity and neutral `qa map-evidence` stable-hash output.
+- [x] Verify JSON, Markdown, redaction, zero-call, non-mutation, and sensitive-scan
   evidence.
-- [ ] Confirm the final repository state and commit match the initial state.
-- [ ] Review the Hermes result independently and record only sanitized evidence here.
+- [x] Confirm the final repository state and commit match the initial state.
+- [x] Review the Hermes result independently and record only sanitized evidence here.
 
 ### L1 Private Offline Candidate Evidence
 
@@ -301,8 +301,25 @@ Baseline recorded on 2026-07-11:
 - `docs/41-marker-aware-candidate-snapshot-hermes-l0.md` now provides the reviewed,
   repository-only instruction with exact neutral fixtures, focused tests, public CLI
   replay, negative cases, deterministic assertions, separate tool/prose sensitive scans,
-  and final clean-worktree proof. Local command calibration passed, but the independent
-  Hermes run has not started;
+  and final clean-worktree proof;
+- Hermes independently replayed L0 against commit `fb38de2`: 16 focused governance tests
+  with 5 subtests and 4 focused CLI tests passed; omitted/default and explicit `file`
+  matched at one chunk and the same stable hash; forced `markers` produced three chunks;
+  directory `auto` produced deterministic `mixed` mode across three documents; all four
+  negative cases returned code 2 with the expected failure classes;
+- the repeated directory snapshots matched on ordered content, stable hashes, source
+  IDs, and boundary decisions. Neutral QA mapping covered 2 of 2 spans and produced only
+  `sha256:` expected chunks;
+- maintainer review reran the committed semantic verification block, inspected the
+  negative outputs, key snapshot and QA artifacts, redaction sidecars, and separate tool
+  and agent-prose scan logs. Path/endpoint and raw-content scans had no matches;
+  credential and identifier matches were limited to zero counters, schema/coverage
+  labels, redaction JSON paths, and sanitized config-path values, with zero unresolved
+  sensitive findings;
+- Hermes recorded identical initial and final commit `fb38de2`, an empty porcelain
+  status, zero RAGFlow/LLM calls, no live writes, and no repository modification. The
+  retained public-safe run label is
+  `ragflow-marker-aware-hermes-l0-20260711T103549Z`;
 - no private source, network service, RAGFlow endpoint, MinerU backend, DeepDoc path,
   LLM/RAGAS backend, or Stage 8C action has been accessed or authorized by this plan;
 - the three open `docs/38` rows remain open: reviewed expected chunks, a true two-subset
@@ -326,7 +343,8 @@ must be reviewed manually rather than treated as automatically safe or unsafe.
 
 Residual work remains classified as follows:
 
-- ordinary public offline work: author and run the separately reviewed Hermes L0 replay;
+- completed public offline work: marker-aware implementation, local instruction
+  calibration, and independent Hermes L0 replay;
 - private offline work: Open RAG and FinanceBench candidate snapshots, QA mapping review,
   and normalized qrels approval under L1;
 - read-only live work: pinned observed RAGFlow validation under L2;
@@ -335,5 +353,17 @@ Residual work remains classified as follows:
 - separately blocked work: DeepDoc/native comparison, script-owned LLM/RAGAS, Stage 8C,
   private adapters, and unrelated post-CLI surfaces.
 
-No closeout or retrospective is recorded yet. Add it only after the approved execution
-level is complete and verified, while leaving all higher levels explicitly gated.
+## L0 Closeout / Retrospective
+
+L0 closed on 2026-07-11 after independent replay and maintainer artifact review:
+
+- the repository-only marker-aware path is reproducible from a clean committed checkout;
+- legacy/default compatibility, deterministic automatic selection, table/fence safety,
+  duplicate-basename isolation, failure paths, report safety, and neutral QA mapping all
+  met the L0 contract;
+- the replay made no network, private-source, RAGFlow, MinerU, DeepDoc, LLM/RAGAS,
+  Stage 8C, default, repository, commit, or push change;
+- no `docs/38` row closes from L0 because reviewed private expected chunks and observed
+  retrieval evidence remain absent;
+- the next actionable gate is L1, but it remains closed until a separate instruction
+  explicitly authorizes the private Open RAG and FinanceBench scope.
