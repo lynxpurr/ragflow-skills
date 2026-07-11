@@ -268,7 +268,10 @@ git commit -m "feat(benchmark): add marker-aware candidate snapshots"
 
 - [x] **Step 1: Write failing auto tests**
 
-Cover successful `markers_selected`, all four ordered fallback codes, forced-mode errors, JSON rejection, and a directory with one marker file plus one marker-free file. Assert the directory result is:
+Cover successful `markers_selected`, all three externally reachable ordered fallback
+codes, forced-mode errors, JSON rejection, and a directory with one marker file plus one
+marker-free file. Table atomicity is enforced by construction and covered with complex
+table fixtures rather than an unreachable fallback code. Assert the directory result is:
 
 ```python
 {

@@ -589,6 +589,8 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertEqual(snapshot["document_coverage"][0]["chunk_count"], 1)
         self.assertTrue(snapshot["chunks"][0]["stable_hash"].startswith("sha256:"))
         self.assertIn("chunk-a", snapshot["chunks"][0]["aliases"])
+        self.assertNotIn("boundary", snapshot)
+        self.assertNotIn("boundary", report)
 
     def test_snapshot_markdown_legacy_default_keeps_one_chunk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -787,6 +789,59 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertIn("<!-- chunk -->", payload["chunks"][0]["content"])
         self.assertEqual(report["boundary"]["ignored_fenced_marker_count"], 1)
 
+    def test_snapshot_markdown_markers_preserve_marker_in_long_fence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.md"
+            output = root / "snapshot.json"
+            source.write_text(
+                "````md\n```\n<!-- chunk -->\n```\n````\n"
+                "<!-- chunk -->\n"
+                "gamma\n",
+                encoding="utf-8",
+            )
+
+            report = snapshot_chunks(
+                input_path=source,
+                output_path=output,
+                include_content=True,
+                markdown_boundary_mode="markers",
+            )
+            payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["summary"]["chunk_count"], 2)
+        self.assertIn("<!-- chunk -->", payload["chunks"][0]["content"])
+        self.assertEqual(report["boundary"]["ignored_fenced_marker_count"], 1)
+
+    def test_snapshot_markdown_markers_preserve_nested_complex_html_table(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.md"
+            output = root / "snapshot.json"
+            source.write_text(
+                "alpha\n<!-- chunk -->\n"
+                "<TABLE data-note=\">\"><tr><td>outer\n"
+                "<table class=\"inner\"><tr><td>inner</td></tr></table>\n"
+                "<!-- chunk -->\n"
+                "</td></tr></TABLE>\n"
+                "<!-- chunk -->\nomega\n",
+                encoding="utf-8",
+            )
+
+            report = snapshot_chunks(
+                input_path=source,
+                output_path=output,
+                include_content=True,
+                markdown_boundary_mode="markers",
+            )
+            payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["summary"]["chunk_count"], 3)
+        self.assertIn("<TABLE", payload["chunks"][1]["content"])
+        self.assertIn("<table class=\"inner\">", payload["chunks"][1]["content"])
+        self.assertIn("</TABLE>", payload["chunks"][1]["content"])
+        self.assertEqual(report["boundary"]["suppressed_table_boundary_count"], 1)
+
     def test_snapshot_markdown_markers_reject_unbalanced_html_table(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -832,7 +887,6 @@ class BenchmarkGovernanceTests(unittest.TestCase):
                 "balanced_html_table",
                 "canonical_markers_available",
                 "sufficient_nonempty_chunks",
-                "table_atomicity_preserved",
             ],
         )
 
@@ -897,6 +951,12 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertEqual(len({value.rsplit("-", 1)[0] for value in source_chunk_ids}), 2)
         fallback_chunks = [item for item in payload["chunks"] if "source_chunk_id" not in item]
         self.assertEqual(len(fallback_chunks), 1)
+        self.assertEqual(payload["summary"]["document_count"], 3)
+        self.assertEqual(len(payload["document_coverage"]), 3)
+        self.assertEqual(
+            len({item["document_id"] for item in payload["document_coverage"]}),
+            3,
+        )
 
     def test_snapshot_markdown_directory_forced_markers_rejects_unsafe_document(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

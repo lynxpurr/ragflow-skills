@@ -2101,7 +2101,6 @@ def _marker_boundary_result(
     active_marker_count = 0
     suppressed_table_boundary_count = 0
     ignored_fenced_marker_count = 0
-    split_boundary_lines: list[int] = []
     segments: list[str] = []
     current: list[str] = []
 
@@ -2124,24 +2123,17 @@ def _marker_boundary_result(
         if line_number in table_lines:
             suppressed_table_boundary_count += 1
             continue
-        split_boundary_lines.append(line_number)
         flush()
     flush()
 
-    table_atomicity_preserved = not any(
-        line_number in table_lines for line_number in split_boundary_lines
-    )
     checks = (
         {"code": "canonical_markers_available", "passed": active_marker_count > 0},
         {"code": "sufficient_nonempty_chunks", "passed": len(segments) >= 2},
         {"code": "balanced_html_table", "passed": analysis.balanced},
-        {"code": "table_atomicity_preserved", "passed": table_atomicity_preserved},
     )
     fallback_code = None
     if not analysis.balanced:
         fallback_code = "unbalanced_html_table"
-    elif not table_atomicity_preserved:
-        fallback_code = "table_atomicity_violation"
     elif active_marker_count <= 0:
         fallback_code = "no_canonical_markers"
     elif len(segments) < 2:
@@ -2306,7 +2298,7 @@ def _read_snapshot_input(
     path: str | Path,
     *,
     markdown_boundary_mode: str,
-) -> tuple[list[NormalizedChunk], list[str | Path], dict[str, Any]]:
+) -> tuple[list[NormalizedChunk], list[str | Path], dict[str, Any] | None]:
     source = Path(path)
     if not source.exists():
         raise BenchmarkGovernanceError(f"chunk snapshot input not found: {source}")
@@ -2321,24 +2313,7 @@ def _read_snapshot_input(
             "markdown boundary mode markers/auto requires a Markdown file or Markdown directory"
         )
     payload = _read_json(source)
-    boundary = {
-        "requested_mode": markdown_boundary_mode,
-        "effective_mode": "file",
-        "evidence_scope": "candidate_offline",
-        "observed_ragflow_chunks": False,
-        "ragflow_calls": 0,
-        "writes_live_ragflow": False,
-        "script_owned_llm_calls": 0,
-        "document_count": 0,
-        "document_mode_counts": {},
-        "decision_code_counts": {"non_markdown_input": 1},
-        "source_marker_count": 0,
-        "emitted_candidate_chunk_count": 0,
-        "suppressed_table_boundary_count": 0,
-        "ignored_fenced_marker_count": 0,
-        "selection_check_counts": {},
-    }
-    return _chunks_from_payload(payload), [source], boundary
+    return _chunks_from_payload(payload), [source], None
 
 
 def _source_chunk_id(chunk: NormalizedChunk) -> str | None:
@@ -2383,11 +2358,16 @@ def _chunk_snapshot_item(
 
 
 def _document_chunk_coverage(chunks: list[NormalizedChunk]) -> list[dict[str, Any]]:
-    documents: dict[str, dict[str, Any]] = {}
+    documents: dict[tuple[str, str], dict[str, Any]] = {}
     for chunk in chunks:
         document_name = chunk.document_name or "<unknown>"
+        document_key = (
+            ("document_id", chunk.document_id)
+            if chunk.document_id
+            else ("document_name", document_name)
+        )
         item = documents.setdefault(
-            document_name,
+            document_key,
             {
                 "document_name": document_name,
                 "document_id": chunk.document_id,
@@ -2589,7 +2569,7 @@ def snapshot_chunks(
             "chunk_count": chunk_count,
             "source_chunk_count": len(chunks),
             "duplicate_stable_hash_count": duplicate_hashes,
-            "document_count": len({item.get("document_name") for item in snapshot_items if item.get("document_name")}),
+            "document_count": len(document_coverage),
             "chunks_with_content": chunks_with_content,
             "chunks_with_document_name": chunks_with_document_name,
             "chunks_with_document_id": chunks_with_document_id,
@@ -2607,9 +2587,10 @@ def snapshot_chunks(
         },
         "source_hashes": _source_hashes(source_paths),
         "document_coverage": document_coverage,
-        "boundary": boundary,
         "chunks": snapshot_items,
     }
+    if boundary is not None:
+        snapshot["boundary"] = boundary
     _write_json(output_path, snapshot)
     runtime_partial_failure = build_runtime_partial_failure_report(
         "ragflow-kb-build snapshot-chunks",
@@ -2648,18 +2629,20 @@ def snapshot_chunks(
             ),
         }
     )
-    return {
+    report = {
         "ok": True,
         "schema": CHUNK_SNAPSHOT_REPORT_SCHEMA,
         "chunk_snapshot": str(output_path),
         "summary": report_summary,
-        "boundary": boundary,
         "observed_state": observed_state,
         "runtime_partial_failure": runtime_partial_failure,
         "chunk_review": review,
         "document_coverage": document_coverage,
         "source_hashes": snapshot["source_hashes"],
     }
+    if boundary is not None:
+        report["boundary"] = boundary
+    return report
 
 
 def _write_benchmark_artifacts(

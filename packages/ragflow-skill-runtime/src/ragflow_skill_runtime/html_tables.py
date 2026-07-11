@@ -8,7 +8,8 @@ from html.parser import HTMLParser
 from typing import Any
 
 
-FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
+FENCE_OPEN_RE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})")
+FENCE_CLOSE_RE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})[ \t]*$")
 
 
 @dataclass(frozen=True)
@@ -88,18 +89,29 @@ class _TableDraft:
 def _masked_fenced_code_with_lines(text: str) -> tuple[str, tuple[int, ...]]:
     masked: list[str] = []
     fenced_lines: list[int] = []
-    in_fence = False
+    fence_character: str | None = None
+    fence_length = 0
     for line_number, line in enumerate(text.splitlines(), start=1):
-        if FENCE_RE.match(line):
+        if fence_character is not None:
             masked.append("")
             fenced_lines.append(line_number)
-            in_fence = not in_fence
+            closing = FENCE_CLOSE_RE.match(line)
+            if closing:
+                fence = closing.group("fence")
+                if fence[0] == fence_character and len(fence) >= fence_length:
+                    fence_character = None
+                    fence_length = 0
             continue
-        if in_fence:
+
+        opening = FENCE_OPEN_RE.match(line)
+        if opening:
+            fence = opening.group("fence")
             masked.append("")
             fenced_lines.append(line_number)
-        else:
-            masked.append(line)
+            fence_character = fence[0]
+            fence_length = len(fence)
+            continue
+        masked.append(line)
     return "\n".join(masked), tuple(fenced_lines)
 
 

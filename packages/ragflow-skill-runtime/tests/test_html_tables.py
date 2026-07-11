@@ -32,3 +32,39 @@ class HtmlTableAnalysisTests(unittest.TestCase):
         self.assertFalse(analysis.balanced)
         self.assertEqual(analysis.unclosed_table_count, 1)
         self.assertEqual(analysis.unexpected_close_count, 1)
+
+    def test_analysis_keeps_shorter_backtick_fences_inside_long_fence(self) -> None:
+        text = (
+            "````md\n"
+            "```\n"
+            "<table><tr><td>literal</td></tr></table>\n"
+            "<!-- chunk -->\n"
+            "```\n"
+            "````\n"
+            "<table><tr><td>outside</td></tr></table>\n"
+        )
+
+        analysis = html_tables.analyze_html_table_structure(text)
+
+        self.assertEqual(analysis.fenced_line_numbers, (1, 2, 3, 4, 5, 6))
+        self.assertEqual(
+            [(item.line_start, item.line_end) for item in analysis.tables],
+            [(7, 7)],
+        )
+
+    def test_analysis_does_not_close_tilde_fence_with_backticks(self) -> None:
+        text = (
+            "~~~md\n"
+            "```\n"
+            "<table><tr><td>literal</td></tr></table>\n"
+            "~~~\n"
+            "<table><tr><td>outside</td></tr></table>\n"
+        )
+
+        analysis = html_tables.analyze_html_table_structure(text)
+
+        self.assertEqual(analysis.fenced_line_numbers, (1, 2, 3, 4))
+        self.assertEqual(
+            [(item.line_start, item.line_end) for item in analysis.tables],
+            [(5, 5)],
+        )

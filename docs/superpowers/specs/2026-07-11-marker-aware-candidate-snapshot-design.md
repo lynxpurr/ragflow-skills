@@ -189,25 +189,27 @@ Select `markers` only when all of the following are true:
 - at least one canonical marker exists;
 - splitting produces at least two non-empty candidate chunks;
 - HTML table structure is balanced;
-- no complete HTML table is fragmented;
 - every produced chunk has non-empty content after whitespace normalization.
+
+Complete HTML tables are kept atomic by construction: a canonical marker inside a
+balanced table is suppressed and never flushes the active segment. This is covered by
+same-line, nested, mixed-case, attributed, and self-closing table fixtures rather than
+advertised as a separate fallback that valid inputs cannot reach.
 
 Otherwise select `file` and emit a stable reason code. Initial reason codes are:
 
 - successful selection code: `markers_selected`;
 - ordered fallback codes:
   1. `unbalanced_html_table`;
-  2. `table_atomicity_violation`;
-  3. `no_canonical_markers`;
-  4. `insufficient_nonempty_chunks`.
+  2. `no_canonical_markers`;
+  3. `insufficient_nonempty_chunks`.
 
 The decision report also contains ordered checks rather than overloading the primary
 reason code:
 
 - `canonical_markers_available`;
 - `sufficient_nonempty_chunks`;
-- `balanced_html_table`;
-- `table_atomicity_preserved`.
+- `balanced_html_table`.
 
 Checks run in the documented order, while fallback codes use the fixed priority above.
 Whitespace-only segments are suppressed before counting, so a separate
@@ -252,6 +254,12 @@ fields and `tools/schema_identity_check.py` verifies identity/coverage reference
 than a field whitelist, so no schema version or identity-list change is required solely
 for this additive object. Focused producer/consumer tests and the report-surface release
 gate remain required.
+
+The `boundary` object is emitted only for Markdown inputs, where the runtime owns the
+offline boundary decision and can truthfully assert candidate/non-observed provenance.
+Legacy JSON snapshot, validation-report, and retrieval-response inputs omit this object
+because they may contain server-observed chunk identities whose provenance cannot be
+inferred from the payload shape alone.
 
 The `boundary` object should include:
 
@@ -300,10 +308,14 @@ Implementation must use test-driven development. Required focused coverage:
   parser semantics;
 - fenced-code table literals are ignored, while the documented inline-code limitation
   fails or falls back safely;
+- fence masking tracks the opener character and length, so shorter nested fence literals
+  and mismatched tilde/backtick runs cannot expose marker or table literals;
 - unbalanced HTML tables fail in `markers` and fall back in `auto`;
 - directory traversal and in-document ordering are stable;
 - repeated runs produce identical semantic chunks and stable hashes;
 - document names, document IDs, and derived chunk IDs are preserved;
+- aggregate document coverage keys by document ID when available, so equal basenames in
+  different directories remain distinct;
 - `auto` reason codes are deterministic;
 - JSON inputs reject Markdown-only modes;
 - CLI help, return codes, JSON report, Markdown report, and redaction sidecar are covered;
@@ -312,7 +324,7 @@ Implementation must use test-driven development. Required focused coverage:
 - public reports state candidate/offline scope and never claim observed RAGFlow chunks;
 - marker-aware output removes canonical delimiters, so
   `delimiter_visible_chunk_count` is zero for the focused fixture;
-- the precise boundary atomicity result passes for the focused fixture. The existing
+- the complex-table atomicity fixture passes. The existing
   `possible_split_table_chunk_count` remains an advisory heuristic and is not required
   to be zero for every multi-table document because adjacent independent table chunks
   can trigger it;
@@ -394,11 +406,14 @@ Verified on 2026-07-11:
 - Canonical boundaries preserve balanced HTML tables, ignore fenced-code marker
   literals, suppress whitespace-only segments, and retain non-colliding
   `source_chunk_id` aliases without populating RAGFlow-facing `chunk_id`.
+- Review hardening tracks fence character/length, distinguishes equal basenames by
+  document ID, omits Markdown-only provenance claims for legacy JSON inputs, and tests
+  nested mixed-case attributed tables without an unreachable atomicity fallback.
 - A neutral two-span grounded-QA fixture mapped both spans to stable `sha256:` expected
   chunks with 100% mapping coverage; repeated snapshots preserved ordered content,
   source IDs, stable hashes, and boundary decisions.
-- Focused runtime/CLI/schema/inventory validation passed with 179 tests and 17 subtests.
-- The complete runtime suite passed with 715 tests and 33 subtests.
+- Focused runtime/CLI/schema/inventory validation passed with 185 tests and 17 subtests.
+- The complete runtime suite passed with 721 tests and 33 subtests.
 - Schema identity, release hygiene, manifest schema, release build/export, consumer
   acceptance, and strict-vendor platform smoke passed with zero findings.
 - No RAGFlow HTTP call, live mutation, DeepDoc run, script-owned LLM/RAGAS call, Stage 8C
