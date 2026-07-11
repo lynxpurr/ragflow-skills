@@ -152,7 +152,7 @@ git commit -m "feat(runtime): expose HTML table structure diagnostics"
 - Modify: `packages/ragflow-skill-runtime/src/ragflow_skill_runtime/benchmark_governance.py`
 - Modify: `packages/ragflow-skill-runtime/tests/test_benchmark_governance.py`
 
-- [ ] **Step 1: Add and run a legacy characterization test**
+- [x] **Step 1: Add and run a legacy characterization test**
 
 ```python
 def test_snapshot_markdown_legacy_default_keeps_one_chunk(self) -> None:
@@ -169,7 +169,7 @@ def test_snapshot_markdown_legacy_default_keeps_one_chunk(self) -> None:
 
 Run the named test and expect PASS before production changes.
 
-- [ ] **Step 2: Write the failing marker-mode test**
+- [x] **Step 2: Write the failing marker-mode test**
 
 Use a document with narrative text, a marker inside a complete HTML table, and a final narrative chunk. Call:
 
@@ -192,7 +192,7 @@ temporary narrative/table Markdown, a content-bearing marker snapshot, and two e
 grounded-QA spans. It calls `map_grounded_qa_evidence` and asserts full mapping coverage,
 two mapped spans, two qrels-template rows, and only `sha256:` expected chunks.
 
-- [ ] **Step 3: Verify RED**
+- [x] **Step 3: Verify RED**
 
 ```bash
 python3 -m pytest packages/ragflow-skill-runtime/tests/test_benchmark_governance.py -k markers_split_and_preserve_source_identity -q
@@ -200,7 +200,7 @@ python3 -m pytest packages/ragflow-skill-runtime/tests/test_benchmark_governance
 
 Expected: FAIL because `markdown_boundary_mode` is unknown.
 
-- [ ] **Step 4: Implement the marker result and source ID contract**
+- [x] **Step 4: Implement the marker result and source ID contract**
 
 Import `analyze_html_table_structure` and add:
 
@@ -238,11 +238,11 @@ NormalizedChunk(
 
 Update aliases, snapshot items, runtime labels, and summary coverage to use `source_chunk_id` without changing `chunk_id` semantics.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run both legacy and marker tests; expect PASS.
 
-- [ ] **Step 6: Add RED edge tests, then implement only their behavior**
+- [x] **Step 6: Add RED edge tests, then implement only their behavior**
 
 Cover leading/trailing/adjacent markers, whitespace-only segments, inline noncanonical marker text, fenced marker literals, attributed/mixed-case/self-closing tables, unbalanced tables, and repeated stable hashes. Run:
 
@@ -252,7 +252,7 @@ python3 -m pytest packages/ragflow-skill-runtime/tests/test_benchmark_governance
 
 Expected first run: FAIL on missing edge behavior. After minimal corrections: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add packages/ragflow-skill-runtime/src/ragflow_skill_runtime/benchmark_governance.py packages/ragflow-skill-runtime/tests/test_benchmark_governance.py

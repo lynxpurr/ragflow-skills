@@ -29,6 +29,7 @@ from .validation import (
 from .retrieval import CHUNK_HASH_ALGORITHM, NormalizedChunk, normalize_chunk, normalize_retrieval_response, stable_chunk_hash
 from .runtime_resilience import build_runtime_partial_failure_report
 from .handoff import CJK_PHRASE_RE, RETRIEVAL_HINTS_SCHEMA, STOPWORDS, WORD_RE
+from .html_tables import HtmlTableAnalysis, analyze_html_table_structure
 from .metadata_governance import lint_tagset_file, tagset_report_file
 from .kb_build import BuildError, KB_REFRESH_REPORT_SCHEMA, load_kb_refresh_report, summarize_kb_refresh_observed_state
 
@@ -2020,14 +2021,201 @@ def _source_hashes(paths: Iterable[str | Path | None]) -> list[dict[str, str]]:
     return hashes
 
 
-def _iter_markdown_chunks(path: Path) -> list[NormalizedChunk]:
+MARKDOWN_BOUNDARY_MODES = {"file", "markers", "auto"}
+CANONICAL_CHUNK_DELIMITER = "<!-- chunk -->"
+
+
+@dataclass(frozen=True)
+class _MarkdownBoundaryResult:
+    chunks: tuple[NormalizedChunk, ...]
+    effective_mode: str
+    decision_code: str
+    selection_checks: tuple[dict[str, Any], ...]
+    source_marker_count: int
+    suppressed_table_boundary_count: int
+    ignored_fenced_marker_count: int
+
+
+def _markdown_paths(path: Path) -> list[Path]:
     if path.is_dir():
-        chunks: list[NormalizedChunk] = []
-        for markdown in sorted(path.rglob("*.md")):
-            chunks.extend(_iter_markdown_chunks(markdown))
-        return chunks
+        return sorted(path.rglob("*.md"))
+    return [path]
+
+
+def _relative_markdown_path(path: Path, source_root: Path) -> str:
+    if source_root.is_dir():
+        try:
+            return path.relative_to(source_root).as_posix()
+        except ValueError:
+            pass
+    return path.name
+
+
+def _document_key(path: Path, source_root: Path) -> str:
+    relative_path = _relative_markdown_path(path, source_root)
+    return hashlib.sha256(relative_path.encode("utf-8")).hexdigest()[:12]
+
+
+def _normalized_content_available(content: str) -> bool:
+    return bool(" ".join(content.split()))
+
+
+def _file_boundary_result(path: Path) -> _MarkdownBoundaryResult:
     text = path.read_text(encoding="utf-8")
-    return [NormalizedChunk(content=text, document_name=path.name, document_id=str(path))]
+    source_marker_count = sum(
+        1 for line in text.splitlines() if line.strip() == CANONICAL_CHUNK_DELIMITER
+    )
+    return _MarkdownBoundaryResult(
+        chunks=(NormalizedChunk(content=text, document_name=path.name, document_id=str(path)),),
+        effective_mode="file",
+        decision_code="file_mode_requested",
+        selection_checks=(),
+        source_marker_count=source_marker_count,
+        suppressed_table_boundary_count=0,
+        ignored_fenced_marker_count=0,
+    )
+
+
+def _table_line_numbers(text: str) -> tuple[set[int], HtmlTableAnalysis]:
+    analysis = analyze_html_table_structure(text)
+    line_numbers: set[int] = set()
+    for table in analysis.tables:
+        line_numbers.update(range(table.line_start, table.line_end + 1))
+    return line_numbers, analysis
+
+
+def _marker_boundary_result(path: Path, *, source_root: Path) -> _MarkdownBoundaryResult:
+    text = path.read_text(encoding="utf-8")
+    table_lines, analysis = _table_line_numbers(text)
+    fenced_lines = set(analysis.fenced_line_numbers)
+    source_marker_count = 0
+    active_marker_count = 0
+    suppressed_table_boundary_count = 0
+    ignored_fenced_marker_count = 0
+    segments: list[str] = []
+    current: list[str] = []
+
+    def flush() -> None:
+        content = "".join(current)
+        current.clear()
+        if _normalized_content_available(content):
+            segments.append(content)
+
+    for line_number, line in enumerate(text.splitlines(keepends=True), start=1):
+        if line.strip() != CANONICAL_CHUNK_DELIMITER:
+            current.append(line)
+            continue
+        source_marker_count += 1
+        if line_number in fenced_lines:
+            ignored_fenced_marker_count += 1
+            current.append(line)
+            continue
+        active_marker_count += 1
+        if line_number in table_lines:
+            suppressed_table_boundary_count += 1
+            continue
+        flush()
+    flush()
+
+    checks = (
+        {"code": "canonical_markers_available", "passed": active_marker_count > 0},
+        {"code": "sufficient_nonempty_chunks", "passed": len(segments) >= 2},
+        {"code": "balanced_html_table", "passed": analysis.balanced},
+        {"code": "table_atomicity_preserved", "passed": True},
+    )
+    if not analysis.balanced:
+        raise BenchmarkGovernanceError(
+            "markdown boundary mode markers rejected a document: unbalanced_html_table"
+        )
+    if active_marker_count <= 0:
+        raise BenchmarkGovernanceError(
+            "markdown boundary mode markers rejected a document: no_canonical_markers"
+        )
+    if len(segments) < 2:
+        raise BenchmarkGovernanceError(
+            "markdown boundary mode markers rejected a document: insufficient_nonempty_chunks"
+        )
+
+    document_key = _document_key(path, source_root)
+    chunks = tuple(
+        NormalizedChunk(
+            content=content,
+            document_name=path.name,
+            document_id=str(path),
+            raw={"source_chunk_id": f"marker-{document_key}-{index:04d}"},
+        )
+        for index, content in enumerate(segments, start=1)
+    )
+    return _MarkdownBoundaryResult(
+        chunks=chunks,
+        effective_mode="markers",
+        decision_code="markers_selected",
+        selection_checks=checks,
+        source_marker_count=source_marker_count,
+        suppressed_table_boundary_count=suppressed_table_boundary_count,
+        ignored_fenced_marker_count=ignored_fenced_marker_count,
+    )
+
+
+def _selection_check_counts(results: Iterable[_MarkdownBoundaryResult]) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for result in results:
+        for check in result.selection_checks:
+            code = str(check.get("code") or "")
+            if not code:
+                continue
+            item = counts.setdefault(code, {"passed": 0, "failed": 0})
+            item["passed" if check.get("passed") else "failed"] += 1
+    return {key: counts[key] for key in sorted(counts)}
+
+
+def _boundary_summary(
+    results: list[_MarkdownBoundaryResult],
+    *,
+    requested_mode: str,
+) -> dict[str, Any]:
+    mode_counts = Counter(item.effective_mode for item in results)
+    decision_counts = Counter(item.decision_code for item in results)
+    effective_mode = next(iter(mode_counts)) if len(mode_counts) == 1 else "mixed"
+    return {
+        "requested_mode": requested_mode,
+        "effective_mode": effective_mode,
+        "evidence_scope": "candidate_offline",
+        "observed_ragflow_chunks": False,
+        "ragflow_calls": 0,
+        "writes_live_ragflow": False,
+        "script_owned_llm_calls": 0,
+        "document_count": len(results),
+        "document_mode_counts": dict(sorted(mode_counts.items())),
+        "decision_code_counts": dict(sorted(decision_counts.items())),
+        "source_marker_count": sum(item.source_marker_count for item in results),
+        "emitted_candidate_chunk_count": sum(
+            len(item.chunks) for item in results if item.effective_mode == "markers"
+        ),
+        "suppressed_table_boundary_count": sum(
+            item.suppressed_table_boundary_count for item in results
+        ),
+        "ignored_fenced_marker_count": sum(
+            item.ignored_fenced_marker_count for item in results
+        ),
+        "selection_check_counts": _selection_check_counts(results),
+    }
+
+
+def _read_markdown_snapshot_input(
+    source: Path,
+    *,
+    requested_mode: str,
+) -> tuple[list[NormalizedChunk], dict[str, Any]]:
+    paths = _markdown_paths(source)
+    results = [
+        _file_boundary_result(path)
+        if requested_mode == "file"
+        else _marker_boundary_result(path, source_root=source)
+        for path in paths
+    ]
+    chunks = [chunk for result in results for chunk in result.chunks]
+    return chunks, _boundary_summary(results, requested_mode=requested_mode)
 
 
 def _chunks_from_validation_report(payload: Mapping[str, Any]) -> list[NormalizedChunk]:
@@ -2060,6 +2248,11 @@ def _chunks_from_payload(payload: Any) -> list[NormalizedChunk]:
                     document_id=item.get("document_id") if isinstance(item.get("document_id"), str) else None,
                     dataset_id=item.get("dataset_id") if isinstance(item.get("dataset_id"), str) else None,
                     chunk_id=item.get("chunk_id") if isinstance(item.get("chunk_id"), str) else None,
+                    raw=(
+                        {"source_chunk_id": item["source_chunk_id"]}
+                        if isinstance(item.get("source_chunk_id"), str)
+                        else {}
+                    ),
                 )
             )
         return chunks
@@ -2075,20 +2268,53 @@ def _chunks_from_payload(payload: Any) -> list[NormalizedChunk]:
     raise BenchmarkGovernanceError("chunk snapshot input must be JSON object, JSON list, Markdown file, or Markdown directory")
 
 
-def _read_snapshot_input(path: str | Path) -> tuple[list[NormalizedChunk], list[str | Path]]:
+def _read_snapshot_input(
+    path: str | Path,
+    *,
+    markdown_boundary_mode: str,
+) -> tuple[list[NormalizedChunk], list[str | Path], dict[str, Any]]:
     source = Path(path)
     if not source.exists():
         raise BenchmarkGovernanceError(f"chunk snapshot input not found: {source}")
     if source.is_dir() or source.suffix.lower() in {".md", ".markdown"}:
-        return _iter_markdown_chunks(source), [source]
+        chunks, boundary = _read_markdown_snapshot_input(
+            source,
+            requested_mode=markdown_boundary_mode,
+        )
+        return chunks, [source], boundary
     payload = _read_json(source)
-    return _chunks_from_payload(payload), [source]
+    boundary = {
+        "requested_mode": markdown_boundary_mode,
+        "effective_mode": "file",
+        "evidence_scope": "candidate_offline",
+        "observed_ragflow_chunks": False,
+        "ragflow_calls": 0,
+        "writes_live_ragflow": False,
+        "script_owned_llm_calls": 0,
+        "document_count": 0,
+        "document_mode_counts": {},
+        "decision_code_counts": {"non_markdown_input": 1},
+        "source_marker_count": 0,
+        "emitted_candidate_chunk_count": 0,
+        "suppressed_table_boundary_count": 0,
+        "ignored_fenced_marker_count": 0,
+        "selection_check_counts": {},
+    }
+    return _chunks_from_payload(payload), [source], boundary
+
+
+def _source_chunk_id(chunk: NormalizedChunk) -> str | None:
+    value = chunk.raw.get("source_chunk_id") if isinstance(chunk.raw, Mapping) else None
+    return value if isinstance(value, str) and value else None
 
 
 def _chunk_aliases(chunk: NormalizedChunk, stable_hash: str) -> list[str]:
     aliases = {stable_hash, stable_hash.removeprefix("sha256:")}
     if chunk.chunk_id:
         aliases.add(chunk.chunk_id)
+    source_chunk_id = _source_chunk_id(chunk)
+    if source_chunk_id:
+        aliases.add(source_chunk_id)
     return sorted(aliases)
 
 
@@ -2099,6 +2325,7 @@ def _chunk_snapshot_item(
     include_content: bool,
 ) -> dict[str, Any]:
     stable_hash = stable_chunk_hash(chunk)
+    source_chunk_id = _source_chunk_id(chunk)
     item: dict[str, Any] = {
         "id": f"chunk-{index + 1}",
         "stable_hash": stable_hash,
@@ -2109,6 +2336,7 @@ def _chunk_snapshot_item(
         "document_id": chunk.document_id,
         "dataset_id": chunk.dataset_id,
         "chunk_id": chunk.chunk_id,
+        "source_chunk_id": source_chunk_id,
         "aliases": _chunk_aliases(chunk, stable_hash),
     }
     if include_content:
@@ -2257,10 +2485,20 @@ def snapshot_chunks(
     description: str = "",
     include_content: bool = False,
     observed_state_path: str | Path | None = None,
+    markdown_boundary_mode: str = "file",
 ) -> dict[str, Any]:
     """Create a deterministic chunk snapshot from local chunks or validation output."""
 
-    chunks, source_paths = _read_snapshot_input(input_path)
+    if markdown_boundary_mode not in MARKDOWN_BOUNDARY_MODES:
+        raise BenchmarkGovernanceError(
+            f"markdown boundary mode must be one of {sorted(MARKDOWN_BOUNDARY_MODES)}"
+        )
+    if markdown_boundary_mode == "auto":
+        raise BenchmarkGovernanceError("markdown boundary mode auto is not implemented")
+    chunks, source_paths, boundary = _read_snapshot_input(
+        input_path,
+        markdown_boundary_mode=markdown_boundary_mode,
+    )
     if not chunks:
         raise BenchmarkGovernanceError("chunk snapshot input did not contain any chunks")
     try:
@@ -2280,7 +2518,7 @@ def snapshot_chunks(
     duplicate_hashes = 0
     for source_index, chunk in enumerate(chunks, start=1):
         stable_hash = stable_chunk_hash(chunk)
-        label = chunk.chunk_id or f"source_chunk_{source_index}"
+        label = chunk.chunk_id or _source_chunk_id(chunk) or f"source_chunk_{source_index}"
         if stable_hash in seen:
             duplicate_hashes += 1
             runtime_items.append({"label": label, "status": "duplicate_skipped"})
@@ -2301,6 +2539,7 @@ def snapshot_chunks(
     chunks_with_document_id = sum(1 for chunk in unique_chunks if chunk.document_id)
     chunks_with_dataset_id = sum(1 for chunk in unique_chunks if chunk.dataset_id)
     chunks_with_chunk_id = sum(1 for chunk in unique_chunks if chunk.chunk_id)
+    chunks_with_source_chunk_id = sum(1 for chunk in unique_chunks if _source_chunk_id(chunk))
     content_char_count = sum(len(chunk.content) for chunk in unique_chunks)
     document_coverage = _document_chunk_coverage(unique_chunks)
     review = _chunk_snapshot_review(unique_chunks, source_chunks=chunks)
@@ -2320,16 +2559,19 @@ def snapshot_chunks(
             "chunks_with_document_id": chunks_with_document_id,
             "chunks_with_dataset_id": chunks_with_dataset_id,
             "chunks_with_chunk_id": chunks_with_chunk_id,
+            "chunks_with_source_chunk_id": chunks_with_source_chunk_id,
             "content_coverage": _rate(chunks_with_content, chunk_count),
             "document_name_coverage": _rate(chunks_with_document_name, chunk_count),
             "document_id_coverage": _rate(chunks_with_document_id, chunk_count),
             "dataset_id_coverage": _rate(chunks_with_dataset_id, chunk_count),
             "chunk_id_coverage": _rate(chunks_with_chunk_id, chunk_count),
+            "source_chunk_id_coverage": _rate(chunks_with_source_chunk_id, chunk_count),
             "content_char_count": content_char_count,
             "average_chunk_chars": round(content_char_count / chunk_count, 2) if chunk_count else 0.0,
         },
         "source_hashes": _source_hashes(source_paths),
         "document_coverage": document_coverage,
+        "boundary": boundary,
         "chunks": snapshot_items,
     }
     _write_json(output_path, snapshot)
@@ -2375,6 +2617,7 @@ def snapshot_chunks(
         "schema": CHUNK_SNAPSHOT_REPORT_SCHEMA,
         "chunk_snapshot": str(output_path),
         "summary": report_summary,
+        "boundary": boundary,
         "observed_state": observed_state,
         "runtime_partial_failure": runtime_partial_failure,
         "chunk_review": review,

@@ -589,6 +589,198 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertTrue(snapshot["chunks"][0]["stable_hash"].startswith("sha256:"))
         self.assertIn("chunk-a", snapshot["chunks"][0]["aliases"])
 
+    def test_snapshot_markdown_legacy_default_keeps_one_chunk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.md"
+            output = root / "snapshot.json"
+            source.write_text("alpha\n<!-- chunk -->\nbeta\n", encoding="utf-8")
+
+            snapshot_chunks(input_path=source, output_path=output, include_content=True)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["summary"]["chunk_count"], 1)
+        self.assertIn("<!-- chunk -->", payload["chunks"][0]["content"])
+
+    def test_snapshot_markdown_markers_split_and_preserve_source_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.md"
+            output = root / "snapshot.json"
+            source.write_text(
+                "alpha evidence\n<!-- chunk -->\n"
+                "<table>\n<tr><td>beta evidence</td></tr>\n<!-- chunk -->\n</table>\n"
+                "<!-- chunk -->\ngamma evidence\n",
+                encoding="utf-8",
+            )
+
+            report = snapshot_chunks(
+                input_path=source,
+                output_path=output,
+                include_content=True,
+                markdown_boundary_mode="markers",
+            )
+            payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["summary"]["chunk_count"], 3)
+        source_chunk_ids = [item["source_chunk_id"] for item in payload["chunks"]]
+        prefixes = {value.rsplit("-", 1)[0] for value in source_chunk_ids}
+        self.assertEqual(len(prefixes), 1)
+        self.assertRegex(next(iter(prefixes)), r"^marker-[0-9a-f]{12}$")
+        self.assertEqual([value.rsplit("-", 1)[1] for value in source_chunk_ids], ["0001", "0002", "0003"])
+        self.assertTrue(all("chunk_id" not in item for item in payload["chunks"]))
+        self.assertTrue(
+            all(item["source_chunk_id"] in item["aliases"] for item in payload["chunks"])
+        )
+        self.assertIn("<table>", payload["chunks"][1]["content"])
+        self.assertIn("</table>", payload["chunks"][1]["content"])
+        self.assertNotIn(
+            "<!-- chunk -->",
+            "\n".join(item["content"] for item in payload["chunks"]),
+        )
+        self.assertEqual(report["boundary"]["suppressed_table_boundary_count"], 1)
+        self.assertEqual(report["summary"]["delimiter_visible_chunk_count"], 0)
+
+    def test_marker_snapshot_maps_grounded_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.md"
+            snapshot_path = root / "snapshot.json"
+            qa_path = root / "qa.json"
+            evidence_map_path = root / "evidence_map.json"
+            source.write_text(
+                "The narrative evidence is exact.\n"
+                "<!-- chunk -->\n"
+                "<table><tr><td>The table evidence is exact.</td></tr></table>\n",
+                encoding="utf-8",
+            )
+            qa_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_grounded_qa_v1",
+                        "items": [
+                            {
+                                "id": "qa-1",
+                                "query_id": "q1",
+                                "question": "What narrative evidence exists?",
+                                "answer": "The narrative evidence is exact.",
+                                "evidence": [
+                                    {
+                                        "document": "source.md",
+                                        "text": "The narrative evidence is exact.",
+                                    }
+                                ],
+                            },
+                            {
+                                "id": "qa-2",
+                                "query_id": "q2",
+                                "question": "What table evidence exists?",
+                                "answer": "The table evidence is exact.",
+                                "evidence": [
+                                    {
+                                        "document": "source.md",
+                                        "text": "The table evidence is exact.",
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            snapshot_chunks(
+                input_path=source,
+                output_path=snapshot_path,
+                include_content=True,
+                markdown_boundary_mode="markers",
+            )
+            mapping_report = map_grounded_qa_evidence(
+                qa_path=qa_path,
+                chunk_snapshot_path=snapshot_path,
+                output_path=evidence_map_path,
+            )
+            evidence_map = json.loads(evidence_map_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(mapping_report["summary"]["evidence_mapping_coverage"], 1.0)
+        self.assertEqual(mapping_report["summary"]["mapped_span_count"], 2)
+        self.assertEqual(len(evidence_map["qrels_template"]["qrels"]), 2)
+        self.assertTrue(
+            all(
+                value.startswith("sha256:")
+                for item in evidence_map["items"]
+                for value in item["expected_chunks"]
+            )
+        )
+
+    def test_snapshot_markdown_markers_suppress_empty_segments_and_keep_inline_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.md"
+            output = root / "snapshot.json"
+            source.write_text(
+                "<!-- chunk -->\n"
+                "alpha <!-- chunk --> inline\n"
+                "<!-- chunk -->\n \n"
+                "<!-- chunk -->\n"
+                "beta\n"
+                "<!-- chunk -->\n",
+                encoding="utf-8",
+            )
+
+            snapshot_chunks(
+                input_path=source,
+                output_path=output,
+                include_content=True,
+                markdown_boundary_mode="markers",
+            )
+            payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["summary"]["chunk_count"], 2)
+        self.assertIn("alpha <!-- chunk --> inline", payload["chunks"][0]["content"])
+        self.assertEqual(payload["chunks"][1]["content"].strip(), "beta")
+
+    def test_snapshot_markdown_markers_preserve_fenced_marker_literal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.md"
+            output = root / "snapshot.json"
+            source.write_text(
+                "```md\n<!-- chunk -->\n```\n"
+                "<!-- chunk -->\n"
+                "gamma\n",
+                encoding="utf-8",
+            )
+
+            report = snapshot_chunks(
+                input_path=source,
+                output_path=output,
+                include_content=True,
+                markdown_boundary_mode="markers",
+            )
+            payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["summary"]["chunk_count"], 2)
+        self.assertIn("<!-- chunk -->", payload["chunks"][0]["content"])
+        self.assertEqual(report["boundary"]["ignored_fenced_marker_count"], 1)
+
+    def test_snapshot_markdown_markers_reject_unbalanced_html_table(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.md"
+            output = root / "snapshot.json"
+            source.write_text(
+                "alpha\n<!-- chunk -->\n<table><tr><td>open\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(BenchmarkGovernanceError, "unbalanced_html_table"):
+                snapshot_chunks(
+                    input_path=source,
+                    output_path=output,
+                    markdown_boundary_mode="markers",
+                )
+
     def test_snapshot_chunks_reviews_table_fragmentation_duplicates_and_delimiters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
