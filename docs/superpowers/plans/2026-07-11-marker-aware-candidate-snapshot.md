@@ -1,6 +1,6 @@
 # Marker-Aware Candidate Snapshot Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use Markdown checkbox syntax for tracking.
 
 **Goal:** Add a backward-compatible, deterministic `file / markers / auto` Markdown boundary engine for offline candidate chunk snapshots, with HTML-table atomicity, stable provenance, explainable fallback, and no live RAGFlow behavior.
 

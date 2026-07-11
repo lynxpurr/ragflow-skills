@@ -106,8 +106,9 @@ Current limitations and gates:
   negative cases without calling RAGFlow or an LLM.
 - The synthetic rehearsal still proves only the Stage 6/7 tooling path. A subsequent
   private evidence fill now provides reviewed Open RAG expected terms and a real
-  normalized FinanceBench slice, but it does not provide observed strict chunk recall,
-  FinanceBench formal handoff evidence, or a retrieval-quality regression baseline.
+  normalized FinanceBench slice. FinanceBench formal conversion, inspect-handoff, and KB
+  dry-run are complete; reviewed private expected chunks, observed strict chunk recall,
+  and a retrieval-quality regression baseline remain open.
 
 ### Session Status Matrix
 
@@ -136,8 +137,9 @@ Current limitations and gates:
 
 Recommended next sequence:
 
-1. Add expected chunk hashes only when a reviewed offline snapshot exists for the stable Open
-   RAG or FinanceBench queries.
+1. Use the implemented marker-aware offline candidate snapshot path only under a
+   separately approved private-evidence scope, then add expected chunk hashes after
+   manual evidence-span and stable-hash review.
 2. Produce pinned observed per-subset validation reports before calling the current
    two-subset artifact portfolio a retrieval-quality regression baseline.
 3. Keep `docs/36-ragflow-kb-parameter-materialization-plan.md` as a conditional gate.
@@ -901,8 +903,11 @@ live-gated enrichment comparison；截至 2026-07-09，该首轮路线已经完�
 metadata、grounded QA 和两个 deterministic wrong-document alternates；import、
 preflight 与 9/9 exact-span QA grounding 均通过。源检查将选定的 190 页 PDF 分类为
 table-heavy、long-document、high-complexity，且 builtin converter 不支持 PDF。
-因此 formal conversion、inspect-handoff、KB dry-run 和 observed retrieval metrics
-仍未完成，Stage 6 继续保持开放；最终 promotion 前还需完成 license review。
+随后，获批的 MinerU FastAPI 高表格质量路径完成了 formal conversion；formal handoff
+包含 491 个 dense markers 和 111 个 detected tables，`inspect-handoff` 与 KB dry-run
+均通过并保留明确 review warnings。Stage 6 的公共/私有离线部分已完成；reviewed
+expected chunks、observed retrieval metrics 与最终 promotion 前的 license review
+仍保持门控。
 
 ### 阶段 7：回归基线组合
 
@@ -1004,9 +1009,10 @@ Treat the strengthened Open RAG Benchmark seed and normalized FinanceBench slice
 completed initial artifact/evidence baseline. The public attribution/selection contract,
 explicit-input portfolio, synthetic replay, Hermes L0 instruction, reviewed expected
 terms, exact-span QA checks, and two-subset private portfolio are complete. The next
-ordinary quality step is FinanceBench formal conversion with a reviewed PDF-capable
-backend, followed by pinned observed per-subset validation reports and a true two-subset
-retrieval regression baseline.
+evidence step is reviewed private expected-chunk mapping through the implemented
+marker-aware candidate snapshot path, followed only under separate approval by pinned
+observed per-subset validation reports and a true two-subset retrieval regression
+baseline. Ordinary public work remains observation and release-path maintenance.
 `docs/36-ragflow-kb-parameter-materialization-plan.md` remains
 contract-blocked with zero current Stage 8C candidates. A DeepDoc native baseline remains
 a separate, explicitly approved live comparison only when PDF-native behavior is the

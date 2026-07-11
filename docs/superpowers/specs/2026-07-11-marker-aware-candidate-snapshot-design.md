@@ -18,7 +18,7 @@ understand chunk markers, stable hashes, or benchmark qrels.
 The result remains candidate/offline evidence. It is not a RAGFlow server-observed chunk
 snapshot and cannot by itself close the Level 3 retrieval regression baseline.
 
-## Current Evidence
+## Design-Time Evidence
 
 The current `snapshot-chunks` Markdown reader returns one `NormalizedChunk` per Markdown
 file. A repository-neutral rehearsal against a marker-bearing Markdown file produced one
@@ -26,8 +26,8 @@ chunk and one visible-delimiter warning. This confirms that running the command 
 on a dense-marker handoff cannot produce useful expected-chunk evidence today.
 
 The private benchmark sources and generated handoff named by the prior session handoff
-are not available in the current session. This round can implement and verify public
-offline behavior with neutral fixtures, but it cannot add reviewed private
+were not available in the implementation session. The round therefore implemented and
+verified public offline behavior with neutral fixtures, but did not add reviewed private
 `expected_chunks` or close the owning roadmap row without the separately retained source
 evidence.
 
@@ -56,9 +56,9 @@ The low-level command contract will expose:
 ```
 
 For this round, the low-level default remains `file` so existing scripts retain the
-current one-file/one-chunk behavior. The high-level workflow may explicitly select
-`auto` after it is implemented and verified. Promoting `auto` to the low-level default
-is a later compatibility decision, not part of this round.
+legacy one-file/one-chunk behavior. High-level workflows and informed callers may now
+explicitly select the implemented and verified `auto` mode. Promoting `auto` to the
+low-level default is a later compatibility decision, not part of this round.
 
 ## Alternatives Considered
 
@@ -421,8 +421,9 @@ Verified on 2026-07-11:
 
 ### G. Separately Gated Evidence Follow-Up
 
-- [ ] Restore or reacquire approved private benchmark sources only under a separate
-  instruction that defines the allowed private-source scope.
+- [ ] Under a separate instruction that defines the allowed private-source scope,
+  confirm the retained private sources/handoffs are available; restore or reacquire only
+  if the approved evidence is absent.
 - [ ] Generate private content-bearing Open RAG and FinanceBench candidate snapshots.
 - [ ] Run and manually review grounded-QA evidence mappings.
 - [ ] Add reviewed `expected_chunks` to normalized qrels only after stable hashes and

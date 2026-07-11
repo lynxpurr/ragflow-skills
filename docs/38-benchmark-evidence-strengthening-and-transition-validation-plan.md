@@ -294,7 +294,8 @@ generated separately after review.
 
 ### Regression And Transition Validation
 
-- [ ] Produce the two-subset Open RAG + FinanceBench regression baseline.
+- [ ] Produce the two-subset Open RAG + FinanceBench observed retrieval-quality
+  regression baseline.
 - [x] Aggregate at least five meaningful transition runs and review sample-type coverage.
 - [ ] Review zero-result, wrong-document, pollution, strict chunk recall, expected-term,
   table-term, and citation-support evidence before guidance changes.
@@ -389,7 +390,8 @@ Implementation update on 2026-07-11:
   passed with 721 tests and 33 subtests, and schema identity, release hygiene, manifest
   schema, build/export, consumer acceptance, and strict-vendor smoke all passed. The
   reviewed expected-chunk row remains open because private Open RAG/FinanceBench mapping,
-  normalized qrels approval, and observed validation were not performed.
+  and normalized qrels approval were not performed. Observed validation remains a
+  separate open regression-baseline gate.
 
 ## Validation Evidence / Residual Gated Work
 

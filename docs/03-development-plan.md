@@ -2240,3 +2240,23 @@ or open live RAGFlow, DeepDoc, LLM/RAGAS, post-CLI adapter, or private bridge wo
 This planning baseline adds no completed roadmap checkbox and does not change the
 586/601 count. Future checklist changes require implementation, verification, and the
 public-safe evidence named by the owning plan.
+
+### 2026-07-11 Benchmark Evidence Strengthening Offline Closeout
+
+The public offline portion of the evidence round is now implemented and verified:
+
+- benchmark attribution/selection artifacts, deterministic sampling, explicit-input
+  portfolio aggregation, neutral fixtures, and the Hermes L0 replay path are complete;
+- the reviewed Open RAG expected-term and FinanceBench normalization/formal-handoff
+  evidence is recorded without retaining raw private sources in the repository;
+- `snapshot-chunks` now supports compatible `file`, fail-closed `markers`, and
+  deterministic per-document `auto` modes for offline Markdown candidate snapshots;
+- synthetic grounded-QA evidence mapping proves stable expected-chunk hash generation,
+  but does not claim server-observed RAGFlow chunks.
+
+The owning `docs/38` rows for reviewed private expected chunks, pinned observed
+per-subset validation/a true two-subset retrieval baseline, and metric review before
+guidance changes remain open. The marker-aware design's private-evidence and default-
+promotion gates also remain open. This closeout adds no product/private/LLM adapter task
+and does not change the roadmap count: 586 of 601 items remain complete, with the same
+15 intentionally gated items.

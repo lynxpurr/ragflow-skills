@@ -82,8 +82,11 @@ Verified results:
 
 The retained report basename was `hermes-final-report.txt`; the private run root was
 reported only by its label, `ragflow-benchmark-evidence-hermes-l0-20260711T002112Z`.
-The replay confirms the synthetic offline contract but leaves
-`private_source_fill_required` and `transition_observation_fill_required` unchanged.
+The replay confirms the synthetic offline contract. Subsequent public status in
+`docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md` records the
+private source fill and five-run transition aggregation as complete. The current
+residual gates are reviewed expected chunks, pinned observed per-subset validation, and
+completion of the transition sample-class matrix.
 
 ## Copy-Paste Hermes Task
 
@@ -209,8 +212,8 @@ mutation、LLM/RAGAS 或 Stage 8C 请求都必须返回 approval_required，并�
 最终返回简洁中文报告，包含：仓库 commit、初始/最终工作区、各测试命令状态、
 两套 import/preflight 状态、sample provenance、portfolio counts/coverage/assessment、
 所有 safety 计数、tool-output 与 prose 两次敏感扫描结果、零 RAGFlow/LLM 调用结论、
-报告 basename，以及残余门禁 private_source_fill_required 和
-transition_observation_fill_required 是否仍存在。
+报告 basename，以及当前残余门禁 reviewed_expected_chunks_required、
+observed_validation_required 和 transition_sample_matrix_incomplete 是否仍存在。
 ```
 
 ## Reference Commands
@@ -310,8 +313,9 @@ Report basenames:
 ## Decision
 
 Synthetic L0 replay reproducible:
-Private source fill still required:
-Transition observation fill still required:
+Reviewed expected chunks still required:
+Observed per-subset validation still required:
+Transition sample matrix incomplete:
 Live/Stage 8C authorization changed: no
 Residual risks:
 Next action:

@@ -1,6 +1,6 @@
 # Benchmark Evidence Strengthening Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use Markdown checkbox syntax for tracking.
 
 **Goal:** Complete the normalized benchmark artifact contract, add an offline multi-subset portfolio report, and establish a reproducible Open RAG plus FinanceBench evidence path without live RAGFlow mutation.
 
@@ -599,7 +599,7 @@ final worktree remained clean. The replay does not close Task 7.
 Use this exact private root layout; do not create it inside the repository:
 
 ```text
-/tmp/ragflow-benchmark-evidence-private-20260711/
+<private-run-root>/
   private-conversion.yaml
   sources/open-rag/
   sources/financebench/
@@ -636,24 +636,24 @@ After the reviewed source artifacts exist, run:
 
 ```bash
 python3 skills/ragflow-kb-build/scripts/build.py benchmark import \
-  --queries /tmp/ragflow-benchmark-evidence-private-20260711/normalized/open-rag/queries.source.json \
-  --qrels /tmp/ragflow-benchmark-evidence-private-20260711/normalized/open-rag/qrels.source.json \
-  --qa /tmp/ragflow-benchmark-evidence-private-20260711/normalized/open-rag/qa.source.json \
-  --source-attribution /tmp/ragflow-benchmark-evidence-private-20260711/normalized/open-rag/source_attribution.source.json \
-  --selection-report /tmp/ragflow-benchmark-evidence-private-20260711/normalized/open-rag/selection_report.source.json \
-  --output /tmp/ragflow-benchmark-evidence-private-20260711/normalized/open-rag/benchmark
+  --queries <private-run-root>/normalized/open-rag/queries.source.json \
+  --qrels <private-run-root>/normalized/open-rag/qrels.source.json \
+  --qa <private-run-root>/normalized/open-rag/qa.source.json \
+  --source-attribution <private-run-root>/normalized/open-rag/source_attribution.source.json \
+  --selection-report <private-run-root>/normalized/open-rag/selection_report.source.json \
+  --output <private-run-root>/normalized/open-rag/benchmark
 python3 skills/ragflow-kb-build/scripts/build.py benchmark preflight \
-  --manifest /tmp/ragflow-benchmark-evidence-private-20260711/normalized/open-rag/benchmark/manifest.json \
-  --report-json /tmp/ragflow-benchmark-evidence-private-20260711/reports/open-rag-preflight.json
+  --manifest <private-run-root>/normalized/open-rag/benchmark/manifest.json \
+  --report-json <private-run-root>/reports/open-rag-preflight.json
 python3 skills/ragflow-kb-build/scripts/build.py benchmark sample \
-  --manifest /tmp/ragflow-benchmark-evidence-private-20260711/normalized/open-rag/benchmark/manifest.json \
-  --output /tmp/ragflow-benchmark-evidence-private-20260711/normalized/open-rag/sample \
+  --manifest <private-run-root>/normalized/open-rag/benchmark/manifest.json \
+  --output <private-run-root>/normalized/open-rag/sample \
   --size 5 \
   --strategy stratified \
   --seed 7 \
-  --report-json /tmp/ragflow-benchmark-evidence-private-20260711/reports/open-rag-sample.json \
-  --report-md /tmp/ragflow-benchmark-evidence-private-20260711/reports/open-rag-sample.md \
-  --redaction-report /tmp/ragflow-benchmark-evidence-private-20260711/reports/open-rag-sample.redaction.json
+  --report-json <private-run-root>/reports/open-rag-sample.json \
+  --report-md <private-run-root>/reports/open-rag-sample.md \
+  --redaction-report <private-run-root>/reports/open-rag-sample.redaction.json
 ```
 
 Expected: the normalized subset preserves the existing stable query IDs, the sample is
@@ -675,43 +675,43 @@ build, parse, query, or obtain a live chunk snapshot. A reviewed offline handoff
 snapshot may be used only to strengthen evidence without any RAGFlow HTTP call.
 
 Use the fixed private root from Step 1. When a reviewed conversion config is available at
-`/tmp/ragflow-benchmark-evidence-private-20260711/private-conversion.yaml`, run:
+`<private-run-root>/private-conversion.yaml`, run:
 
 ```bash
 python3 skills/ragflow-doc-to-md/scripts/convert.py pipeline \
-  --input /tmp/ragflow-benchmark-evidence-private-20260711/sources/financebench/pdfs/BOEING_2022_10K.pdf \
-  --output /tmp/ragflow-benchmark-evidence-private-20260711/handoffs/financebench \
-  --config /tmp/ragflow-benchmark-evidence-private-20260711/private-conversion.yaml \
+  --input <private-run-root>/sources/financebench/pdfs/BOEING_2022_10K.pdf \
+  --output <private-run-root>/handoffs/financebench \
+  --config <private-run-root>/private-conversion.yaml \
   --backend mineru-fastapi \
   --table-quality high \
   --postprocess-profile chunk-markers-dense \
-  --redaction-report /tmp/ragflow-benchmark-evidence-private-20260711/reports/financebench-convert.redaction.json \
+  --redaction-report <private-run-root>/reports/financebench-convert.redaction.json \
   --json
 python3 skills/ragflow-kb-build/scripts/build.py inspect-handoff \
-  --handoff /tmp/ragflow-benchmark-evidence-private-20260711/handoffs/financebench \
-  --report-json /tmp/ragflow-benchmark-evidence-private-20260711/reports/financebench-handoff.json \
-  --report-md /tmp/ragflow-benchmark-evidence-private-20260711/reports/financebench-handoff.md \
-  --redaction-report /tmp/ragflow-benchmark-evidence-private-20260711/reports/financebench-handoff.redaction.json \
+  --handoff <private-run-root>/handoffs/financebench \
+  --report-json <private-run-root>/reports/financebench-handoff.json \
+  --report-md <private-run-root>/reports/financebench-handoff.md \
+  --redaction-report <private-run-root>/reports/financebench-handoff.redaction.json \
   --json
 python3 skills/ragflow-kb-build/scripts/build.py \
-  --doc-manifest /tmp/ragflow-benchmark-evidence-private-20260711/handoffs/financebench/doc_manifest.json \
-  --retrieval-hints /tmp/ragflow-benchmark-evidence-private-20260711/handoffs/financebench/retrieval_hints.json \
-  --ingest-plan /tmp/ragflow-benchmark-evidence-private-20260711/handoffs/financebench/ragflow_ingest_plan.yaml \
+  --doc-manifest <private-run-root>/handoffs/financebench/doc_manifest.json \
+  --retrieval-hints <private-run-root>/handoffs/financebench/retrieval_hints.json \
+  --ingest-plan <private-run-root>/handoffs/financebench/ragflow_ingest_plan.yaml \
   --kb-name benchmark-finance-dry-run \
   --profile skills/ragflow-kb-build/templates/default-en-768.json \
   --dry-run \
   --json \
-  >/tmp/ragflow-benchmark-evidence-private-20260711/reports/financebench-build-dry-run.json
+  ><private-run-root>/reports/financebench-build-dry-run.json
 python3 skills/ragflow-kb-build/scripts/build.py benchmark import \
-  --queries /tmp/ragflow-benchmark-evidence-private-20260711/normalized/financebench/queries.source.json \
-  --qrels /tmp/ragflow-benchmark-evidence-private-20260711/normalized/financebench/qrels.source.json \
-  --qa /tmp/ragflow-benchmark-evidence-private-20260711/normalized/financebench/qa.source.json \
-  --source-attribution /tmp/ragflow-benchmark-evidence-private-20260711/normalized/financebench/source_attribution.source.json \
-  --selection-report /tmp/ragflow-benchmark-evidence-private-20260711/normalized/financebench/selection_report.source.json \
-  --output /tmp/ragflow-benchmark-evidence-private-20260711/normalized/financebench/benchmark
+  --queries <private-run-root>/normalized/financebench/queries.source.json \
+  --qrels <private-run-root>/normalized/financebench/qrels.source.json \
+  --qa <private-run-root>/normalized/financebench/qa.source.json \
+  --source-attribution <private-run-root>/normalized/financebench/source_attribution.source.json \
+  --selection-report <private-run-root>/normalized/financebench/selection_report.source.json \
+  --output <private-run-root>/normalized/financebench/benchmark
 python3 skills/ragflow-kb-build/scripts/build.py benchmark preflight \
-  --manifest /tmp/ragflow-benchmark-evidence-private-20260711/normalized/financebench/benchmark/manifest.json \
-  --report-json /tmp/ragflow-benchmark-evidence-private-20260711/reports/financebench-preflight.json
+  --manifest <private-run-root>/normalized/financebench/benchmark/manifest.json \
+  --report-json <private-run-root>/reports/financebench-preflight.json
 ```
 
 Expected: conversion either succeeds or produces a classified service/input failure;
@@ -749,15 +749,15 @@ expected-term coverage, source attribution, selection evidence, and explicit mis
 evidence. Retain only sanitized JSON/Markdown/redaction reports for public status updates.
 
 Write the explicit config to
-`/tmp/ragflow-benchmark-evidence-private-20260711/reports/portfolio-config.json`, with
+`<private-run-root>/reports/portfolio-config.json`, with
 paths relative to that file or absolute paths under the fixed private root, then run:
 
 ```bash
 python3 tools/benchmark_portfolio.py \
-  --config /tmp/ragflow-benchmark-evidence-private-20260711/reports/portfolio-config.json \
-  --report-json /tmp/ragflow-benchmark-evidence-private-20260711/reports/portfolio.json \
-  --report-md /tmp/ragflow-benchmark-evidence-private-20260711/reports/portfolio.md \
-  --redaction-report /tmp/ragflow-benchmark-evidence-private-20260711/reports/portfolio.redaction.json
+  --config <private-run-root>/reports/portfolio-config.json \
+  --report-json <private-run-root>/reports/portfolio.json \
+  --report-md <private-run-root>/reports/portfolio.md \
+  --redaction-report <private-run-root>/reports/portfolio.redaction.json
 ```
 
 Expected: missing observed validation remains `ready_with_review`; the portfolio must not
@@ -777,14 +777,14 @@ leave the corresponding `docs/32` rows open. Otherwise run:
 
 ```bash
 python3 tools/field_trial_metrics.py \
-  /tmp/ragflow-benchmark-evidence-private-20260711/transition-runs/run-001 \
-  /tmp/ragflow-benchmark-evidence-private-20260711/transition-runs/run-002 \
-  /tmp/ragflow-benchmark-evidence-private-20260711/transition-runs/run-003 \
-  /tmp/ragflow-benchmark-evidence-private-20260711/transition-runs/run-004 \
-  /tmp/ragflow-benchmark-evidence-private-20260711/transition-runs/run-005 \
-  --report-json /tmp/ragflow-benchmark-evidence-private-20260711/reports/transition-summary.json \
-  --report-md /tmp/ragflow-benchmark-evidence-private-20260711/reports/transition-summary.md \
-  --redaction-report /tmp/ragflow-benchmark-evidence-private-20260711/reports/transition-summary.redaction.json
+  <private-run-root>/transition-runs/run-001 \
+  <private-run-root>/transition-runs/run-002 \
+  <private-run-root>/transition-runs/run-003 \
+  <private-run-root>/transition-runs/run-004 \
+  <private-run-root>/transition-runs/run-005 \
+  --report-json <private-run-root>/reports/transition-summary.json \
+  --report-md <private-run-root>/reports/transition-summary.md \
+  --redaction-report <private-run-root>/reports/transition-summary.redaction.json
 ```
 
 Expected: the summary reports at least five meaningful runs, exposes missing sample

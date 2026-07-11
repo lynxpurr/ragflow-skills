@@ -297,8 +297,8 @@ evidence exists and validation has been run.
 ### Retrieval Quality
 
 - [x] Confirm smoke validation passes for every approved live transition KB.
-- [ ] Confirm benchmark or regression validation exists for at least the highest-risk
-  sample classes.
+- [ ] Confirm observed benchmark or regression validation exists for at least the
+  highest-risk sample classes; offline import/preflight alone does not close this row.
 - [ ] Confirm zero-result, wrong-document, pollution, strict chunk recall, and citation
   support metrics are reviewed before defaulting a new profile or handoff mode.
 
