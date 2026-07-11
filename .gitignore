@@ -21,6 +21,7 @@ release-artifacts/
 
 # Local run artifacts and source-document copies
 output/
+.worktrees/
 
 # Local config and secrets
 .ragflow/
