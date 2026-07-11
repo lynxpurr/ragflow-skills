@@ -1,6 +1,7 @@
 # RAGFlux And ragflow-kb-ops Retirement Transition Action Plan
 
-Status: active broad-corpus transition observation; representative-sample checkpoint complete
+Status: active broad-corpus transition observation; representative-sample checkpoint and
+five-run aggregate complete, with three required sample classes still missing
 Date: 2026-07-08
 Last calibrated: 2026-07-11
 
@@ -273,7 +274,7 @@ evidence exists and validation has been run.
   classes where RAGFlux was historically used.
 - [x] Record retired `ragflow-kb-ops` comparison evidence only where it reveals current
   suite reporting or validation needs.
-- [ ] Aggregate at least five meaningful transition runs with `tools/field_trial_metrics.py`.
+- [x] Aggregate at least five meaningful transition runs with `tools/field_trial_metrics.py`.
 
 ### Current-Suite Handoff Quality
 
@@ -319,10 +320,18 @@ audit, focused `snapshot-chunks` tests, cleanup/smoke evidence, and release/reda
 gates. The retained RAGFlux evidence is a static package comparison plus a live current
 replacement-path run; a strict paired live RAGFlux/RAGFlow A/B was not run.
 
-Five observation items remain open:
+The same-day benchmark evidence round materialized four previously reviewed public-safe
+workflow records plus the current benchmark normalization workflow into five explicit
+repository-external run roots. `tools/field_trial_metrics.py` recognized all five records
+with zero findings and zero triggered tracks. The retirement matrix observed five of the
+eight required sample classes and remained `insufficient_samples`; office-table,
+mixed-language, and low-quality-OCR records are still missing. The records prove the run
+count and review cadence only; they do not substitute for retained per-run quality,
+handoff, query, or cleanup signal reports.
+
+Four observation items remain open:
 
 - complete the required sample-class matrix;
-- aggregate at least five meaningful transition runs;
 - confirm that every covered sample class has no unexplained empty Markdown or missing
   assets;
 - add benchmark or regression evidence for the highest-risk sample classes;

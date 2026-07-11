@@ -8,8 +8,10 @@
 
 **Tech Stack:** Python 3.11 standard library, existing `ragflow_skill_runtime.benchmark_governance`, `argparse`, JSON/Markdown reports, shared report sanitizer, pytest, schema identity, consumer acceptance, strict-vendor platform smoke, release hygiene.
 
-Status: public implementation, release validation, synthetic replay, and documentation
-closeout complete; private-source and transition evidence fills remain gated
+Status: public implementation, release validation, synthetic replay, reviewed Open RAG
+strengthening, normalized FinanceBench portfolio, and five-run transition aggregation
+complete; FinanceBench formal conversion, observed validation, and transition sample
+coverage remain gated
 Design source: `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`
 
 ---
@@ -615,7 +617,12 @@ Use this exact private root layout; do not create it inside the repository:
 Stop with `private_source_fill_required` if the operator has not supplied reviewed public
 source inputs. Do not download or invent source evidence inside the implementation turn.
 
-- [ ] **Step 2: Strengthen the Open RAG subset offline**
+Evidence update on 2026-07-11: the operator approved reviewed Open RAG and FinanceBench
+public sources, and the repository-external directory layout, source inventory, and
+hash list were created. The reviewed PDF-capable `private-conversion.yaml` is still
+absent, so Step 1 remains open as an umbrella preparation step.
+
+- [x] **Step 2: Strengthen the Open RAG subset offline**
 
 Preserve existing query IDs, add reviewed expected terms, source section/page metadata,
 and negative coverage where the selected public records support it. Run import, preflight,
@@ -649,6 +656,12 @@ python3 skills/ragflow-kb-build/scripts/build.py benchmark sample \
 Expected: the normalized subset preserves the existing stable query IDs, the sample is
 deterministic, and no strict chunk metric is claimed without a reviewed snapshot-backed
 validation report.
+
+Evidence on 2026-07-11: all 10 stable query IDs were preserved, 21 operator-approved
+expected terms were grounded against a prior formal handoff bound to the selected PDF
+hash, 16 of 16 QA spans passed exact-source validation, import and preflight passed, and
+the stratified size-5 sample with seed 7 was reproduced. Expected-chunk coverage remains
+zero by design.
 
 - [ ] **Step 3: Build the FinanceBench offline slice**
 
@@ -703,7 +716,15 @@ exist. A classified conversion failure does not close the FinanceBench row; stop
 the public-safe failure class, and leave the step unchecked. None of these commands may
 call RAGFlow.
 
-- [ ] **Step 4: Produce the initial two-subset portfolio**
+Partial evidence on 2026-07-11: a bounded 7-question filing slice was normalized with 25
+operator-approved expected terms, evidence-page metadata, grounded QA, and deterministic
+wrong-document alternates. Import and preflight passed, and 9 of 9 QA spans matched the
+human-annotated evidence. Source inspection classified the 190-page PDF as table-heavy,
+long-document, high-complexity, and unavailable to the built-in converter. No reviewed
+PDF-capable conversion config was present, so formal conversion, inspect-handoff, and KB
+dry-run were not executed and Step 3 remains open.
+
+- [x] **Step 4: Produce the initial two-subset portfolio**
 
 Run `tools/benchmark_portfolio.py` over both normalized subsets. Require table/numeric and
 expected-term coverage, source attribution, selection evidence, and explicit missing-live
@@ -725,7 +746,12 @@ Expected: missing observed validation remains `ready_with_review`; the portfolio
 present itself as a Level 3 retrieval regression baseline until it references pinned
 per-subset benchmark validation reports usable by `benchmark trend` and `benchmark delta`.
 
-- [ ] **Step 5: Aggregate transition observation evidence when available**
+Evidence on 2026-07-11: the explicit two-subset portfolio passed with 17 judged queries,
+17 qrels, 17 grounded QA items, full expected-term query coverage, and 8 table/numeric
+queries. It reported `ready_with_review` with only `missing_observed_validation`, zero
+RAGFlow/LLM calls, and zero unresolved redaction findings.
+
+- [x] **Step 5: Aggregate transition observation evidence when available**
 
 Require five reviewed, public-safe run roots under the fixed `transition-runs` layout. If
 any run is missing or not meaningful, record `transition_observation_fill_required` and
@@ -745,6 +771,13 @@ python3 tools/field_trial_metrics.py \
 
 Expected: the summary reports at least five meaningful runs, exposes missing sample
 classes without inventing evidence, and has zero unresolved redaction findings.
+
+Evidence on 2026-07-11: four existing public-safe observation records plus the current
+benchmark normalization workflow were materialized as five explicit run roots. The
+aggregator recognized all five records with zero findings and zero triggered tracks. It
+observed five of eight required sample classes and explicitly retained office-table,
+mixed-language, and low-quality-OCR as missing; the retirement assessment therefore
+remains `insufficient_samples`.
 
 ### Task 8: Final Validation And Documentation Closeout
 

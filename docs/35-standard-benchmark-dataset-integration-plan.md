@@ -1,7 +1,9 @@
 # Standard Benchmark Dataset Integration Plan
 
 Status: active standard-dataset integration plan; Open RAG Benchmark seed validated
-through Stage 5, with Stage 6/7 public tooling and synthetic rehearsal complete
+through Stage 5 and strengthened with reviewed expected terms; the normalized
+FinanceBench slice and initial artifact portfolio are complete, while formal conversion
+and observed retrieval validation remain open
 Date: 2026-07-09
 Last calibrated: 2026-07-11
 
@@ -102,9 +104,10 @@ Current limitations and gates:
 - An explicit-input offline portfolio tool and neutral two-subset synthetic rehearsal
   now cover table, numeric, mixed-modality, expected-term, declared expected-chunk, and
   negative cases without calling RAGFlow or an LLM.
-- This synthetic rehearsal proves the Stage 6/7 tooling path only. It does not replace
-  an operator-reviewed Open RAG source fill, a real FinanceBench slice, observed strict
-  chunk recall, or a retrieval-quality regression baseline.
+- The synthetic rehearsal still proves only the Stage 6/7 tooling path. A subsequent
+  private evidence fill now provides reviewed Open RAG expected terms and a real
+  normalized FinanceBench slice, but it does not provide observed strict chunk recall,
+  FinanceBench formal handoff evidence, or a retrieval-quality regression baseline.
 
 ### Session Status Matrix
 
@@ -119,27 +122,27 @@ Current limitations and gates:
 | `docs/34` disposable enrichment checklist | Complete | Stage 5 evidence closed the remaining live-gated checklist item. |
 | DeepDoc native PDF baseline | Pending / separately gated | Optional PDF-native/fallback comparison requiring separate live approval. |
 | KB parameter materialization | Contract-audited / conditionally blocked | `docs/36-ragflow-kb-parameter-materialization-plan.md` Stage 8B is complete for RAGFlow `v0.25.5`; zero candidates are Stage 8C eligible. Benchmark datasets remain prerequisite evaluation evidence if a future pinned contract exposes a writable candidate. |
-| Stronger Open RAG Benchmark subset | Pending | Needs more documents, more queries, expected terms, or expected chunks before promotion decisions. |
-| FinanceBench table/numeric slice | Pending | Recommended next dataset expansion for table-heavy and numeric evidence retrieval. |
+| Stronger Open RAG Benchmark subset | Expected-term strengthening complete / chunk evidence pending | Existing 10 stable query IDs now have reviewed source attribution, selection evidence, 21 source-grounded expected terms, exact-span QA validation, deterministic sampling, and refreshed preflight. Expected chunks remain absent. |
+| FinanceBench table/numeric slice | Normalized / formal conversion pending | One bounded filing contributes 7 judged queries, 25 source-grounded expected terms, evidence-page metadata, grounded QA, deterministic distractors, and passing import/preflight. Formal conversion, inspect-handoff, and KB dry-run remain open. |
 | QASPER scientific QA slice | Deferred | Useful after Open RAG Benchmark and FinanceBench adapters are stable. |
 | TREC-COVID IR reference slice | Deferred | Later retrieval-metric and qrels-format calibration work. |
-| Regression portfolio | Pending | Current seed can become a smoke/exploratory baseline; broader portfolio still needs pinned subsets and trend reporting. |
+| Regression portfolio | Initial artifact baseline complete / retrieval baseline pending | The reviewed two-subset portfolio has 17 judged queries and 8 table/numeric queries with `ready_with_review`; observed per-subset validation is still required for trend/delta and Level 3 claims. |
 | Attribution/selection artifact contract | Complete | Import and deterministic sampling now preserve normalized source and selection provenance with schema/release governance. |
 | Synthetic Stage 6/7 rehearsal | Complete | Neutral two-subset portfolio produced 6 queries, 12 qrels, 6 QA items, table/numeric and negative coverage, and `ready_with_review` without live calls. |
 | Independent Hermes L0 replay | Complete | Commit `3b94d93` reproduced the synthetic chain from a clean worktree with zero RAGFlow/DeepDoc/LLM/Stage 8C actions and no unresolved sensitive findings. |
-| Private Stage 6/7 evidence fill | Blocked on operator input | `private_source_fill_required`; no reviewed FinanceBench/Open RAG source root was supplied in this round. |
+| Private Stage 6/7 evidence fill | In progress | Reviewed source acquisition and normalization are complete, and five transition records were aggregated. Remaining gates are a reviewed PDF-capable FinanceBench conversion backend/config, license confirmation before promotion, observed per-subset validation, and three missing transition sample classes. |
 
 ### Follow-Up Work Plan
 
 Recommended next sequence:
 
-1. Execute the artifact-contract and explicit-input portfolio work in
-   `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`.
-2. Strengthen the current Open RAG Benchmark seed with reviewed expected terms and,
-   only when a reviewed snapshot exists, expected chunk hashes for the existing
-   stable queries.
-3. Add one bounded FinanceBench slice for table-heavy, numeric, and evidence-page
-   retrieval failure modes, then form the initial two-subset regression portfolio.
+1. Complete FinanceBench formal conversion, inspect-handoff, and KB dry-run with a
+   reviewed PDF-capable backend; do not use the built-in text/HTML converter as a PDF
+   fallback.
+2. Add expected chunk hashes only when a reviewed snapshot exists for the stable Open
+   RAG or FinanceBench queries.
+3. Produce pinned observed per-subset validation reports before calling the current
+   two-subset artifact portfolio a retrieval-quality regression baseline.
 4. Keep `docs/36-ragflow-kb-parameter-materialization-plan.md` as a conditional gate.
    Its pinned RAGFlow `v0.25.5` Stage 8B audit is complete with zero Stage 8C-eligible
    candidates; reopen contract discovery only for a new deployed version or an explicit
@@ -895,11 +898,14 @@ live-gated enrichment comparison；截至 2026-07-09，该首轮路线已经完�
 - 有一个可重复的 table/numeric benchmark slice。
 - 该 slice 能检测表格碎片化、错误页、错误文档和数值证据丢失。
 
-2026-07-11 状态：Stage 6 的公共 artifact contract、table/numeric synthetic
-fixture、import/preflight 和 portfolio rehearsal 已完成。真实 FinanceBench filing、
-evidence page、handoff conversion、inspect-handoff 和 dry-run 尚未执行，因为没有
-operator 提供的 reviewed private source root。当前门禁为
-`private_source_fill_required`，不得用 synthetic fixture 关闭本阶段。
+2026-07-11 状态：Stage 6 的公共 artifact contract 和 synthetic rehearsal 已完成；
+同日完成了真实 FinanceBench 私有证据填充的选择与归一化部分。当前 bounded slice
+包含 7 个 judged queries、25 个 operator-approved expected terms、evidence-page
+metadata、grounded QA 和两个 deterministic wrong-document alternates；import、
+preflight 与 9/9 exact-span QA grounding 均通过。源检查将选定的 190 页 PDF 分类为
+table-heavy、long-document、high-complexity，且 builtin converter 不支持 PDF。
+因此 formal conversion、inspect-handoff、KB dry-run 和 observed retrieval metrics
+仍未完成，Stage 6 继续保持开放；最终 promotion 前还需完成 license review。
 
 ### 阶段 7：回归基线组合
 
@@ -932,11 +938,14 @@ operator 提供的 reviewed private source root。当前门禁为
 - 每次质量变化都有 query-level、metric-level 和 public-safe artifact evidence。
 
 2026-07-11 状态：显式输入 portfolio 聚合器、schema identity、release hygiene、
-consumer acceptance、strict-vendor smoke 和 Hermes L0 指令已完成。synthetic
-portfolio 为 `ready_with_review`，原因是缺少 observed validation；它只证明工具和
-artifact contract，不是 Stage 7 的 retrieval-quality regression baseline。真实
-Stage 7 仍需要 reviewed Open RAG + FinanceBench subsets、可供 trend/delta 使用的
-per-subset validation reports，以及后续 transition observation evidence。
+consumer acceptance、strict-vendor smoke 和 Hermes L0 指令已完成。随后形成的真实
+私有 artifact portfolio 包含 reviewed Open RAG 与 normalized FinanceBench 两个
+subsets、17 个 judged queries、17 个 qrels、17 个 grounded QA items 和 8 个
+table/numeric queries。它仍为 `ready_with_review`，唯一原因是缺少 observed
+validation；因此它是初始 artifact/evidence baseline，而不是 Stage 7 的
+retrieval-quality regression baseline。Stage 7 仍需要可供 trend/delta 使用的
+per-subset validation reports，以及 office-table、mixed-language、low-quality-OCR
+三类 transition sample evidence。
 
 同日 Hermes 已在 clean commit `3b94d93` 上独立复验该 synthetic 链。复验重现了
 2 subsets、6 queries、12 qrels、6 QA 和相同的 `ready_with_review` 判断，安全计数
@@ -945,14 +954,15 @@ per-subset validation reports，以及后续 transition observation evidence。
 
 ## 立即执行建议
 
-当前已完成阶段 0 到阶段 5 的首轮标准 seed 验证，以及阶段 6/7 所需的公共
-artifact contract、portfolio 工具和 synthetic rehearsal。下一步不应从 synthetic
-或单一 exploratory seed 推广默认 profile，而应推进真实证据填充：
+当前已完成阶段 0 到阶段 5 的首轮标准 seed 验证、阶段 6/7 所需的公共工具、
+reviewed Open RAG expected-term strengthening、FinanceBench normalization 和初始
+两子集 artifact portfolio。下一步不应从 `ready_with_review` 结果推广默认 profile，
+而应补齐剩余证据：
 
-1. 建立更强 Open RAG Benchmark subset：增加文档数、query 数、expected terms
-   或 expected chunks。
-2. 引入 FinanceBench 小切片，补 table-heavy、numeric evidence 和 evidence-page
-   压力测试。
+1. 使用 reviewed PDF-capable backend 完成 FinanceBench formal conversion、
+   inspect-handoff 和 KB dry-run。
+2. 在 reviewed snapshot 存在后补 expected chunks，并生成 pinned observed
+   validation reports。
 3. 如需 PDF native/fallback 对照，单独申请 DeepDoc live baseline approval。
 4. 将当前 seed 固化为 regression smoke/exploratory baseline，并在后续 release
    health review 中重复运行。
@@ -993,12 +1003,13 @@ The standard-dataset program is useful when it can answer these questions repeat
 
 ## Immediate Next Step
 
-Treat the first Open RAG Benchmark seed as a completed exploratory baseline. The public
-attribution/selection contract, explicit-input portfolio, synthetic replay, and Hermes L0
-instruction in `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`
-are now complete. The next ordinary offline quality step requires operator-reviewed
-private inputs: strengthen the real seed, add a FinanceBench table/numeric slice, attach
-observed per-subset validation reports, and form a true two-subset regression baseline.
+Treat the strengthened Open RAG Benchmark seed and normalized FinanceBench slice as a
+completed initial artifact/evidence baseline. The public attribution/selection contract,
+explicit-input portfolio, synthetic replay, Hermes L0 instruction, reviewed expected
+terms, exact-span QA checks, and two-subset private portfolio are complete. The next
+ordinary quality step is FinanceBench formal conversion with a reviewed PDF-capable
+backend, followed by pinned observed per-subset validation reports and a true two-subset
+retrieval regression baseline.
 `docs/36-ragflow-kb-parameter-materialization-plan.md` remains
 contract-blocked with zero current Stage 8C candidates. A DeepDoc native baseline remains
 a separate, explicitly approved live comparison only when PDF-native behavior is the

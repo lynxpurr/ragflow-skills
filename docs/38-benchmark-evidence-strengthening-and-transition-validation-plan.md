@@ -1,7 +1,8 @@
 # Benchmark Evidence Strengthening And Transition Validation Plan
 
-Status: public offline tooling and synthetic L0 baseline complete; private-source and
-transition evidence fills remain gated
+Status: public offline tooling, synthetic L0, reviewed Open RAG strengthening, normalized
+FinanceBench portfolio, and five-run transition aggregation are complete; FinanceBench
+formal conversion, observed validation, and transition sample coverage remain gated
 Date: 2026-07-11
 
 ## Objective / Scope / Boundaries
@@ -51,12 +52,12 @@ Out of scope by default:
 
 ## Problem Description
 
-The current repository has strong single-subset benchmark primitives but no single
-execution owner for this evidence round:
+At the planning baseline, the repository had strong single-subset benchmark primitives
+but no single execution owner for this evidence round:
 
 1. The first Open RAG Benchmark seed is exploratory: one PDF, ten judged queries, and
    mostly document-level evidence.
-2. FinanceBench is designed in `docs/35`, but no normalized table/numeric slice is yet
+2. FinanceBench was designed in `docs/35`, but no normalized table/numeric slice was yet
    retained as a reproducible private-source/public-safe-evidence workflow.
 3. `benchmark import` currently normalizes `queries.json`, `qrels.json`, and `qa.json`,
    while the `docs/35` artifact contract also requires `source_attribution.json` and
@@ -64,7 +65,7 @@ execution owner for this evidence round:
 4. Existing benchmark commands operate on one subset at a time. Release-health review
    needs an explicit-input portfolio summary without scanning user directories or
    calling RAGFlow.
-5. The retirement checklist still lacks the full sample matrix, five meaningful runs,
+5. The retirement checklist lacked the full sample matrix, five meaningful runs,
    highest-risk benchmark evidence, and a combined review of zero-result,
    wrong-document, pollution, strict chunk recall, and citation support.
 6. `docs/36` correctly has zero Stage 8C candidates. Stronger benchmark evidence is a
@@ -268,29 +269,29 @@ generated separately after review.
 
 ### Open RAG Evidence
 
-- [ ] Add public-safe source attribution and selection evidence for the existing Open RAG
+- [x] Add public-safe source attribution and selection evidence for the existing Open RAG
   seed.
-- [ ] Add expected-term coverage for core query types without publishing raw source or
+- [x] Add expected-term coverage for core query types without publishing raw source or
   retrieved evidence.
 - [ ] Add expected-chunk or candidate-snapshot evidence only after a reviewed snapshot is
   available.
-- [ ] Rerun import, preflight, deterministic sample, and portfolio summary for the
+- [x] Rerun import, preflight, deterministic sample, and portfolio summary for the
   strengthened seed.
 
 ### FinanceBench Evidence
 
-- [ ] Select one bounded FinanceBench filing/question slice and record license,
+- [x] Select one bounded FinanceBench filing/question slice and record license,
   selection, provenance, and source hashes outside raw public artifacts.
-- [ ] Normalize table/numeric queries, document qrels, evidence-page metadata, expected
+- [x] Normalize table/numeric queries, document qrels, evidence-page metadata, expected
   terms, grounded QA, and deterministic distractor cases.
 - [ ] Run formal conversion, handoff inspection, benchmark import/preflight, and KB
   dry-run without live mutation.
-- [ ] Add the FinanceBench subset to the initial portfolio and retain public-safe reports.
+- [x] Add the FinanceBench subset to the initial portfolio and retain public-safe reports.
 
 ### Regression And Transition Validation
 
 - [ ] Produce the two-subset Open RAG + FinanceBench regression baseline.
-- [ ] Aggregate at least five meaningful transition runs and review sample-type coverage.
+- [x] Aggregate at least five meaningful transition runs and review sample-type coverage.
 - [ ] Review zero-result, wrong-document, pollution, strict chunk recall, expected-term,
   table-term, and citation-support evidence before guidance changes.
 - [x] Update `docs/32`, `docs/35`, and `docs/16` only when evidence changes their current
@@ -345,9 +346,25 @@ Implementation update on 2026-07-11:
 - focused validation passed with 72 tests and 17 subtests; the complete runtime suite
   passed with 698 tests and 28 subtests; release hygiene, build/export, consumer
   acceptance, and strict-vendor smoke all passed;
-- the fixed private evidence root and five transition run roots were not supplied, so
-  `private_source_fill_required` and `transition_observation_fill_required` remain the
-  active evidence gates;
+- operator-reviewed public sources were acquired into the repository-external private
+  evidence root without committing raw data: the Open RAG seed retained 10 stable query
+  IDs and gained 21 reviewed expected terms, while a bounded FinanceBench slice retained
+  7 judged questions, 25 reviewed expected terms, evidence-page metadata, and two
+  deterministic wrong-document alternates;
+- both normalized subsets passed import and preflight with 100% expected-term and
+  grounded-QA coverage; exact-span QA validation grounded 16 of 16 Open RAG spans and 9
+  of 9 FinanceBench spans with zero errors or warnings;
+- the private two-subset portfolio contains 17 judged queries, 17 qrels, 17 QA items,
+  and 8 table/numeric queries. It remains `ready_with_review` solely because observed
+  validation is absent and therefore is not a Level 3 retrieval regression baseline;
+- FinanceBench source inspection classified the 190-page filing as table-heavy,
+  long-document, high-complexity, and unsuitable for the built-in converter. Formal
+  conversion, handoff inspection, and KB dry-run remain gated on a reviewed PDF-capable
+  backend;
+- five explicit, public-safe transition records were aggregated with zero findings and
+  zero triggered tracks. Five of eight required sample classes were observed; office
+  table, mixed-language, and low-quality-OCR samples remain missing, so the retirement
+  assessment is still `insufficient_samples`;
 - no RAGFlow HTTP call, live mutation, DeepDoc run, script-owned LLM/RAGAS call, or
   Stage 8C action was performed.
 
@@ -383,9 +400,11 @@ broadly verified.
 
 Residual gates remain separate:
 
-- public source download and private raw dataset preparation are operator-owned data-fill
-  work;
-- MinerU/private-source execution requires available user-owned inputs and services;
+- reviewed public source acquisition and private normalization are complete for the
+  current Open RAG and FinanceBench slices;
+- FinanceBench PDF conversion requires a reviewed PDF-capable backend; the built-in
+  converter is not a valid PDF fallback, and MinerU/private-service execution still
+  requires an explicit service/config decision;
 - RAGFlow read-only HTTP evidence requires its own instruction when needed;
 - any disposable RAGFlow mutation requires explicit approval, exact cleanup, and
   sanitized retention;
@@ -405,12 +424,16 @@ Public offline closeout on 2026-07-11:
   generated Markdown, release hygiene, release build/export, consumer acceptance, and
   strict-vendor smoke, plus an independent Hermes L0 replay with separate tool-report
   and agent-prose sensitive scans;
-- still open: reviewed Open RAG seed strengthening, operator-selected FinanceBench
-  conversion and normalization, pinned observed per-subset validation, a true
-  two-subset regression baseline, and five meaningful transition runs;
-- private/live decision: no private-source input was present and no live approval was
-  requested, so the round stopped before conversion, RAGFlow, DeepDoc, LLM/RAGAS, and
-  Stage 8C work;
+- closed after private evidence review: Open RAG attribution, selection, expected-term,
+  exact-span QA, deterministic sample, and portfolio rerun; FinanceBench filing/question
+  selection, normalization, source-grounded expected terms, exact-span QA, import,
+  preflight, and initial portfolio inclusion;
+- still open: FinanceBench formal conversion, handoff inspection and KB dry-run, reviewed
+  expected chunks, pinned observed per-subset validation, a true retrieval-quality
+  regression baseline, and completion of the transition sample-class matrix;
+- private/live decision: source acquisition and normalization remained offline. The
+  built-in converter cannot process the selected PDF, so the round stopped before any
+  MinerU/DeepDoc, RAGFlow, LLM/RAGAS, or Stage 8C action;
 - roadmap effect: no `docs/32` retirement row and no `docs/36` Stage 8C row closes from
   synthetic evidence alone. The current profile, retirement, and parameter
   materialization decisions remain unchanged.
