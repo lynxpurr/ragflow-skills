@@ -1,7 +1,6 @@
 # Marker-Aware Evidence Validation And Promotion Plan
 
-Status: active planning; owning design written, Hermes L0 instruction and execution
-awaiting separate review and approval
+Status: approved plan; Hermes L0 instruction documented, independent execution pending
 Date: 2026-07-11
 Owning prior work:
 `docs/superpowers/specs/2026-07-11-marker-aware-candidate-snapshot-design.md`
@@ -116,10 +115,11 @@ inherited from a completed lower level.
 The next Hermes run has a maximum authority of L0. It must return
 `approval_required` rather than proceeding if any higher-level action appears necessary.
 
-L3 is not automatically required if L2 already provides sufficient pinned, comparable
-observed evidence. It exists for cases where a controlled disposable lifecycle is needed
-to produce or reproduce that evidence. L4 is a decision gate, not authorization to run
-new live operations.
+L3 may be skipped only after a maintainer reviews the pinned, comparable L2 evidence and
+records a written conclusion that it is sufficient for the intended comparison. L3
+exists for cases where a controlled disposable lifecycle is still needed to produce or
+reproduce that evidence. L4 is a decision gate, not authorization to run new live
+operations.
 
 ## Update Plan
 
@@ -128,7 +128,9 @@ new live operations.
 After this document is reviewed, create the separate copy-paste Hermes instruction at
 `docs/41-marker-aware-candidate-snapshot-hermes-l0.md`. The instruction must pin the
 tested repository commit, require clean initial and final worktree states, write
-artifacts only outside the repository, and forbid repository modification.
+artifacts only outside the repository, and forbid repository modification. It must
+explicitly prohibit changing `.gitignore` or any other repository file and prohibit
+`git add`, `git commit`, and `git push`.
 
 The L0 contract must independently verify:
 
@@ -144,11 +146,14 @@ The L0 contract must independently verify:
 - unbalanced HTML tables fail in `markers` and fall back in `auto`;
 - repeated snapshots reproduce ordered content, source IDs, stable hashes, and boundary
   decisions;
-- `qa map-evidence` maps neutral grounded spans to `sha256:` expected chunks;
+- `qa map-evidence` maps neutral grounded spans from the exact committed synthetic
+  fixture specification in the L0 instruction to `sha256:` expected chunks;
 - JSON, Markdown, and redaction sidecars describe candidate/offline, non-observed scope;
 - `ragflow_calls=0`, `writes_live_ragflow=false`, and
   `script_owned_llm_calls=0` remain true;
-- tool outputs and agent-authored prose contain no private-path or secret leakage;
+- generated tool reports and agent-authored prose are scanned separately and contain no
+  unresolved private path, endpoint, credential, private identifier, or raw-content
+  leakage;
 - the final commit and worktree match the initial state.
 
 The L0 report must not restate private handoff paths or use private sources as fixtures.
@@ -229,10 +234,10 @@ an `auto` fallback or invent a successful marker decision.
   predates marker-aware snapshot behavior.
 - [x] Create this owning validation and promotion plan with explicit L0-L4 authority
   boundaries.
-- [ ] Obtain user review and approval of this written plan.
-- [ ] Create `docs/41-marker-aware-candidate-snapshot-hermes-l0.md` as a separate
+- [x] Obtain user review and approval of this written plan.
+- [x] Create `docs/41-marker-aware-candidate-snapshot-hermes-l0.md` as a separate
   L0-only Hermes instruction after plan approval.
-- [ ] Self-review the instruction for placeholders, private references, ambiguous
+- [x] Self-review the instruction for placeholders, private references, ambiguous
   authority, and accidental network or mutation steps.
 
 ### L0 Independent Repository Replay
@@ -293,7 +298,11 @@ Baseline recorded on 2026-07-11:
 - `docs/39-benchmark-evidence-strengthening-hermes-test.md` replayed commit `3b94d93`, so
   it is valid evidence for the earlier benchmark portfolio chain but not for the later
   marker-aware end-to-end chain;
-- no new Hermes instruction has been created and Hermes has not been run for this plan;
+- `docs/41-marker-aware-candidate-snapshot-hermes-l0.md` now provides the reviewed,
+  repository-only instruction with exact neutral fixtures, focused tests, public CLI
+  replay, negative cases, deterministic assertions, separate tool/prose sensitive scans,
+  and final clean-worktree proof. Local command calibration passed, but the independent
+  Hermes run has not started;
 - no private source, network service, RAGFlow endpoint, MinerU backend, DeepDoc path,
   LLM/RAGAS backend, or Stage 8C action has been accessed or authorized by this plan;
 - the three open `docs/38` rows remain open: reviewed expected chunks, a true two-subset
