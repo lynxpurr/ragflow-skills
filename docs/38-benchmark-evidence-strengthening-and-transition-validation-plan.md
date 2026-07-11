@@ -378,8 +378,9 @@ Implementation update on 2026-07-11:
   zero triggered tracks. Five of eight required sample classes were observed; office
   table, mixed-language, and low-quality-OCR samples remain missing, so the retirement
   assessment is still `insufficient_samples`;
-- no RAGFlow HTTP call, live mutation, DeepDoc run, script-owned LLM/RAGAS call, or
-  Stage 8C action was performed.
+- during offline source acquisition, conversion, transition aggregation, and L1
+  candidate-evidence review, no RAGFlow HTTP call, live mutation, DeepDoc run,
+  script-owned LLM/RAGAS call, or Stage 8C action was performed;
 - the public offline marker-aware candidate snapshot engine now supports compatible
   `file`, fail-closed `markers`, and deterministic per-document `auto` modes, including
   aggregate `mixed` decisions for Markdown directories. It preserves balanced HTML

@@ -1,4 +1,4 @@
-# Marker-Aware Evidence Validation And Promotion Plan
+# Marker-Aware Evidence Validation and Promotion Plan
 
 Status: Hermes L0 and private offline L1 complete; Open RAG L2 read-only checkpoint
 complete, FinanceBench requires separate L3, and L4 remains gated
@@ -115,8 +115,10 @@ inherited from a completed lower level.
 | L3 | Separately approved disposable live build, query, and cleanup | Exact disposable scope, build/parse/query evidence, cleanup proof, sanitized retention | No persistent production mutation, unreviewed resources, or implicit reuse of prior approval |
 | L4 | Evidence-based default-promotion decision | Compatibility comparison plus representative candidate and observed evidence | No automatic promotion, no safety-check override, and no default change without a separate design/update |
 
-The next Hermes run has a maximum authority of L0. It must return
-`approval_required` rather than proceeding if any higher-level action appears necessary.
+The completed Hermes replay documented in
+`docs/41-marker-aware-candidate-snapshot-hermes-l0.md` had a maximum authority of L0. Its
+contract required `approval_required` rather than proceeding whenever a higher-level
+action appeared necessary.
 
 L3 may be skipped only after a maintainer reviews the pinned, comparable L2 evidence and
 records a written conclusion that it is sufficient for the intended comparison. L3
@@ -371,7 +373,7 @@ Baseline recorded on 2026-07-11:
 
 ## Validation Evidence / Residual Gated Work
 
-Required validation for this docs-only planning slice:
+Required validation for docs-only maintenance of this plan:
 
 ```bash
 git diff --check

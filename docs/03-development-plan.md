@@ -2255,15 +2255,17 @@ now implemented and verified:
 - synthetic grounded-QA evidence mapping proves stable expected-chunk hash generation;
 - the separately authorized private L1 review added candidate-only expected chunks to all
   17 Open RAG/FinanceBench qrels after 25 of 25 reviewed spans mapped one-to-one and 119
-  HTML tables passed exact atomicity review. The refreshed portfolio remains
-  `ready_with_review` because it contains no observed RAGFlow validation.
+  HTML tables passed exact atomicity review. At L1 closeout, the refreshed portfolio
+  remained `ready_with_review` because it did not yet contain observed RAGFlow validation.
 
 The reviewed private expected-chunk row in `docs/38` and the marker-aware design's
-private-evidence gate are now complete. Pinned observed per-subset validation/a true two-
-subset retrieval baseline, metric review before guidance changes, and default promotion
-remain open. This closeout adds no product/private/LLM adapter task and does not change
-the roadmap count: 586 of 601 items remain complete, with the same 15 intentionally gated
-items.
+private-evidence gate completed in that L1 closeout. At that point, pinned observed per-
+subset validation, a true two-subset retrieval baseline, metric review before guidance
+changes, and default promotion remained open. The subsequent L2 checkpoint below
+completed the Open RAG observed slice only; FinanceBench observed validation, cross-subset
+metric review, the true two-subset retrieval baseline, and default promotion remain open.
+That closeout added no product/private/LLM adapter task and did not change the roadmap
+count: 586 of 601 items remain complete, with the same 15 intentionally gated items.
 
 ### 2026-07-11 Marker-Aware L2 Read-Only Checkpoint
 

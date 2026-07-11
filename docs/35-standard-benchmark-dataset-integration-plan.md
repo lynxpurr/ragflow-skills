@@ -1012,10 +1012,10 @@ completed initial artifact/evidence baseline. The public attribution/selection c
 explicit-input portfolio, synthetic replay, Hermes L0 instruction, reviewed expected
 terms, exact-span QA checks, reviewed private expected chunks, and the two-subset private
 portfolio are complete. The next evidence step is the remaining pinned observed
-validation for FinanceBench through a separately approved L3 disposable lifecycle, followed by
-cross-subset metric review and a true two-subset retrieval regression baseline. The Open
-RAG read-only checkpoint is complete. Ordinary public work remains observation and
-release-path maintenance.
+validation for FinanceBench through a separately approved L3 disposable lifecycle,
+followed by cross-subset metric review and a true two-subset retrieval regression
+baseline. The Open RAG read-only checkpoint is complete. Ordinary public work remains
+observation and release-path maintenance.
 `docs/36-ragflow-kb-parameter-materialization-plan.md` remains
 contract-blocked with zero current Stage 8C candidates. A DeepDoc native baseline remains
 a separate, explicitly approved live comparison only when PDF-native behavior is the

@@ -85,8 +85,9 @@ reported only by its label, `ragflow-benchmark-evidence-hermes-l0-20260711T00211
 The replay confirms the synthetic offline contract. Subsequent public status in
 `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md` records the
 private source fill, reviewed expected chunks, and five-run transition aggregation as
-complete. The current residual gates are pinned observed per-subset validation, complete
-metric review, and completion of the transition sample-class matrix.
+complete. The current residual gates are FinanceBench observed validation under a
+separately approved L3 lifecycle, the cross-subset metric review and true two-subset
+regression baseline, and completion of the transition sample-class matrix.
 
 ## Copy-Paste Hermes Task
 
