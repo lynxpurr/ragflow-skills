@@ -54,6 +54,7 @@ python scripts/build.py benchmark trend --report ./run/benchmark_report.json --b
 python scripts/build.py benchmark delta --report ./run/benchmark_report.json --baseline-report ./run/baseline_benchmark_report.json --report-md ./run/benchmark_delta.md
 python scripts/build.py benchmark suggest --report ./run/benchmark_report.json --baseline-report ./run/baseline_benchmark_report.json --gate-config ./templates/benchmark-gate.example.json --current-top-k 3 --current-similarity-threshold 0.25 --report-md ./run/benchmark_suggestions.md
 python scripts/build.py snapshot-chunks --input ./run/benchmark_report.json --output ./run/chunk_snapshot.json --report-md ./run/chunk_snapshot.md
+python scripts/build.py snapshot-chunks --input ./handoff/documents --output ./run/candidate_chunk_snapshot.json --markdown-boundary-mode auto --report-md ./run/candidate_chunk_snapshot.md
 python scripts/build.py suppression-report --report ./run/benchmark_report.json --tagset ./run/tagset.template.json --report-md ./run/suppression_report.md
 python scripts/build.py qa generate --source-dir ./handoff --output ./run/benchmark/qa.generated.json --count 20 --report-md ./run/qa_generate.md
 python scripts/build.py qa validate --qa ./run/benchmark/qa.json --source-dir ./handoff --report-md ./run/qa_validate.md
@@ -125,6 +126,7 @@ Notes:
 - Use `qa generate` to create a deterministic, offline grounded QA scaffold from exact source spans; it does not call an LLM or mutate RAGFlow.
 - Use `qa validate` before feeding generated QA into benchmark gates; it checks required questions, answers, evidence spans, and exact source-span grounding when `--sources` or `--source-dir` is provided.
 - Use `qa map-evidence` after `snapshot-chunks` to map exact QA evidence spans onto chunk snapshot IDs and stable hashes for strict `expected_chunks` qrels; the report includes deterministic mapping confidence and mapped chunk coverage.
+- For Markdown candidate snapshots, use `--markdown-boundary-mode auto` as the guided offline choice. `file` preserves the legacy one-file/one-chunk behavior, while `markers` is an expert fail-closed override for canonical `<!-- chunk -->` boundaries. These modes do not observe RAGFlow server chunks; add `--include-content` only for private exact-span evidence mapping.
 - Use `segment-metadata report` to measure document metadata and segment provenance coverage in chunk snapshots before relying on segment-aware benchmark analysis.
 - Use `topology advise` before upload when deciding whether a corpus should become a new KB, merge with an existing route, or be reviewed for splitting; it is advisory only and does not edit RAGFlow or routing config.
 - Use `topology split-plan` to turn split-review signals into sidecar KB grouping suggestions and boundary route-test questions before creating separate KBs.

@@ -3004,6 +3004,7 @@ def _run_snapshot_chunks(args: argparse.Namespace) -> int:
             description=args.description or "",
             include_content=args.include_content,
             observed_state_path=args.observed_state,
+            markdown_boundary_mode=args.markdown_boundary_mode,
         )
         if args.redaction_report:
             report, redaction_report = _sanitize_benchmark_report(
@@ -4570,6 +4571,12 @@ def build_snapshot_chunks_parser() -> argparse.ArgumentParser:
     parser.add_argument("--name", default="chunk-snapshot", help="Chunk snapshot name")
     parser.add_argument("--description", help="Optional chunk snapshot description")
     parser.add_argument("--include-content", action="store_true", help="Include full chunk content in the snapshot")
+    parser.add_argument(
+        "--markdown-boundary-mode",
+        choices=("file", "markers", "auto"),
+        default="file",
+        help="Markdown-only boundary policy: compatible whole-file, forced markers, or deterministic auto",
+    )
     parser.add_argument("--report-json", help="Optional snapshot report JSON path")
     parser.add_argument("--report-md", help="Optional snapshot report Markdown path")
     parser.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")

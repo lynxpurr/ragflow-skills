@@ -5494,6 +5494,31 @@ def render_benchmark_governance_markdown(report: Mapping[str, Any], *, title: st
                     status="passed" if check.get("passed") else "failed",
                 )
             )
+    boundary = report.get("boundary")
+    if isinstance(boundary, Mapping):
+        lines.extend(["", "## Boundary Decision", ""])
+        for key in (
+            "requested_mode",
+            "effective_mode",
+            "evidence_scope",
+            "observed_ragflow_chunks",
+            "source_marker_count",
+            "emitted_candidate_chunk_count",
+            "suppressed_table_boundary_count",
+            "ignored_fenced_marker_count",
+            "ragflow_calls",
+            "writes_live_ragflow",
+            "script_owned_llm_calls",
+        ):
+            lines.append(f"- {key}: `{boundary.get(key)}`")
+        for key in (
+            "document_mode_counts",
+            "decision_code_counts",
+            "selection_check_counts",
+        ):
+            lines.append(
+                f"- {key}: `{json.dumps(boundary.get(key, {}), sort_keys=True)}`"
+            )
     issues = report.get("issues")
     if isinstance(issues, list) and issues:
         lines.extend(["", "## Issues", "", "| severity | code | field | message |", "| --- | --- | --- | --- |"])

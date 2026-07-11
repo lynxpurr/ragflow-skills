@@ -3862,6 +3862,95 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["observed_state"]["summary"]["observed_chunk_total"], 1)
         self.assertEqual(payload["summary"]["observed_state_document_count"], 1)
 
+    def test_snapshot_chunks_markdown_boundary_auto_emits_reports_and_redaction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            markdown = root / "source.md"
+            snapshot_path = root / "snapshot.json"
+            report_json = root / "report.json"
+            report_md = root / "report.md"
+            redaction_path = root / "redaction.json"
+            markdown.write_text("alpha\n<!-- chunk -->\nbeta\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "snapshot-chunks",
+                    "--input",
+                    str(markdown),
+                    "--output",
+                    str(snapshot_path),
+                    "--markdown-boundary-mode",
+                    "auto",
+                    "--include-content",
+                    "--report-json",
+                    str(report_json),
+                    "--report-md",
+                    str(report_md),
+                    "--redaction-report",
+                    str(redaction_path),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8")) if snapshot_path.exists() else {}
+            report = json.loads(report_json.read_text(encoding="utf-8")) if report_json.exists() else {}
+            markdown_report = report_md.read_text(encoding="utf-8") if report_md.exists() else ""
+            redaction = json.loads(redaction_path.read_text(encoding="utf-8")) if redaction_path.exists() else {}
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(snapshot["boundary"]["effective_mode"], "markers")
+        self.assertEqual(report["boundary"]["requested_mode"], "auto")
+        self.assertIn("content", snapshot["chunks"][0])
+        self.assertIn("## Boundary Decision", markdown_report)
+        self.assertIn("effective_mode", markdown_report)
+        self.assertTrue(redaction["ok"], redaction)
+
+    def test_snapshot_chunks_markdown_boundary_rejects_json_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chunk_input = root / "chunks.json"
+            chunk_input.write_text(json.dumps({"chunks": [{"content": "alpha"}]}), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "snapshot-chunks",
+                    "--input",
+                    str(chunk_input),
+                    "--output",
+                    str(root / "snapshot.json"),
+                    "--markdown-boundary-mode",
+                    "markers",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires a Markdown file or Markdown directory", result.stdout + result.stderr)
+
+    def test_snapshot_chunks_help_lists_markdown_boundary_modes(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(BUILD_SCRIPT), "snapshot-chunks", "--help"],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_env(),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("--markdown-boundary-mode", result.stdout)
+        self.assertIn("{file,markers,auto}", result.stdout)
+
     def test_metadata_governance_subcommands_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

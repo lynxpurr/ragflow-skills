@@ -341,11 +341,11 @@ git commit -m "feat(benchmark): add automatic snapshot boundary decisions"
 - Modify: `packages/ragflow-skill-runtime/tests/test_kb_build_cli.py`
 - Modify: `skills/ragflow-kb-build/SKILL.md`
 
-- [ ] **Step 1: Write failing CLI tests**
+- [x] **Step 1: Write failing CLI tests**
 
 Test successful `--markdown-boundary-mode auto` with snapshot JSON, report JSON, Markdown, and redaction sidecar. Assert `## Boundary Decision`, requested/effective modes, redaction `ok`, and content only when `--include-content` is passed. Test JSON input with `markers` returns non-zero and a clear Markdown-only error. Test help lists `file`, `markers`, and `auto`.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py -k 'snapshot_chunks and markdown_boundary' -q
@@ -353,7 +353,7 @@ python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py -k '
 
 Expected: FAIL because the option is unknown.
 
-- [ ] **Step 3: Implement CLI forwarding**
+- [x] **Step 3: Implement CLI forwarding**
 
 Add:
 
@@ -368,11 +368,11 @@ parser.add_argument(
 
 Forward it from `_run_snapshot_chunks()`.
 
-- [ ] **Step 4: Render boundary metadata**
+- [x] **Step 4: Render boundary metadata**
 
 In `render_benchmark_governance_markdown()` add a `## Boundary Decision` section. Render scalar safety/mode/count fields in fixed order and render the three count mappings with `json.dumps(..., sort_keys=True)`. Do not render paths or chunk content.
 
-- [ ] **Step 5: Update public guidance**
+- [x] **Step 5: Update public guidance**
 
 Add:
 
@@ -382,7 +382,7 @@ python scripts/build.py snapshot-chunks --input ./handoff/documents --output ./r
 
 Explain `auto` as guided offline choice, `file` as legacy-compatible, `markers` as expert fail-closed, and all three as non-observed/offline.
 
-- [ ] **Step 6: Verify GREEN and inventories**
+- [x] **Step 6: Verify GREEN and inventories**
 
 ```bash
 python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py packages/ragflow-skill-runtime/tests/test_report_surface_inventory.py packages/ragflow-skill-runtime/tests/test_runtime_resilience_inventory.py -k 'snapshot_chunks or snapshot-chunks' -q
@@ -390,7 +390,7 @@ python3 -m pytest packages/ragflow-skill-runtime/tests/test_kb_build_cli.py pack
 
 Expected: PASS. Change inventory counts only if output categories or schema identities actually changed.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add skills/ragflow-kb-build/scripts/build.py skills/ragflow-kb-build/SKILL.md packages/ragflow-skill-runtime/src/ragflow_skill_runtime/benchmark_governance.py packages/ragflow-skill-runtime/tests/test_kb_build_cli.py
