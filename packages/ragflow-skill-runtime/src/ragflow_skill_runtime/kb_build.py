@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import mimetypes
 from pathlib import Path
 import re
@@ -3189,19 +3190,104 @@ def discover_markdown_documents(
     return docs
 
 
+@dataclass(frozen=True)
+class _DatasetCreateResponseClassification:
+    label: str
+    dataset_id: str | None = None
+
+
+_DATASET_CREATE_KNOWN_PATHS = (
+    "code",
+    "data",
+    "data.id",
+    "data.dataset_id",
+    "id",
+    "dataset_id",
+)
+
+
+def _dataset_create_root_label(response: Any) -> str:
+    if isinstance(response, Mapping):
+        return "mapping"
+    if isinstance(response, list):
+        return "list"
+    return "scalar"
+
+
+def _dataset_create_data_type(response: Any) -> str:
+    if not isinstance(response, Mapping) or "data" not in response:
+        return "absent"
+    data = response.get("data")
+    if isinstance(data, Mapping):
+        return "mapping"
+    if isinstance(data, list):
+        return "list"
+    if data is None:
+        return "null"
+    return "scalar"
+
+
+def _dataset_create_known_paths(response: Any) -> tuple[str, ...]:
+    if not isinstance(response, Mapping):
+        return ()
+    data = response.get("data")
+    present = {
+        key
+        for key in ("code", "data", "id", "dataset_id")
+        if key in response
+    }
+    if isinstance(data, Mapping):
+        present.update(
+            f"data.{key}"
+            for key in ("id", "dataset_id")
+            if key in data
+        )
+    return tuple(path for path in _DATASET_CREATE_KNOWN_PATHS if path in present)
+
+
+def _classify_dataset_create_response(response: Any) -> _DatasetCreateResponseClassification:
+    if isinstance(response, Mapping):
+        if "code" in response:
+            code = response.get("code")
+            if isinstance(code, (int, float)) and not isinstance(code, bool):
+                if isinstance(code, float) and not math.isfinite(code):
+                    return _DatasetCreateResponseClassification("unknown_shape")
+                if code != 0:
+                    return _DatasetCreateResponseClassification("application_failure")
+            else:
+                return _DatasetCreateResponseClassification("unknown_shape")
+
+        data = response.get("data")
+        candidates: list[Any] = []
+        if isinstance(data, Mapping):
+            candidates.extend(data[key] for key in ("id", "dataset_id") if key in data)
+        candidates.extend(response[key] for key in ("id", "dataset_id") if key in response)
+        if not candidates or any(not isinstance(candidate, str) or not candidate for candidate in candidates):
+            return _DatasetCreateResponseClassification("unknown_shape")
+        if len(set(candidates)) != 1:
+            return _DatasetCreateResponseClassification("unknown_shape")
+        return _DatasetCreateResponseClassification("supported", candidates[0])
+    return _DatasetCreateResponseClassification("unknown_shape")
+
+
+def _dataset_create_response_error(response: Any, classification: str) -> str:
+    known_paths = _dataset_create_known_paths(response)
+    return (
+        "could not extract dataset id from RAGFlow response; "
+        f"classification={classification} "
+        f"root={_dataset_create_root_label(response)} "
+        f"data_type={_dataset_create_data_type(response)} "
+        f"known_paths={','.join(known_paths) if known_paths else 'none'}"
+    )
+
+
 def extract_dataset_id(response: Any) -> str:
     """Extract a dataset ID from common RAGFlow response shapes."""
 
-    candidates = []
-    if isinstance(response, Mapping):
-        data = response.get("data", response)
-        if isinstance(data, Mapping):
-            candidates.extend([data.get("id"), data.get("dataset_id")])
-        candidates.extend([response.get("id"), response.get("dataset_id")])
-    for candidate in candidates:
-        if isinstance(candidate, str) and candidate:
-            return candidate
-    raise BuildError("could not extract dataset id from RAGFlow response")
+    classification = _classify_dataset_create_response(response)
+    if classification.label == "supported" and classification.dataset_id is not None:
+        return classification.dataset_id
+    raise BuildError(_dataset_create_response_error(response, classification.label))
 
 
 def extract_uploaded_document_id(response: Any) -> str:

@@ -339,6 +339,177 @@ class KbBuildTests(unittest.TestCase):
     def test_extract_dataset_id_from_nested_response(self) -> None:
         self.assertEqual(extract_dataset_id({"data": {"id": "ds-1"}}), "ds-1")
 
+    def test_extract_dataset_id_preserves_exact_supported_locations(self) -> None:
+        cases = (
+            ({"data": {"id": "nested-id"}}, "nested-id"),
+            ({"data": {"dataset_id": "nested-dataset-id"}}, "nested-dataset-id"),
+            ({"id": "top-level-id"}, "top-level-id"),
+            ({"dataset_id": "top-level-dataset-id"}, "top-level-dataset-id"),
+            ({"code": 0, "data": {"id": "success-envelope-id"}}, "success-envelope-id"),
+            ({"code": 0.0, "data": {"id": "float-zero-envelope-id"}}, "float-zero-envelope-id"),
+        )
+        for response, expected in cases:
+            with self.subTest(response=response):
+                self.assertEqual(extract_dataset_id(response), expected)
+
+    def test_extract_dataset_id_accepts_identical_values_across_known_locations(self) -> None:
+        response = {
+            "data": {"id": "same-id", "dataset_id": "same-id"},
+            "id": "same-id",
+            "dataset_id": "same-id",
+        }
+
+        self.assertEqual(extract_dataset_id(response), "same-id")
+
+    def test_extract_dataset_id_rejects_conflicting_or_invalid_known_id_values(self) -> None:
+        cases = (
+            {"data": {"id": "first-id", "dataset_id": "second-id"}},
+            {"data": {"id": "first-id"}, "id": "second-id"},
+            {"data": {"id": None}, "id": "valid-id"},
+            {"data": {"id": ""}, "dataset_id": "valid-id"},
+            {"id": 123, "dataset_id": "valid-id"},
+        )
+        for response in cases:
+            with self.subTest(known_paths=tuple(response)):
+                with self.assertRaises(BuildError) as raised:
+                    extract_dataset_id(response)
+                message = str(raised.exception)
+                self.assertIn("classification=unknown_shape", message)
+                for sensitive in ("first-id", "second-id", "valid-id"):
+                    self.assertNotIn(sensitive, message)
+
+    def test_extract_dataset_id_classifies_application_failure_before_present_id(self) -> None:
+        for code in (101, -1, 1.0):
+            with self.subTest(code=code):
+                response = {
+                    "code": code,
+                    "data": {"id": "must-not-be-accepted"},
+                    "id": "also-must-not-be-accepted",
+                    "message": "private failure detail",
+                }
+
+                with self.assertRaises(BuildError) as raised:
+                    extract_dataset_id(response)
+
+                message = str(raised.exception)
+                self.assertTrue(
+                    message.startswith("could not extract dataset id from RAGFlow response")
+                )
+                self.assertIn("classification=application_failure", message)
+                self.assertIn("root=mapping", message)
+                self.assertNotIn("must-not-be-accepted", message)
+                self.assertNotIn("private failure detail", message)
+
+    def test_extract_dataset_id_classifies_unknown_mapping_list_and_scalar(self) -> None:
+        cases = (
+            ({"unexpected": "private-mapping-value"}, "mapping"),
+            ({"data": [{"id": "private-nested-list-id"}]}, "mapping"),
+            ([{"id": "private-list-id"}], "list"),
+            ("private-scalar-value", "scalar"),
+        )
+        for response, root in cases:
+            with self.subTest(root=root):
+                with self.assertRaises(BuildError) as raised:
+                    extract_dataset_id(response)
+                message = str(raised.exception)
+                self.assertIn("classification=unknown_shape", message)
+                self.assertIn(f"root={root}", message)
+                self.assertNotIn("private-", message)
+
+    def test_extract_dataset_id_error_reports_fixed_data_type(self) -> None:
+        cases = (
+            ({"unexpected": "private-absent-value"}, "absent"),
+            ({"data": {"unexpected": "private-mapping-value"}}, "mapping"),
+            ({"data": ["private-list-value"]}, "list"),
+            ({"data": None}, "null"),
+            ({"data": "private-scalar-value"}, "scalar"),
+        )
+        for response, data_type in cases:
+            with self.subTest(data_type=data_type):
+                with self.assertRaises(BuildError) as raised:
+                    extract_dataset_id(response)
+                message = str(raised.exception)
+                self.assertIn(f"data_type={data_type}", message)
+                self.assertNotIn("private-", message)
+
+    def test_extract_dataset_id_rejects_non_numeric_code_even_with_id(self) -> None:
+        for code in ("0", False, None, [0], {"value": 0}):
+            with self.subTest(code_type=type(code).__name__):
+                with self.assertRaises(BuildError) as raised:
+                    extract_dataset_id(
+                        {
+                            "code": code,
+                            "data": {"id": "private-id-must-not-be-accepted"},
+                        }
+                    )
+                message = str(raised.exception)
+                self.assertIn("classification=unknown_shape", message)
+                self.assertNotIn("private-id-must-not-be-accepted", message)
+
+    def test_extract_dataset_id_rejects_non_finite_float_code(self) -> None:
+        for code in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(code=str(code)):
+                with self.assertRaises(BuildError) as raised:
+                    extract_dataset_id(
+                        {
+                            "code": code,
+                            "id": "private-id-must-not-be-accepted",
+                        }
+                    )
+                message = str(raised.exception)
+                self.assertIn("classification=unknown_shape", message)
+                self.assertNotIn("private-id-must-not-be-accepted", message)
+
+    def test_extract_dataset_id_accepts_negative_float_zero(self) -> None:
+        self.assertEqual(
+            extract_dataset_id({"code": -0.0, "id": "negative-zero-id"}),
+            "negative-zero-id",
+        )
+
+    def test_extract_dataset_id_unknown_shape_never_leaks_unknown_keys_or_values(self) -> None:
+        response = {
+            "private_unknown_key": "private-unknown-value",
+            "data": {"private_nested_key": "private-nested-value"},
+        }
+
+        with self.assertRaises(BuildError) as raised:
+            extract_dataset_id(response)
+
+        message = str(raised.exception)
+        self.assertIn("classification=unknown_shape", message)
+        for sensitive in (
+            "private_unknown_key",
+            "private-unknown-value",
+            "private_nested_key",
+            "private-nested-value",
+        ):
+            self.assertNotIn(sensitive, message)
+
+    def test_extract_dataset_id_error_never_leaks_values_or_unknown_keys(self) -> None:
+        sensitive_values = (
+            "private-id-value",
+            "private-message-value",
+            "private-error-value",
+            "/private/runtime/path",
+            "https://private.example.invalid/api",
+        )
+        response = {
+            "code": 99,
+            "id": sensitive_values[0],
+            "message": sensitive_values[1],
+            "error": sensitive_values[2],
+            "private_unknown_key": sensitive_values[3],
+            "endpoint": sensitive_values[4],
+        }
+
+        with self.assertRaises(BuildError) as raised:
+            extract_dataset_id(response)
+
+        message = str(raised.exception)
+        self.assertIn("classification=application_failure", message)
+        for sensitive in (*sensitive_values, "private_unknown_key", "endpoint", "message", "error"):
+            self.assertNotIn(sensitive, message)
+
     def test_extract_uploaded_document_id_from_list_response(self) -> None:
         self.assertEqual(extract_uploaded_document_id({"data": [{"id": "doc-1"}]}), "doc-1")
 
