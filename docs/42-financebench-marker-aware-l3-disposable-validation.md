@@ -1,6 +1,6 @@
 # FinanceBench Marker-Aware L3 Disposable Validation Contract
 
-Status: L3-PREP reviewed; live execution is not authorized
+Status: old identifiable-dataset cleanup obligation resolved without DELETE; historical create outcome unknown; fresh L3 separately gated
 Date: 2026-07-12
 Owning plans:
 
@@ -10,19 +10,28 @@ Owning plans:
 
 ## Purpose And Authority Boundary
 
-This document defines the proposed FinanceBench L3 disposable build, observed-evidence,
-query, retention, and cleanup contract. It is an authorization design, not an execution
-record and not live approval.
+This document began as the FinanceBench L3 disposable build, observed-evidence, query,
+retention, and cleanup authorization design. It now also records the public-safe outcome
+of one separately authorized attempt, its bounded recovery review, and one recovery-only
+datastore forensic.
 
-The current authority is L3-PREP only. Under L3-PREP, maintainers may verify public code,
-the specifically authorized retained evidence, hashes, and offline reports. They may not
-make any RAGFlow HTTP request, create or inspect a live dataset, upload a document,
-trigger parsing, run retrieval, delete a dataset, or perform a cleanup probe.
+L3-PREP is complete. The separately approved live attempt stopped immediately after an
+ambiguous dataset-create response, before upload, parse, retrieval, read-back, or delete.
+The approved log review, one delayed recovery scan, and one exact-window datastore
+forensic are also complete. The forensic found zero exact rows, but its immutable
+contract explicitly forbids treating zero rows as automatic cleanup-risk resolution.
+No exact returned dataset identifier was recovered and automatic deletion remains
+forbidden. On 2026-07-13 the risk owner explicitly accepted the combined evidence as
+terminal only for the identifiable dataset lifecycle. The current cleanup obligation is
+therefore `resolved_no_current_target` with `cleanup_required=false` and no DELETE, while
+the historical create outcome and immutable forensic `cleanup_risk` fields remain
+unchanged.
 
-The final action in this document is always `approval_required`. A later live run needs a
-new, explicit authorization that pins the execution commit, private run contract,
-disposable name, live config source, operation counts, and cleanup obligations. Authority
-from L0, L1, L2, or this L3-PREP review is not reusable.
+The conditional authority for a fresh L3 attempt never activated during the old run, and
+the cleanup-policy decision does not activate it. Any further RAGFlow or datastore call
+requires a new, explicit authorization; authority from L0, L1, L2, L3-PREP, the failed
+attempt, its recovery contract, the forensic contract, or the cleanup-policy decision
+is not reusable.
 
 Explicit exclusions for both preparation and the proposed L3 run:
 
@@ -60,20 +69,36 @@ code-changing verification baseline remains:
 b42b96ba2e8e6d8138f01031101c95aef1a741a8
 ```
 
-Because this document is intentionally not committed in L3-PREP, a later live run cannot
-start merely from the preparation commit above. Before any live call, the user must
-separately approve an exact clean execution commit containing this reviewed document.
-That execution commit must be a docs-only descendant of `40615d5...` unless a new
-L3-PREP review revalidates every changed source/profile file. The live preflight must
-prove:
+This contract was subsequently committed as the only change in:
+
+```text
+fc370f33c5fbec357084eefca5752e4a1d3c3f85
+```
+
+The authorized attempt ran from that clean synchronized execution commit. After the
+ambiguous create result, dataset-create response handling was hardened and committed
+locally as:
+
+```text
+d7e95872592dfe4701fbe80228343752f90a6463
+```
+
+That fix distinguishes sanitized application failures from unknown response shapes,
+requires every present known identifier to be valid and identical, and fails closed on
+conflicts. It cannot retroactively classify the old response because the response body
+was not retained. The current local `develop` contains this fix, while the tracked and
+actual remote branch remain at `fc370f3...`; no push was authorized.
+
+Any later live run would still have to prove:
 
 ```text
 HEAD == develop == origin/develop == <APPROVED_EXECUTION_COMMIT>
 git status --porcelain is empty
 ```
 
-Any other commit, detached state, untracked public file, or dirty worktree stops before
-network access.
+Any other commit, detached state, untracked public file, dirty worktree, or unsynchronized
+remote stops before network access. The present local/remote mismatch remains a fresh-
+run blocker even though the old identifiable-dataset cleanup obligation is now resolved.
 
 The authorized retained evidence was present, and all 11 handoff-pinned SHA-256 values
 matched. The FinanceBench source identities used by this contract are:
@@ -716,11 +741,11 @@ checkpoint, assess one-document limitations, and decide whether the true two-sub
 baseline and metric-review criteria are satisfied. No L4 or default-promotion work may
 begin in the same step.
 
-## Instruction Self-Review
+## Original L3-PREP Instruction Self-Review
 
 | Review dimension | Result |
 | --- | --- |
-| Preparation authority | L3-PREP only; every live/read-only HTTP action remains separately gated |
+| Original preparation authority | L3-PREP only; every later live/read-only HTTP action required separate approval |
 | Input provenance | direct pinned formal Markdown; no reconstructed manifest |
 | Profile provenance | exact public path/hash; explicitly a new reviewed baseline |
 | Query identity | exact file hash/order; seven unique entries; seven empty `expected_documents` arrays |
@@ -750,17 +775,172 @@ findings were resolved as follows:
 | Requested/effective fields lacked field-level observability rules | mapped audit fields, raw manual review, and `not_observable` partial statuses are now distinct |
 | Query-document identity could drift | the exact seven-query artifact/order is pinned and all seven empty `expected_documents` arrays are asserted before live retrieval |
 
-No finding was used to expand L3-PREP authority or add a live operation.
+At that review, no finding was used to expand L3-PREP authority or add a live operation.
+
+## Authorized Attempt And Recovery Record
+
+One separately authorized run used the exact clean synchronized `fc370f3...` execution
+commit, pinned direct Markdown/profile/query inputs, an immutable private run contract,
+and hash-reviewed supervisor/helpers. The repeated offline dry-run matched the approved
+one-document, 841-estimated-chunk evidence before any HTTP call.
+
+The live sequence stopped at the first create response:
+
+- one compatibility GET passed;
+- one complete pre-create scan examined 186 datasets and found zero exact or numeric-
+  suffix name matches;
+- one dataset-create POST was issued;
+- the response did not yield an accepted dataset identifier, so upload, parse, query,
+  read-back, and delete were not dispatched;
+- one immediate complete recovery scan again examined 186 datasets and found zero name
+  matches, but correctly left automatic deletion unauthorized;
+- the temporary live config was deleted and proven absent.
+
+The exact create window was then reviewed in the application and container logs. The
+container stdout stream had no records, while the application used private rotated log
+files. The reverse-proxy access log proved that exactly one create POST reached the
+service and returned HTTP 200 with a 106-byte response. The response body was not
+retained, and neither the exact window nor the retained server logs contained the
+disposable name or a dataset identifier. This evidence therefore proves request arrival,
+not application success, rollback, commit status, or ownership.
+
+The generic create-response error exposed a public fail-closed reporting gap. The
+subsequent `d7e9587...` fix adds sanitized `application_failure` versus `unknown_shape`
+classification, accepts only the four already supported identifier locations, requires
+all present identifiers to be nonempty strings with one identical value, and rejects
+malformed, conflicting, boolean, nonnumeric, or non-finite code fields. Focused tests
+passed with 153 tests and 36 subtests; the full runtime suite passed with 734 tests and
+69 subtests. Manifest/schema identity, release hygiene, build/export, consumer
+acceptance, and strict-vendor platform smoke also passed. The fix does not infer the
+missing historical response body.
+
+After explicit recovery authorization, a new recovery-only contract pinned the old
+contract/state/ledger/recovery evidence, exact live-config sources, current repository
+state, interpreter, support/audit helper, supervisor/tests, command arrays, and these
+ceilings:
+
+| Recovery operation | Actual | Ceiling |
+| --- | ---: | ---: |
+| Complete delayed name-scan GET | `1` | `10` |
+| Dataset detail GET | `0` | `0` |
+| POST / PUT / DELETE | `0 / 0 / 0` | `0 / 0 / 0` |
+
+The delayed scan was complete: one page requested at page size 200, 186 datasets
+examined, short-page termination, and zero exact or numeric-suffix matches. The one-shot
+lock was retained, the temporary config was durably deleted and proven absent, and
+independent post-run review found no artifact-integrity issue. Across the original
+attempt and this recovery,
+the aggregate RAGFlow ledger is four GET calls and one create POST, with zero upload,
+parse, retrieval, detail, update, or delete calls.
+
+A separately authorized recovery-only datastore forensic then ran exactly once under an
+immutable, independently accepted contract. It bound the exact original disposable name
+and inclusive original 40-second create window without widening or normalization. The
+retained public-safe outcome is:
+
+| Forensic item | Actual | Ceiling |
+| --- | ---: | ---: |
+| Datastore `SELECT` | `1` | `1` |
+| Matching rows | `0` | `2` returned at most for fail-closed ambiguity detection |
+| RAGFlow HTTP | `0` | `0` |
+| Datastore DML / DDL | `0 / 0` | `0 / 0` |
+| Dataset cleanup/delete | `0` | `0` |
+| Fresh-L3 operations | `0` | `0` |
+
+The ledger contains only the expected `dispatch_intent`, `child_started`, and
+`child_exited` lifecycle for that single SELECT, with no retry. The retained result is
+`ok=true`, `classification=zero_row_forensic`, `match_count=0`, and `rows_returned=0`.
+Container-stage cleanup and an independent read-only absence check both passed. Private
+result, summary, ledger, state, lock, and logs are owner-only; stderr is empty, and no
+raw row, identifier, name, endpoint, credential, or query text is retained here.
+
+Independent post-run review returned `ACCEPT` with zero Critical, Important, or Minor
+findings. It confirmed artifact hashes and permissions, result/summary consistency, the
+one-SELECT ceiling, zero HTTP/DML/DDL/delete operations, stage absence, and these
+unchanged authorization fields:
+
+```text
+cleanup_risk=true
+delete_authorized=false
+fresh_l3_authorized=false
+```
+
+The immutable forensic/recovery classification remains:
+
+```text
+cleanup_risk / zero_row_forensic
+```
+
+This result proves only that the byte-exact target has no datastore row inside the pinned
+create window. It is not broader global-absence evidence and, by contract, does not
+itself clear cleanup risk. No DELETE is authorized, no identifier/post-name absence pair
+exists, and the conditional fresh-L3 authority remains inactive.
+
+## Cleanup-Policy Decision Boundary
+
+An owner-only, hash-bound cleanup-policy decision packet was prepared offline on
+2026-07-13 and independently accepted with zero Critical, Important, or Minor findings.
+It binds the original attempt, both recovery scans, the log review, the recovery
+contract/state/ledger, and the v4 forensic contract/state/ledger/result/summary. It makes
+no RAGFlow call, performs no datastore access, and grants no Git or live authority.
+
+The combined evidence proves that no currently identified dataset target is available
+for an exact safe DELETE: neither complete recovery scan found the exact or numeric-
+suffix name, the exact-window binary datastore forensic returned zero rows, no dataset
+or document identifier was recovered, and upload, parse, retrieval, update, and delete
+were never dispatched.
+
+The evidence does not prove the historical HTTP-200 response semantics, universal
+absence of every hypothetical internal or orphan side resource, absence of a differently
+named row or a row outside the exact window, or the original identifier-plus-post-delete
+absence transition. These limits must not be rewritten as global absence.
+
+Before an explicit risk-owner decision, the controlling option was:
+
+```text
+cleanup_risk=true
+cleanup_required=true
+delete_authorized=false
+fresh_l3_authorized=false
+```
+
+On 2026-07-13 the risk owner explicitly accepted only the identifiable-dataset lifecycle
+boundary. The current policy state is:
+
+```text
+historical_create_outcome=unknown
+current_identifiable_target=resolved_no_current_target
+cleanup_required=false
+delete_authorized=false
+delete_performed=false
+```
+
+This acceptance is a policy decision, not a change to the immutable v4 evidence. It
+requires no DELETE and does not authorize repository synchronization, contract
+generation, fresh L3, or any live operation.
 
 ## Mandatory Stop
 
 Current status:
 
 ```text
-approval_required
+fresh_l3_approval_required
 ```
 
-Do not run a compatibility probe, collision check, create, upload, parse, retrieval,
-read-back, delete, or post-cleanup check from this L3-PREP session. Request separate,
-explicit L3 live-mutation authorization that pins the private run contract and exact
-operation ceilings above.
+Do not run another compatibility probe, name scan, datastore forensic, create, upload,
+parse, retrieval, read-back, detail request, delete, or post-cleanup check. The approved
+attempt, delayed recovery scan, and one-shot datastore forensic have consumed their
+authority, and a fresh run is blocked before contract generation.
+
+The cleanup-policy decision is complete. It resolves only the old identifiable-dataset
+cleanup obligation as `resolved_no_current_target`; it does not authorize DELETE, erase
+the historical ambiguity, or change the immutable forensic fields. Retain
+`delete_authorized=false` and `fresh_l3_authorized=false`.
+
+Fresh L3 still requires a new, explicit live-mutation authorization that pins a clean
+synchronized execution commit,
+a new disposable name, a new temporary config source, a new immutable private run
+contract, exact operation ceilings, and independently reviewed supervisor/helper hashes.
+No prior contract, name, scan, forensic lock, or mutation authority may be reused. The
+current local/remote commit mismatch must be resolved under separate Git authority before
+such an execution can pass its clean-synchronized baseline gate.
