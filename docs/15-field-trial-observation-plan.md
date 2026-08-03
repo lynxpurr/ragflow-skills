@@ -473,3 +473,14 @@ Decision:
 - Accept the Open RAG result as a pinned read-only subset checkpoint only. Keep the true
   two-subset baseline, cross-subset guidance review, and all default-promotion decisions
   open until FinanceBench observed evidence and cleanup proof exist.
+
+### 2026-08-03 FinanceBench Evidence Closeout
+
+The later bounded `NEW_MINIMAL_L3` feasibility gate stopped before contract creation or
+live execution because the reviewed FinanceBench input bytes were incomplete. The owner
+accepted `L3=NOT_COMPLETED_INPUTS_UNAVAILABLE` and formally closed that workflow.
+
+Run-005 remains valid historical observation, but its L3 trigger is no longer a current
+task. FinanceBench observed evidence and the two-subset comparison remain unavailable;
+the corresponding evidence rows stay open, no replacement live run is implied, and L4
+remains unauthorized.

@@ -2283,7 +2283,20 @@ calls. Independent review added a third fail-before-network regression: all loca
 benchmark and observed-state inputs are now loaded and validated before any retrieval.
 
 FinanceBench had no exactly pinnable existing KB, so the true two-subset baseline and
-cross-subset metric review remain open. Completing them requires a separately authorized
-L3 disposable build/query/cleanup lifecycle with post-cleanup proof. This checkpoint does
-not change the 586/601 roadmap count, open Stage 8C, authorize L3/L4, or change any
-default.
+cross-subset metric review remain open. At this checkpoint, completing them would have
+required a separately authorized L3 disposable build/query/cleanup lifecycle with
+post-cleanup proof. This checkpoint does not change the 586/601 roadmap count, open Stage
+8C, authorize L3/L4, or change any default.
+
+### 2026-08-03 FinanceBench L3 Formal Closeout
+
+The later `NEW_MINIMAL_L3` feasibility gate could not establish the required input
+closure: the reviewed formal-Markdown bytes did not match, the normalized query set and
+benchmark/qrels were unavailable, and zero of nine reviewed evidence spans were present.
+The owner accepted `L3=NOT_COMPLETED_INPUTS_UNAVAILABLE` and formally closed that workflow
+before contract creation or live execution.
+
+FinanceBench observed evidence, the true two-subset baseline, and cross-subset metric
+review therefore remain unavailable rather than completed. They are not current L3 tasks,
+and L4 remains unauthorized. This closeout changes no roadmap checkbox: 586 of 601 items
+remain complete, with the same 15 intentionally gated items.

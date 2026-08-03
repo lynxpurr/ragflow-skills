@@ -1,12 +1,52 @@
 # FinanceBench Marker-Aware L3 Disposable Validation Contract
 
-Status: old identifiable-dataset cleanup obligation resolved without DELETE; historical create outcome unknown; fresh L3 separately gated
+Status: historical evidence; NEW_MINIMAL_L3 formally closed without L3 execution
 Date: 2026-07-12
 Owning plans:
 
 - `docs/40-marker-aware-evidence-validation-and-promotion-plan.md`
 - `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`
 - `docs/35-standard-benchmark-dataset-integration-plan.md`
+
+Closed successor:
+
+- `docs/specs/2026-08-02-financebench-new-minimal-l3-design.md`
+
+## 2026-08-03 NEW_MINIMAL_L3 Formal Closeout
+
+The owner accepted the successor Gate-A result and formally closed `NEW_MINIMAL_L3` with
+`L3=NOT_COMPLETED_INPUTS_UNAVAILABLE` and `Gate_B=NOT_STARTED`. The sanitized result is
+bound by SHA-256
+`769f4dfb5a89bcfa9395180771ab9a16b4b2927d16fcb2b654f9ea82c4dd4ae9`.
+
+The feasibility check found a formal-Markdown candidate whose hash did not match, zero of
+seven normalized queries, no benchmark/qrels input, and zero of nine reviewed evidence
+spans. It created no run contract and performed zero credential-value reads, live-config
+reads or materializations, RAGFlow calls, or dataset/document operations.
+
+This is a workflow closeout, not accepted L3 evidence. There is no current FinanceBench L3
+owner, authority, dataset, config, or cleanup obligation. The unavailable observed
+evidence remains an explicit gap, and neither this historical document nor the closed
+successor authorizes reconstruction, a new lifecycle, Stage 8C, or L4.
+
+## 2026-08-02 Successor Boundary
+
+This document remains the historical source for the original L3 contract, ambiguous
+create outcome, recovery scans, datastore forensic, and cleanup-policy decision. Those
+facts are not rewritten or invalidated.
+
+The later Stage-B request, temporary execution package, pending run contract, and reviews
+were stored only in temporary roots and are no longer present. Their recorded SHA-256
+values cannot recreate the missing bytes or authorize a live run. The owner therefore
+selected `NEW_MINIMAL_L3` and retired this document's prospective private-package and
+future Stage-C execution requirements.
+
+At that point, future preparation and execution decisions were controlled by the
+successor spec above. No session should rebuild the old 14-file private package, execute
+from a historical contract hash, or treat any earlier request/review/handoff as current
+authority. The 2026-08-03 closeout now makes that successor historical as well. Neither
+notice authorizes network, credential read, RAGFlow operation, dataset mutation, or
+cleanup.
 
 ## Purpose And Authority Boundary
 
