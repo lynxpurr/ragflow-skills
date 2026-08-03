@@ -1,7 +1,19 @@
+---
+doc_type: reference
+topic: release-hardening
+status: reference
+created: 2026-06-23
+updated: 2026-08-03
+canonical: true
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+---
+
 # Release Hardening
 
-Status: active
-Date: 2026-06-23
 
 ## Release Checklist
 
@@ -46,7 +58,7 @@ If no MinerU CLI is available on the test host, `consumer_acceptance.py` still v
 
 ### MinerU CLI Discovery Lesson (2026-06-24)
 
-`command -v mineru` alone is not a reliable existence check. MinerU is commonly installed inside a dedicated virtual environment (`~/tools/mineru/bin/mineru`, `~/.venv/mineru/bin/mineru`) that is invisible to the system PATH, `pip list`, and `import mineru` from the system Python interpreter. Always fall through to a broad filesystem search before reporting "not found." See `docs/08-cli-agent-integration.md#mineru-cli-localization` for the progressive discovery protocol.
+`command -v mineru` alone is not a reliable existence check. MinerU is commonly installed inside a dedicated virtual environment (`~/tools/mineru/bin/mineru`, `~/.venv/mineru/bin/mineru`) that is invisible to the system PATH, `pip list`, and `import mineru` from the system Python interpreter. Always fall through to a broad filesystem search before reporting "not found." See `docs/reference/cli-agent-integration.md#mineru-cli-localization` for the progressive discovery protocol.
 
 The hygiene check rebuilds `dist/` and verifies:
 

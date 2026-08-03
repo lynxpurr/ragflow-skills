@@ -26,6 +26,7 @@ updates, body-preservation evidence, and a reversible migration batch.
 | old_path | new_path | archived | historical_reason | original_sha256 |
 | --- | --- | --- | --- | --- |
 | `docs/01-folder-plan.md` | `docs/archive/2026/plans/01-folder-plan.md` | 2026-08-03 | superseded | `e036da6843bec57a0199e1e4d35cf4270682f60038289247b24ab13cd534f3a6` |
+| `docs/02-architecture-design.md` | `docs/archive/2026/specs/02-architecture-design.md` | 2026-08-03 | superseded | `378c201ca9886eb6cacd0ef958acf9b59db50879db295653eccb29ea0abcb097` |
 | `docs/04-validation-inventory.md` | `docs/archive/2026/legacy/04-validation-inventory.md` | 2026-08-03 | superseded | `518b86c04dd1cbc82d2e10022d2f37640b34906f1aea848262525fde4c97663a` |
 | `docs/07-first-release.md` | `docs/archive/2026/evidence/07-first-release.md` | 2026-08-03 | evidence_only | `a78c2f8fb9d102de10b04f2414860847e1ef7bc49fdb69c22a98d0a93edb7b9c` |
 | `docs/09-high-value-feature-roadmap.md` | `docs/archive/2026/legacy/09-high-value-feature-roadmap.md` | 2026-08-03 | superseded | `854999d490f0bc9cfeef78a60a68b7b50ec7b2b5147daf83f56e4da2632b126c` |

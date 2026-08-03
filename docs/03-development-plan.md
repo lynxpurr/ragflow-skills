@@ -639,7 +639,7 @@ Goal: make the public suite feel native in Hermes, OpenClaw, Claude Code, openco
 
 Tasks:
 
-- [x] Add `docs/08-cli-agent-integration.md`.
+- [x] Add `docs/reference/cli-agent-integration.md`.
 - [x] Remove remaining SaaS target wording from public `SKILL.md` files.
 - [x] Add environment-variable configuration for `ragflow-doc-to-md` remote conversion.
 - [x] Support `DOC_TO_MD_BACKEND`, `DOC_TO_MD_REMOTE_URL`, `DOC_TO_MD_REMOTE_API_KEY`, and `DOC_TO_MD_TIMEOUT`.
@@ -675,7 +675,7 @@ Goal: cut a refreshed release candidate from the current CLI-agent-focused sourc
 
 Tasks:
 
-- [x] Run the full pre-release command list from `docs/06-release-hardening.md`.
+- [x] Run the full pre-release command list from `docs/reference/release-hardening.md`.
 - [x] Export refreshed per-skill archives and `release-manifest.json`.
 - [x] Run clean consumer acceptance from local refreshed artifacts.
 - [x] Publish `v0.1.0-rc2` as a GitHub prerelease.
@@ -702,7 +702,7 @@ Tasks:
 - [x] Filter internal `parser_config.__*` keys from RAGFlow dataset API payloads while preserving them in manifests.
 - [x] Add a regression test for default-profile internal metadata filtering.
 - [x] Add a release-artifact consumer acceptance check for default-profile API-payload filtering.
-- [x] Run the full pre-release command list from `docs/06-release-hardening.md`.
+- [x] Run the full pre-release command list from `docs/reference/release-hardening.md`.
 - [x] Commit and push the fix on `develop`.
 - [x] Export refreshed per-skill archives and `release-manifest.json` from the fix commit.
 - [x] Run clean consumer acceptance from local refreshed artifacts.
@@ -726,7 +726,7 @@ Tasks:
 - [x] Link the prompt from each public `SKILL.md`.
 - [x] Link the prompt from each `references/host-agent-setup.md`.
 - [x] Add a release-build assertion that every public skill artifact includes the prompt.
-- [x] Record the prompt as a public release example in `docs/06-release-hardening.md`.
+- [x] Record the prompt as a public release example in `docs/reference/release-hardening.md`.
 - [x] Forward-test the prompt with Hermes and record the MinerU protocol distinction found during onboarding.
 - [x] Clarify that `mineru` / `mineru-agent` target MinerU Agent API, while `mineru-sync` / `mineru-local` target synchronous multipart `/parse` services.
 - [x] Forward-test the prompt with OpenClaw and tighten guidance so synchronous multipart MinerU services use `doc_to_md.backend: mineru-sync`, not `mineru`.
@@ -2211,7 +2211,7 @@ local RAGFlow container or image, change configuration, environment, databases,
 datasets, or documents, call a RAGFlow API, or trigger parse/reparse work.
 
 Hermes can independently replay the L0 source audit using
-`docs/37-ragflow-kb-parameter-contract-audit-hermes-test.md`. L1 read-only HTTP evidence
+`docs/reference/ragflow-kb-parameter-contract-audit-hermes-test.md`. L1 read-only HTTP evidence
 and L2 disposable mutation require separate approval and cannot be inferred from an L0
 pass. Until a new version-bound writable contract exists, the ordinary next work is
 release-health observation or optional Hermes L0 corroboration, not Stage 8C

@@ -1,7 +1,19 @@
+---
+doc_type: reference
+topic: kb-parameter-contract-audit
+status: reference
+created: 2026-07-10
+updated: 2026-08-03
+canonical: true
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+---
+
 # Hermes L0 Test For RAGFlow KB Parameter Contract Audit
 
-Status: reusable L0 source-audit instruction; L1/L2 remain approval-gated
-Date: 2026-07-10
 Last calibrated: 2026-07-11 after the first independent replay
 
 ## Purpose And Boundary
@@ -75,7 +87,7 @@ private Hermes session.
 不允许 DeepDoc 测试，不允许脚本自有 LLM/RAGAS 调用。
 
 先读取：
-- docs/37-ragflow-kb-parameter-contract-audit-hermes-test.md
+- docs/reference/ragflow-kb-parameter-contract-audit-hermes-test.md
 - docs/archive/2026/specs/2026-07-10-kb-parameter-stage-8b-contract-audit-design.md
 - docs/36-ragflow-kb-parameter-materialization-plan.md
 

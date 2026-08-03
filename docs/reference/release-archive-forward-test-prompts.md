@@ -1,7 +1,19 @@
+---
+doc_type: reference
+topic: release-forward-test-prompts
+status: reference
+created: 2026-06-27
+updated: 2026-08-03
+canonical: true
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+---
+
 # Release Archive Forward-Test Prompts
 
-Status: active
-Date: 2026-06-27
 
 These templates let a host agent validate the public RAGFlow skill release archives
 without repository context, network access, real credentials, or live RAGFlow mutation.

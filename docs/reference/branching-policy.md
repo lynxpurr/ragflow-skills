@@ -1,7 +1,19 @@
+---
+doc_type: reference
+topic: branching-policy
+status: reference
+created: 2026-06-22
+updated: 2026-08-03
+canonical: true
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+---
+
 # Branching Policy
 
-Status: active
-Date: 2026-06-22
 
 ## Branch Roles
 
@@ -18,19 +30,8 @@ Date: 2026-06-22
 1. Start from `develop`.
 2. Create a short-lived topic branch when work is larger than a small docs or build-script edit.
 3. Merge topic branches back into `develop`.
-4. Run the local validation suite before release:
-
-```bash
-PYTHONPATH=packages/ragflow-skill-runtime/src:tools \
-  python3 -m unittest discover -s packages/ragflow-skill-runtime/tests -v
-
-python3 tools/build_release.py --check
-python3 tools/vendor_import_smoke.py
-python3 tools/platform_smoke_matrix.py
-python3 tools/release_hygiene_check.py
-python3 tools/export_release_archives.py
-python3 tools/live_integration_check.py
-```
+4. Run the current release validation sequence from
+   `docs/reference/release-hardening.md`; do not maintain a second command list here.
 
 5. Promote to `main` only when `develop` is ready for a stable release snapshot.
 

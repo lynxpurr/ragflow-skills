@@ -1,7 +1,19 @@
+---
+doc_type: reference
+topic: cross-platform-smoke
+status: reference
+created: 2026-06-23
+updated: 2026-08-03
+canonical: true
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+---
+
 # Cross-Platform Smoke Matrix
 
-Status: implemented
-Date: 2026-06-23
 
 ## Purpose
 

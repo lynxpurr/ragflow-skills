@@ -57,6 +57,22 @@ def _write_minimal_repo(root: Path) -> None:
 
 
 class VersionDateDriftCheckTests(unittest.TestCase):
+    def test_wave3_release_references_use_normalized_paths(self) -> None:
+        expected = {
+            Path("docs/reference/release-hardening.md"),
+            Path("docs/reference/cli-agent-integration.md"),
+            Path("docs/reference/release-archive-forward-test-prompts.md"),
+        }
+        self.assertTrue(expected.issubset(DOC_VERSION_PATHS))
+        self.assertFalse(
+            {
+                Path("docs/06-release-hardening.md"),
+                Path("docs/08-cli-agent-integration.md"),
+                Path("docs/12-release-archive-forward-test-prompts.md"),
+            }
+            & set(DOC_VERSION_PATHS)
+        )
+
     def test_first_release_uses_archived_static_path(self) -> None:
         self.assertIn(Path("docs/archive/2026/evidence/07-first-release.md"), DOC_VERSION_PATHS)
         self.assertNotIn(Path("docs/07-first-release.md"), DOC_VERSION_PATHS)

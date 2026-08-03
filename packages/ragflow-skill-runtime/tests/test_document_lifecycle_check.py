@@ -13,7 +13,11 @@ TOOLS_DIR = ROOT / "tools"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from document_lifecycle_check import parse_frontmatter, run_document_lifecycle_check  # noqa: E402
+from document_lifecycle_check import (  # noqa: E402
+    WAVE1_LEGACY_METADATA_PATHS,
+    parse_frontmatter,
+    run_document_lifecycle_check,
+)
 
 
 def _write_doc(
@@ -199,6 +203,27 @@ class DocumentLifecycleCheckTests(unittest.TestCase):
                 "docs/43-agent-session-handoff-lessons.md",
             ],
         )
+
+    def test_wave3a_legacy_metadata_exemptions_keep_only_deferred_candidates(self) -> None:
+        moved_paths = {
+            "docs/02-architecture-design.md",
+            "docs/05-cross-platform-smoke.md",
+            "docs/06-release-hardening.md",
+            "docs/08-cli-agent-integration.md",
+            "docs/11-public-rename-policy.md",
+            "docs/12-release-archive-forward-test-prompts.md",
+            "docs/30-hermes-e2e-test-plan.md",
+            "docs/37-ragflow-kb-parameter-contract-audit-hermes-test.md",
+            "docs/branching-policy.md",
+        }
+        deferred_paths = {
+            "docs/16-system-closeout-report.md",
+            "docs/23-adaptive-pipeline-proposal.md",
+            "docs/43-agent-session-handoff-lessons.md",
+        }
+
+        self.assertFalse(moved_paths & WAVE1_LEGACY_METADATA_PATHS)
+        self.assertTrue(deferred_paths.issubset(WAVE1_LEGACY_METADATA_PATHS))
 
     def test_unregistered_markdown_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

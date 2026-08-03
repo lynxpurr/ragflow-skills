@@ -282,7 +282,7 @@ Read these files first:
 - skills/ragflow-doc-to-md/references/host-agent-setup.md
 - skills/ragflow-kb-build/SKILL.md
 - skills/ragflow-kb-build/references/host-agent-setup.md
-- docs/30-hermes-e2e-test-plan.md
+- docs/reference/hermes-e2e-test-plan.md
 - docs/31-hermes-e2e-improvement-follow-up-plan.md
 
 Goal:

@@ -31,6 +31,9 @@ operations, mutation, staging, commit, push, L3, Stage 8C, or L4.
 - [Wave 2 successor plan](plans/2026-08-03-document-lifecycle-and-spec-archive-wave-2-implementation-plan.md) - proposed, non-authoritative plan file for 18 historical moves in Waves 2A-2C;
   external owner authority has completed all 18 files across Waves 2A-2C, while all 10
   Wave 2D candidates remain blocked. `implementation_authority=false`.
+- [Wave 3 successor plan](plans/2026-08-03-document-lifecycle-and-spec-archive-wave-3-implementation-plan.md) - proposed, non-authoritative plan for durable-reference normalization;
+  owner-authorized Wave 3A processed its nine repository-local candidates, while Wave 3B
+  remains separately gated and Wave 3 as a whole is not complete. `implementation_authority=false`.
 - `docs/superpowers/specs/2026-08-02-ragflow-skill-surface-simplification-design.md` - separate proposed track; not part of document-governance Wave 1.
 
 ## Active And Gated Owners
@@ -41,19 +44,23 @@ create live or implementation authority.
 
 ## Durable References
 
-The 12 approved reference candidates remain at their current paths during Wave 1. They
-are non-authoritative guidance and are not moved until a separately approved Wave 3 plan.
+Wave 3A normalized eight durable references under [`docs/reference/`](reference/README.md),
+archived the superseded architecture snapshot, and added a concise current architecture
+reference. `docs/16-system-closeout-report.md`, `docs/23-adaptive-pipeline-proposal.md`,
+and `docs/43-agent-session-handoff-lessons.md` remain deferred at their current paths.
 
 ## Historical Candidates
 
-Waves 2A-2C have archived 18 of the 28 approved historical candidates. The remaining 10
-are the blocked Wave 2D candidates and stay at their current paths. Wave 2 remains
-unadopted, and archived documents create no current authority.
+The archive records 19 migrations: 18 historical-candidate moves from Waves 2A-2C plus
+the Wave 3A architecture snapshot. All 10 blocked Wave 2D candidates stay at their
+current paths. The registry remains unadopted, and archived documents create no current
+authority.
 
 ## Authoring
 
 - Specs: `docs/specs/README.md` and `docs/specs/TEMPLATE.md`.
 - Plans: `docs/plans/README.md` and `docs/plans/TEMPLATE.md`.
+- Durable references: `docs/reference/README.md`.
 - Archive index: `docs/archive/README.md`.
 - Machine-readable registry: `docs/document-registry.json`.
 

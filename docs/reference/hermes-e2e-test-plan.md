@@ -1,7 +1,19 @@
+---
+doc_type: reference
+topic: hermes-e2e-test
+status: reference
+created: 2026-07-08
+updated: 2026-08-03
+canonical: true
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+---
+
 # Hermes E2E Test Plan For `ragflow-doc-to-md` And `ragflow-kb-build`
 
-Status: archived reusable test plan; live retest closure is tracked in `docs/31-hermes-e2e-improvement-follow-up-plan.md`
-Date: 2026-07-08
 Scope: `ragflow-doc-to-md` -> `ragflow-kb-build`
 
 ## Objective
@@ -256,20 +268,20 @@ Purpose: confirm Hermes can locate and invoke both skills.
 Commands:
 
 ```bash
-python ragflow-doc-to-md/scripts/convert.py --help
-python ragflow-doc-to-md/scripts/convert.py pipeline --help
-python ragflow-doc-to-md/scripts/convert.py package --help
-python ragflow-doc-to-md/scripts/convert.py postprocess --help
-python ragflow-doc-to-md/scripts/convert.py backend probe --help
+python3 ragflow-doc-to-md/scripts/convert.py --help
+python3 ragflow-doc-to-md/scripts/convert.py pipeline --help
+python3 ragflow-doc-to-md/scripts/convert.py package --help
+python3 ragflow-doc-to-md/scripts/convert.py postprocess --help
+python3 ragflow-doc-to-md/scripts/convert.py backend probe --help
 
-python ragflow-kb-build/scripts/build.py --help
-python ragflow-kb-build/scripts/build.py inspect-handoff --help
-python ragflow-kb-build/scripts/build.py asset-upload-plan --help
-python ragflow-kb-build/scripts/build.py metadata --help
-python ragflow-kb-build/scripts/build.py benchmark --help
-python ragflow-kb-build/scripts/validate.py --help
-python ragflow-kb-build/scripts/profile.py --help
-python ragflow-kb-build/scripts/probe.py --help
+python3 ragflow-kb-build/scripts/build.py --help
+python3 ragflow-kb-build/scripts/build.py inspect-handoff --help
+python3 ragflow-kb-build/scripts/build.py asset-upload-plan --help
+python3 ragflow-kb-build/scripts/build.py metadata --help
+python3 ragflow-kb-build/scripts/build.py benchmark --help
+python3 ragflow-kb-build/scripts/validate.py --help
+python3 ragflow-kb-build/scripts/profile.py --help
+python3 ragflow-kb-build/scripts/probe.py --help
 ```
 
 Pass criteria:
@@ -306,7 +318,7 @@ The Hermes smoke marker is RAGFLOW-HERMES-SMOKE-20260708.
 The disposable KB should contain the smoke marker and this table.
 EOF
 
-python ragflow-doc-to-md/scripts/convert.py pipeline \
+python3 ragflow-doc-to-md/scripts/convert.py pipeline \
   --input "$RUN/input" \
   --output "$RUN/handoff" \
   --mode passthrough \
@@ -335,7 +347,7 @@ conversion or live mutation.
 Command:
 
 ```bash
-python ragflow-doc-to-md/scripts/convert.py adaptive \
+python3 ragflow-doc-to-md/scripts/convert.py adaptive \
   --input "$RUN/input" \
   --output "$RUN/adaptive-decision" \
   --decision-only \
@@ -359,7 +371,7 @@ Purpose: prove backend probe reporting and redaction sidecars work in offline mo
 Command:
 
 ```bash
-python ragflow-doc-to-md/scripts/convert.py backend probe \
+python3 ragflow-doc-to-md/scripts/convert.py backend probe \
   --backend builtin \
   --report-json "$RUN/reports/backend_probe.json" \
   --report-md "$RUN/reports/backend_probe.md" \
@@ -381,14 +393,14 @@ Purpose: prove `ragflow-kb-build` can consume formal handoffs before any live bu
 Commands:
 
 ```bash
-python ragflow-kb-build/scripts/build.py inspect-handoff \
+python3 ragflow-kb-build/scripts/build.py inspect-handoff \
   --handoff "$RUN/handoff" \
   --report-json "$RUN/reports/handoff_inspection.json" \
   --report-md "$RUN/reports/handoff_inspection.md" \
   --redaction-report "$RUN/reports/handoff_inspection.redaction.json" \
   --json
 
-python ragflow-kb-build/scripts/build.py asset-upload-plan \
+python3 ragflow-kb-build/scripts/build.py asset-upload-plan \
   --doc-manifest "$RUN/handoff/doc_manifest.json" \
   --report-json "$RUN/reports/asset_upload_plan.json" \
   --report-md "$RUN/reports/asset_upload_plan.md" \
@@ -413,7 +425,7 @@ Purpose: prove build input validation and profile handling without RAGFlow mutat
 Command:
 
 ```bash
-python ragflow-kb-build/scripts/build.py \
+python3 ragflow-kb-build/scripts/build.py \
   --doc-manifest "$RUN/handoff/doc_manifest.json" \
   --retrieval-hints "$RUN/handoff/retrieval_hints.json" \
   --kb-name "kb:ragflow-skills-e2e-dry-run" \
@@ -437,31 +449,31 @@ Purpose: exercise governance commands that commonly precede a serious live build
 Commands:
 
 ```bash
-python ragflow-kb-build/scripts/profile.py lint \
+python3 ragflow-kb-build/scripts/profile.py lint \
   --profile ragflow-kb-build/templates/default-en-768.json \
   --report-md "$RUN/reports/profile_lint.md"
 
-python ragflow-kb-build/scripts/build.py metadata generate-template \
+python3 ragflow-kb-build/scripts/build.py metadata generate-template \
   --doc-manifest "$RUN/handoff/doc_manifest.json" \
   --output "$RUN/reports/metadata.template.json"
 
-python ragflow-kb-build/scripts/build.py metadata lint \
+python3 ragflow-kb-build/scripts/build.py metadata lint \
   --metadata "$RUN/reports/metadata.template.json" \
   --report-md "$RUN/reports/metadata_lint.md"
 
-python ragflow-kb-build/scripts/build.py tagset generate-template \
+python3 ragflow-kb-build/scripts/build.py tagset generate-template \
   --output "$RUN/reports/tagset.template.json"
 
-python ragflow-kb-build/scripts/build.py tagset lint \
+python3 ragflow-kb-build/scripts/build.py tagset lint \
   --tagset "$RUN/reports/tagset.template.json" \
   --report-md "$RUN/reports/tagset_lint.md"
 
-python ragflow-kb-build/scripts/build.py benchmark import \
+python3 ragflow-kb-build/scripts/build.py benchmark import \
   --queries ragflow-kb-build/templates/benchmark-queries.example.json \
   --qrels ragflow-kb-build/templates/qrels.example.json \
   --output "$RUN/reports/benchmark"
 
-python ragflow-kb-build/scripts/build.py benchmark preflight \
+python3 ragflow-kb-build/scripts/build.py benchmark preflight \
   --manifest "$RUN/reports/benchmark/manifest.json" \
   --gate-config ragflow-kb-build/templates/benchmark-gate.example.json \
   --report-md "$RUN/reports/benchmark_preflight.md"
@@ -483,14 +495,14 @@ Run only if relevant config is present.
 Commands:
 
 ```bash
-python ragflow-kb-build/scripts/probe.py \
+python3 ragflow-kb-build/scripts/probe.py \
   --config "$RAGFLOW_CONFIG" \
   --report-json "$RUN/reports/ragflow_probe.json" \
   --report-md "$RUN/reports/ragflow_probe.md" \
   --redaction-report "$RUN/reports/ragflow_probe.redaction.json" \
   --json
 
-python ragflow-kb-build/scripts/build.py model-providers probe \
+python3 ragflow-kb-build/scripts/build.py model-providers probe \
   --config "$RAGFLOW_CONFIG" \
   --embedding-model bge-m3 \
   --report-json "$RUN/reports/model_provider_probe.json" \
@@ -498,7 +510,7 @@ python ragflow-kb-build/scripts/build.py model-providers probe \
   --redaction-report "$RUN/reports/model_provider_probe.redaction.json" \
   --json
 
-python ragflow-doc-to-md/scripts/convert.py backend probe \
+python3 ragflow-doc-to-md/scripts/convert.py backend probe \
   --config "$RAGFLOW_CONFIG" \
   --backend auto \
   --network-check \
@@ -525,7 +537,7 @@ Run only when the user provides a safe source file and MinerU configuration is c
 FastAPI v2 example:
 
 ```bash
-python ragflow-doc-to-md/scripts/convert.py pipeline \
+python3 ragflow-doc-to-md/scripts/convert.py pipeline \
   --config "$RAGFLOW_CONFIG" \
   --input "$RUN/source-docs" \
   --output "$RUN/mineru-handoff" \
@@ -541,7 +553,7 @@ python ragflow-doc-to-md/scripts/convert.py pipeline \
 MinerU v4 example:
 
 ```bash
-python ragflow-doc-to-md/scripts/convert.py pipeline \
+python3 ragflow-doc-to-md/scripts/convert.py pipeline \
   --config "$RAGFLOW_CONFIG" \
   --input "$RUN/source-docs" \
   --output "$RUN/mineru-v4-handoff" \
@@ -581,7 +593,7 @@ Commands:
 ```bash
 KB_NAME="kb:ragflow-skills-e2e-YYYYMMDD-HHMM"
 
-python ragflow-kb-build/scripts/build.py \
+python3 ragflow-kb-build/scripts/build.py \
   --config "$RAGFLOW_CONFIG" \
   --doc-manifest "$RUN/handoff/doc_manifest.json" \
   --retrieval-hints "$RUN/handoff/retrieval_hints.json" \
@@ -590,7 +602,7 @@ python ragflow-kb-build/scripts/build.py \
   --output "$RUN/reports/kb_manifest.json" \
   --json
 
-python ragflow-kb-build/scripts/validate.py \
+python3 ragflow-kb-build/scripts/validate.py \
   --config "$RAGFLOW_CONFIG" \
   --kb-manifest "$RUN/reports/kb_manifest.json" \
   --level smoke \
@@ -616,7 +628,7 @@ Purpose: verify the post-build review surfaces that decide whether a KB is usabl
 Commands:
 
 ```bash
-python ragflow-kb-build/scripts/build.py refresh-report \
+python3 ragflow-kb-build/scripts/build.py refresh-report \
   --config "$RAGFLOW_CONFIG" \
   --kb-manifest "$RUN/reports/kb_manifest.json" \
   --report-json "$RUN/reports/kb_refresh_report.json" \
@@ -624,7 +636,7 @@ python ragflow-kb-build/scripts/build.py refresh-report \
   --redaction-report "$RUN/reports/kb_refresh_report.redaction.json" \
   --json
 
-python ragflow-kb-build/scripts/build.py parse-report \
+python3 ragflow-kb-build/scripts/build.py parse-report \
   --kb-manifest "$RUN/reports/kb_manifest.json" \
   --observed-state "$RUN/reports/kb_refresh_report.json" \
   --profile ragflow-kb-build/templates/default-en-768.json \
@@ -633,7 +645,7 @@ python ragflow-kb-build/scripts/build.py parse-report \
   --redaction-report "$RUN/reports/parse_report.redaction.json" \
   --json
 
-python ragflow-kb-build/scripts/build.py activation-plan \
+python3 ragflow-kb-build/scripts/build.py activation-plan \
   --kb-manifest "$RUN/reports/kb_manifest.json" \
   --doc-manifest "$RUN/handoff/doc_manifest.json" \
   --retrieval-hints "$RUN/handoff/retrieval_hints.json" \
@@ -644,7 +656,7 @@ python ragflow-kb-build/scripts/build.py activation-plan \
   --redaction-report "$RUN/reports/kb_activation_plan.redaction.json" \
   --json
 
-python ragflow-kb-build/scripts/build.py health-report \
+python3 ragflow-kb-build/scripts/build.py health-report \
   --kb-manifest "$RUN/reports/kb_manifest.json" \
   --parse-report "$RUN/reports/parse_report.json" \
   --observed-state "$RUN/reports/kb_refresh_report.json" \
@@ -670,11 +682,11 @@ Purpose: ensure the disposable KB is not left behind.
 Commands:
 
 ```bash
-python ragflow-kb-build/scripts/cleanup.py \
+python3 ragflow-kb-build/scripts/cleanup.py \
   --kb-manifest "$RUN/reports/kb_manifest.json" \
   --output "$RUN/reports/cleanup_plan.json"
 
-python ragflow-kb-build/scripts/cleanup.py \
+python3 ragflow-kb-build/scripts/cleanup.py \
   --config "$RAGFLOW_CONFIG" \
   --kb-manifest "$RUN/reports/kb_manifest.json" \
   --execute \
@@ -682,7 +694,7 @@ python ragflow-kb-build/scripts/cleanup.py \
   --confirm-kb-name "$KB_NAME" \
   --output "$RUN/reports/cleanup_execution_report.json"
 
-python ragflow-kb-build/scripts/probe.py \
+python3 ragflow-kb-build/scripts/probe.py \
   --config "$RAGFLOW_CONFIG" \
   --report-json "$RUN/reports/ragflow_probe_after_cleanup.json" \
   --report-md "$RUN/reports/ragflow_probe_after_cleanup.md" \
@@ -735,7 +747,7 @@ this plan's scope.
 - ragflow-doc-to-md/references/host-agent-setup.md
 - ragflow-kb-build/SKILL.md
 - ragflow-kb-build/references/host-agent-setup.md
-- docs/30-hermes-e2e-test-plan.md
+- docs/reference/hermes-e2e-test-plan.md
 
 目标：
 1. 验证 ragflow-doc-to-md 能生成 formal_ingest handoff。
@@ -753,7 +765,7 @@ this plan's scope.
 - live KB 必须使用一次性名称：kb:ragflow-skills-e2e-YYYYMMDD-HHMM。
 - live cleanup 必须使用 kb_manifest.json 中的 dataset id 和完全匹配的 KB 名称。
 
-请按 docs/30-hermes-e2e-test-plan.md 中的测试用例执行：
+请按 docs/reference/hermes-e2e-test-plan.md 中的测试用例执行：
 - TC-00 到 TC-06 必跑，必须不联网、不接触 RAGFlow/MinerU。
 - TC-07 只在配置存在时执行，只读。
 - TC-08 只在我提供 PDF/Office/图片样本和 MinerU 配置时执行。

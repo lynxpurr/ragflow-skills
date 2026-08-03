@@ -1,3 +1,23 @@
+---
+doc_type: spec
+topic: suite-architecture-snapshot
+status: historical
+created: 2026-06-22
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: docs/reference/suite-architecture.md
+related: []
+archived: 2026-08-03
+historical_reason: superseded
+original_sha256: 378c201ca9886eb6cacd0ef958acf9b59db50879db295653eccb29ea0abcb097
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
 # Cross-Platform RAGFlow Skills Architecture
 
 Status: implementation snapshot

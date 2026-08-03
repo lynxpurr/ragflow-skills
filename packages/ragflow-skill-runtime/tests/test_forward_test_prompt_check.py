@@ -11,7 +11,7 @@ TOOLS_DIR = ROOT / "tools"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from forward_test_prompt_check import SCHEMA, run_forward_test_prompt_check  # noqa: E402
+from forward_test_prompt_check import PROMPT_PATH, SCHEMA, run_forward_test_prompt_check  # noqa: E402
 
 
 def _template(host: str, work_dir: str) -> str:
@@ -70,6 +70,9 @@ def _prompt_doc(*, openclaw_template: str | None = None, extra_requirements: str
 
 
 class ForwardTestPromptCheckTests(unittest.TestCase):
+    def test_wave3_prompt_reference_uses_normalized_path(self) -> None:
+        self.assertEqual(PROMPT_PATH, Path("docs/reference/release-archive-forward-test-prompts.md"))
+
     def test_forward_test_prompt_check_passes_for_public_suite(self) -> None:
         report = run_forward_test_prompt_check()
 
@@ -81,13 +84,12 @@ class ForwardTestPromptCheckTests(unittest.TestCase):
     def test_forward_test_prompt_check_reports_missing_template_coverage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            docs = root / "docs"
-            docs.mkdir()
+            (root / PROMPT_PATH).parent.mkdir(parents=True, exist_ok=True)
             broken_openclaw = _template("OpenClaw", "/tmp/ragflow-forward-test-openclaw").replace(
                 "--dry-run ",
                 "",
             )
-            (docs / "12-release-archive-forward-test-prompts.md").write_text(
+            (root / PROMPT_PATH).write_text(
                 _prompt_doc(openclaw_template=broken_openclaw),
                 encoding="utf-8",
             )
@@ -102,9 +104,8 @@ class ForwardTestPromptCheckTests(unittest.TestCase):
     def test_forward_test_prompt_check_reports_forbidden_literals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            docs = root / "docs"
-            docs.mkdir()
-            (docs / "12-release-archive-forward-test-prompts.md").write_text(
+            (root / PROMPT_PATH).parent.mkdir(parents=True, exist_ok=True)
+            (root / PROMPT_PATH).write_text(
                 _prompt_doc(extra_requirements="- Never use /home/private-user/config.yaml.\n"),
                 encoding="utf-8",
             )

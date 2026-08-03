@@ -1,6 +1,19 @@
+---
+doc_type: reference
+topic: public-rename-policy
+status: reference
+created: 2026-06-27
+updated: 2026-08-03
+canonical: true
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+---
+
 # Public Rename Policy
 
-Status: active
 
 This policy applies before changing public CLI commands, schema names, skill names,
 artifact names, profile IDs, or report fields that downstream agents may call directly.
