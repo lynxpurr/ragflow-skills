@@ -15,7 +15,7 @@ tools/export_release_archives.py  # deterministic per-skill archive exporter
 tools/live_integration_check.py   # opt-in live RAGFlow retrieval check
 tools/platform_smoke_matrix.py    # cross-platform no-network smoke matrix
 tools/release_hygiene_check.py    # public/private release hygiene gate
-docs/                             # architecture and development plans
+docs/README.md                    # canonical documentation entrypoint
 ```
 
 ## Release Model
@@ -180,6 +180,7 @@ PYTHONPATH=packages/ragflow-skill-runtime/src:tools \
 python3 tools/build_release.py --check
 python3 tools/vendor_import_smoke.py
 python3 tools/platform_smoke_matrix.py
+python3 tools/document_lifecycle_check.py
 python3 tools/release_hygiene_check.py
 python3 tools/export_release_archives.py
 python3 tools/consumer_acceptance.py --artifacts-dir release-artifacts --work-dir /tmp/ragflow-consumer-acceptance --overwrite
@@ -192,5 +193,4 @@ This repository contains only the public, portable RAGFlow skill suite. Private 
 
 Commercial SaaS agent sandboxes are not a v1 target. The intended public targets are programming-agent CLI environments the user controls or can configure, especially Hermes, OpenClaw, Claude Code, and opencode. A first-party SaaS platform should integrate document parsing, RAGFlow, and retrieval as native backend tools rather than by running these portable skill scripts inside a sandbox.
 
-See `docs/08-cli-agent-integration.md` for CLI agent configuration and invocation patterns.
-See `docs/09-high-value-feature-roadmap.md` for completed v0.2+ high-value features and the remaining optional synthesis backlog.
+Start at `docs/README.md` for the current roadmap, controlling specs and plans, durable references, and historical-document boundaries.
