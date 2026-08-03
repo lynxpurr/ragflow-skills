@@ -1,3 +1,23 @@
+---
+doc_type: plan
+topic: current-skills-quality-improvement
+status: historical
+created: 2026-07-06
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+archived: 2026-08-03
+historical_reason: completed
+original_sha256: b3efa165a4fd8d3bde4fe5372596e6a2339a8dcc786ac2f5ace8c6114fe50c16
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
 # Current Skills Quality Improvement Checklist
 
 Status: closeout; public offline work and governance tasks are complete for the current scope, with live mutation retained as an explicit field-trial boundary

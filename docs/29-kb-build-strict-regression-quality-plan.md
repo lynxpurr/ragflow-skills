@@ -17,7 +17,7 @@ existing readiness signals into scoring, and closing the final cleanup evidence 
 
 The scope is limited to `ragflow-kb-build`, shared `ragflow-skill-runtime` validation and
 optimization logic, profile templates, focused tests, and public guidance. It builds on
-`docs/28-retrieval-optimization-quality-improvement-plan.md` instead of reopening the
+`docs/archive/2026/plans/28-retrieval-optimization-quality-improvement-plan.md` instead of reopening the
 completed R1/R2 quality round.
 
 Boundaries:

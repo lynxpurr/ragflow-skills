@@ -666,7 +666,7 @@ Allowed conclusion:
 ## 分阶段落实任务清单
 
 以下阶段 0 到阶段 5 记录首轮 Open RAG Benchmark seed 的执行路线。它们最初
-用于支撑 `docs/34-pipeline-consumption-gap-quality-improvement-plan.md` 的剩余
+用于支撑 `docs/archive/2026/plans/34-pipeline-consumption-gap-quality-improvement-plan.md` 的剩余
 live-gated enrichment comparison；截至 2026-07-09，该首轮路线已经完成并关闭
 `docs/34` 的对应 checklist 项。阶段 6 之后仍是后续 benchmark portfolio 扩展
 计划。除非当前线程获得明确授权，任何新的 live RAGFlow mutation 仍然默认不执行。

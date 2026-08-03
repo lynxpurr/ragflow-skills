@@ -1,3 +1,23 @@
+---
+doc_type: plan
+topic: dedao-pandoc-epub-quality
+status: historical
+created: 2026-07-08
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+archived: 2026-08-03
+historical_reason: completed
+original_sha256: a142753dfd2296bea180f31466cab23f5cc0207878ac973cb5eb037f6d5753f7
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
 # Dedao/Pandoc EPUB Quality Improvement Plan
 
 Status: complete for P0-P2 public offline work; next-round tracks remain separately gated

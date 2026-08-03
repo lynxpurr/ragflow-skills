@@ -597,7 +597,7 @@ Goal: validate a first external release candidate before promotion to `main`.
 
 Tasks:
 
-- [x] Add `docs/07-first-release.md`.
+- [x] Add `docs/archive/2026/evidence/07-first-release.md`.
 - [x] Generate release archives and checksum manifest.
 - [x] Complete fresh-agent forward test from release artifacts.
 - [x] Run live integration against a reachable test RAGFlow endpoint, or record explicit skip.
@@ -2004,7 +2004,7 @@ Exit criteria:
 Goal: add a first-class MinerU v4 platform-compatible backend without overloading the
 self-hosted FastAPI, Agent API, synchronous multipart, or local CLI adapters.
 
-Design source: `docs/26-mineru-v4-platform-backend-design.md`.
+Design source: `docs/archive/2026/specs/26-mineru-v4-platform-backend-design.md`.
 
 Status note: Phase 42 backend implementation and protocol-binding docs/help follow-up
 are release-validated with fake-server coverage. The backend does not run live MinerU v4
@@ -2015,7 +2015,7 @@ private-bridge gated tracks.
 Tasks:
 
 - [x] Record the MinerU v4 protocol distinction, endpoint shape, request fields, result
-  contract, and live-validation boundary in `docs/26-mineru-v4-platform-backend-design.md`.
+  contract, and live-validation boundary in `docs/archive/2026/specs/26-mineru-v4-platform-backend-design.md`.
 - [x] Add `mineru-v4` plus the `mineru-platform` alias to runtime, CLI, adaptive, config,
   and public template inventories.
 - [x] Implement the v4 local-file batch protocol: submit `/api/v4/file-urls/batch`,

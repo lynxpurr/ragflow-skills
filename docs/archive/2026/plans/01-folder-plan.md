@@ -1,3 +1,23 @@
+---
+doc_type: plan
+topic: folder-plan
+status: historical
+created: 2026-06-22
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+archived: 2026-08-03
+historical_reason: superseded
+original_sha256: e036da6843bec57a0199e1e4d35cf4270682f60038289247b24ab13cd534f3a6
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
 # RAGFlow Skills Folder Plan
 
 Status: draft

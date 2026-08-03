@@ -1,3 +1,23 @@
+---
+doc_type: plan
+topic: current-suite-regression-follow-up
+status: historical
+created: 2026-07-06
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+archived: 2026-08-03
+historical_reason: completed
+original_sha256: ea33d0bf83d895d9745a592cf29652538d1c840bb8edfa5058533550492c22a6
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
 # Current Suite Regression Follow-Up Plan
 
 Status: offline follow-up complete; gated observations remain

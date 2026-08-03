@@ -12,7 +12,7 @@ TOOLS_DIR = ROOT / "tools"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from version_date_drift_check import SCHEMA, run_version_date_drift_check  # noqa: E402
+from version_date_drift_check import DOC_VERSION_PATHS, SCHEMA, run_version_date_drift_check  # noqa: E402
 
 
 PUBLIC_SKILLS = ("ragflow-doc-to-md", "ragflow-kb-build", "ragflow-query")
@@ -57,6 +57,10 @@ def _write_minimal_repo(root: Path) -> None:
 
 
 class VersionDateDriftCheckTests(unittest.TestCase):
+    def test_first_release_uses_archived_static_path(self) -> None:
+        self.assertIn(Path("docs/archive/2026/evidence/07-first-release.md"), DOC_VERSION_PATHS)
+        self.assertNotIn(Path("docs/07-first-release.md"), DOC_VERSION_PATHS)
+
     def test_version_date_drift_check_passes_for_public_repo(self) -> None:
         report = run_version_date_drift_check()
 

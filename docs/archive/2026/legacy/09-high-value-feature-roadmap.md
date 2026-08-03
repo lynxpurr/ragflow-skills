@@ -1,3 +1,23 @@
+---
+doc_type: roadmap
+topic: high-value-feature-roadmap
+status: historical
+created: 2026-06-23
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+archived: 2026-08-03
+historical_reason: superseded
+original_sha256: 854999d490f0bc9cfeef78a60a68b7b50ec7b2b5147daf83f56e4da2632b126c
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
 # High-Value Feature Roadmap
 
 Status: active roadmap for v0.2+

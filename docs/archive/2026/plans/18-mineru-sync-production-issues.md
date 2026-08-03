@@ -1,3 +1,23 @@
+---
+doc_type: plan
+topic: mineru-sync-production-issues
+status: historical
+created: 2026-07-02
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+archived: 2026-08-03
+historical_reason: completed
+original_sha256: 3326bb402477bbee97cf9d334e1c08841abea78d617f7059a1e0f5fbe6ec4efb
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
 # 18. MinerU FastAPI 异步协议生产问题与修正计划
 
 状态：P0/P1 已离线验证，P2 Markdown-first 质量增强已离线验证，结构化资产 sidecar 实现后续按需开启

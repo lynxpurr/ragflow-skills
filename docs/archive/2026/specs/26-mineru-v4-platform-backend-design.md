@@ -1,3 +1,23 @@
+---
+doc_type: spec
+topic: mineru-v4-platform-backend
+status: historical
+created: 2026-07-06
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+archived: 2026-08-03
+historical_reason: completed
+original_sha256: b7ce825d4cb776bba17b041553a0a6c1b5f74c9e35a8dc0d2777c32abb18931b
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
 # MinerU v4 Platform Backend Design
 
 Status: implemented and release-validated

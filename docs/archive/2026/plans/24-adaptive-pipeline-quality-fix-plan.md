@@ -1,3 +1,23 @@
+---
+doc_type: plan
+topic: adaptive-pipeline-quality-fix
+status: historical
+created: 2026-07-05
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+archived: 2026-08-03
+historical_reason: completed
+original_sha256: 1378a30d4bff3aaf81522a0c54f0b20538768944c073d98808616afc2bb31df8
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
 # Adaptive Pipeline Quality Fix Plan
 
 Status: proposed targeted fix plan

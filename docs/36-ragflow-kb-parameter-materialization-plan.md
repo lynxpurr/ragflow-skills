@@ -299,7 +299,7 @@ Read-only Stage 6 evidence incorporated on 2026-07-10:
 
 Related completed evidence:
 
-- `docs/34-pipeline-consumption-gap-quality-improvement-plan.md` closed the
+- `docs/archive/2026/plans/34-pipeline-consumption-gap-quality-improvement-plan.md` closed the
   handoff-to-KB consumption gap for payload preview, top-level language,
   delimiter guidance, bounded keyword/question enrichment experiments, and
   public-safe retention.

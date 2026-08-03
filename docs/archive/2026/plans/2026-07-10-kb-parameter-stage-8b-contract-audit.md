@@ -1,3 +1,23 @@
+---
+doc_type: plan
+topic: kb-parameter-stage-8b-contract-audit
+status: historical
+created: 2026-07-10
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+archived: 2026-08-03
+historical_reason: completed
+original_sha256: 8292f9b7e78b5b6ed61a0b45436c3f05f48c5ef995306f4b2c3fca449d17b47a
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
 # KB Parameter Stage 8B Contract Audit Implementation Plan
 
 Status: completed

@@ -26,8 +26,11 @@ operations, mutation, staging, commit, push, L3, Stage 8C, or L4.
 
 - [Document lifecycle spec](specs/2026-08-02-document-lifecycle-and-spec-archive-design.md) - approved design; Gate 0 is closed.
 - [Wave 1 implementation plan](plans/2026-08-03-document-lifecycle-and-spec-archive-implementation-plan.md) - Wave 1 was executed, its targeted revision was owner-accepted, and Wave 1 is complete;
-  Wave 2 is not authorized, and the plan/spec lifecycle state and registry adoption have
-  not been transitioned. `implementation_authority=false`.
+  it did not authorize Wave 2, and the plan/spec lifecycle state and registry adoption
+  have not been transitioned. `implementation_authority=false`.
+- [Wave 2 successor plan](plans/2026-08-03-document-lifecycle-and-spec-archive-wave-2-implementation-plan.md) - proposed, non-authoritative plan file for 18 historical moves in Waves 2A-2C;
+  external owner authority has completed all 18 files across Waves 2A-2C, while all 10
+  Wave 2D candidates remain blocked. `implementation_authority=false`.
 - `docs/superpowers/specs/2026-08-02-ragflow-skill-surface-simplification-design.md` - separate proposed track; not part of document-governance Wave 1.
 
 ## Active And Gated Owners
@@ -43,9 +46,9 @@ are non-authoritative guidance and are not moved until a separately approved Wav
 
 ## Historical Candidates
 
-The 28 approved historical candidates remain at their current paths during Wave 1. They
-must not be executed as current instructions. Archive moves require a separately approved
-Wave 2 plan with inbound-reference inventory, reversible batches, and body preservation.
+Waves 2A-2C have archived 18 of the 28 approved historical candidates. The remaining 10
+are the blocked Wave 2D candidates and stay at their current paths. Wave 2 remains
+unadopted, and archived documents create no current authority.
 
 ## Authoring
 

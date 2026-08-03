@@ -1,3 +1,23 @@
+---
+doc_type: spec
+topic: doc-to-md-table-quality
+status: historical
+created: 2026-07-04
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+archived: 2026-08-03
+historical_reason: completed
+original_sha256: bf9762763577348b27b09f8932ae1ddc36d7f112cfe293085dc298654888be20
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
 # 21. ragflow-doc-to-md 表格质量优化设计
 
 状态：P0/P1/P2 已实现并通过离线验证；APOLLO high-accuracy 只读回归已完成；

@@ -18,7 +18,7 @@ PUBLIC_SKILLS = ("ragflow-doc-to-md", "ragflow-kb-build", "ragflow-query")
 DOC_VERSION_PATHS = (
     Path("docs/03-development-plan.md"),
     Path("docs/06-release-hardening.md"),
-    Path("docs/07-first-release.md"),
+    Path("docs/archive/2026/evidence/07-first-release.md"),
     Path("docs/08-cli-agent-integration.md"),
     Path("docs/12-release-archive-forward-test-prompts.md"),
 )

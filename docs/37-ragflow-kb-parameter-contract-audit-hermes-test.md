@@ -76,7 +76,7 @@ private Hermes session.
 
 先读取：
 - docs/37-ragflow-kb-parameter-contract-audit-hermes-test.md
-- docs/superpowers/specs/2026-07-10-kb-parameter-stage-8b-contract-audit-design.md
+- docs/archive/2026/specs/2026-07-10-kb-parameter-stage-8b-contract-audit-design.md
 - docs/36-ragflow-kb-parameter-materialization-plan.md
 
 执行边界：

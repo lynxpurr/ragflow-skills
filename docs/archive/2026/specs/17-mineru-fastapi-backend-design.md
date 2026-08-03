@@ -1,3 +1,23 @@
+---
+doc_type: spec
+topic: mineru-fastapi-backend
+status: historical
+created: 2026-07-02
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+archived: 2026-08-03
+historical_reason: completed
+original_sha256: b61dedce1012305d1805dd32a41a3de04471a9941e5b5e7ce3d17df047c7a0ed
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
 # MinerU FastAPI Backend Design
 
 Status: offline validated

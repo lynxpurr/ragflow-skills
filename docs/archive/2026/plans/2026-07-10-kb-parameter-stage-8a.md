@@ -1,3 +1,23 @@
+---
+doc_type: plan
+topic: kb-parameter-stage-8a
+status: historical
+created: 2026-07-10
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+archived: 2026-08-03
+historical_reason: completed
+original_sha256: 945461f9366bc03ac83a58a8a2bedfbd9ded13900c996aa9719492c36ea1ad5a
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
 # KB Parameter Stage 8A Implementation Plan
 
 Status: completed

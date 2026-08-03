@@ -1,3 +1,23 @@
+---
+doc_type: evidence
+topic: first-release
+status: historical
+created: 2026-06-23
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+archived: 2026-08-03
+historical_reason: evidence_only
+original_sha256: a78c2f8fb9d102de10b04f2414860847e1ef7bc49fdb69c22a98d0a93edb7b9c
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
 # First Release Candidate
 
 Status: rc3 published

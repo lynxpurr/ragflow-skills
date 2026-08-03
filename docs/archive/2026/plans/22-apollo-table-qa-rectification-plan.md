@@ -1,3 +1,23 @@
+---
+doc_type: plan
+topic: apollo-table-qa
+status: historical
+created: 2026-07-04
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+archived: 2026-08-03
+historical_reason: completed
+original_sha256: 7c415c603e5768872e68a0f1b6d712d5c5aa5b189c32ac1891020c4ca7caed12
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
 # 22. APOLLO 表格 QA 矫正核验与后续优化计划
 
 状态：公共离线开发批次已完成；剩余私有/live gated 项待外部输入

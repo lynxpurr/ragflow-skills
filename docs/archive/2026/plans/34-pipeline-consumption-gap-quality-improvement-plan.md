@@ -1,3 +1,23 @@
+---
+doc_type: plan
+topic: pipeline-consumption-gap
+status: historical
+created: 2026-07-09
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+archived: 2026-08-03
+historical_reason: completed
+original_sha256: 15a97025b29cbeabd0a1e36ca8419b82d229d4d7e90c6e6a53c728d357adf1fe
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
 # Pipeline Consumption Gap Quality Improvement Plan
 
 Status: complete; live enrichment comparison executed and cleanup verified
