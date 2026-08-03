@@ -209,6 +209,63 @@ class DocumentLifecycleCheckTests(unittest.TestCase):
 
         self.assertIn("unregistered_document", self._checks(report))
 
+    def test_registry_document_paths_must_be_normalized_under_docs(self) -> None:
+        invalid_paths = (
+            "/outside.md",
+            "../outside.md",
+            "docs/../outside.md",
+            "docs//README.md",
+            "notes/example.md",
+            "docs/example.txt",
+        )
+        for invalid_path in invalid_paths:
+            with self.subTest(path=invalid_path), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                entries = _valid_fixture(root)
+                entries[0]["path"] = invalid_path
+                _write_registry(root, entries)
+                report = run_document_lifecycle_check(root=root)
+
+            self.assertIn("invalid_document_path", self._checks(report))
+
+    def test_symlinked_markdown_is_rejected_without_reading_target(self) -> None:
+        sensitive_value = "ghp_" + "B" * 24
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            root = workspace / "repo"
+            entries = _valid_fixture(root)
+            outside = workspace / "outside.md"
+            _write_doc(
+                workspace,
+                "outside.md",
+                doc_type="reference",
+                topic="outside",
+                status="reference",
+                canonical=False,
+                body=f"# Outside\n\n{sensitive_value}\n",
+            )
+            path = "docs/external.md"
+            link = root / path
+            try:
+                link.symlink_to(outside)
+            except OSError as exc:
+                self.skipTest(f"symlinks unavailable: {exc}")
+            entries.append(
+                _entry(
+                    path,
+                    doc_type="reference",
+                    topic="outside",
+                    status="reference",
+                    canonical=False,
+                )
+            )
+            _write_registry(root, entries)
+            report = run_document_lifecycle_check(root=root)
+
+        self.assertIn("document_symlink", self._checks(report))
+        self.assertNotIn(sensitive_value, json.dumps(report))
+        self.assertNotIn(str(outside), report["documents"])
+
     def test_duplicate_active_canonical_topic_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -364,6 +421,101 @@ class DocumentLifecycleCheckTests(unittest.TestCase):
 
         self.assertIn("metadata_mismatch", self._checks(report))
 
+    def test_metadata_dates_must_be_iso_calendar_dates(self) -> None:
+        cases = (
+            ("created: 2026-08-03", "created: 2026-02-30"),
+            ("updated: 2026-08-03", "updated: []"),
+        )
+        for before, after in cases:
+            with self.subTest(value=after), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                _valid_fixture(root)
+                path = root / "docs" / "README.md"
+                path.write_text(path.read_text(encoding="utf-8").replace(before, after), encoding="utf-8")
+                report = run_document_lifecycle_check(root=root)
+
+            self.assertIn("invalid_metadata_date", self._checks(report))
+
+    def test_metadata_owner_must_match_registry_in_both_directions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _valid_fixture(root)
+            path = root / "docs" / "README.md"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "supersedes: []",
+                    "owner_spec: docs/specs/example.md\nsupersedes: []",
+                ),
+                encoding="utf-8",
+            )
+            report = run_document_lifecycle_check(root=root)
+
+        self.assertIn("metadata_mismatch", self._checks(report))
+
+    def test_implementation_authority_requires_approved_spec_or_plan(self) -> None:
+        cases = (
+            ("docs/README.md", "index", "active"),
+            ("docs/plans/example.md", "plan", "proposed"),
+        )
+        for path, doc_type, status in cases:
+            with self.subTest(path=path), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                entries = _valid_fixture(root)
+                entry = next(item for item in entries if item["path"] == path)
+                self.assertEqual(entry["doc_type"], doc_type)
+                self.assertEqual(entry["status"], status)
+                entry["implementation_authority"] = True
+                document = root / path
+                document.write_text(
+                    document.read_text(encoding="utf-8").replace(
+                        "implementation_authority: false",
+                        "implementation_authority: true",
+                    ),
+                    encoding="utf-8",
+                )
+                _write_registry(root, entries)
+                report = run_document_lifecycle_check(root=root)
+
+            self.assertIn("invalid_authority", self._checks(report))
+
+    def test_archive_metadata_requires_iso_date_and_reason_enum(self) -> None:
+        cases = (
+            ("archived: 2026-08-03", "archived: 2026-02-30"),
+            ("historical_reason: completed", "historical_reason: arbitrary"),
+        )
+        for before, after in cases:
+            with self.subTest(value=after), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                entries = _valid_fixture(root)
+                path = "docs/archive/2026/plans/old.md"
+                _write_doc(
+                    root,
+                    path,
+                    doc_type="plan",
+                    topic="old-plan",
+                    status="historical",
+                    canonical=False,
+                    owner_spec="docs/specs/example.md",
+                    archive_fields=True,
+                    body="# Old Plan\n\nHistorical and non-authoritative.\n",
+                )
+                document = root / path
+                document.write_text(document.read_text(encoding="utf-8").replace(before, after), encoding="utf-8")
+                entries.append(
+                    _entry(
+                        path,
+                        doc_type="plan",
+                        topic="old-plan",
+                        status="historical",
+                        canonical=False,
+                        owner="docs/specs/example.md",
+                    )
+                )
+                _write_registry(root, entries)
+                report = run_document_lifecycle_check(root=root)
+
+            self.assertIn("archive_metadata", self._checks(report))
+
     def test_legacy_metadata_fields_are_validated_when_present(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -401,6 +553,51 @@ class DocumentLifecycleCheckTests(unittest.TestCase):
             report = run_document_lifecycle_check(root=root)
 
         self.assertIn("invalid_metadata_type", self._checks(report))
+
+    def test_registry_legacy_flags_must_be_boolean(self) -> None:
+        for key in ("legacy_metadata", "legacy_path"):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                entries = _valid_fixture(root)
+                entries[0][key] = "true"
+                _write_registry(root, entries)
+                report = run_document_lifecycle_check(root=root)
+
+            self.assertIn("invalid_legacy_flag", self._checks(report))
+
+    def test_new_paths_cannot_claim_legacy_exemptions(self) -> None:
+        cases = (
+            ("docs/new-legacy.md", True, False),
+            ("docs/superpowers/plans/new-legacy.md", False, True),
+        )
+        for path, legacy_metadata, legacy_path in cases:
+            with self.subTest(path=path), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                entries = _valid_fixture(root)
+                _write_doc(
+                    root,
+                    path,
+                    doc_type="reference",
+                    topic="new-legacy",
+                    status="reference",
+                    canonical=False,
+                    body="# New Legacy Claim\n",
+                )
+                entries.append(
+                    _entry(
+                        path,
+                        doc_type="reference",
+                        topic="new-legacy",
+                        status="reference",
+                        canonical=False,
+                        legacy_metadata=legacy_metadata,
+                        legacy_path=legacy_path,
+                    )
+                )
+                _write_registry(root, entries, adopted=True)
+                report = run_document_lifecycle_check(root=root)
+
+            self.assertIn("invalid_legacy_exemption", self._checks(report))
 
     def test_roadmap_checkbox_counts_must_match_registry_baseline(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -535,6 +732,74 @@ class DocumentLifecycleCheckTests(unittest.TestCase):
             report = run_document_lifecycle_check(root=root)
 
         self.assertIn("broken_markdown_link", self._checks(report))
+
+    def test_missing_markdown_image_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _valid_fixture(root)
+            _write_doc(
+                root,
+                "docs/README.md",
+                doc_type="index",
+                topic="document-index",
+                status="active",
+                canonical=True,
+                body="# Documentation\n\n![Missing image](missing.png)\n",
+            )
+            report = run_document_lifecycle_check(root=root)
+
+        self.assertIn("broken_markdown_link", self._checks(report))
+
+    def test_inline_code_link_syntax_is_not_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _valid_fixture(root)
+            _write_doc(
+                root,
+                "docs/README.md",
+                doc_type="index",
+                topic="document-index",
+                status="active",
+                canonical=True,
+                body="# Documentation\n\nExample: `![...](images/missing.png)`.\n",
+            )
+            report = run_document_lifecycle_check(root=root)
+
+        self.assertTrue(report["ok"], report)
+
+    def test_reference_style_link_target_is_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _valid_fixture(root)
+            _write_doc(
+                root,
+                "docs/README.md",
+                doc_type="index",
+                topic="document-index",
+                status="active",
+                canonical=True,
+                body="# Documentation\n\n[Missing][guide]\n\n[guide]: missing.md\n",
+            )
+            report = run_document_lifecycle_check(root=root)
+
+        self.assertIn("broken_markdown_link", self._checks(report))
+
+    def test_undefined_reference_style_link_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _valid_fixture(root)
+            _write_doc(
+                root,
+                "docs/README.md",
+                doc_type="index",
+                topic="document-index",
+                status="active",
+                canonical=True,
+                body="# Documentation\n\n[Missing][undefined-guide]\n",
+            )
+            report = run_document_lifecycle_check(root=root)
+
+        self.assertIn("broken_markdown_reference", self._checks(report))
 
     def test_markdown_link_resolving_outside_repository_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

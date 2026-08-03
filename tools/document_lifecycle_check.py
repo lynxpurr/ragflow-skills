@@ -7,7 +7,8 @@ import argparse
 import json
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from datetime import date
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 
@@ -58,7 +59,70 @@ BASELINE_CLASS_TO_COUNT_KEY = {
     "active_owner": "active_owner_count",
 }
 ALLOWED_BASELINE_CLASSES = set(BASELINE_CLASS_TO_COUNT_KEY) | {"wave1_governance"}
-MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
+ARCHIVE_REASONS = {"completed", "superseded", "rejected", "evidence_only"}
+WAVE1_LEGACY_METADATA_PATHS = frozenset(
+    {
+        "docs/01-folder-plan.md",
+        "docs/02-architecture-design.md",
+        "docs/03-development-plan.md",
+        "docs/04-validation-inventory.md",
+        "docs/05-cross-platform-smoke.md",
+        "docs/06-release-hardening.md",
+        "docs/07-first-release.md",
+        "docs/08-cli-agent-integration.md",
+        "docs/09-high-value-feature-roadmap.md",
+        "docs/10-legacy-feature-gap-closure-design.md",
+        "docs/11-public-rename-policy.md",
+        "docs/12-release-archive-forward-test-prompts.md",
+        "docs/13-post-cli-adapter-planning.md",
+        "docs/14-optional-llm-backend-planning.md",
+        "docs/15-field-trial-observation-plan.md",
+        "docs/16-system-closeout-report.md",
+        "docs/17-mineru-fastapi-backend-design.md",
+        "docs/18-mineru-sync-production-issues.md",
+        "docs/19-ragflux-capability-parity-plan.md",  # release-hygiene: allow - frozen Wave 1 legacy path
+        "docs/20-ragflow-doc-to-md-ingest-quality-plan.md",
+        "docs/21-ragflow-doc-to-md-table-quality-design.md",
+        "docs/22-apollo-table-qa-rectification-plan.md",
+        "docs/23-adaptive-pipeline-proposal.md",
+        "docs/24-adaptive-pipeline-quality-fix-plan.md",
+        "docs/25-current-suite-regression-follow-up-plan.md",
+        "docs/26-mineru-v4-platform-backend-design.md",
+        "docs/27-current-skills-quality-improvement-checklist.md",
+        "docs/28-retrieval-optimization-quality-improvement-plan.md",
+        "docs/29-kb-build-strict-regression-quality-plan.md",
+        "docs/30-hermes-e2e-test-plan.md",
+        "docs/31-hermes-e2e-improvement-follow-up-plan.md",
+        "docs/32-retirement-transition-action-plan.md",
+        "docs/33-dedao-pandoc-epub-quality-improvement-plan.md",  # release-hygiene: allow - frozen Wave 1 legacy path
+        "docs/34-pipeline-consumption-gap-quality-improvement-plan.md",
+        "docs/35-standard-benchmark-dataset-integration-plan.md",
+        "docs/36-ragflow-kb-parameter-materialization-plan.md",
+        "docs/37-ragflow-kb-parameter-contract-audit-hermes-test.md",
+        "docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md",
+        "docs/39-benchmark-evidence-strengthening-hermes-test.md",
+        "docs/40-marker-aware-evidence-validation-and-promotion-plan.md",
+        "docs/41-marker-aware-candidate-snapshot-hermes-l0.md",
+        "docs/42-financebench-marker-aware-l3-disposable-validation.md",
+        "docs/43-agent-session-handoff-lessons.md",
+        "docs/branching-policy.md",
+        "docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md",
+        "docs/specs/2026-08-02-financebench-new-minimal-l3-design.md",
+        "docs/superpowers/plans/2026-07-10-kb-parameter-stage-8a.md",
+        "docs/superpowers/plans/2026-07-10-kb-parameter-stage-8b-contract-audit.md",
+        "docs/superpowers/plans/2026-07-11-benchmark-evidence-strengthening.md",
+        "docs/superpowers/plans/2026-07-11-marker-aware-candidate-snapshot.md",
+        "docs/superpowers/specs/2026-07-10-kb-parameter-stage-8b-contract-audit-design.md",
+        "docs/superpowers/specs/2026-07-11-marker-aware-candidate-snapshot-design.md",
+        "docs/superpowers/specs/2026-08-02-ragflow-skill-surface-simplification-design.md",
+    }
+)
+WAVE1_LEGACY_PATHS = frozenset(path for path in WAVE1_LEGACY_METADATA_PATHS if path.startswith("docs/superpowers/"))
+INLINE_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
+REFERENCE_LINK_RE = re.compile(r"!?\[([^\]]+)\]\[([^\]]*)\]")
+REFERENCE_DEFINITION_RE = re.compile(r"^\s{0,3}\[([^\]]+)\]:\s*(<[^>]+>|\S+)")
+INLINE_CODE_RE = re.compile(r"(`+).*?\1")
+ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
 FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 EXTERNAL_LINK_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 CHECKED_TASK_RE = re.compile(r"- \[x\]")
@@ -200,7 +264,21 @@ def _markdown_files(root: Path) -> list[Path]:
     docs_root = root / "docs"
     if not docs_root.exists():
         return []
-    return sorted(path for path in docs_root.rglob("*.md") if path.is_file())
+    return sorted(path for path in docs_root.rglob("*.md") if path.is_file() or path.is_symlink())
+
+
+def _is_normalized_document_path(value: object) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    path = PurePosixPath(value)
+    return (
+        not path.is_absolute()
+        and len(path.parts) >= 2
+        and path.parts[0] == "docs"
+        and ".." not in path.parts
+        and value == path.as_posix()
+        and path.suffix == ".md"
+    )
 
 
 def _outside_fence_lines(body: str) -> Iterable[tuple[int, str]]:
@@ -237,8 +315,52 @@ def _link_target(path: Path, raw_target: str, root: Path) -> Path | None:
     return candidate.resolve()
 
 
+def _reference_label(value: str) -> str:
+    return " ".join(value.strip().split()).casefold()
+
+
+def _link_finding(
+    *,
+    document_path: str,
+    file_path: Path,
+    raw_target: str,
+    root: Path,
+    line_no: int,
+) -> Finding | None:
+    target = _link_target(file_path, raw_target, root)
+    if target is None:
+        return None
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return Finding(
+            "markdown_link_outside_repository",
+            document_path,
+            "repository-relative Markdown link resolves outside the repository",
+            line_no,
+        )
+    if not target.exists():
+        return Finding(
+            "broken_markdown_link",
+            document_path,
+            "repository-relative Markdown link does not resolve",
+            line_no,
+        )
+    return None
+
+
 def _is_string_list(value: object) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) and bool(item) for item in value)
+
+
+def _is_iso_date(value: object) -> bool:
+    if not isinstance(value, str) or ISO_DATE_RE.fullmatch(value) is None:
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _roadmap_checkbox_counts(text: str) -> tuple[int, int]:
@@ -310,6 +432,8 @@ def run_document_lifecycle_check(
         entry = dict(raw_entry)
         entry_by_path[path] = entry
         entry_paths.append(path)
+        if not _is_normalized_document_path(path_value):
+            findings.append(Finding("invalid_document_path", path, "document path must be normalized under docs and end in .md"))
         if entry.get("doc_type") not in ALLOWED_DOC_TYPES:
             findings.append(Finding("invalid_doc_type", path, "unrecognized document type"))
         if entry.get("status") not in ALLOWED_STATUSES:
@@ -320,6 +444,24 @@ def run_document_lifecycle_check(
             findings.append(Finding("invalid_canonical", path, "canonical must be boolean"))
         if not isinstance(entry.get("implementation_authority"), bool):
             findings.append(Finding("invalid_authority", path, "implementation_authority must be boolean"))
+        elif entry.get("implementation_authority") is True and (
+            entry.get("doc_type") not in {"spec", "plan"}
+            or entry.get("status") not in {"approved", "active"}
+        ):
+            findings.append(
+                Finding(
+                    "invalid_authority",
+                    path,
+                    "implementation authority requires an approved or active spec or plan",
+                )
+            )
+        for key in ("legacy_metadata", "legacy_path"):
+            if not isinstance(entry.get(key), bool):
+                findings.append(Finding("invalid_legacy_flag", path, f"{key} must be boolean"))
+        if entry.get("legacy_metadata") is True and path not in WAVE1_LEGACY_METADATA_PATHS:
+            findings.append(Finding("invalid_legacy_exemption", path, "legacy metadata exemption is not in the reviewed baseline"))
+        if entry.get("legacy_path") is True and path not in WAVE1_LEGACY_PATHS:
+            findings.append(Finding("invalid_legacy_exemption", path, "legacy path exemption is not in the reviewed baseline"))
         if not _is_string_list(entry.get("related")):
             findings.append(Finding("invalid_related", path, "related must be a list of registered document paths"))
         if entry.get("baseline_class") not in ALLOWED_BASELINE_CLASSES:
@@ -356,7 +498,23 @@ def run_document_lifecycle_check(
             if owner is None or (owner_entry is not None and owner_entry.get("doc_type") not in {"spec", "plan"}):
                 findings.append(Finding("invalid_owner", path, "new evidence owner must be a registered spec or plan"))
 
-    actual_paths = [_relative(path, root) for path in _markdown_files(root)]
+    actual_paths: list[str] = []
+    unsafe_document_paths: set[str] = set()
+    for file_path in _markdown_files(root):
+        try:
+            path = file_path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        actual_paths.append(path)
+        try:
+            file_path.resolve(strict=True).relative_to(root)
+        except (OSError, ValueError):
+            unsafe_document_paths.add(path)
+            findings.append(Finding("document_symlink", path, "Markdown document must not be a symlink or resolve outside the repository"))
+            continue
+        if file_path.is_symlink():
+            unsafe_document_paths.add(path)
+            findings.append(Finding("document_symlink", path, "Markdown document must not be a symlink or resolve outside the repository"))
     actual_path_set = set(actual_paths)
     for path in sorted(set(actual_paths) - set(entry_by_path)):
         findings.append(Finding("unregistered_document", path, "Markdown document is not registered"))
@@ -402,6 +560,8 @@ def run_document_lifecycle_check(
     for path in actual_paths:
         entry = entry_by_path.get(path)
         file_path = root / path
+        if path in unsafe_document_paths:
+            continue
         if entry is None:
             if adopted and path.startswith("docs/superpowers/"):
                 findings.append(Finding("post_adoption_tool_path", path, "post-adoption tool-specific document path is forbidden"))
@@ -453,7 +613,16 @@ def run_document_lifecycle_check(
             for key in ("doc_type", "topic", "status", "canonical", "implementation_authority"):
                 if key in metadata and metadata[key] != entry.get(key):
                     findings.append(Finding("metadata_mismatch", path, f"metadata disagrees with registry for {key}"))
-            if entry.get("owner") is not None and metadata.get("owner_spec") != entry.get("owner"):
+            for key in ("created", "updated"):
+                if key in metadata and not _is_iso_date(metadata[key]):
+                    findings.append(
+                        Finding(
+                            "invalid_metadata_date",
+                            path,
+                            f"metadata {key} must be a YYYY-MM-DD calendar date",
+                        )
+                    )
+            if metadata.get("owner_spec") != entry.get("owner"):
                 findings.append(Finding("metadata_mismatch", path, "owner_spec disagrees with registry owner"))
             if _is_string_list(related) and related != entry.get("related"):
                 findings.append(Finding("metadata_mismatch", path, "metadata disagrees with registry for related"))
@@ -476,7 +645,11 @@ def run_document_lifecycle_check(
                 findings.append(Finding("invalid_plan_owner", path, "plan owner must be an approved or active spec"))
 
         if path.startswith("docs/archive/") and entry.get("doc_type") != "index":
-            if status != "historical" or not metadata.get("archived") or not metadata.get("historical_reason"):
+            if (
+                status != "historical"
+                or not _is_iso_date(metadata.get("archived"))
+                or metadata.get("historical_reason") not in ARCHIVE_REASONS
+            ):
                 findings.append(Finding("archive_metadata", path, "archived document requires historical status and archive metadata"))
         if status == "historical" and not path.startswith("docs/archive/"):
             findings.append(Finding("historical_location", path, "historical document must be under docs/archive"))
@@ -484,36 +657,52 @@ def run_document_lifecycle_check(
         if adopted and path.startswith("docs/superpowers/") and entry.get("legacy_path") is not True:
             findings.append(Finding("post_adoption_tool_path", path, "post-adoption tool-specific document path is forbidden"))
 
+        outside_lines = list(_outside_fence_lines(body))
+        reference_definitions: dict[str, tuple[str, int]] = {}
+        for line_no, line in outside_lines:
+            definition = REFERENCE_DEFINITION_RE.match(INLINE_CODE_RE.sub("", line))
+            if definition is None:
+                continue
+            label = _reference_label(definition.group(1))
+            reference_definitions.setdefault(label, (definition.group(2), line_no))
+            finding = _link_finding(
+                document_path=path,
+                file_path=file_path,
+                raw_target=definition.group(2),
+                root=root,
+                line_no=line_no,
+            )
+            if finding is not None:
+                findings.append(finding)
+
         historical_section = False
-        for line_no, line in _outside_fence_lines(body):
+        for line_no, line in outside_lines:
             stripped = line.strip()
+            link_line = INLINE_CODE_RE.sub("", line)
             if stripped.startswith("## "):
                 heading = stripped[3:].strip().lower()
                 historical_section = heading.startswith(("historical", "archive"))
-            for raw_target in MARKDOWN_LINK_RE.findall(line):
-                target = _link_target(file_path, raw_target, root)
-                if target is not None:
-                    try:
-                        target.relative_to(root)
-                    except ValueError:
-                        findings.append(
-                            Finding(
-                                "markdown_link_outside_repository",
-                                path,
-                                "repository-relative Markdown link resolves outside the repository",
-                                line_no,
-                            )
+            for raw_target in INLINE_LINK_RE.findall(link_line):
+                finding = _link_finding(
+                    document_path=path,
+                    file_path=file_path,
+                    raw_target=raw_target,
+                    root=root,
+                    line_no=line_no,
+                )
+                if finding is not None:
+                    findings.append(finding)
+            for reference in REFERENCE_LINK_RE.finditer(link_line):
+                label = _reference_label(reference.group(2) or reference.group(1))
+                if label not in reference_definitions:
+                    findings.append(
+                        Finding(
+                            "broken_markdown_reference",
+                            path,
+                            "Markdown reference link has no definition",
+                            line_no,
                         )
-                    else:
-                        if not target.exists():
-                            findings.append(
-                                Finding(
-                                    "broken_markdown_link",
-                                    path,
-                                    "repository-relative Markdown link does not resolve",
-                                    line_no,
-                                )
-                            )
+                    )
             if (
                 entry.get("doc_type") == "index"
                 and historical_section
