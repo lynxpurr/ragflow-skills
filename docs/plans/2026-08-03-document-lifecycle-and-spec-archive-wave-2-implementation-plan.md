@@ -1,9 +1,9 @@
 ---
 doc_type: plan
 topic: document-lifecycle-and-spec-archive-wave-2
-status: proposed
+status: gated
 created: 2026-08-03
-updated: 2026-08-03
+updated: 2026-08-04
 canonical: false
 implementation_authority: false
 owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
@@ -11,6 +11,7 @@ supersedes: []
 superseded_by: null
 related:
   - docs/plans/2026-08-03-document-lifecycle-and-spec-archive-implementation-plan.md
+gate: private_handoff_closure_or_refresh_for_wave_2d
 ---
 
 # Document Lifecycle And Spec Archive Wave 2 Implementation Plan
@@ -518,4 +519,7 @@ The next decision is to approve or reject the exact SHA-256 of this proposed pla
 approval must separately name which of 2A, 2B, and 2C may execute. Wave 2D is not
 approvable under this plan and requires a later successor after both blockers close.
 
-`implementation=NOT_STARTED`
+Lifecycle closeout: owner-authorized Waves 2A-2C completed 18 migrations. Wave 2D remains
+gated on private-handoff closure or refresh and is not authorized by registry adoption.
+
+`implementation=WAVES_2A_2B_2C_COMPLETE / WAVE_2D_GATED`

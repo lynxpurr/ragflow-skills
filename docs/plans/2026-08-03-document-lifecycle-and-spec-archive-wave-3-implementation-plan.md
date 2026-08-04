@@ -1,9 +1,9 @@
 ---
 doc_type: plan
 topic: document-lifecycle-and-spec-archive-wave-3
-status: proposed
+status: gated
 created: 2026-08-03
-updated: 2026-08-03
+updated: 2026-08-04
 canonical: false
 implementation_authority: false
 owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
@@ -12,6 +12,7 @@ superseded_by: null
 related:
   - docs/plans/2026-08-03-document-lifecycle-and-spec-archive-implementation-plan.md
   - docs/plans/2026-08-03-document-lifecycle-and-spec-archive-wave-2-implementation-plan.md
+gate: separate_owner_resolution_for_docs_16_and_docs_43
 ---
 
 # Document Lifecycle And Spec Archive Wave 3 Implementation Plan
@@ -625,4 +626,7 @@ approved, the smallest recommended authority is Wave 3A only. Wave 3B requires a
 explicit external-maintainer scope decision. The two deferred candidates are not
 approvable under this plan.
 
-`implementation=NOT_STARTED`
+Lifecycle closeout: owner-authorized Waves 3A-3B are complete. The `docs/16` and `docs/43`
+candidates remain gated and are not authorized by registry adoption.
+
+`implementation=WAVES_3A_3B_COMPLETE / DEFERRED_REFERENCES_GATED`

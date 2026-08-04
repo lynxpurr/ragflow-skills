@@ -24,20 +24,12 @@ operations, mutation, staging, commit, push, L3, Stage 8C, or L4.
 
 ## Controlling Governance Work
 
-- [Document lifecycle spec](specs/2026-08-02-document-lifecycle-and-spec-archive-design.md) - approved design; Gate 0 is closed.
-- [Wave 1 implementation plan](plans/2026-08-03-document-lifecycle-and-spec-archive-implementation-plan.md) - Wave 1 was executed, its targeted revision was owner-accepted, and Wave 1 is complete;
-  it did not authorize Wave 2, and the plan/spec lifecycle state and registry adoption
-  have not been transitioned. `implementation_authority=false`.
-- [Wave 2 successor plan](plans/2026-08-03-document-lifecycle-and-spec-archive-wave-2-implementation-plan.md) - proposed, non-authoritative plan file for 18 historical moves in Waves 2A-2C;
-  external owner authority has completed all 18 files across Waves 2A-2C, while all 10
-  Wave 2D candidates remain blocked. `implementation_authority=false`.
-- [Wave 3 successor plan](plans/2026-08-03-document-lifecycle-and-spec-archive-wave-3-implementation-plan.md) - proposed, non-authoritative plan for durable-reference normalization;
-  owner-authorized Wave 3A processed its nine repository-local candidates, and separately
-  authorized Wave 3B archived the completed adaptive-pipeline record. Two candidates remain
-  deferred, and Wave 3 as a whole is not declared complete. `implementation_authority=false`.
-- [Wave 4 successor plan](plans/2026-08-04-document-lifecycle-and-spec-archive-wave-4-implementation-plan.md) - proposed, non-authoritative calibration plan for the 13 stable owner documents;
-  `Wave_4A_COMPLETE / Wave_4B_COMPLETE / OWNER_REVIEW_REQUIRED`.
-  `implementation_authority=false`.
+- [Document lifecycle spec](specs/2026-08-02-document-lifecycle-and-spec-archive-design.md) - active lifecycle policy; Gate 0 is closed.
+- [Wave 1 implementation plan](plans/2026-08-03-document-lifecycle-and-spec-archive-implementation-plan.md) - implemented; `implementation_authority=false`.
+- [Wave 2 successor plan](plans/2026-08-03-document-lifecycle-and-spec-archive-wave-2-implementation-plan.md) - Waves 2A-2C complete; Wave 2D gated; `implementation_authority=false`.
+- [Wave 3 successor plan](plans/2026-08-03-document-lifecycle-and-spec-archive-wave-3-implementation-plan.md) - Waves 3A-3B complete; `docs/16` and `docs/43` gated; `implementation_authority=false`.
+- [Wave 4 successor plan](plans/2026-08-04-document-lifecycle-and-spec-archive-wave-4-implementation-plan.md) - implemented, committed, and pushed; `implementation_authority=false`.
+- [Wave 5 successor plan](plans/2026-08-04-document-lifecycle-and-spec-archive-wave-5-implementation-plan.md) - adoption implemented; final validation passed; `implementation_authority=false`.
 - `docs/superpowers/specs/2026-08-02-ragflow-skill-surface-simplification-design.md` - separate proposed track; not part of document-governance Wave 1.
 
 ## Active And Gated Owners
@@ -58,13 +50,14 @@ guidance moved to its public skill sources. `docs/16-system-closeout-report.md` 
 
 The archive records 20 migrations: 18 historical-candidate moves from Waves 2A-2C, the
 Wave 3A architecture snapshot, and the Wave 3B adaptive-pipeline record. All 10 blocked
-Wave 2D candidates stay at their current paths. The registry remains unadopted, and
+Wave 2D candidates stay at their current paths. The registry is adopted for new work, and
 archived documents create no current authority.
 
 ## Authoring
 
 - Specs: `docs/specs/README.md` and `docs/specs/TEMPLATE.md`.
 - Plans: `docs/plans/README.md` and `docs/plans/TEMPLATE.md`.
+- Sanitized evidence: `docs/evidence/README.md`.
 - Durable references: `docs/reference/README.md`.
 - Archive index: `docs/archive/README.md`.
 - Machine-readable registry: `docs/document-registry.json`.

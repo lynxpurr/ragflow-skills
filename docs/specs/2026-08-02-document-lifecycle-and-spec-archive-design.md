@@ -1,7 +1,7 @@
 ---
 doc_type: spec
 topic: document-lifecycle-and-spec-archive
-status: approved
+status: active
 created: 2026-08-02
 updated: 2026-08-04
 canonical: true
@@ -542,9 +542,9 @@ The later migration is complete when:
 | 2026-08-02 | Permit this one-time audit spec to exceed 500 lines | The complete baseline classification is retained in one reviewable source; implementation details and move mappings remain in a later plan. |
 | 2026-08-03 | Close Gate 0 after the owner accepted `L3=NOT_COMPLETED_INPUTS_UNAVAILABLE` | The bounded successor reached its fail-closed terminal outcome without creating a live contract; documentation planning can resume without implying L3 completion. |
 
-## Current Stop
+## Current State
 
-This spec is approved and Gate 0 is closed, but it creates no implementation authority.
-One implementation plan may now be prepared for owner review. No archive migration,
-tracked-document rewrite, code change, staging, commit, push, or network operation has
-begun.
+The documentation taxonomy is adopted for new work. This spec remains `active` as the
+canonical lifecycle policy and registry owner. Wave 2D, the two deferred reference
+candidates, and every unrelated product or live-operation gate remain separate and
+unchanged. This policy creates no implementation or operational authority.

@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 topic: document-lifecycle-and-spec-archive-wave-4
-status: proposed
+status: implemented
 created: 2026-08-04
 updated: 2026-08-04
 canonical: false
@@ -857,9 +857,10 @@ stop, if any of these conditions occurs:
    adoption, roadmap, migration, or external-file change;
 5. all validation passes, and execution stops with Wave 5 unauthorized.
 
-## Current Stop
+## Lifecycle Closeout
 
-This Wave 4 successor plan has been prepared for owner review only. Wave 4A and Wave 4B
-are both `NOT_STARTED` and `NOT_AUTHORIZED`. No owner metadata, checker code, test,
-governing spec, path, body, checkbox, registry lifecycle state, adoption state, external
-maintainer file, or rollback backup has been changed by plan authoring.
+Owner-authorized Waves 4A and 4B are complete, committed, pushed, and independently
+validated. The unchecked boxes above preserve the original execution plan; they create no
+new authority after adoption.
+
+`implementation=WAVE_4_COMPLETE`
