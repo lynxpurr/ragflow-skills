@@ -34,6 +34,7 @@ updates, body-preservation evidence, and a reversible migration batch.
 | `docs/18-mineru-sync-production-issues.md` | `docs/archive/2026/plans/18-mineru-sync-production-issues.md` | 2026-08-03 | completed | `3326bb402477bbee97cf9d334e1c08841abea78d617f7059a1e0f5fbe6ec4efb` |
 | `docs/21-ragflow-doc-to-md-table-quality-design.md` | `docs/archive/2026/specs/21-ragflow-doc-to-md-table-quality-design.md` | 2026-08-03 | completed | `bf9762763577348b27b09f8932ae1ddc36d7f112cfe293085dc298654888be20` |
 | `docs/22-apollo-table-qa-rectification-plan.md` | `docs/archive/2026/plans/22-apollo-table-qa-rectification-plan.md` | 2026-08-03 | completed | `7c415c603e5768872e68a0f1b6d712d5c5aa5b189c32ac1891020c4ca7caed12` |
+| `docs/23-adaptive-pipeline-proposal.md` | `docs/archive/2026/specs/23-adaptive-pipeline-proposal.md` | 2026-08-03 | completed | `649b0b539a314dcd7ec767a0b2b1c399f442039bc6a085560659d3f45607f2cf` |
 | `docs/24-adaptive-pipeline-quality-fix-plan.md` | `docs/archive/2026/plans/24-adaptive-pipeline-quality-fix-plan.md` | 2026-08-03 | completed | `1378a30d4bff3aaf81522a0c54f0b20538768944c073d98808616afc2bb31df8` |
 | `docs/25-current-suite-regression-follow-up-plan.md` | `docs/archive/2026/plans/25-current-suite-regression-follow-up-plan.md` | 2026-08-03 | completed | `ea33d0bf83d895d9745a592cf29652538d1c840bb8edfa5058533550492c22a6` |
 | `docs/26-mineru-v4-platform-backend-design.md` | `docs/archive/2026/specs/26-mineru-v4-platform-backend-design.md` | 2026-08-03 | completed | `b7ce825d4cb776bba17b041553a0a6c1b5f74c9e35a8dc0d2777c32abb18931b` |

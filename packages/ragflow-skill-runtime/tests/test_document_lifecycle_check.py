@@ -204,7 +204,7 @@ class DocumentLifecycleCheckTests(unittest.TestCase):
             ],
         )
 
-    def test_wave3a_legacy_metadata_exemptions_keep_only_deferred_candidates(self) -> None:
+    def test_wave3_legacy_metadata_exemptions_keep_only_deferred_candidates(self) -> None:
         moved_paths = {
             "docs/02-architecture-design.md",
             "docs/05-cross-platform-smoke.md",
@@ -212,13 +212,13 @@ class DocumentLifecycleCheckTests(unittest.TestCase):
             "docs/08-cli-agent-integration.md",
             "docs/11-public-rename-policy.md",
             "docs/12-release-archive-forward-test-prompts.md",
+            "docs/23-adaptive-pipeline-proposal.md",
             "docs/30-hermes-e2e-test-plan.md",
             "docs/37-ragflow-kb-parameter-contract-audit-hermes-test.md",
             "docs/branching-policy.md",
         }
         deferred_paths = {
             "docs/16-system-closeout-report.md",
-            "docs/23-adaptive-pipeline-proposal.md",
             "docs/43-agent-session-handoff-lessons.md",
         }
 

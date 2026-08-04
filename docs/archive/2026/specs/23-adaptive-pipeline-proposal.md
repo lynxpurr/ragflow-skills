@@ -1,4 +1,24 @@
 ---
+doc_type: spec
+topic: adaptive-pipeline
+status: historical
+created: 2026-07-05
+updated: 2026-08-03
+canonical: false
+implementation_authority: false
+owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
+supersedes: []
+superseded_by: null
+related: []
+archived: 2026-08-03
+historical_reason: completed
+original_sha256: 649b0b539a314dcd7ec767a0b2b1c399f442039bc6a085560659d3f45607f2cf
+---
+
+> **Historical archive:** This document is immutable context and creates no current task,
+> implementation, operational, network, credential, mutation, or live authority.
+
+---
 name: ragflow-skills-adaptive-pipeline-proposal
 description: 设计与完成记录：为 ragflow-skills 增加确定性自适应解析管线，先轻量检测文档内容，再选择 backend / table_quality / postprocess_profile / chunk profile 参数组合，最后复用正式 pipeline。
 version: 1.1.0

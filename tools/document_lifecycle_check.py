@@ -70,7 +70,6 @@ WAVE1_LEGACY_METADATA_PATHS = frozenset(
         "docs/16-system-closeout-report.md",
         "docs/19-ragflux-capability-parity-plan.md",  # release-hygiene: allow - frozen Wave 1 legacy path
         "docs/20-ragflow-doc-to-md-ingest-quality-plan.md",
-        "docs/23-adaptive-pipeline-proposal.md",
         "docs/29-kb-build-strict-regression-quality-plan.md",
         "docs/31-hermes-e2e-improvement-follow-up-plan.md",
         "docs/32-retirement-transition-action-plan.md",
