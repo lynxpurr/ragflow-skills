@@ -1,9 +1,9 @@
 ---
 doc_type: spec
 topic: skill-surface-simplification
-status: proposed
+status: approved
 created: 2026-08-02
-updated: 2026-08-04
+updated: 2026-08-05
 canonical: true
 implementation_authority: false
 owner_spec: null
@@ -14,7 +14,7 @@ related: []
 
 # RAGFlow Skill Surface Simplification And Agent Command Selection Design
 
-Status: proposed; design-only; no implementation or live-operation authority
+Status: approved; design-only; no implementation or live-operation authority
 
 Date: 2026-08-02
 
@@ -26,6 +26,20 @@ start. This satisfies the isolation prerequisite for implementation planning, no
 live execution. FinanceBench observed evidence, the cross-subset review, and both L4
 decisions remain unavailable and are not next actions for this simplification project.
 
+## 2026-08-04 Document Governance Adoption Update
+
+The document-lifecycle Gate 0 is closed and Wave 5 is complete with final validation
+passed. `docs/document-registry.json` is adopted for new work and contains 67 registered
+documents and 20 migration records. The owner approved this design, and the spec is now
+`status=approved` with `implementation_authority=false` on its reviewed legacy path.
+
+`docs/43-agent-session-handoff-lessons.md` is now included in Git, registered with
+`status=reference`, and retained at its current path as tracked durable guidance. Its
+possible later move to `docs/reference/` remains separately gated and is not authorized by
+this spec. These governance facts change no product authority or roadmap state: Stage 8C,
+both L4 decisions, the fifteen gated roadmap items, and Phase 3 deprecation remain
+unauthorized.
+
 Owning and related context:
 
 - `docs/03-development-plan.md`
@@ -34,9 +48,14 @@ Owning and related context:
 - `docs/14-optional-llm-backend-planning.md`
 - `docs/15-field-trial-observation-plan.md`
 - `docs/16-system-closeout-report.md`
+- `docs/36-ragflow-kb-parameter-materialization-plan.md`
 - `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md`
 - `docs/40-marker-aware-evidence-validation-and-promotion-plan.md`
 - `docs/42-financebench-marker-aware-l3-disposable-validation.md`
+- `docs/README.md`
+- `docs/document-registry.json`
+- `docs/plans/2026-08-04-document-lifecycle-and-spec-archive-wave-5-implementation-plan.md`
+- `docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md`
 - `docs/specs/2026-08-02-financebench-new-minimal-l3-design.md`
 - `docs/43-agent-session-handoff-lessons.md`
 - `tools/report_surface_inventory.py`
@@ -75,8 +94,9 @@ The implementation must satisfy all of the following:
    `internal_candidate`, or `deprecated_candidate` before any command is removed.
 5. Primary skill guidance contains no instruction to bypass a blocked readiness result,
    manually substitute a raw HTTP mutation, or use an unavailable related skill.
-6. A representative command-selection review maps every ordinary prompt to one skill and
-   one canonical workflow, with zero untriggered advanced-command selections.
+6. A representative command-selection review maps every prompt in the twelve-case matrix
+   to one skill and one canonical workflow, with zero untriggered advanced-command
+   selections.
 7. The initial simplification round changes no CLI parser, public report schema, runtime
    behavior, default profile, or live-mutation authority.
 8. Existing focused, release-hygiene, build, consumer-acceptance, and platform-smoke gates
@@ -95,11 +115,11 @@ Design-time guidance baseline:
 
 | File | Current line count | Primary concern |
 | --- | ---: | --- |
-| root `SKILL.md` | 380 | suite routing, operations, incidents, pitfalls, and cross-references are mixed |
+| root `SKILL.md` | 379 | suite routing, operations, incidents, pitfalls, and cross-references are mixed |
 | `ragflow-doc-to-md/SKILL.md` | 210 | backend and workflow variants dominate the entrypoint |
 | `ragflow-kb-build/SKILL.md` | 154 | core build guidance and many advanced command families are flat |
 | `ragflow-query/SKILL.md` | 98 | a large command catalogue precedes selection policy |
-| FinanceBench `docs/42` | 946 | historical live/recovery records and the closed successor outcome are combined |
+| FinanceBench `docs/42` | 986 | historical live/recovery records and the closed successor outcome are combined |
 
 That implementation breadth does not require all commands to appear at equal prominence
 in an AI-facing `SKILL.md`. A flat command catalogue increases intent ambiguity, consumes
@@ -128,9 +148,7 @@ The suite entrypoint currently contains two unsafe workaround patterns:
 - proceeding from a blocked asset plan directly to image-ingestion execution;
 - bypassing the standard build path with a manually constructed dataset POST.
 
-The current uncommitted entrypoint also references a `ragflow-kb-seeding` skill that is
-not present in this repository's public `skills/` directories. These patterns must not
-survive the first simplification slice.
+These patterns must not survive the first simplification slice.
 
 ### Closed design history remains in active agent context
 
@@ -212,7 +230,8 @@ deprecations.
 - a complete maintainer-facing classification of the currently discovered command
   surfaces;
 - static guidance checks and a representative agent command-selection review;
-- status calibration for active versus completed/historical design documents;
+- post-implementation calibration of simplification-related wording in roadmap and
+  closeout documents, without a lifecycle status or path transition;
 - removal of unsafe, unavailable, duplicated, or machine-specific guidance.
 
 ### Explicitly out of scope for the first implementation round
@@ -239,8 +258,8 @@ as live authority.
 ## Related Gated Work Not Owned By This Spec
 
 This document is not a replacement for the repository roadmap or for the marker-aware
-evidence plans. A future item is considered accounted for only when it is either owned by
-the checklist in this spec or explicitly assigned to an owning document below.
+evidence plans. A future item is considered accounted for only when it is either covered
+by a design requirement here or explicitly assigned to an owning document below.
 
 | Workstream | Owning source | Required gate or next decision | Relationship to this spec |
 | --- | --- | --- | --- |
@@ -248,6 +267,7 @@ the checklist in this spec or explicitly assigned to an owning document below.
 | Open RAG + FinanceBench cross-subset evidence review | `docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md` and `docs/40-marker-aware-evidence-validation-and-promotion-plan.md` | New representative FinanceBench observed evidence under separately approved future work | Currently unavailable, not a next action. Skill-documentation changes cannot fill the evidence gap. |
 | L4 high-level automatic-workflow decision | `docs/40-marker-aware-evidence-validation-and-promotion-plan.md` | Completed representative cross-subset evidence review and compatibility assessment | Currently unavailable and unauthorized. This spec preserves current behavior. |
 | L4 low-level `file` to `auto` default proposal | `docs/40-marker-aware-evidence-validation-and-promotion-plan.md` | Representative evidence plus a separately approved design, implementation plan, compatibility review, and full release validation | Currently unavailable and separately gated; the low-level default remains `file`. |
+| Stage 8C KB-parameter materialization | `docs/36-ragflow-kb-parameter-materialization-plan.md` and `docs/16-system-closeout-report.md` | A separately satisfied contract and explicit owner approval | No candidate is currently eligible. Stage 8C is unauthorized and not owned by this simplification. |
 | Fifteen intentionally gated roadmap items | `docs/03-development-plan.md`, `docs/13-post-cli-adapter-planning.md`, `docs/14-optional-llm-backend-planning.md`, `docs/15-field-trial-observation-plan.md`, and `docs/16-system-closeout-report.md` | The trigger evidence defined by the owning plans | External backlog: 2 local-service/post-CLI items, 4 product adapters, 7 script-owned LLM/backend items, and 2 private dedao-bridge items. None becomes ordinary simplification work. |
 | Ongoing observation and release health | `docs/15-field-trial-observation-plan.md` and `docs/16-system-closeout-report.md` | Normal observation cadence or a failing release gate | Continues independently. A release-health failure takes priority over new simplification surface. |
 
@@ -255,10 +275,10 @@ The fifteen roadmap items remain open by design. This spec may classify their ex
 commands or hide them from primary guidance, but it must not implement, close, reject, or
 supersede those tracks without the evidence and approval required by their owning plans.
 
-`docs/43-agent-session-handoff-lessons.md` is useful related maintainer guidance, but it
-is currently an untracked worktree file. Before implementation begins, the owner must
-decide whether to retain it as tracked durable guidance or remove it from this spec's
-durable dependency set. The implementation must not silently rely on an untracked file.
+`docs/43-agent-session-handoff-lessons.md` is tracked durable maintainer guidance. The
+adopted registry classifies it as a canonical `reference`, and this spec retains its
+current path. That durability decision does not authorize the separately gated move to
+`docs/reference/`, Wave 2D, or any operational action.
 
 ## Command Guidance Model
 
@@ -366,26 +386,20 @@ corrected; the agent must not invent a workaround or broaden authority.
 
 ## Documentation Lifecycle
 
-Design and plan documents receive one visible state:
+Repository-wide document types, lifecycle states, ownership, and migration records are
+governed by `docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md`,
+`docs/document-registry.json`, and the default index at `docs/README.md`; this spec does
+not define a competing taxonomy. At this revision baseline, Gate 0 is closed, Wave 5 is
+complete, and the registry is adopted with 67 documents and 20 migrations.
 
-- `active`: controls current planned work;
-- `reference`: stable technical explanation still needed by maintainers;
-- `historical`: completed or superseded execution/design evidence;
-- `gated`: valid future work whose trigger has not been satisfied.
-
-Closed specs remain addressable for provenance, but active skill files link only to
-current references. File moves are optional in the first round because moving many docs
-can break links; status calibration and an index are sufficient. Any later archive move
-must first map inbound references with `rg` and update them atomically.
-
-The FinanceBench L3 document must eventually separate:
-
-1. current acceptance criteria and outcome;
-2. reusable live-safety/cleanup rules;
-3. historical attempt, recovery, forensic, and policy evidence.
-
-That split occurs only after NEW_MINIMAL_L3 is terminal or formally closed and must not
-rewrite private evidence.
+Closed specs remain addressable for provenance, while active skill files link only to
+current references. Completed governance migrations use the registry's recorded paths.
+`docs/16-system-closeout-report.md` and tracked durable guidance at
+`docs/43-agent-session-handoff-lessons.md` remain at their current paths. This spec permits
+only post-implementation calibration of simplification-related roadmap and closeout
+wording. FinanceBench restructuring, Wave 2D, lifecycle status transitions, and any
+archive or reference move are outside this spec and require separate planning and owner
+approval.
 
 ## Compatibility And Migration Strategy
 
@@ -401,7 +415,8 @@ rewrite private evidence.
 
 - run representative agent command-selection cases;
 - fix ambiguous routing or duplicated ownership in guidance;
-- calibrate active/reference/historical document states;
+- calibrate only simplification-related roadmap and closeout wording after verified
+  implementation, without changing document lifecycle status or paths;
 - keep all existing commands compatible.
 
 ### Phase 3: Evidence-based deprecation proposals
@@ -433,21 +448,23 @@ report-surface compatibility process.
 
 1. Complete this spec self-review and obtain explicit owner approval of the written
    design. No implementation follows merely from the existence of this file.
-2. Resolve the durable status of `docs/43-agent-session-handoff-lessons.md` and confirm
-   that no implementation step depends on an untracked document.
+2. Preserve the adopted document-governance baseline: Gate 0 closed, Wave 5 complete,
+   registry `adopted=true`, and `docs/43-agent-session-handoff-lessons.md` tracked at its
+   current path with `status=reference`. Do not treat that reference status as authority
+   to move the file or execute another governance wave.
 3. Preserve the verified FinanceBench `NEW_MINIMAL_L3` formal-close state; do not create a
    replacement evidence workstream from this project.
 4. After approval, create a separate implementation plan with file-by-file steps,
    focused tests, release validation, review checkpoints, and a rollback checkpoint.
 5. Execute only the guidance-compatible Phase 1 slice first. Stop if it requires a
    parser, schema, runtime, default, or live-authority change.
-6. Run Phase 2 selection validation and documentation calibration before proposing any
-   deprecation work.
+6. Run Phase 2 selection validation and post-implementation simplification wording
+   calibration before proposing any deprecation work.
 7. Treat Phase 3 as a new design gate. No command warning, alias change, schema merge, or
    deletion is authorized by the Phase 1/2 implementation plan.
-8. Keep unavailable external evidence work separate. The cross-subset review and both L4
-   decisions remain non-actions unless a later owner-approved source supplies new
-   representative FinanceBench observed evidence.
+8. Keep unavailable external evidence work separate. Stage 8C, the cross-subset review,
+   and both L4 decisions remain non-actions unless their owning gates are separately
+   satisfied and approved.
 
 ## Risks And Rollback
 
@@ -459,8 +476,8 @@ report-surface compatibility process.
 | Request/review or report consolidation breaks artifact consumers | Keep consolidation outside the initial round and require report-surface/schema compatibility review | Retain the existing artifacts and commands; treat the proposed consolidation as rejected until a migration contract exists. |
 | Public references are absent from packaged skills | Validate source links and exported archive contents together | Revert the affected entrypoint/reference edit and keep the previous self-contained release layout. |
 | Skill edits are mistaken for reopening FinanceBench evidence work | Keep the formal-close state explicit and exclude private evidence reconstruction from the plan | Stop the simplification slice and restore the closed boundary; documentation cannot create L3 authority. |
-| Documentation-state calibration hides still-active work | Map inbound links and owning checklists before changing status; do not move files in the first round | Restore the previous status label and leave the document discoverable until ownership is clear. |
-| An untracked guidance file is treated as durable project state | Resolve the `docs/43` tracking decision before implementation | Remove the dependency from the implementation plan or separately authorize adding the document to tracked source. |
+| Simplification wording calibration is mistaken for lifecycle migration | Limit follow-up edits to roadmap and closeout wording after verified implementation; preserve registry status and paths | Revert the wording edit and stop if accurate calibration would require a lifecycle transition or second governance project. |
+| Tracked `docs/43` guidance is mistaken for migration or operational authority | Pin its registry `status=reference`, retain the current path, and keep its deferred move outside this spec | Stop the simplification slice and preserve the tracked file at its current path; any move requires separate owner-approved governance work. |
 
 Because the first round is guidance-only, rollback is intentionally simple: revert only
 the intended guidance/test changes to the previously verified tracked state, preserve the
@@ -507,139 +524,24 @@ Acceptance requires:
 This is a bounded maintainer review, not a new public report schema or permanent model
 benchmark service.
 
-## File Map For The First Implementation Round
+## Decomposition Note
 
-Expected modifications:
+This revision removes the file map and task checklist because exact files, ordered steps,
+test commands, and rollback checkpoints belong in a separately approved implementation
+plan. The workflow, command-classification, gated-work, and representative-selection
+matrices remain here because they define acceptance behavior and authority boundaries.
+The spec remains above 500 lines because those contracts must be reviewed together;
+splitting them would separate the proposed simplification from its safety gates and
+measurable selection criteria.
 
-- `SKILL.md`
-- `skills/ragflow-doc-to-md/SKILL.md`
-- `skills/ragflow-kb-build/SKILL.md`
-- `skills/ragflow-query/SKILL.md`
-- existing release-hygiene or suite-review tests when needed to enforce safety and
-  resolvable related-skill references
-- `docs/03-development-plan.md`, `docs/10-legacy-feature-gap-closure-design.md`, and
-  `docs/16-system-closeout-report.md` only for narrow status calibration after verified
-  implementation
+## Decision Log
 
-Expected new guidance files, subject to reuse of existing references:
-
-- one advanced-command index under each child skill only when no suitable existing index
-  can be extended;
-- one maintainer command-tier classification artifact derived from the existing public
-  command discovery inventory;
-- one neutral command-selection case matrix.
-
-The implementation plan must inspect existing references before creating any new file and
-must prefer consolidation over duplication.
-
-## Task Checklist
-
-### A. Baseline And Ownership
-
-- [ ] Record the current discovered command count and exact command names from the existing
-  inventory without changing its schema.
-- [ ] Map every command to one owning skill, one workflow family, and one guidance tier.
-- [ ] Identify duplicated intent ownership, unavailable references, raw mutation
-  workarounds, and machine-specific guidance.
-- [x] Confirm NEW_MINIMAL_L3 is formally closed before editing public guidance; the owner
-  accepted `L3=NOT_COMPLETED_INPUTS_UNAVAILABLE` on 2026-08-03.
-
-### B. Immediate Safety Corrections
-
-- [ ] Remove guidance that recommends executing from a blocked asset plan.
-- [ ] Remove guidance that recommends manually replacing the standard build workflow with
-  a raw dataset-create POST.
-- [ ] Remove or formally validate the unavailable `ragflow-kb-seeding` cross-reference;
-  no port-specific shortcut may remain in the suite router.
-- [ ] Add focused suite-review coverage that fails when a related public skill is not
-  resolvable or when primary guidance contains a forbidden safety pattern.
-
-### C. Root Router Simplification
-
-- [ ] Rewrite the root skill as an intent router within the 90-nonblank-line budget.
-- [ ] Retain only the three-skill boundary, canonical sequence, common safety rules, and
-  child-skill links.
-- [ ] Move machine-specific incidents, retired-path comparisons, command variants, and
-  detailed pitfalls out of the root entrypoint.
-- [ ] Verify the root description and related-skill metadata agree with the actual public
-  suite.
-
-### D. Child Skill Progressive Disclosure
-
-- [ ] Rewrite `ragflow-doc-to-md/SKILL.md` around conversion inputs, outputs, core
-  pipeline/adaptive workflows, stop rules, and advanced triggers.
-- [ ] Rewrite `ragflow-kb-build/SKILL.md` around inspect, dry-run, approved build,
-  validation/health, and exact cleanup.
-- [ ] Rewrite `ragflow-query/SKILL.md` around `ask`, optional automatic routing, and
-  evidence/citation review.
-- [ ] Keep each child entrypoint within 120 nonblank lines and at most five core command
-  examples.
-- [ ] Consolidate advanced command guidance into trigger-oriented references without
-  duplicating parser help.
-
-### E. Command Classification And Deprecation Gate
-
-- [ ] Classify 100% of discovered commands as `core`, `advanced`,
-  `internal_candidate`, or `deprecated_candidate`.
-- [ ] Confirm every core command has exactly one ordinary intent owner.
-- [ ] Confirm advanced commands have explicit triggers and are absent from primary command
-  example blocks.
-- [ ] Record deprecated candidates with replacement, dependency, and compatibility
-  evidence; do not remove them in this round.
-- [ ] Review the five named candidate groups above and record whether each belongs in
-  `advanced`, `internal_candidate`, or a later `deprecated_candidate` proposal.
-- [ ] Review duplicated request/review and report artifact surfaces without changing
-  their schemas, filenames, or runtime behavior in this round.
-- [ ] Keep report-surface and runtime-resilience classifications unchanged unless actual
-  command behavior changes.
-
-### F. Agent Command-Selection Validation
-
-- [ ] Create the twelve-case neutral selection matrix defined above.
-- [ ] Run one bounded agent review from the rewritten skill files without loading the full
-  repository history.
-- [ ] Record skill choice, workflow choice, advanced-trigger use, step count, and artifact
-  count for every case.
-- [ ] Correct ambiguous guidance until all acceptance thresholds pass.
-- [ ] Do not add a dispatcher or new command unless the completed matrix demonstrates a
-  failure that documentation cannot resolve.
-
-### G. Documentation State Calibration
-
-- [ ] Mark completed implementation specs as reference or historical without changing
-  their technical evidence.
-- [ ] Keep one active simplification spec and avoid duplicating the full development plan.
-- [ ] Keep the closed FinanceBench outcome distinguishable from its historical recovery
-  and policy narrative without rewriting either evidence body.
-- [ ] Verify that the closed NEW_MINIMAL_L3 workflow, unavailable cross-subset/L4 work,
-  and all fifteen gated roadmap items remain linked to their owning documents rather than
-  copied into this implementation checklist.
-- [ ] Resolve whether `docs/43-agent-session-handoff-lessons.md` becomes tracked durable
-  guidance or is removed from this spec's durable dependency set.
-- [ ] Update roadmap/closeout wording only after the corresponding implementation and
-  validation are complete.
-
-### H. Validation And Release Safety
-
-- [ ] Run `git diff --check` and targeted public-doc redaction review.
-- [ ] Run focused tests for any suite-review or release-hygiene rule changes.
-- [ ] Run the complete runtime test suite after test/tool changes.
-- [ ] Run schema identity and report/runtime inventories and confirm counts are unchanged
-  for guidance-only work.
-- [ ] Run release hygiene, build check, consumer acceptance, and strict-vendor platform
-  smoke before calling public skill guidance complete.
-- [ ] Review release archives to confirm each packaged child skill remains self-contained
-  and every referenced advanced file is included.
-
-### I. Implementation Planning And Rollback Gate
-
-- [ ] Obtain explicit owner approval of this amended design before implementation.
-- [ ] Create a separate implementation plan after approval; do not execute directly from
-  this design document.
-- [ ] Record the exact intended file set, pre-change command/schema/inventory counts, and
-  rollback checkpoint before editing public skill guidance.
-- [ ] Stop and return to design if the implementation requires CLI, parser, schema,
-  runtime, default, live-authority, or external-roadmap changes.
+| Date | Decision | Rationale |
+| --- | --- | --- |
+| 2026-08-02 | Use progressive disclosure and compatibility-preserving command classification. | Reduce agent choice without changing CLI, schema, runtime, defaults, or live authority. |
+| 2026-08-03 | Preserve `NEW_MINIMAL_L3` as `L3=NOT_COMPLETED_INPUTS_UNAVAILABLE`. | The owner closed the workflow before contract creation; simplification cannot recreate evidence or authority. |
+| 2026-08-04 | Treat the adopted lifecycle registry as the sole document-state authority and retain tracked `docs/43` at `status=reference` on its current path. | Gate 0 is closed and Wave 5 is complete; this spec must not execute Wave 2D or another status/path migration. |
+| 2026-08-04 | Defer file assignments and task sequencing to a future implementation plan while retaining acceptance-level matrices. | The spec defines behavior and gates; a later plan will define execution mechanics only after exact-SHA owner approval. |
 
 ## Validation Strategy
 
@@ -696,24 +598,28 @@ The first implementation round is accepted only when all of the following are tr
    release hygiene, build check, consumer acceptance, and strict-vendor platform smoke
    pass.
 9. No private value or live identifier is added to tracked files.
-10. Roadmap and closeout docs distinguish completed simplification from future gated
-    deprecation work.
+10. Post-implementation roadmap and closeout wording distinguishes completed
+    simplification from future gated deprecation work without changing lifecycle status
+    or paths.
 11. The formal-close state of NEW_MINIMAL_L3 remains unchanged by this project.
 12. No command is deleted until a later deprecation design is explicitly approved.
-13. Closed NEW_MINIMAL_L3 evidence, unavailable cross-subset/L4 decisions, and all fifteen
-    gated roadmap items remain explicitly assigned to their owning documents.
-14. The `docs/43` durability decision is explicit; no tracked implementation depends on
-    an untracked guidance file.
+13. Closed NEW_MINIMAL_L3 evidence, unavailable cross-subset/L4 decisions, unauthorized
+    Stage 8C work, and all fifteen gated roadmap items remain explicitly assigned to their
+    owning documents.
+14. Adopted document governance remains intact: `docs/43` is tracked durable guidance with
+    registry `status=reference` at its current path, and this project executes no Wave 2D,
+    deferred reference move, or other lifecycle migration.
 15. A separately approved implementation plan and guidance-only rollback checkpoint exist
     before public skill files are edited.
 
 ## Definition Of Done
 
 This design round is complete when the spec is self-reviewed, every known future item is
-either owned here or linked to its external gate, the `docs/43` durability decision is
-explicit, and the owner approves the written design. Approval transitions to a separate
-implementation-plan task; it does not authorize implementation by itself. The
-implementation round is complete only when every Phase 1 and Phase 2 checklist item is
+either owned here or linked to its external gate, the adopted lifecycle baseline and
+tracked `docs/43` reference state are explicit, and the owner approves the written design.
+Approval transitions to a separate implementation-plan task; it does not authorize
+implementation by itself. The
+implementation round is complete only when every Phase 1 and Phase 2 requirement is
 implemented and verified, all acceptance criteria pass, and remaining Phase 3 deletion
 candidates are recorded as gated rather than silently removed.
 

@@ -3,7 +3,7 @@ doc_type: index
 topic: document-index
 status: active
 created: 2026-08-03
-updated: 2026-08-04
+updated: 2026-08-05
 canonical: true
 implementation_authority: false
 owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
@@ -30,11 +30,11 @@ operations, mutation, staging, commit, push, L3, Stage 8C, or L4.
 - [Wave 3 successor plan](plans/2026-08-03-document-lifecycle-and-spec-archive-wave-3-implementation-plan.md) - Waves 3A-3B complete; `docs/16` and `docs/43` gated; `implementation_authority=false`.
 - [Wave 4 successor plan](plans/2026-08-04-document-lifecycle-and-spec-archive-wave-4-implementation-plan.md) - implemented, committed, and pushed; `implementation_authority=false`.
 - [Wave 5 successor plan](plans/2026-08-04-document-lifecycle-and-spec-archive-wave-5-implementation-plan.md) - adoption implemented; final validation passed; `implementation_authority=false`.
-- `docs/superpowers/specs/2026-08-02-ragflow-skill-surface-simplification-design.md` - separate proposed track; not part of document-governance Wave 1.
+- `docs/superpowers/specs/2026-08-02-ragflow-skill-surface-simplification-design.md` - separate approved track; not part of document-governance Wave 1; `implementation_authority=false`.
 
-## Active And Gated Owners
+## Active, Approved, And Gated Owners
 
-The registry records 13 active, gated, or proposed owners at stable paths. Load an owner
+The registry records 13 active, approved, or gated owners at stable paths. Load an owner
 only when the current task names its topic. Unchecked evidence or adapter rows do not
 create live or implementation authority.
 
