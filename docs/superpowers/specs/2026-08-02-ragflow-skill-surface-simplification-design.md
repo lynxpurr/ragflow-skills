@@ -1,9 +1,9 @@
 ---
 doc_type: spec
 topic: skill-surface-simplification
-status: proposed
+status: approved
 created: 2026-08-02
-updated: 2026-08-04
+updated: 2026-08-05
 canonical: true
 implementation_authority: false
 owner_spec: null
@@ -14,7 +14,7 @@ related: []
 
 # RAGFlow Skill Surface Simplification And Agent Command Selection Design
 
-Status: proposed; design-only; no implementation or live-operation authority
+Status: approved; design-only; no implementation or live-operation authority
 
 Date: 2026-08-02
 
@@ -30,8 +30,8 @@ decisions remain unavailable and are not next actions for this simplification pr
 
 The document-lifecycle Gate 0 is closed and Wave 5 is complete with final validation
 passed. `docs/document-registry.json` is adopted for new work and contains 67 registered
-documents and 20 migration records. This spec remains `status=proposed` with
-`implementation_authority=false` on its reviewed legacy path.
+documents and 20 migration records. The owner approved this design, and the spec is now
+`status=approved` with `implementation_authority=false` on its reviewed legacy path.
 
 `docs/43-agent-session-handoff-lessons.md` is now included in Git, registered with
 `status=reference`, and retained at its current path as tracked durable guidance. Its
