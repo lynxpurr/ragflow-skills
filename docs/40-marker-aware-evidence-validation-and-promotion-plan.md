@@ -1,3 +1,18 @@
+---
+doc_type: plan
+topic: marker-aware-evidence-promotion
+status: gated
+created: 2026-07-11
+updated: 2026-08-04
+canonical: true
+implementation_authority: false
+owner_spec: null
+supersedes: []
+superseded_by: null
+related: []
+gate: representative_observed_evidence_and_separate_l4_promotion_authorization
+---
+
 # Marker-Aware Evidence Validation and Promotion Plan
 
 Status: Hermes L0 and private offline L1 complete; Open RAG L2 read-only checkpoint

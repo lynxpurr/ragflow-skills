@@ -1,3 +1,18 @@
+---
+doc_type: plan
+topic: optional-llm-backends
+status: gated
+created: 2026-07-02
+updated: 2026-08-04
+canonical: true
+implementation_authority: false
+owner_spec: null
+supersedes: []
+superseded_by: null
+related: []
+gate: explicit_backend_implementation_request_with_deterministic_fixtures_and_safety_gates
+---
+
 # Optional LLM Backend Planning
 
 Status: planning gate; script-owned backend execution deferred

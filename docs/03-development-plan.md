@@ -1,3 +1,17 @@
+---
+doc_type: roadmap
+topic: current-development
+status: active
+created: 2026-07-02
+updated: 2026-08-04
+canonical: true
+implementation_authority: false
+owner_spec: null
+supersedes: []
+superseded_by: null
+related: []
+---
+
 # RAGFlow Skills Phased Development Plan
 
 Status: active roadmap

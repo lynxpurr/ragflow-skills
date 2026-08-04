@@ -1,3 +1,17 @@
+---
+doc_type: spec
+topic: skill-surface-simplification
+status: proposed
+created: 2026-08-02
+updated: 2026-08-04
+canonical: true
+implementation_authority: false
+owner_spec: null
+supersedes: []
+superseded_by: null
+related: []
+---
+
 # RAGFlow Skill Surface Simplification And Agent Command Selection Design
 
 Status: proposed; design-only; no implementation or live-operation authority

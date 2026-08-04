@@ -62,34 +62,28 @@ ALLOWED_BASELINE_CLASSES = set(BASELINE_CLASS_TO_COUNT_KEY) | {"wave1_governance
 ARCHIVE_REASONS = {"completed", "superseded", "rejected", "evidence_only"}
 WAVE1_LEGACY_METADATA_PATHS = frozenset(
     {
-        "docs/03-development-plan.md",
         "docs/10-legacy-feature-gap-closure-design.md",
-        "docs/13-post-cli-adapter-planning.md",
-        "docs/14-optional-llm-backend-planning.md",
-        "docs/15-field-trial-observation-plan.md",
         "docs/16-system-closeout-report.md",
         "docs/19-ragflux-capability-parity-plan.md",  # release-hygiene: allow - frozen Wave 1 legacy path
         "docs/20-ragflow-doc-to-md-ingest-quality-plan.md",
-        "docs/29-kb-build-strict-regression-quality-plan.md",
-        "docs/31-hermes-e2e-improvement-follow-up-plan.md",
-        "docs/32-retirement-transition-action-plan.md",
-        "docs/35-standard-benchmark-dataset-integration-plan.md",
-        "docs/36-ragflow-kb-parameter-materialization-plan.md",
-        "docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md",
         "docs/39-benchmark-evidence-strengthening-hermes-test.md",
-        "docs/40-marker-aware-evidence-validation-and-promotion-plan.md",
         "docs/41-marker-aware-candidate-snapshot-hermes-l0.md",
         "docs/42-financebench-marker-aware-l3-disposable-validation.md",
         "docs/43-agent-session-handoff-lessons.md",
-        "docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md",
         "docs/specs/2026-08-02-financebench-new-minimal-l3-design.md",
+        "docs/superpowers/plans/2026-07-11-benchmark-evidence-strengthening.md",
+        "docs/superpowers/plans/2026-07-11-marker-aware-candidate-snapshot.md",
+        "docs/superpowers/specs/2026-07-11-marker-aware-candidate-snapshot-design.md",
+    }
+)
+WAVE1_LEGACY_PATHS = frozenset(
+    {
         "docs/superpowers/plans/2026-07-11-benchmark-evidence-strengthening.md",
         "docs/superpowers/plans/2026-07-11-marker-aware-candidate-snapshot.md",
         "docs/superpowers/specs/2026-07-11-marker-aware-candidate-snapshot-design.md",
         "docs/superpowers/specs/2026-08-02-ragflow-skill-surface-simplification-design.md",
     }
 )
-WAVE1_LEGACY_PATHS = frozenset(path for path in WAVE1_LEGACY_METADATA_PATHS if path.startswith("docs/superpowers/"))
 INLINE_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 REFERENCE_LINK_RE = re.compile(r"!?\[([^\]]+)\]\[([^\]]*)\]")
 REFERENCE_DEFINITION_RE = re.compile(r"^\s{0,3}\[([^\]]+)\]:\s*(<[^>]+>|\S+)")
@@ -323,6 +317,11 @@ def _link_finding(
 
 def _is_string_list(value: object) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) and bool(item) for item in value)
+
+
+def _has_structured_gate(metadata: dict[str, object]) -> bool:
+    value = metadata.get("gate")
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _is_iso_date(value: object) -> bool:
@@ -603,13 +602,26 @@ def run_document_lifecycle_check(
         topic = str(entry.get("topic"))
         if entry.get("canonical") is True and status in CANONICAL_STATUSES:
             canonical_topics.setdefault(topic, []).append(path)
-        if status == "gated" and not legacy_metadata and not GATE_RE.search(body):
+        if "gate" in metadata and not _has_structured_gate(metadata):
+            findings.append(Finding("invalid_gate", path, "metadata gate must be a non-empty string"))
+        if (
+            status == "gated"
+            and not legacy_metadata
+            and not _has_structured_gate(metadata)
+            and not GATE_RE.search(body)
+        ):
             findings.append(Finding("missing_named_gate", path, "gated document must name its blocking condition"))
 
         if entry.get("doc_type") == "plan" and not legacy_metadata:
             owner = entry.get("owner")
             owner_entry = entry_by_path.get(str(owner)) if isinstance(owner, str) else None
-            if (
+            is_canonical_root_owner = (
+                entry.get("baseline_class") == "active_owner"
+                and entry.get("canonical") is True
+                and entry.get("implementation_authority") is False
+                and owner is None
+            )
+            if not is_canonical_root_owner and (
                 owner_entry is None
                 or owner_entry.get("doc_type") != "spec"
                 or owner_entry.get("status") not in {"approved", "active"}

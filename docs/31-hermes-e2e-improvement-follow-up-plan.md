@@ -1,3 +1,18 @@
+---
+doc_type: plan
+topic: hermes-e2e-follow-up
+status: gated
+created: 2026-07-08
+updated: 2026-08-04
+canonical: true
+implementation_authority: false
+owner_spec: null
+supersedes: []
+superseded_by: null
+related: []
+gate: explicit_owner_request_for_optional_p2_routing_validation
+---
+
 # Hermes E2E Improvement Follow-Up Plan
 
 Status: P0/P1 complete; optional P2 routing validation remains request-gated

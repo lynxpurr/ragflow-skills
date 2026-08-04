@@ -1,3 +1,17 @@
+---
+doc_type: plan
+topic: retirement-transition
+status: active
+created: 2026-07-08
+updated: 2026-08-04
+canonical: true
+implementation_authority: false
+owner_spec: null
+supersedes: []
+superseded_by: null
+related: []
+---
+
 # RAGFlux And ragflow-kb-ops Retirement Transition Action Plan
 
 Status: active broad-corpus transition observation; representative-sample checkpoint and

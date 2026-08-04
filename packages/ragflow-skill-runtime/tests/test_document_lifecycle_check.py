@@ -15,6 +15,7 @@ if str(TOOLS_DIR) not in sys.path:
 
 from document_lifecycle_check import (  # noqa: E402
     WAVE1_LEGACY_METADATA_PATHS,
+    WAVE1_LEGACY_PATHS,
     parse_frontmatter,
     run_document_lifecycle_check,
 )
@@ -30,11 +31,19 @@ def _write_doc(
     canonical: bool,
     body: str,
     owner_spec: str | None = None,
+    include_null_owner_spec: bool = False,
+    gate: str | None = None,
     archive_fields: bool = False,
 ) -> None:
     path = root / relative_path
     path.parent.mkdir(parents=True, exist_ok=True)
-    owner_line = f"owner_spec: {owner_spec}\n" if owner_spec else ""
+    if owner_spec is not None:
+        owner_line = f"owner_spec: {owner_spec}\n"
+    elif include_null_owner_spec:
+        owner_line = "owner_spec: null\n"
+    else:
+        owner_line = ""
+    gate_line = f"gate: {json.dumps(gate)}\n" if gate is not None else ""
     archive_lines = "archived: 2026-08-03\nhistorical_reason: completed\n" if archive_fields else ""
     path.write_text(
         "---\n"
@@ -49,6 +58,7 @@ def _write_doc(
         "supersedes: []\n"
         "superseded_by: null\n"
         "related: []\n"
+        f"{gate_line}"
         f"{archive_lines}"
         "---\n\n"
         f"{body}",
@@ -224,6 +234,32 @@ class DocumentLifecycleCheckTests(unittest.TestCase):
 
         self.assertFalse(moved_paths & WAVE1_LEGACY_METADATA_PATHS)
         self.assertTrue(deferred_paths.issubset(WAVE1_LEGACY_METADATA_PATHS))
+
+    def test_wave4a_owner_metadata_is_normalized_while_legacy_path_remains(self) -> None:
+        normalized_paths = {
+            "docs/03-development-plan.md",
+            "docs/13-post-cli-adapter-planning.md",
+            "docs/14-optional-llm-backend-planning.md",
+            "docs/15-field-trial-observation-plan.md",
+            "docs/29-kb-build-strict-regression-quality-plan.md",
+            "docs/31-hermes-e2e-improvement-follow-up-plan.md",
+            "docs/32-retirement-transition-action-plan.md",
+            "docs/35-standard-benchmark-dataset-integration-plan.md",
+            "docs/36-ragflow-kb-parameter-materialization-plan.md",
+            "docs/38-benchmark-evidence-strengthening-and-transition-validation-plan.md",
+            "docs/40-marker-aware-evidence-validation-and-promotion-plan.md",
+            "docs/superpowers/specs/2026-08-02-ragflow-skill-surface-simplification-design.md",
+        }
+
+        self.assertFalse(normalized_paths & WAVE1_LEGACY_METADATA_PATHS)
+        self.assertIn(
+            "docs/superpowers/specs/2026-08-02-ragflow-skill-surface-simplification-design.md",
+            WAVE1_LEGACY_PATHS,
+        )
+        self.assertNotIn(
+            "docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md",
+            WAVE1_LEGACY_METADATA_PATHS,
+        )
 
     def test_unregistered_markdown_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -692,6 +728,192 @@ class DocumentLifecycleCheckTests(unittest.TestCase):
             report = run_document_lifecycle_check(root=root)
 
         self.assertIn("missing_named_gate", self._checks(report))
+
+    def test_canonical_active_owner_plan_may_have_null_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = _valid_fixture(root)
+            path = "docs/root-plan.md"
+            _write_doc(
+                root,
+                path,
+                doc_type="plan",
+                topic="root-plan",
+                status="active",
+                canonical=True,
+                include_null_owner_spec=True,
+                body="# Root Plan\n\nCurrent root owner.\n",
+            )
+            entries.append(
+                _entry(
+                    path,
+                    doc_type="plan",
+                    topic="root-plan",
+                    status="active",
+                    canonical=True,
+                    baseline_class="active_owner",
+                )
+            )
+            _write_registry(root, entries)
+            report = run_document_lifecycle_check(root=root)
+
+        self.assertTrue(report["ok"], report)
+
+    def test_ordinary_plan_with_null_owner_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = _valid_fixture(root)
+            path = "docs/plans/unowned.md"
+            _write_doc(
+                root,
+                path,
+                doc_type="plan",
+                topic="unowned",
+                status="proposed",
+                canonical=False,
+                include_null_owner_spec=True,
+                body="# Unowned Plan\n",
+            )
+            entries.append(
+                _entry(path, doc_type="plan", topic="unowned", status="proposed", canonical=False)
+            )
+            _write_registry(root, entries)
+            report = run_document_lifecycle_check(root=root)
+
+        self.assertIn("invalid_plan_owner", self._checks(report))
+
+    def test_gated_active_owner_accepts_nonempty_structured_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = _valid_fixture(root)
+            path = "docs/gated-root.md"
+            _write_doc(
+                root,
+                path,
+                doc_type="plan",
+                topic="gated-root",
+                status="gated",
+                canonical=True,
+                include_null_owner_spec=True,
+                gate="explicit_owner_decision",
+                body="# Gated Root\n\nWork remains deferred.\n",
+            )
+            entries.append(
+                _entry(
+                    path,
+                    doc_type="plan",
+                    topic="gated-root",
+                    status="gated",
+                    canonical=True,
+                    baseline_class="active_owner",
+                )
+            )
+            _write_registry(root, entries)
+            report = run_document_lifecycle_check(root=root)
+
+        self.assertTrue(report["ok"], report)
+
+    def test_empty_structured_gate_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = _valid_fixture(root)
+            path = "docs/gated-root.md"
+            _write_doc(
+                root,
+                path,
+                doc_type="plan",
+                topic="gated-root",
+                status="gated",
+                canonical=True,
+                include_null_owner_spec=True,
+                gate="",
+                body="# Gated Root\n\nWork remains deferred.\n",
+            )
+            entries.append(
+                _entry(
+                    path,
+                    doc_type="plan",
+                    topic="gated-root",
+                    status="gated",
+                    canonical=True,
+                    baseline_class="active_owner",
+                )
+            )
+            _write_registry(root, entries)
+            report = run_document_lifecycle_check(root=root)
+
+        self.assertIn("invalid_gate", self._checks(report))
+        self.assertIn("missing_named_gate", self._checks(report))
+
+    def test_non_string_structured_gate_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = _valid_fixture(root)
+            path = "docs/gated-root.md"
+            _write_doc(
+                root,
+                path,
+                doc_type="plan",
+                topic="gated-root",
+                status="gated",
+                canonical=True,
+                include_null_owner_spec=True,
+                gate="temporary_valid_value",
+                body="# Gated Root\n\nWork remains deferred.\n",
+            )
+            document = root / path
+            document.write_text(
+                document.read_text(encoding="utf-8").replace(
+                    'gate: "temporary_valid_value"',
+                    "gate: []",
+                ),
+                encoding="utf-8",
+            )
+            entries.append(
+                _entry(
+                    path,
+                    doc_type="plan",
+                    topic="gated-root",
+                    status="gated",
+                    canonical=True,
+                    baseline_class="active_owner",
+                )
+            )
+            _write_registry(root, entries)
+            report = run_document_lifecycle_check(root=root)
+
+        self.assertIn("invalid_gate", self._checks(report))
+        self.assertIn("missing_named_gate", self._checks(report))
+
+    def test_existing_body_named_gate_remains_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = _valid_fixture(root)
+            path = "docs/plans/body-gated.md"
+            _write_doc(
+                root,
+                path,
+                doc_type="plan",
+                topic="body-gated",
+                status="gated",
+                canonical=True,
+                owner_spec="docs/specs/example.md",
+                body="# Body-Gated Plan\n\nGate: explicit owner decision.\n",
+            )
+            entries.append(
+                _entry(
+                    path,
+                    doc_type="plan",
+                    topic="body-gated",
+                    status="gated",
+                    canonical=True,
+                    owner="docs/specs/example.md",
+                )
+            )
+            _write_registry(root, entries)
+            report = run_document_lifecycle_check(root=root)
+
+        self.assertTrue(report["ok"], report)
 
     def test_plan_without_approved_or_active_spec_owner_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

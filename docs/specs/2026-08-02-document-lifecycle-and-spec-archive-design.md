@@ -3,9 +3,13 @@ doc_type: spec
 topic: document-lifecycle-and-spec-archive
 status: approved
 created: 2026-08-02
-updated: 2026-08-03
+updated: 2026-08-04
 canonical: true
 implementation_authority: false
+owner_spec: null
+supersedes: []
+superseded_by: null
+related: []
 gate_0: closed
 ---
 

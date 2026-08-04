@@ -3,7 +3,7 @@ doc_type: index
 topic: document-index
 status: active
 created: 2026-08-03
-updated: 2026-08-03
+updated: 2026-08-04
 canonical: true
 implementation_authority: false
 owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
@@ -35,6 +35,9 @@ operations, mutation, staging, commit, push, L3, Stage 8C, or L4.
   owner-authorized Wave 3A processed its nine repository-local candidates, and separately
   authorized Wave 3B archived the completed adaptive-pipeline record. Two candidates remain
   deferred, and Wave 3 as a whole is not declared complete. `implementation_authority=false`.
+- [Wave 4 successor plan](plans/2026-08-04-document-lifecycle-and-spec-archive-wave-4-implementation-plan.md) - proposed, non-authoritative calibration plan for the 13 stable owner documents;
+  `Wave_4A_COMPLETE / Wave_4B_COMPLETE / OWNER_REVIEW_REQUIRED`.
+  `implementation_authority=false`.
 - `docs/superpowers/specs/2026-08-02-ragflow-skill-surface-simplification-design.md` - separate proposed track; not part of document-governance Wave 1.
 
 ## Active And Gated Owners
