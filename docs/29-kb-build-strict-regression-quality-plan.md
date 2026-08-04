@@ -1,3 +1,18 @@
+---
+doc_type: plan
+topic: kb-build-strict-regression
+status: gated
+created: 2026-07-08
+updated: 2026-08-04
+canonical: true
+implementation_authority: false
+owner_spec: null
+supersedes: []
+superseded_by: null
+related: []
+gate: explicit_owner_approval_for_disposable_r3_live_regression
+---
+
 # KB Build Strict Regression Quality Plan
 
 Status: offline implementation complete; R3 live regression gated
@@ -17,7 +32,7 @@ existing readiness signals into scoring, and closing the final cleanup evidence 
 
 The scope is limited to `ragflow-kb-build`, shared `ragflow-skill-runtime` validation and
 optimization logic, profile templates, focused tests, and public guidance. It builds on
-`docs/28-retrieval-optimization-quality-improvement-plan.md` instead of reopening the
+`docs/archive/2026/plans/28-retrieval-optimization-quality-improvement-plan.md` instead of reopening the
 completed R1/R2 quality round.
 
 Boundaries:

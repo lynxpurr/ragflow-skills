@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from build_release import DIST_DIR, PUBLIC_SKILLS, ROOT, build_release
+from document_lifecycle_check import run_document_lifecycle_check
 from forward_test_prompt_check import run_forward_test_prompt_check
 from generated_markdown_audit import run_generated_markdown_audit
 from manifest_schema_check import run_manifest_schema_check
@@ -809,6 +810,7 @@ def run_hygiene_check(
     version_date_drift: bool = True,
     generated_report_safety: bool = True,
     runtime_resilience_inventory: bool = True,
+    document_lifecycle: bool = True,
 ) -> dict[str, Any]:
     if rebuild:
         build_release(dist_dir)
@@ -875,6 +877,10 @@ def run_hygiene_check(
         runtime_resilience_payload = run_runtime_resilience_inventory(root=ROOT)
         payload["runtime_resilience_inventory"] = runtime_resilience_payload
         payload["ok"] = bool(payload["ok"] and runtime_resilience_payload["ok"])
+    if document_lifecycle:
+        document_lifecycle_payload = run_document_lifecycle_check(root=ROOT)
+        payload["document_lifecycle"] = document_lifecycle_payload
+        payload["ok"] = bool(payload["ok"] and document_lifecycle_payload["ok"])
     return payload
 
 
@@ -891,6 +897,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-version-date-drift", action="store_true", help="Skip static version/date drift checks")
     parser.add_argument("--skip-generated-report-safety", action="store_true", help="Skip generated report/example safety checks")
     parser.add_argument("--skip-runtime-resilience-inventory", action="store_true", help="Skip static runtime-resilience inventory checks")
+    parser.add_argument("--skip-document-lifecycle", action="store_true", help="Skip documentation lifecycle and link checks")
     args = parser.parse_args(argv)
 
     payload = run_hygiene_check(
@@ -905,6 +912,7 @@ def main(argv: list[str] | None = None) -> int:
         version_date_drift=not args.skip_version_date_drift,
         generated_report_safety=not args.skip_generated_report_safety,
         runtime_resilience_inventory=not args.skip_runtime_resilience_inventory,
+        document_lifecycle=not args.skip_document_lifecycle,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if payload["ok"] else 1

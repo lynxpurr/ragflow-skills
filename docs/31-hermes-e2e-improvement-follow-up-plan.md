@@ -1,3 +1,18 @@
+---
+doc_type: plan
+topic: hermes-e2e-follow-up
+status: gated
+created: 2026-07-08
+updated: 2026-08-04
+canonical: true
+implementation_authority: false
+owner_spec: null
+supersedes: []
+superseded_by: null
+related: []
+gate: explicit_owner_request_for_optional_p2_routing_validation
+---
+
 # Hermes E2E Improvement Follow-Up Plan
 
 Status: P0/P1 complete; optional P2 routing validation remains request-gated
@@ -282,7 +297,7 @@ Read these files first:
 - skills/ragflow-doc-to-md/references/host-agent-setup.md
 - skills/ragflow-kb-build/SKILL.md
 - skills/ragflow-kb-build/references/host-agent-setup.md
-- docs/30-hermes-e2e-test-plan.md
+- docs/reference/hermes-e2e-test-plan.md
 - docs/31-hermes-e2e-improvement-follow-up-plan.md
 
 Goal:

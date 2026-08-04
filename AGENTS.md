@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Shared Python code lives in `packages/ragflow-skill-runtime/src/ragflow_skill_runtime/`, with tests in the adjacent `tests/` directory. Public, self-contained skills are under `skills/ragflow-doc-to-md/`, `skills/ragflow-kb-build/`, and `skills/ragflow-query/`; each may contain `scripts/`, `templates/`, and `references/`. Repository-wide build and validation utilities live in `tools/`, while architecture, plans, and release guidance live in `docs/`. Treat `dist/`, `release-artifacts/`, and `output/` as generated products, not source.
+Shared Python code lives in `packages/ragflow-skill-runtime/src/ragflow_skill_runtime/`, with tests in the adjacent `tests/` directory. Public, self-contained skills are under `skills/ragflow-doc-to-md/`, `skills/ragflow-kb-build/`, and `skills/ragflow-query/`; each may contain `scripts/`, `templates/`, and `references/`. Repository-wide build and validation utilities live in `tools/`. Start documentation discovery at `docs/README.md`; governed specs, plans, references, evidence, and archive material live under `docs/`. Treat `dist/`, `release-artifacts/`, and `output/` as generated products, not source.
 
 ## Build, Test, and Development Commands
 
@@ -13,6 +13,7 @@ Run commands from the repository root with Python 3.10 or newer.
 - `python3 tools/build_release.py --check` verifies self-contained skill artifacts without publishing them.
 - `python3 tools/platform_smoke_matrix.py` exercises supported no-network platform paths.
 - `python3 tools/release_hygiene_check.py` checks packaging, public/private boundaries, schemas, and generated-report safety.
+- `python3 tools/document_lifecycle_check.py` checks documentation classification, metadata, ownership, links, archive rules, and public safety.
 - `python3 tools/consumer_acceptance.py --artifacts-dir release-artifacts --work-dir /tmp/ragflow-consumer-acceptance --overwrite` validates archives from a clean consumer view.
 
 ## Coding Style & Naming Conventions

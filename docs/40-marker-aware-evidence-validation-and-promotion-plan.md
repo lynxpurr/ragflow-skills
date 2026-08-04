@@ -1,10 +1,37 @@
+---
+doc_type: plan
+topic: marker-aware-evidence-promotion
+status: gated
+created: 2026-07-11
+updated: 2026-08-04
+canonical: true
+implementation_authority: false
+owner_spec: null
+supersedes: []
+superseded_by: null
+related: []
+gate: representative_observed_evidence_and_separate_l4_promotion_authorization
+---
+
 # Marker-Aware Evidence Validation and Promotion Plan
 
 Status: Hermes L0 and private offline L1 complete; Open RAG L2 read-only checkpoint
-complete, FinanceBench requires separate L3, and L4 remains gated
+complete; FinanceBench L3 formally closed without observed evidence; L4 remains gated and
+unauthorized
 Date: 2026-07-11
 Owning prior work:
 `docs/superpowers/specs/2026-07-11-marker-aware-candidate-snapshot-design.md`
+
+## 2026-08-03 FinanceBench L3 Formal Closeout
+
+The bounded `NEW_MINIMAL_L3` feasibility gate stopped before contract creation or live
+execution because the reviewed FinanceBench input bytes were incomplete. The owner
+accepted `L3=NOT_COMPLETED_INPUTS_UNAVAILABLE` and formally closed that workflow.
+
+The unchecked observed-validation and promotion rows below remain open. They record an
+evidence gap, not current execution authority: there is no active FinanceBench L3 task,
+the cross-subset review cannot proceed without observed evidence, and L4 remains
+unauthorized.
 
 ## Objective / Scope / Boundaries
 
@@ -391,9 +418,10 @@ Residual work remains classified as follows:
 - completed private offline work: Open RAG and FinanceBench candidate snapshots, QA
   mapping review, stable-hash approval, normalized qrels, and portfolio replay under L1;
 - completed read-only live work: pinned Open RAG observed validation under L2;
-- remaining live mutation work: FinanceBench disposable build/query/cleanup only under a
-  separate L3 instruction;
-- decision work: high-level and possible low-level automatic-default promotion under L4;
+- formally closed evidence gap: FinanceBench observed evidence remains unavailable, with
+  no current L3 live-mutation workstream;
+- unavailable decision work: high-level and possible low-level automatic-default
+  promotion under L4 remains gated on representative observed evidence;
 - separately blocked work: DeepDoc/native comparison, script-owned LLM/RAGAS, Stage 8C,
   private adapters, and unrelated post-CLI surfaces.
 
@@ -452,7 +480,6 @@ L2 completed the maximum evidence available without mutation:
   build/export for all three archives, 264 of 264 consumer-acceptance checks, and 154 of
   154 strict-vendor smoke checks.
 
-The next actionable gate is a separately reviewed L3 instruction limited to a disposable
-FinanceBench build, seven benchmark queries, exact cleanup confirmation, post-cleanup
-absence proof, and sanitized retention. No L4 decision should begin before that evidence
-exists.
+`NEW_MINIMAL_L3` is formally closed and has no automatic successor. The missing
+FinanceBench observed evidence leaves the two-subset and promotion reviews unavailable;
+neither another L3 lifecycle nor an L4 decision is a current action under this plan.

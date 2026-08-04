@@ -12,6 +12,8 @@ if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
 from rename_governance_check import (  # noqa: E402
+    DEFAULT_COMPATIBILITY_DOC_ROOTS,
+    RENAME_POLICY_PATH,
     SCHEMA,
     CompatibilityAlias,
     run_rename_governance_check,
@@ -19,6 +21,13 @@ from rename_governance_check import (  # noqa: E402
 
 
 class RenameGovernanceCheckTests(unittest.TestCase):
+    def test_wave3_rename_references_use_normalized_paths(self) -> None:
+        self.assertEqual(RENAME_POLICY_PATH, Path("docs/reference/public-rename-policy.md"))
+        self.assertEqual(
+            DEFAULT_COMPATIBILITY_DOC_ROOTS,
+            (Path("docs/reference/cross-platform-smoke.md"),),
+        )
+
     def test_rename_governance_passes_for_public_suite(self) -> None:
         report = run_rename_governance_check()
 
@@ -33,8 +42,8 @@ class RenameGovernanceCheckTests(unittest.TestCase):
     def test_rename_governance_reports_policy_and_drift_failures(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "docs").mkdir()
-            (root / "docs" / "11-public-rename-policy.md").write_text("# Incomplete\n", encoding="utf-8")
+            (root / RENAME_POLICY_PATH).parent.mkdir(parents=True, exist_ok=True)
+            (root / RENAME_POLICY_PATH).write_text("# Incomplete\n", encoding="utf-8")
             skill_root = root / "skills" / "ragflow-query"
             skill_root.mkdir(parents=True)
             (skill_root / "SKILL.md").write_text("Do not publish ragflux names.\n", encoding="utf-8")
@@ -53,9 +62,8 @@ class RenameGovernanceCheckTests(unittest.TestCase):
     def test_chunk_marker_profile_token_is_allowed_without_general_legacy_reference(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            docs = root / "docs"
-            docs.mkdir()
-            docs.joinpath("11-public-rename-policy.md").write_text(
+            (root / RENAME_POLICY_PATH).parent.mkdir(parents=True, exist_ok=True)
+            (root / RENAME_POLICY_PATH).write_text(
                 "\n".join(
                     [
                         "## CLI Aliases",
@@ -95,9 +103,8 @@ class RenameGovernanceCheckTests(unittest.TestCase):
     def test_skill_doc_directory_is_ignored_as_local_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            docs = root / "docs"
-            docs.mkdir()
-            docs.joinpath("11-public-rename-policy.md").write_text(
+            (root / RENAME_POLICY_PATH).parent.mkdir(parents=True, exist_ok=True)
+            (root / RENAME_POLICY_PATH).write_text(
                 "\n".join(
                     [
                         "## CLI Aliases",
@@ -142,7 +149,8 @@ class RenameGovernanceCheckTests(unittest.TestCase):
             docs.mkdir()
             (source / "cli.py").write_text('ALIASES = {"old-command": "new-command"}\n', encoding="utf-8")
             (docs / "rename.md").write_text("old-command maps to new-command\n", encoding="utf-8")
-            (root / "docs" / "11-public-rename-policy.md").write_text(
+            (root / RENAME_POLICY_PATH).parent.mkdir(parents=True, exist_ok=True)
+            (root / RENAME_POLICY_PATH).write_text(
                 "\n".join(
                     [
                         "## CLI Aliases",

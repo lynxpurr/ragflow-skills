@@ -1,11 +1,37 @@
+---
+doc_type: plan
+topic: benchmark-evidence-strengthening
+status: gated
+created: 2026-07-11
+updated: 2026-08-04
+canonical: true
+implementation_authority: false
+owner_spec: null
+supersedes: []
+superseded_by: null
+related: []
+gate: reviewed_financebench_input_closure_disposable_lifecycle_approval_and_transition_sample_coverage
+---
+
 # Benchmark Evidence Strengthening And Transition Validation Plan
 
 Status: public offline tooling, synthetic L0, reviewed Open RAG/FinanceBench expected
 chunks, normalized portfolio, and five-run transition aggregation are complete;
 FinanceBench formal conversion, handoff inspection, benchmark replay, and KB dry-run are
 complete; Open RAG has a pinned read-only observed checkpoint, while FinanceBench
-observed validation and transition sample coverage remain gated
+observed validation remains unavailable, transition sample coverage remains gated, and
+there is no current L3 task
 Date: 2026-07-11
+
+## 2026-08-03 FinanceBench Evidence Closeout
+
+The bounded `NEW_MINIMAL_L3` feasibility gate could not establish the reviewed input
+closure and stopped before contract creation or live execution. The owner accepted
+`L3=NOT_COMPLETED_INPUTS_UNAVAILABLE` and formally closed that workflow.
+
+The two unchecked regression and evidence-review rows below remain unchecked because no
+FinanceBench observed evidence was produced. They describe unavailable evidence, not a
+current live-work instruction. L4 and Stage 8C remain unauthorized.
 
 ## Objective / Scope / Boundaries
 
@@ -503,6 +529,7 @@ Independent merge review added a separate fail-before-network test and fix: qrel
 baseline, chunk-snapshot, and observed-state inputs are validated before retrieval.
 
 FinanceBench had no exactly pinnable existing dataset. No dataset creation, upload,
-parse, reparse, update, delete, or cleanup was attempted. Therefore both regression rows
-above remain open, and FinanceBench requires a separate L3 instruction with exact
-disposable scope and cleanup proof.
+parse, reparse, update, delete, or cleanup was attempted. Both regression rows above
+remain open. The later `NEW_MINIMAL_L3` attempt was formally closed before execution
+because the reviewed input bytes were incomplete, so there is no current L3 instruction
+or successor live task.

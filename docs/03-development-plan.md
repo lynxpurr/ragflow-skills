@@ -1,3 +1,17 @@
+---
+doc_type: roadmap
+topic: current-development
+status: active
+created: 2026-07-02
+updated: 2026-08-04
+canonical: true
+implementation_authority: false
+owner_spec: null
+supersedes: []
+superseded_by: null
+related: []
+---
+
 # RAGFlow Skills Phased Development Plan
 
 Status: active roadmap
@@ -597,7 +611,7 @@ Goal: validate a first external release candidate before promotion to `main`.
 
 Tasks:
 
-- [x] Add `docs/07-first-release.md`.
+- [x] Add `docs/archive/2026/evidence/07-first-release.md`.
 - [x] Generate release archives and checksum manifest.
 - [x] Complete fresh-agent forward test from release artifacts.
 - [x] Run live integration against a reachable test RAGFlow endpoint, or record explicit skip.
@@ -639,7 +653,7 @@ Goal: make the public suite feel native in Hermes, OpenClaw, Claude Code, openco
 
 Tasks:
 
-- [x] Add `docs/08-cli-agent-integration.md`.
+- [x] Add `docs/reference/cli-agent-integration.md`.
 - [x] Remove remaining SaaS target wording from public `SKILL.md` files.
 - [x] Add environment-variable configuration for `ragflow-doc-to-md` remote conversion.
 - [x] Support `DOC_TO_MD_BACKEND`, `DOC_TO_MD_REMOTE_URL`, `DOC_TO_MD_REMOTE_API_KEY`, and `DOC_TO_MD_TIMEOUT`.
@@ -675,7 +689,7 @@ Goal: cut a refreshed release candidate from the current CLI-agent-focused sourc
 
 Tasks:
 
-- [x] Run the full pre-release command list from `docs/06-release-hardening.md`.
+- [x] Run the full pre-release command list from `docs/reference/release-hardening.md`.
 - [x] Export refreshed per-skill archives and `release-manifest.json`.
 - [x] Run clean consumer acceptance from local refreshed artifacts.
 - [x] Publish `v0.1.0-rc2` as a GitHub prerelease.
@@ -702,7 +716,7 @@ Tasks:
 - [x] Filter internal `parser_config.__*` keys from RAGFlow dataset API payloads while preserving them in manifests.
 - [x] Add a regression test for default-profile internal metadata filtering.
 - [x] Add a release-artifact consumer acceptance check for default-profile API-payload filtering.
-- [x] Run the full pre-release command list from `docs/06-release-hardening.md`.
+- [x] Run the full pre-release command list from `docs/reference/release-hardening.md`.
 - [x] Commit and push the fix on `develop`.
 - [x] Export refreshed per-skill archives and `release-manifest.json` from the fix commit.
 - [x] Run clean consumer acceptance from local refreshed artifacts.
@@ -726,7 +740,7 @@ Tasks:
 - [x] Link the prompt from each public `SKILL.md`.
 - [x] Link the prompt from each `references/host-agent-setup.md`.
 - [x] Add a release-build assertion that every public skill artifact includes the prompt.
-- [x] Record the prompt as a public release example in `docs/06-release-hardening.md`.
+- [x] Record the prompt as a public release example in `docs/reference/release-hardening.md`.
 - [x] Forward-test the prompt with Hermes and record the MinerU protocol distinction found during onboarding.
 - [x] Clarify that `mineru` / `mineru-agent` target MinerU Agent API, while `mineru-sync` / `mineru-local` target synchronous multipart `/parse` services.
 - [x] Forward-test the prompt with OpenClaw and tighten guidance so synchronous multipart MinerU services use `doc_to_md.backend: mineru-sync`, not `mineru`.
@@ -2004,7 +2018,7 @@ Exit criteria:
 Goal: add a first-class MinerU v4 platform-compatible backend without overloading the
 self-hosted FastAPI, Agent API, synchronous multipart, or local CLI adapters.
 
-Design source: `docs/26-mineru-v4-platform-backend-design.md`.
+Design source: `docs/archive/2026/specs/26-mineru-v4-platform-backend-design.md`.
 
 Status note: Phase 42 backend implementation and protocol-binding docs/help follow-up
 are release-validated with fake-server coverage. The backend does not run live MinerU v4
@@ -2015,7 +2029,7 @@ private-bridge gated tracks.
 Tasks:
 
 - [x] Record the MinerU v4 protocol distinction, endpoint shape, request fields, result
-  contract, and live-validation boundary in `docs/26-mineru-v4-platform-backend-design.md`.
+  contract, and live-validation boundary in `docs/archive/2026/specs/26-mineru-v4-platform-backend-design.md`.
 - [x] Add `mineru-v4` plus the `mineru-platform` alias to runtime, CLI, adaptive, config,
   and public template inventories.
 - [x] Implement the v4 local-file batch protocol: submit `/api/v4/file-urls/batch`,
@@ -2211,7 +2225,7 @@ local RAGFlow container or image, change configuration, environment, databases,
 datasets, or documents, call a RAGFlow API, or trigger parse/reparse work.
 
 Hermes can independently replay the L0 source audit using
-`docs/37-ragflow-kb-parameter-contract-audit-hermes-test.md`. L1 read-only HTTP evidence
+`docs/reference/ragflow-kb-parameter-contract-audit-hermes-test.md`. L1 read-only HTTP evidence
 and L2 disposable mutation require separate approval and cannot be inferred from an L0
 pass. Until a new version-bound writable contract exists, the ordinary next work is
 release-health observation or optional Hermes L0 corroboration, not Stage 8C
@@ -2283,7 +2297,20 @@ calls. Independent review added a third fail-before-network regression: all loca
 benchmark and observed-state inputs are now loaded and validated before any retrieval.
 
 FinanceBench had no exactly pinnable existing KB, so the true two-subset baseline and
-cross-subset metric review remain open. Completing them requires a separately authorized
-L3 disposable build/query/cleanup lifecycle with post-cleanup proof. This checkpoint does
-not change the 586/601 roadmap count, open Stage 8C, authorize L3/L4, or change any
-default.
+cross-subset metric review remain open. At this checkpoint, completing them would have
+required a separately authorized L3 disposable build/query/cleanup lifecycle with
+post-cleanup proof. This checkpoint does not change the 586/601 roadmap count, open Stage
+8C, authorize L3/L4, or change any default.
+
+### 2026-08-03 FinanceBench L3 Formal Closeout
+
+The later `NEW_MINIMAL_L3` feasibility gate could not establish the required input
+closure: the reviewed formal-Markdown bytes did not match, the normalized query set and
+benchmark/qrels were unavailable, and zero of nine reviewed evidence spans were present.
+The owner accepted `L3=NOT_COMPLETED_INPUTS_UNAVAILABLE` and formally closed that workflow
+before contract creation or live execution.
+
+FinanceBench observed evidence, the true two-subset baseline, and cross-subset metric
+review therefore remain unavailable rather than completed. They are not current L3 tasks,
+and L4 remains unauthorized. This closeout changes no roadmap checkbox: 586 of 601 items
+remain complete, with the same 15 intentionally gated items.

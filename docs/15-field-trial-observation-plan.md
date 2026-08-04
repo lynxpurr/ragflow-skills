@@ -1,3 +1,17 @@
+---
+doc_type: plan
+topic: field-trial-observation
+status: active
+created: 2026-07-02
+updated: 2026-08-04
+canonical: true
+implementation_authority: false
+owner_spec: null
+supersedes: []
+superseded_by: null
+related: []
+---
+
 # Field Trial Observation Plan
 
 Status: active observation gate
@@ -473,3 +487,14 @@ Decision:
 - Accept the Open RAG result as a pinned read-only subset checkpoint only. Keep the true
   two-subset baseline, cross-subset guidance review, and all default-promotion decisions
   open until FinanceBench observed evidence and cleanup proof exist.
+
+### 2026-08-03 FinanceBench Evidence Closeout
+
+The later bounded `NEW_MINIMAL_L3` feasibility gate stopped before contract creation or
+live execution because the reviewed FinanceBench input bytes were incomplete. The owner
+accepted `L3=NOT_COMPLETED_INPUTS_UNAVAILABLE` and formally closed that workflow.
+
+Run-005 remains valid historical observation, but its L3 trigger is no longer a current
+task. FinanceBench observed evidence and the two-subset comparison remain unavailable;
+the corresponding evidence rows stay open, no replacement live run is implied, and L4
+remains unauthorized.

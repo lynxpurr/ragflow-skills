@@ -261,9 +261,22 @@ Independent merge review also moved all local benchmark and observed-state loadi
 of retrieval, so invalid local evidence fails without a RAGFlow call.
 
 FinanceBench had no exactly pinnable existing KB, so the evidence round stopped at the L2
-boundary. A true two-subset baseline requires separately approved L3 disposable mutation
-and cleanup proof. This checkpoint does not reopen product adapters, script-owned LLMs,
-Stage 8C, DeepDoc comparison, or default promotion.
+boundary. At that checkpoint, a true two-subset baseline would have required separately
+approved L3 disposable mutation and cleanup proof. This checkpoint does not reopen product
+adapters, script-owned LLMs, Stage 8C, DeepDoc comparison, or default promotion.
+
+## FinanceBench L3 Formal Closeout
+
+Closeout date: 2026-08-03
+
+The bounded `NEW_MINIMAL_L3` feasibility gate later stopped before contract creation or
+live execution because its reviewed input bytes were incomplete. The owner accepted
+`L3=NOT_COMPLETED_INPUTS_UNAVAILABLE` and formally closed the workflow. FinanceBench
+observed evidence and the cross-subset comparison remain unavailable, not accepted.
+
+There is no current FinanceBench L3 task or operational authority. L4 and Stage 8C remain
+unauthorized, and the roadmap remains at 586 completed of 601 tracked items with the same
+15 gated items.
 
 ## Closeout Conclusion
 

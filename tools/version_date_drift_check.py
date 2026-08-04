@@ -17,10 +17,10 @@ SCHEMA = "ragflow_version_date_drift_check_v1"
 PUBLIC_SKILLS = ("ragflow-doc-to-md", "ragflow-kb-build", "ragflow-query")
 DOC_VERSION_PATHS = (
     Path("docs/03-development-plan.md"),
-    Path("docs/06-release-hardening.md"),
-    Path("docs/07-first-release.md"),
-    Path("docs/08-cli-agent-integration.md"),
-    Path("docs/12-release-archive-forward-test-prompts.md"),
+    Path("docs/reference/release-hardening.md"),
+    Path("docs/archive/2026/evidence/07-first-release.md"),
+    Path("docs/reference/cli-agent-integration.md"),
+    Path("docs/reference/release-archive-forward-test-prompts.md"),
 )
 VERSION_RE = re.compile(r"\bv(?P<version>\d+\.\d+\.\d+)(?:-rc\d+)?\b")
 STABLE_RELEASE_RE = re.compile(r"\bstable\b", flags=re.IGNORECASE)

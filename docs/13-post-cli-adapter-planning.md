@@ -1,3 +1,18 @@
+---
+doc_type: plan
+topic: post-cli-adapters
+status: gated
+created: 2026-07-02
+updated: 2026-08-04
+canonical: true
+implementation_authority: false
+owner_spec: null
+supersedes: []
+superseded_by: null
+related: []
+gate: concrete_host_or_product_workflow_with_contract_fixtures_and_acceptance_evidence
+---
+
 # Post-CLI Adapter Planning
 
 Status: planning gate; Phase 37.3 adapter intake gate documented

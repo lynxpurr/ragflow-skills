@@ -14,7 +14,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = "ragflow_forward_test_prompt_check_v1"
-PROMPT_PATH = Path("docs/12-release-archive-forward-test-prompts.md")
+PROMPT_PATH = Path("docs/reference/release-archive-forward-test-prompts.md")
 REQUIRED_SECTIONS = (
     "## Requirements",
     "## Hermes Template",

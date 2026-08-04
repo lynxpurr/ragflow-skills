@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -79,6 +80,32 @@ class ReleaseHygieneTests(unittest.TestCase):
         self.assertEqual(payload["generated_markdown_audit"]["schema"], "ragflow_generated_markdown_audit_v1")
         self.assertTrue(payload["runtime_resilience_inventory"]["ok"])
         self.assertEqual(payload["runtime_resilience_inventory"]["schema"], "ragflow_runtime_resilience_inventory_v1")
+        self.assertTrue(payload["document_lifecycle"]["ok"])
+        self.assertEqual(payload["document_lifecycle"]["schema"], "ragflow_document_lifecycle_check_v1")
+
+    def test_hygiene_check_fails_when_document_lifecycle_fails(self) -> None:
+        lifecycle_payload = {
+            "ok": False,
+            "schema": "ragflow_document_lifecycle_check_v1",
+            "findings": [{"check": "private_ipv4_literal", "path": "docs/example.md", "message": "sanitized"}],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("release_hygiene_check.run_document_lifecycle_check", return_value=lifecycle_payload):
+                payload = run_hygiene_check(
+                    dist_dir=Path(tmp) / "dist",
+                    rebuild=True,
+                    scan_source=False,
+                    schema_identity=False,
+                    manifest_schema=False,
+                    rename_governance=False,
+                    forward_test_prompts=False,
+                    version_date_drift=False,
+                    generated_report_safety=False,
+                    runtime_resilience_inventory=False,
+                )
+
+        self.assertFalse(payload["ok"], payload)
+        self.assertEqual(payload["document_lifecycle"], lifecycle_payload)
 
     def test_forbidden_private_path_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

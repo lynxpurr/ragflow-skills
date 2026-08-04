@@ -1,3 +1,18 @@
+---
+doc_type: plan
+topic: kb-parameter-materialization
+status: gated
+created: 2026-07-10
+updated: 2026-08-04
+canonical: true
+implementation_authority: false
+owner_spec: null
+supersedes: []
+superseded_by: null
+related: []
+gate: new_version_bound_writable_contract_candidate_and_separate_live_approval
+---
+
 # RAGFlow KB Parameter Materialization Plan
 
 Status: active KB parameter materialization plan; Stage 8B offline contract audit complete, Stage 8C remains contract- and approval-gated
@@ -299,7 +314,7 @@ Read-only Stage 6 evidence incorporated on 2026-07-10:
 
 Related completed evidence:
 
-- `docs/34-pipeline-consumption-gap-quality-improvement-plan.md` closed the
+- `docs/archive/2026/plans/34-pipeline-consumption-gap-quality-improvement-plan.md` closed the
   handoff-to-KB consumption gap for payload preview, top-level language,
   delimiter guidance, bounded keyword/question enrichment experiments, and
   public-safe retention.

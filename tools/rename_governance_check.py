@@ -57,7 +57,7 @@ class RenameDriftPattern:
     message: str
 
 
-RENAME_POLICY_PATH = Path("docs/11-public-rename-policy.md")
+RENAME_POLICY_PATH = Path("docs/reference/public-rename-policy.md")
 REQUIRED_POLICY_SECTIONS = (
     "## CLI Aliases",
     "## Schema Migration",
@@ -93,7 +93,7 @@ DEFAULT_DRIFT_ROOTS = (
 )
 DEFAULT_COMPATIBILITY_SOURCE_ROOTS = (Path("tools/platform_smoke_matrix.py"),)
 DEFAULT_COMPATIBILITY_COVERAGE_ROOTS = (Path("packages/ragflow-skill-runtime/tests"),)
-DEFAULT_COMPATIBILITY_DOC_ROOTS = (Path("docs/05-cross-platform-smoke.md"),)
+DEFAULT_COMPATIBILITY_DOC_ROOTS = (Path("docs/reference/cross-platform-smoke.md"),)
 DEFAULT_EXCLUDED_RELATIVE_PATHS = {
     "tools/release_hygiene_check.py",
     "tools/rename_governance_check.py",
