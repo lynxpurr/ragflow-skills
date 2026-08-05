@@ -1009,6 +1009,9 @@ def _build_candidate_kb(
 
     dataset_response = client.create_dataset(kb_name, profile=profile.to_dataset_payload())
     dataset_id = extract_dataset_id(dataset_response)
+    build_language = profile.build_language
+    if build_language:
+        client.update_dataset(dataset_id, {"language": build_language})
     uploaded = []
     document_ids: list[str] = []
     for doc in docs:
@@ -1480,6 +1483,9 @@ def _run(args: argparse.Namespace) -> int:
                 }
             )
             dataset_id = extract_dataset_id(dataset_response)
+            build_language = profile.build_language
+            if build_language:
+                client.update_dataset(dataset_id, {"language": build_language})
             stage_results.append({"label": "create_dataset", "status": "success"})
             _write_ingestion_checkpoint(
                 args.checkpoint,

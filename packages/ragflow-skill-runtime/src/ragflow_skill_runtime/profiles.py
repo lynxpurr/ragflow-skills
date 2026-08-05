@@ -114,17 +114,22 @@ class ChunkProfile:
         parser_config = {
             key: value
             for key, value in self.parser_config.items()
-            if not key.startswith("__") and key in SUPPORTED_PARSER_KEYS
+            if not key.startswith("__") and key in SUPPORTED_PARSER_KEYS and not (key == "delimiter" and isinstance(value, str) and value == "")
         }
         payload: dict[str, Any] = {
             "chunk_method": self.chunk_method,
             "parser_config": parser_config,
         }
-        if self.language:
-            payload["language"] = self.language
+        # RAGFlow >= v0.25.5 rejects top-level "language" as "Extra inputs are not permitted".
+        # Language must be set via PUT /datasets/{id} after creation.
         if self.embedding_model:
             payload["embedding_model"] = self.embedding_model
         return payload
+
+    @property
+    def build_language(self) -> str | None:
+        """Return the language that should be set on the dataset after creation."""
+        return self.language
 
     def to_manifest_dict(self) -> dict[str, Any]:
         return {

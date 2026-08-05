@@ -80,6 +80,13 @@ class RAGFlowClient:
             payload.update({k: v for k, v in profile.items() if v is not None})
         return self.post("/datasets", payload)
 
+    def update_dataset(self, dataset_id: str, updates: Mapping[str, Any]) -> Any:
+        """Update a RAGFlow dataset with partial settings (e.g. language after creation).
+
+        RAGFlow >= v0.25.5 rejects "language" at creation time; it must be set via PUT.
+        """
+        return self.put(f"/datasets/{dataset_id}", updates)
+
     def get_dataset(self, dataset_id: str) -> Any:
         """Fetch one dataset by ID."""
 
