@@ -15,6 +15,7 @@ For a copy-paste prompt that end users can give to their own host agent, use `us
 - Distinguish MinerU execution modes before testing conversion. The `mineru-fastapi` backend supports MinerU 3.2+ FastAPI protocol v2: submit files to `/tasks`, poll `/tasks/{task_id}`, then read Markdown from `/tasks/{task_id}/result`. The `mineru-v4` and `mineru-platform` backends support MinerU v4 platform-compatible APIs, including the public `mineru.net` API: request upload URLs at `/api/v4/file-urls/batch`, upload files with `PUT`, poll `/api/v4/extract-results/batch/{batch_id}`, then extract Markdown from `full_zip_url`. The `mineru-cli` backend runs a local MinerU binary. The `mineru` and `mineru-agent` backends support the MinerU Agent API shape: create a parse task with `/parse/file`, upload to the returned URL, poll `/parse/{task_id}`, then download Markdown. The `mineru-sync` and `mineru-local` backends are legacy compatibility paths for synchronous multipart `/parse` services.
 - For a remote MinerU FastAPI service, set `doc_to_md.backend: mineru-fastapi` explicitly. For a MinerU v4 platform-compatible API, set `doc_to_md.backend: mineru-v4` or `mineru-platform` explicitly. Use `auto` only when local `mineru-cli` discovery is intentionally allowed. Do not set `doc_to_md.backend: mineru` for a FastAPI v2, v4 platform-compatible, or synchronous multipart MinerU service.
 - Do not patch `scripts/_vendor` inside release artifacts. New backend support must be implemented in the source runtime package and then re-vendored by the release builder.
+- Read `staging-validation-and-recovery.md` before an authorized live build, checkpoint resume, real-manifest consistency check, or answer-layer interpretation of negative retrieval.
 - Keep all E2E artifacts in a temporary or user-approved workspace, and report paths at the end.
 
 ## Config Locations
@@ -239,6 +240,13 @@ and assistant/query artifacts without implying they are all written to RAGFlow. 
 delimiters help boundaries only when the deployment honors `parser_config.delimiter` and
 do not override server-side parent chunk limits.
 
+Dry-run success does not create a real `kb_manifest.json` and cannot close a post-build
+artifact consistency gate. Record that gate as pending until an authorized live build
+writes the real manifest. If a later parse trigger or wait fails after dataset creation or
+upload, inspect the checkpoint and read-only server state, fix the shared cause, and resume
+the same build. Do not create a suffixed replacement KB or repeat confirmed uploads to
+hide the failure.
+
 ## Complex Table Ingest Review
 
 For complex specification tables, keep the review offline until the user explicitly
@@ -323,6 +331,17 @@ python ragflow-query/scripts/query.py \
   --host-assisted \
   --json
 ```
+
+The `--output` file above is the real post-build manifest. Use it with fresh observed
+state for consistency, parse, health, and validation reports. Treat nonzero application
+`code` values as parse-trigger failures even when the transport returned JSON. If the
+build is interrupted, use the same reviewed profile, KB name, checkpoint, and `--resume`;
+verify exact dataset identity, document counts, and embedding model before continuing.
+
+Live parser output may merge reviewed Markdown markers or add alternate HTML/table
+chunks. Measure retrieval impact before changing canonical text or parser settings. A
+non-empty query against a forced single KB is diagnostic only and does not prove that the
+actual answer layer will or should answer.
 
 For PDF/Office/image E2E, use `--backend mineru-fastapi` when the service implements MinerU FastAPI protocol v2, or `--backend mineru-v4` when it implements the MinerU v4 platform-compatible protocol. Keep `--backend auto` only when a local MinerU CLI is configured and should be preferred. Use `--backend mineru-cli` to force local CLI, `--backend mineru` when the service implements the MinerU Agent API, or `--backend mineru-sync` only for legacy synchronous multipart `/parse`. If no compatible CLI or service protocol can be identified, report the uncertainty and skip the MinerU test rather than guessing.
 

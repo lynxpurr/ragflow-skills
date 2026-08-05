@@ -3,7 +3,7 @@ doc_type: reference
 topic: release-hardening
 status: reference
 created: 2026-06-23
-updated: 2026-08-03
+updated: 2026-08-05
 canonical: true
 implementation_authority: false
 owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
@@ -33,6 +33,19 @@ python3 tools/live_integration_check.py
 ```
 
 Run these commands sequentially. Several release tools rebuild `dist/`, so parallel execution can corrupt an in-progress check.
+
+### Failure Attribution And Focused Runtime Fixes
+
+For a bounded runtime correction:
+
+1. Review the source diff and run focused tests that exercise the changed contract.
+2. Run `tools/build_release.py --check` and `tools/vendor_import_smoke.py` to prove the public skills receive the updated runtime.
+3. When the authoring host provides the Skill Creator validator, run its `quick_validate.py` for each changed skill source and generated release skill. This is an authoring check, not a repository-bundled runtime command.
+4. Run the full runtime and release hygiene suites before public release.
+
+If the full suite or release hygiene check fails outside the changed surface, reproduce the same command on a clean `HEAD` worktree before attributing the failure. Record a clean-HEAD reproduction as existing baseline debt; do not claim it passed, hide it, or mix an unrelated repair into the bounded fix.
+
+Edit shared behavior in `packages/ragflow-skill-runtime/src` and public skill guidance under `skills/`. Do not edit or commit generated `dist/`, release archives, or an installed host copy as though they were source. Rebuild and validate generated artifacts, then update host installations through the normal deployment flow.
 
 ### MinerU CLI Acceptance Gate
 
