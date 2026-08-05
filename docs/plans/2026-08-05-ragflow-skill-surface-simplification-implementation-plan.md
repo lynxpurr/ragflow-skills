@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 topic: skill-surface-simplification-implementation
-status: approved
+status: implemented
 created: 2026-08-05
 updated: 2026-08-05
 canonical: false
@@ -1560,4 +1560,16 @@ for separate execution authority. The implementation task is complete only after
 authority, successful Tasks 0-6, all acceptance checks, sanitized selection evidence, and
 owner review of the exact implementation diff. Completion creates no Phase 3 authority.
 
-`implementation=NOT_STARTED`
+## Lifecycle Closeout
+
+Owner-authorized Tasks 0-6 are complete. The guidance and static-contract checkpoint is
+commit `b209b674eac568634dae7d2f81e9d15b76562ae2`; the sanitized evidence and closeout
+checkpoint is commit `04eaec05d35758cc3e5920fe4613d802d6d1ce29`. Owner review accepted
+the exact thirteen-path implementation after the full release-facing validation chain.
+
+The frozen `NOT_STARTED` planning value and unchecked boxes above preserve the original
+execution plan; they do not describe current implementation state or create renewed
+authority. Phase 3 remains a separate gated design task, and this plan retains
+`implementation_authority=false`.
+
+`implementation=PHASE_1_2_COMPLETE / PHASE_3_GATED`

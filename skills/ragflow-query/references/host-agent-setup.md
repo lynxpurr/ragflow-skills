@@ -239,6 +239,13 @@ and assistant/query artifacts without implying they are all written to RAGFlow. 
 delimiters help boundaries only when the deployment honors `parser_config.delimiter` and
 do not override server-side parent chunk limits.
 
+Dry-run success does not create a real `kb_manifest.json` and cannot close a post-build
+artifact consistency gate. Record that gate as pending until an authorized live build
+writes the real manifest. If a later parse trigger or wait fails after dataset creation or
+upload, inspect the checkpoint and read-only server state, fix the shared cause, and resume
+the same build. Do not create a suffixed replacement KB or repeat confirmed uploads to
+hide the failure.
+
 ## Complex Table Ingest Review
 
 For complex specification tables, keep the review offline until the user explicitly
@@ -323,6 +330,17 @@ python ragflow-query/scripts/query.py \
   --host-assisted \
   --json
 ```
+
+The `--output` file above is the real post-build manifest. Use it with fresh observed
+state for consistency, parse, health, and validation reports. Treat nonzero application
+`code` values as parse-trigger failures even when the transport returned JSON. If the
+build is interrupted, use the same reviewed profile, KB name, checkpoint, and `--resume`;
+verify exact dataset identity, document counts, and embedding model before continuing.
+
+Live parser output may merge reviewed Markdown markers or add alternate HTML/table
+chunks. Measure retrieval impact before changing canonical text or parser settings. A
+non-empty query against a forced single KB is diagnostic only and does not prove that the
+actual answer layer will or should answer.
 
 For PDF/Office/image E2E, use `--backend mineru-fastapi` when the service implements MinerU FastAPI protocol v2, or `--backend mineru-v4` when it implements the MinerU v4 platform-compatible protocol. Keep `--backend auto` only when a local MinerU CLI is configured and should be preferred. Use `--backend mineru-cli` to force local CLI, `--backend mineru` when the service implements the MinerU Agent API, or `--backend mineru-sync` only for legacy synchronous multipart `/parse`. If no compatible CLI or service protocol can be identified, report the uncertainty and skip the MinerU test rather than guessing.
 

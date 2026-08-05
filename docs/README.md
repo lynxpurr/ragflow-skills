@@ -30,8 +30,12 @@ operations, mutation, staging, commit, push, L3, Stage 8C, or L4.
 - [Wave 3 successor plan](plans/2026-08-03-document-lifecycle-and-spec-archive-wave-3-implementation-plan.md) - Waves 3A-3B complete; `docs/16` and `docs/43` gated; `implementation_authority=false`.
 - [Wave 4 successor plan](plans/2026-08-04-document-lifecycle-and-spec-archive-wave-4-implementation-plan.md) - implemented, committed, and pushed; `implementation_authority=false`.
 - [Wave 5 successor plan](plans/2026-08-04-document-lifecycle-and-spec-archive-wave-5-implementation-plan.md) - adoption implemented; final validation passed; `implementation_authority=false`.
-- [Skill surface simplification design](superpowers/specs/2026-08-02-ragflow-skill-surface-simplification-design.md) - approved guidance-only design on its reviewed legacy path; `implementation_authority=false`.
-- [Skill surface simplification implementation plan](plans/2026-08-05-ragflow-skill-surface-simplification-implementation-plan.md) - approved planning-only Phase 1/2 plan; `implementation_authority=false`.
+- [Skill surface simplification design](superpowers/specs/2026-08-02-ragflow-skill-surface-simplification-design.md) - active canonical owner after verified Phase 1/2 implementation; Phase 3 remains separately gated and `implementation_authority=false`.
+- [Skill surface simplification implementation plan](plans/2026-08-05-ragflow-skill-surface-simplification-implementation-plan.md) - implemented and verified for Phase 1/2; Phase 3 remains outside its authority.
+
+## Current Evidence
+
+- [Skill surface selection review](evidence/2026-08-05-ragflow-skill-surface-selection-review.md) - implemented sanitized twelve-case selection evidence; no implementation or live-operation authority.
 
 ## Active, Approved, And Gated Owners
 

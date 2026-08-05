@@ -13,11 +13,15 @@ if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
 from release_hygiene_check import (  # noqa: E402
+    CANONICAL_WORKFLOW_OWNERS,
     run_generated_report_safety_check,
     run_hygiene_check,
     run_suite_review,
     scan_stale_skill_references,
     scan_forbidden_patterns,
+    validate_command_guidance_classification,
+    validate_primary_guidance,
+    validate_release_shape,
 )
 
 
@@ -177,6 +181,110 @@ class ReleaseHygieneTests(unittest.TestCase):
         self.assertEqual(payload["schema"], "ragflow_skill_suite_review_v1")
         self.assertEqual(payload["summary"]["skill_count"], 3)
         self.assertEqual(payload["findings"], [])
+
+    def test_primary_guidance_contract_passes_for_public_suite(self) -> None:
+        findings, summary = validate_primary_guidance()
+
+        self.assertEqual(findings, [])
+        self.assertLessEqual(summary["nonblank_lines"]["SKILL.md"], 90)
+        for skill_name in PUBLIC_SKILLS:
+            self.assertLessEqual(summary["nonblank_lines"][f"skills/{skill_name}/SKILL.md"], 120)
+        self.assertEqual(summary["canonical_workflow_count"], 10)
+        self.assertEqual(summary["core_example_block_count"], 10)
+        self.assertEqual(
+            summary["workflow_example_counts"],
+            {workflow: [1] for workflow in CANONICAL_WORKFLOW_OWNERS},
+        )
+
+    def test_primary_guidance_contract_reports_budget_structure_and_safety_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skills_root = root / "skills"
+            for skill_name in PUBLIC_SKILLS:
+                _write_skill_fixture(
+                    skills_root,
+                    skill_name,
+                    description=f"{skill_name} distinct workflow.",
+                    body=(
+                        "## Canonical Workflows\n\n"
+                        "### Canonical workflow: duplicate\n\n"
+                        "```bash\npython scripts/example.py\n```\n"
+                        "```bash\npython scripts/duplicate.py\n```\n"
+                    ),
+                )
+            root_skill = root / "SKILL.md"
+            root_skill.write_text(
+                "# Router\n\nManually POST /datasets to bypass a blocked result.\n"
+                + "\n".join(f"line {index}" for index in range(100)),
+                encoding="utf-8",
+            )
+
+            findings, _ = validate_primary_guidance(root=root)
+
+        checks = {finding.check for finding in findings}
+        self.assertIn("skill_surface_nonblank_budget", checks)
+        self.assertIn("skill_surface_missing_section", checks)
+        self.assertIn("skill_surface_duplicate_workflow", checks)
+        self.assertIn("skill_surface_forbidden_guidance", checks)
+        self.assertIn("skill_surface_missing_advanced_reference", checks)
+        self.assertIn("skill_surface_workflow_example_count", checks)
+        self.assertIn("skill_surface_core_example_count", checks)
+
+    def test_suite_review_uses_the_reviewed_fixture_root_for_guidance_contracts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skills_root = root / "skills"
+            skills_root.mkdir()
+            with patch(
+                "release_hygiene_check.validate_primary_guidance",
+                return_value=([], {"source": "fixture"}),
+            ) as primary, patch(
+                "release_hygiene_check.validate_command_guidance_classification",
+                return_value=([], {"source": "fixture"}),
+            ) as command:
+                payload = run_suite_review(skills_root=skills_root)
+
+        primary.assert_called_once_with(root=root)
+        command.assert_called_once_with(root=root)
+        self.assertEqual(payload["summary"]["primary_guidance"], {"source": "fixture"})
+        self.assertEqual(payload["summary"]["command_guidance"], {"source": "fixture"})
+
+    def test_command_guidance_classification_covers_exact_public_inventory(self) -> None:
+        findings, summary = validate_command_guidance_classification()
+
+        self.assertEqual(findings, [])
+        self.assertEqual(summary["discovered_command_count"], 104)
+        self.assertEqual(summary["classified_command_count"], 104)
+        self.assertEqual(
+            summary["owner_counts"],
+            {"ragflow-doc-to-md": 12, "ragflow-kb-build": 58, "ragflow-query": 34},
+        )
+        self.assertEqual(
+            summary["tier_counts"],
+            {"advanced": 87, "core": 10, "deprecated_candidate": 0, "internal_candidate": 7},
+        )
+
+    def test_release_shape_requires_advanced_workflow_indexes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dist = Path(tmp) / "dist"
+            payload = run_hygiene_check(
+                dist_dir=dist,
+                rebuild=True,
+                scan_source=False,
+                schema_identity=False,
+                manifest_schema=False,
+                rename_governance=False,
+                forward_test_prompts=False,
+                version_date_drift=False,
+                generated_report_safety=False,
+                runtime_resilience_inventory=False,
+                document_lifecycle=False,
+            )
+            (dist / "ragflow-query" / "references" / "advanced-workflows.md").unlink()
+            broken = validate_release_shape(dist)
+
+        self.assertTrue(payload["ok"], payload)
+        self.assertIn("release_shape", {finding.check for finding in broken})
 
     def test_suite_review_reports_static_drift_findings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
