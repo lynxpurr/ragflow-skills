@@ -335,7 +335,7 @@ Each public child `SKILL.md` uses the same structure:
 
 1. when to use the skill;
 2. required inputs and primary outputs;
-3. two to five canonical workflows;
+3. two to six canonical workflows;
 4. decision and stop rules;
 5. advanced triggers and reference links;
 6. one compact security note.
@@ -542,6 +542,7 @@ measurable selection criteria.
 | 2026-08-03 | Preserve `NEW_MINIMAL_L3` as `L3=NOT_COMPLETED_INPUTS_UNAVAILABLE`. | The owner closed the workflow before contract creation; simplification cannot recreate evidence or authority. |
 | 2026-08-04 | Treat the adopted lifecycle registry as the sole document-state authority and retain tracked `docs/43` at `status=reference` on its current path. | Gate 0 is closed and Wave 5 is complete; this spec must not execute Wave 2D or another status/path migration. |
 | 2026-08-04 | Defer file assignments and task sequencing to a future implementation plan while retaining acceptance-level matrices. | The spec defines behavior and gates; a later plan will define execution mechanics only after exact-SHA owner approval. |
+| 2026-08-05 | Allow two to six canonical workflows per child while preserving the approved ten-family `2/6/2` ownership split. | The intent table assigns six KB lifecycle families to `ragflow-kb-build`; the earlier two-to-five bound contradicted that explicit contract. |
 
 ## Validation Strategy
 

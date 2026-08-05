@@ -40,7 +40,7 @@ and strict-vendor platform-smoke tools.
 | --- | --- |
 | Execution state | `NOT_STARTED` |
 | Governing spec | `docs/superpowers/specs/2026-08-02-ragflow-skill-surface-simplification-design.md` |
-| Governing spec SHA-256 | `3d5708ab34025ba3b4eb1f452e8df210baffd99c0479ec7b4a915d7a2ed4b90d` |
+| Governing spec SHA-256 | `4d54178d83ca2c6032ac1d24b309060645519e02cbeb44a86b5499cb4a63d5f9` |
 | Governing state | `status=approved`, `implementation_authority=false` |
 | Planning branch | `feature/skill-surface-simplification-plan` |
 | Merged design baseline | `1d8473c2f6884d4c39203588e639ea6186c7db28` |
@@ -60,16 +60,21 @@ design and plan even after this plan is approved.
 
 ## Planning-Only Change Set
 
-Creating this proposed plan changes exactly three paths:
+The proposal-stage planning batch and its later approval-state landing were limited to
+exactly three paths:
 
-- create `docs/plans/2026-08-05-ragflow-skill-surface-simplification-implementation-plan.md`;
-- register it in `docs/document-registry.json` with `status=proposed`,
-  `implementation_authority=false`, and the approved design as owner;
-- link it from `docs/README.md` without changing any product, roadmap, or governance gate.
+- create and then approve
+  `docs/plans/2026-08-05-ragflow-skill-surface-simplification-implementation-plan.md`;
+- register it first with `status=proposed`, then atomically promote it to
+  `status=approved`, while retaining `implementation_authority=false` and the approved
+  design as owner;
+- index the same proposal and approval states in `docs/README.md` without changing any
+  product, roadmap, or governance gate.
 
-Planning acceptance requires lifecycle `68/68/0`, 20 migrations, `adopted=true`, roadmap
-`586/15`, empty staging, and exactly these three dirty paths. Every task below describes
-future work and remains unauthorized until the separate execution gate is satisfied.
+Proposal-stage and approval-state acceptance required lifecycle `68/68/0`, 20 migrations,
+`adopted=true`, roadmap `586/15`, empty staging, and exactly these three dirty paths.
+Every task below describes future work and remains unauthorized until the separate
+execution gate is satisfied.
 
 ## Authorized Future File Map
 
@@ -124,7 +129,7 @@ unauthorized.
 - [ ] **Step 1: Verify exact authority and repository state**
 
 Require an owner instruction naming this plan's approved exact SHA-256 and authorizing
-the `Phase 1/2 guidance-only slice`. Before that instruction, the proposed plan must have
+the `Phase 1/2 guidance-only slice`. Before that instruction, the plan must have
 completed its separate approval-state landing and review; approval alone still creates no
 implementation authority. Create `feature/skill-surface-simplification-implementation`
 from the `develop` commit that contains the merged approved-plan bytes. Verify that exact
@@ -180,8 +185,9 @@ snapshot and the first edit.
 
 - [ ] **Step 1: Extend the imports and add focused contract tests**
 
-Add `validate_command_guidance_classification` and `validate_primary_guidance` to the
-existing import block. Add these complete tests to `ReleaseHygieneTests`:
+Add `CANONICAL_WORKFLOW_OWNERS`, `validate_command_guidance_classification`, and
+`validate_primary_guidance` to the existing import block. Add these complete tests to
+`ReleaseHygieneTests`:
 
 ```python
     def test_primary_guidance_contract_passes_for_public_suite(self) -> None:
@@ -193,6 +199,10 @@ existing import block. Add these complete tests to `ReleaseHygieneTests`:
             self.assertLessEqual(summary["nonblank_lines"][f"skills/{skill_name}/SKILL.md"], 120)
         self.assertEqual(summary["canonical_workflow_count"], 10)
         self.assertEqual(summary["core_example_block_count"], 10)
+        self.assertEqual(
+            summary["workflow_example_counts"],
+            {workflow: [1] for workflow in CANONICAL_WORKFLOW_OWNERS},
+        )
 
     def test_primary_guidance_contract_reports_budget_structure_and_safety_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -207,6 +217,7 @@ existing import block. Add these complete tests to `ReleaseHygieneTests`:
                         "## Canonical Workflows\n\n"
                         "### Canonical workflow: duplicate\n\n"
                         "```bash\npython scripts/example.py\n```\n"
+                        "```bash\npython scripts/duplicate.py\n```\n"
                     ),
                 )
             root_skill = root / "SKILL.md"
@@ -224,6 +235,27 @@ existing import block. Add these complete tests to `ReleaseHygieneTests`:
         self.assertIn("skill_surface_duplicate_workflow", checks)
         self.assertIn("skill_surface_forbidden_guidance", checks)
         self.assertIn("skill_surface_missing_advanced_reference", checks)
+        self.assertIn("skill_surface_workflow_example_count", checks)
+        self.assertIn("skill_surface_core_example_count", checks)
+
+    def test_suite_review_uses_the_reviewed_fixture_root_for_guidance_contracts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skills_root = root / "skills"
+            skills_root.mkdir()
+            with patch(
+                "release_hygiene_check.validate_primary_guidance",
+                return_value=([], {"source": "fixture"}),
+            ) as primary, patch(
+                "release_hygiene_check.validate_command_guidance_classification",
+                return_value=([], {"source": "fixture"}),
+            ) as command:
+                payload = run_suite_review(skills_root=skills_root)
+
+        primary.assert_called_once_with(root=root)
+        command.assert_called_once_with(root=root)
+        self.assertEqual(payload["summary"]["primary_guidance"], {"source": "fixture"})
+        self.assertEqual(payload["summary"]["command_guidance"], {"source": "fixture"})
 
     def test_command_guidance_classification_covers_exact_public_inventory(self) -> None:
         findings, summary = validate_command_guidance_classification()
@@ -321,7 +353,7 @@ CANONICAL_WORKFLOW_OWNERS = {
     "retrieve evidence": "ragflow-query",
     "review answer support": "ragflow-query",
 }
-CORE_EXAMPLE_BLOCK_LIMITS = {
+CORE_EXAMPLE_BLOCK_COUNTS = {
     "ragflow-doc-to-md": 2,
     "ragflow-kb-build": 6,
     "ragflow-query": 2,
@@ -333,7 +365,10 @@ REQUIRED_ROOT_GUIDANCE = (
     "exact dataset id",
     "do not bypass",
 )
-CANONICAL_WORKFLOW_RE = re.compile(r"^### Canonical workflow: (.+?)\s*$", re.MULTILINE)
+CANONICAL_WORKFLOW_SECTION_RE = re.compile(
+    r"^### Canonical workflow: (.+?)\s*$\n(.*?)(?=^##(?:#)?\s|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
 SHELL_EXAMPLE_BLOCK_RE = re.compile(r"```(?:bash|sh)\n(.*?)```", re.DOTALL)
 FORBIDDEN_PRIMARY_GUIDANCE = (
     re.compile(r"--allow-blocked\b", re.IGNORECASE),
@@ -514,6 +549,7 @@ def validate_primary_guidance(*, root: Path = ROOT) -> tuple[list[Finding], dict
     findings: list[Finding] = []
     nonblank_lines: dict[str, int] = {}
     workflows: dict[str, list[str]] = {}
+    workflow_example_counts: dict[str, list[int]] = {}
     core_example_block_count = 0
 
     for relative, path in _primary_skill_paths(root).items():
@@ -590,18 +626,31 @@ def validate_primary_guidance(*, root: Path = ROOT) -> tuple[list[Finding], dict
                     "child skill must link its packaged advanced workflow index",
                 )
             )
-        for name in CANONICAL_WORKFLOW_RE.findall(text):
-            workflows.setdefault(name.strip().lower(), []).append(skill_name)
+        for name, body in CANONICAL_WORKFLOW_SECTION_RE.findall(text):
+            workflow = name.strip().lower()
+            workflows.setdefault(workflow, []).append(skill_name)
+            workflow_examples = [
+                block for block in SHELL_EXAMPLE_BLOCK_RE.findall(body) if "python scripts/" in block
+            ]
+            workflow_example_counts.setdefault(workflow, []).append(len(workflow_examples))
+            if len(workflow_examples) != 1:
+                findings.append(
+                    Finding(
+                        "skill_surface_workflow_example_count",
+                        relative,
+                        f"canonical workflow {workflow!r} has {len(workflow_examples)} preferred examples; expected 1",
+                    )
+                )
         example_blocks = [
             block for block in SHELL_EXAMPLE_BLOCK_RE.findall(text) if "python scripts/" in block
         ]
         core_example_block_count += len(example_blocks)
-        if len(example_blocks) > CORE_EXAMPLE_BLOCK_LIMITS[skill_name]:
+        if len(example_blocks) != CORE_EXAMPLE_BLOCK_COUNTS[skill_name]:
             findings.append(
                 Finding(
-                    "skill_surface_core_example_budget",
+                    "skill_surface_core_example_count",
                     relative,
-                    f"core example blocks {len(example_blocks)} exceed {CORE_EXAMPLE_BLOCK_LIMITS[skill_name]}",
+                    f"core example blocks {len(example_blocks)} do not equal {CORE_EXAMPLE_BLOCK_COUNTS[skill_name]}",
                 )
             )
 
@@ -632,6 +681,7 @@ def validate_primary_guidance(*, root: Path = ROOT) -> tuple[list[Finding], dict
         "nonblank_lines": nonblank_lines,
         "canonical_workflow_count": len(workflows),
         "core_example_block_count": core_example_block_count,
+        "workflow_example_counts": workflow_example_counts,
     }
 
 
@@ -684,8 +734,9 @@ must not be subject to shared-reference hash equality.
 Insert this exact integration before the `run_suite_review` return value:
 
 ```python
-    primary_findings, primary_summary = validate_primary_guidance(root=ROOT)
-    command_findings, command_summary = validate_command_guidance_classification(root=ROOT)
+    suite_root = skills_root.parent
+    primary_findings, primary_summary = validate_primary_guidance(root=suite_root)
+    command_findings, command_summary = validate_command_guidance_classification(root=suite_root)
     findings.extend(primary_findings)
     findings.extend(command_findings)
 ```
@@ -1503,10 +1554,10 @@ Stop before or during execution if any of the following occurs:
 
 ## Definition Of Done
 
-This planning task is complete when the proposed plan is registered and indexed, all
-planning-only validations pass, its exact SHA-256 is reported, and work stops for owner
-approval. The implementation task is complete only after separate execution authority,
-successful Tasks 0-6, all acceptance checks, sanitized selection evidence, and owner
-review of the exact implementation diff. Completion creates no Phase 3 authority.
+This planning task is complete when the plan is registered and indexed as approved, all
+planning-only validations pass, its exact approved SHA-256 is reported, and work stops
+for separate execution authority. The implementation task is complete only after that
+authority, successful Tasks 0-6, all acceptance checks, sanitized selection evidence, and
+owner review of the exact implementation diff. Completion creates no Phase 3 authority.
 
 `implementation=NOT_STARTED`
