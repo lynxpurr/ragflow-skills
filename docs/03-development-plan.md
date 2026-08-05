@@ -2314,3 +2314,17 @@ FinanceBench observed evidence, the true two-subset baseline, and cross-subset m
 review therefore remain unavailable rather than completed. They are not current L3 tasks,
 and L4 remains unauthorized. This closeout changes no roadmap checkbox: 586 of 601 items
 remain complete, with the same 15 intentionally gated items.
+
+## Skill Surface Simplification Closeout
+
+The approved Phase 1/2 guidance-only simplification reduced the root router to at most 90
+nonblank lines and each public child entrypoint to at most 120, with ten canonical workflow
+families and trigger-based advanced indexes. Static suite review classifies all 104 public
+commands exactly once while preserving command discovery, report/schema identities,
+runtime behavior, defaults, and live-operation gates. The twelve-case agent-selection
+review passed its skill, workflow, advanced-trigger, safety, and step-count thresholds.
+
+This closeout does not authorize Phase 3 deprecation, Stage 8C, either L4 decision,
+script-owned LLM/backend work, post-CLI adapters, private bridges, or live operations.
+`NEW_MINIMAL_L3` remains `L3=NOT_COMPLETED_INPUTS_UNAVAILABLE`; the roadmap remains 586
+checked and 15 intentionally gated unchecked items.

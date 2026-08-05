@@ -284,3 +284,17 @@ The project is no longer in a broad feature-construction phase. The current publ
 is ready for sustained real use through the portable CLI/archive path. Future work should
 be evidence-led: observe, measure, decide, then implement the smallest gated slice that a
 real workflow proves necessary.
+
+## Skill Surface Simplification Calibration
+
+The Phase 1/2 skill-surface round is complete as a compatibility-preserving guidance
+change. The root routes ten canonical workflow families, child skills use progressive
+disclosure, advanced commands remain available through trigger-based references and CLI
+help, and all 104 public commands retain their existing behavior and inventory states.
+Representative agent selection met the approved twelve-case thresholds without raw HTTP
+workarounds or unapproved mutation.
+
+Phase 3 remains a separate evidence-based deprecation gate. Document governance remains
+adopted, `docs/43-agent-session-handoff-lessons.md` remains tracked at its current path
+with registry `status=reference`, and Wave 2D, Stage 8C, both L4 decisions, closed L3, and
+the 15 gated roadmap items are unchanged.
