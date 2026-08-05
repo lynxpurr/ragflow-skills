@@ -1,154 +1,94 @@
 ---
 name: ragflow-kb-build
-description: Build and validate RAGFlow knowledge bases from Markdown handoff bundles. Use when Codex needs to upload Markdown documents into RAGFlow, apply chunking profiles, inspect parse status, or validate retrieval quality with smoke, regression, or benchmark checks.
+description: Inspect Markdown handoffs, dry-run and build one reviewed RAGFlow knowledge base, validate retrieval quality, inspect health, and perform exact cleanup. Use when Codex owns the handoff-to-KB lifecycle; advanced benchmark, profile, metadata, topology, and optimization work requires an explicit trigger.
 ---
 
 # RAGFlow KB Build
 
-Use scripts in this skill to create, inspect, and validate RAGFlow datasets from Markdown inputs.
+## When to use
 
-Inputs:
+Use this skill after a Markdown handoff exists. It owns handoff inspection, non-mutating
+readiness, one explicitly approved KB build, validation, health review, and exact cleanup.
 
-- A Markdown file or directory via `--input`, or a handoff manifest via `--doc-manifest`.
-- A chunk profile JSON/YAML via `--profile`.
-- RAGFlow connection from `RAGFLOW_BASE_URL` and `RAGFLOW_API_KEY`, or `--base-url` and `--api-key`.
+## Inputs and outputs
 
-Commands:
+Inputs are `doc_manifest.json` or reviewed Markdown, a KB name, a chunk profile, and a
+private RAGFlow config only when a live or read-only call is approved. Outputs include
+dry-run JSON, `kb_manifest.json`, validation and health reports, and cleanup previews.
+
+## Canonical workflows
+
+### Canonical workflow: inspect a handoff
 
 ```bash
-python scripts/build.py --input ./markdown --kb-name kb:project --profile ./templates/default-en-768.json --output ./run/kb_manifest.json
-python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-zh-512.json
-python scripts/build.py --config /path/to/ragflow-config.local.yaml --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-zh-512.json
-python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-en-768.json --dry-run --json
-python scripts/build.py --config /path/to/ragflow-config.local.yaml --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-en-768.json --dry-run --probe-kb-name-collision --json
-python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --retrieval-hints ./handoff/retrieval_hints.json --ingest-plan ./handoff/ragflow_ingest_plan.yaml --kb-name kb:project --profile ./templates/bge-m3-en-768.json --expected-embedding-model bge-m3 --dry-run --json
-python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --metadata ./run/metadata.merged.json --kb-name kb:project --profile ./templates/default-en-768.json --dry-run --json
-python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-en-768.json --allow-blocked
-python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-en-768.json --batch-size 25 --output ./run/kb_manifest.json
-python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-en-768.json --checkpoint ./run/kb_build.checkpoint.json --batch-size 25 --output ./run/kb_manifest.json
-python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb:project --profile ./templates/default-en-768.json --checkpoint ./run/kb_build.checkpoint.json --resume --batch-size 25 --output ./run/kb_manifest.json
-python scripts/build.py model-providers probe --config /path/to/ragflow-config.local.yaml --embedding-model bge-m3 --rerank-model bge-reranker --embedding-adapter-url https://embedding.example/v1/embeddings --rerank-adapter-url https://rerank.example/rerank --report-md ./run/model_provider_probe.md --redaction-report ./run/model_provider_redaction.json --json
-python scripts/build.py inspect-handoff --handoff ./handoff --report-md ./run/handoff_inspection.md
-python scripts/build.py asset-upload-plan --doc-manifest ./handoff/doc_manifest.json --report-json ./run/asset_upload_plan.json --report-md ./run/asset_upload_plan.md --package-zip ./run/asset_upload_package.zip --json
-python scripts/build.py image-ingestion-execute --execute --asset-upload-plan ./run/asset_upload_plan.json --dataset-id DATASET_ID --confirm-dataset-id DATASET_ID --confirm-planned-count 15 --base-url https://ragflow.example --api-key REVIEWED_KEY --batch-size 10 --report-json ./run/image_ingestion_execute.json --json
-python scripts/build.py image-ingestion-execute --execute --asset-upload-plan ./run/asset_upload_plan.json --dataset-id DATASET_ID --confirm-dataset-id DATASET_ID --confirm-planned-count 15 --base-url https://ragflow.example --api-key REVIEWED_KEY --checkpoint ./run/image_ingestion.checkpoint.json --resume --batch-size 10 --report-json ./run/image_ingestion_execute.json --json
-python scripts/build.py consistency-check --retrieval-hints ./handoff/retrieval_hints.json --asset-upload-plan ./run/asset_upload_plan.json --chunk-profile-report ./handoff/chunk_profile_report.json --kb-manifest ./run/kb_manifest.json --report-json ./run/kb_artifact_consistency_report.json --report-md ./run/kb_artifact_consistency_report.md --redaction-report ./run/kb_artifact_consistency_redaction.json --json
-python scripts/build.py metadata generate-template --doc-manifest ./handoff/doc_manifest.json --output ./run/metadata.template.json
-python scripts/build.py metadata lint --metadata ./run/metadata.template.json --report-md ./run/metadata_lint.md
-python scripts/build.py metadata merge --doc-manifest ./handoff/doc_manifest.json --handoff-metadata ./handoff/metadata.json --metadata ./run/metadata.template.json --output ./run/metadata.merged.json
-python scripts/build.py metadata suggest-request --doc-manifest ./handoff/doc_manifest.json --metadata ./run/metadata.merged.json --output ./run/metadata_suggestion_request.json --report-md ./run/metadata_suggestion_request.md
-python scripts/build.py metadata suggest-review --candidate ./run/metadata_suggestion_candidate.json --request ./run/metadata_suggestion_request.json --report-md ./run/metadata_suggestion_review.md
-python scripts/build.py tagset generate-template --output ./run/tagset.template.json
-python scripts/build.py tagset lint --tagset ./run/tagset.template.json --report-md ./run/tagset_lint.md
-python scripts/build.py tagset export --tagset ./run/tagset.template.json --format csv --output ./run/tagset.csv
-python scripts/build.py tagset report --tagset ./run/tagset.template.json --metadata ./run/metadata.merged.json --report-md ./run/tagset_report.md
-python scripts/build.py benchmark import --queries ./templates/benchmark-queries.example.json --qrels ./templates/qrels.example.json --output ./run/benchmark
-python scripts/build.py benchmark import --queries ./run/queries.json --qrels ./run/qrels.json --qa ./run/qa.json --source-attribution ./run/source_attribution.json --selection-report ./run/selection_report.json --output ./run/benchmark --report-md ./run/benchmark_import.md --redaction-report ./run/benchmark_import.redaction.json
-python scripts/build.py benchmark import --queries ./templates/benchmark-queries.example.json --qrels ./templates/qrels.example.json --output ./run/benchmark --checkpoint ./run/benchmark-import.checkpoint.json --batch-size 25
-python scripts/build.py benchmark import --queries ./templates/benchmark-queries.example.json --qrels ./templates/qrels.example.json --output ./run/benchmark --checkpoint ./run/benchmark-import.checkpoint.json --resume --batch-size 25
-python scripts/build.py benchmark preflight --manifest ./run/benchmark/manifest.json --gate-config ./templates/benchmark-gate.example.json --report-md ./run/benchmark_preflight.md
-python scripts/build.py benchmark sample --manifest ./run/benchmark/manifest.json --output ./run/benchmark-sample --size 25 --strategy stratified --seed 7 --report-md ./run/benchmark_sample.md
-python scripts/build.py benchmark summarize --report ./run/benchmark_report.json --report-md ./run/benchmark_summary.md
-python scripts/build.py benchmark gate --report ./run/benchmark_report.json --gate-config ./templates/benchmark-gate.example.json --report-md ./run/benchmark_gate.md
-python scripts/build.py benchmark trend --report ./run/benchmark_report.json --baseline-report ./run/baseline_benchmark_report.json --gate-config ./templates/benchmark-gate.example.json --report-md ./run/benchmark_trend.md
-python scripts/build.py benchmark delta --report ./run/benchmark_report.json --baseline-report ./run/baseline_benchmark_report.json --report-md ./run/benchmark_delta.md
-python scripts/build.py benchmark suggest --report ./run/benchmark_report.json --baseline-report ./run/baseline_benchmark_report.json --gate-config ./templates/benchmark-gate.example.json --current-top-k 3 --current-similarity-threshold 0.25 --report-md ./run/benchmark_suggestions.md
-python scripts/build.py snapshot-chunks --input ./run/benchmark_report.json --output ./run/chunk_snapshot.json --report-md ./run/chunk_snapshot.md
-python scripts/build.py snapshot-chunks --input ./handoff/documents --output ./run/candidate_chunk_snapshot.json --markdown-boundary-mode auto --report-md ./run/candidate_chunk_snapshot.md
-python scripts/build.py suppression-report --report ./run/benchmark_report.json --tagset ./run/tagset.template.json --report-md ./run/suppression_report.md
-python scripts/build.py qa generate --source-dir ./handoff --output ./run/benchmark/qa.generated.json --count 20 --report-md ./run/qa_generate.md
-python scripts/build.py qa validate --qa ./run/benchmark/qa.json --source-dir ./handoff --report-md ./run/qa_validate.md
-python scripts/build.py qa map-evidence --qa ./run/benchmark/qa.json --chunk-snapshot ./run/chunk_snapshot.json --output ./run/qa_evidence_map.json --report-md ./run/qa_evidence_map.md
-python scripts/build.py segment-metadata report --chunk-snapshot ./run/chunk_snapshot.json --metadata ./run/metadata.merged.json --segmentation-plan ./run/segmentation_plan.json --report-md ./run/segment_metadata.md
-python scripts/build.py topology advise --doc-manifest ./handoff/doc_manifest.json --kb-name kb:example --metadata ./run/metadata.merged.json --retrieval-hints ./handoff/retrieval_hints.json --future-growth high --output ./run/kb_topology_advice.json --report-md ./run/kb_topology_advice.md --json
-python scripts/build.py topology split-plan --doc-manifest ./handoff/doc_manifest.json --kb-name kb:example --metadata ./run/metadata.merged.json --retrieval-hints ./handoff/retrieval_hints.json --output ./run/kb_split_plan.json --report-md ./run/kb_split_plan.md --json
-python scripts/build.py activation-plan --kb-manifest ./run/kb_manifest.json --doc-manifest ./handoff/doc_manifest.json --route-config ./routing.json --retrieval-hints ./handoff/retrieval_hints.json --ingest-plan ./handoff/ragflow_ingest_plan.yaml --profile ./profile.json --chunk-snapshot ./run/chunk_snapshot.json --route-tests ./route_tests.json --output ./run/kb_activation_plan.json --report-md ./run/kb_activation_plan.md --json
-python scripts/build.py parse-report --kb-manifest ./run/kb_manifest.json --documents-json ./run/ragflow_documents.json --parse-log ./run/parse.log --profile ./profiles/default.json --report-json ./run/parse_report.json --report-md ./run/parse_report.md --json
-python scripts/build.py refresh-report --kb-manifest ./run/kb_manifest.json --base-url https://ragflow.example --api-key REVIEWED_KEY --report-json ./run/kb_refresh_report.json --report-md ./run/kb_refresh_report.md --redaction-report ./run/kb_refresh_report.redaction.json --json
-python scripts/build.py parse-report --kb-manifest ./run/kb_manifest.json --observed-state ./run/kb_refresh_report.json --report-json ./run/parse_report.json --json
-python scripts/build.py parameter-audit --dry-run-report ./run/kb_build_dry_run.json --observed-state ./run/dataset_read_back.json --evidence-bundle-id 12345678-1234-4678-9234-567812345678 --ragflow-contract-version REVIEWED_VERSION --ragflow-contract-source server_reported --report-json ./run/parameter_read_back_audit.json --report-md ./run/parameter_read_back_audit.md --redaction-report ./run/parameter_read_back_audit.redaction.json --json
-python scripts/build.py snapshot-chunks --input ./run/benchmark_report.json --output ./run/chunk_snapshot.json --observed-state ./run/kb_refresh_report.json --report-md ./run/chunk_snapshot.md
-python scripts/build.py health-report --kb-manifest ./run/kb_manifest.json --parse-report ./run/parse_report.json --observed-state ./run/kb_refresh_report.json --activation-plan ./run/kb_activation_plan.json --model-provider-probe ./run/model_provider_probe.json --expected-embedding-model bge-m3 --report-json ./run/kb_health_report.json --report-md ./run/kb_health_report.md --json
-python scripts/build.py optimize --plan-only --doc-manifest ./handoff/doc_manifest.json --kb-name kb:example --profile ./profiles/default.json --recommendation en:manual --benchmark-manifest ./run/benchmark/manifest.json --run-id reviewed-run --output ./run/optimization_plan.json --report-md ./run/optimization_plan.md --command-manifest-output ./run/optimization_command_manifest.json
-python scripts/build.py optimize cleanup-plan --plan ./run/optimization_plan.json --output ./run/cleanup_plan.json --report-md ./run/cleanup_plan.md
-python scripts/build.py optimize readiness --plan ./run/optimization_plan.json --cleanup-plan ./run/cleanup_plan.json --base-url https://ragflow.example --api-key REVIEWED_KEY --confirm-live-build --confirm-kb-name kb:example --confirm-run-id reviewed-run --output ./run/optimization_live_readiness_report.json --report-md ./run/optimization_live_readiness_report.md
-python scripts/build.py optimize --execute --validate-benchmark --doc-manifest ./handoff/doc_manifest.json --kb-name kb:example --profile ./profiles/default.json --benchmark-manifest ./run/benchmark/manifest.json --run-id reviewed-run --confirm-live-build --confirm-kb-name kb:example --confirm-run-id reviewed-run --output ./run/optimization_execute_plan.json
-python scripts/build.py optimize summarize --plan ./run/optimization_plan.json --report ./run/benchmark_report.json --cleanup-plan ./run/cleanup_plan.json --readiness-report ./run/optimization_live_readiness_report.json --output ./run/profile_experiment_results.json --report-md ./run/best_profile_report.md
-python scripts/build.py optimize cleanup-execute --cleanup-plan ./run/cleanup_plan.json --readiness-report ./run/optimization_live_readiness_report.json --execute --confirm-dataset-id DATASET_ID --confirm-kb-name kb:example__opt__reviewed-run__default --output ./run/cleanup_execution_report.json
-python scripts/append.py --kb-manifest ./run/kb_manifest.json --input ./new-markdown --output ./run/append_plan.json
-python scripts/append.py --kb-manifest ./run/kb_manifest.json --input ./new-markdown --live-preview --config /path/to/ragflow-config.local.yaml
-python scripts/append.py --kb-manifest ./run/kb_manifest.json --input ./new-markdown --execute --config /path/to/ragflow-config.local.yaml
-python scripts/cleanup.py --kb-manifest ./run/kb_manifest.json --output ./run/cleanup_plan.json
-python scripts/cleanup.py --kb-manifest ./run/kb_manifest.json --execute --confirm-dataset-id DATASET_ID --confirm-kb-name kb:project --config /path/to/ragflow-config.local.yaml
-python scripts/probe.py --config /path/to/ragflow-config.local.yaml --report-md ./run/ragflow_probe.md
-python scripts/diagnose.py --kb-manifest ./run/kb_manifest.json --live --report-md ./run/diagnostic.md
-python scripts/inspect_kb.py --kb-manifest ./run/kb_manifest.json
-python scripts/profile.py lint --profile ./templates/default-en-768.json --report-md ./run/profile_lint.md
-python scripts/profile.py explain --profile ./templates/default-zh-512.json
-python scripts/profile.py recommend --language en --doc-type manual --output ./run/recommended-profile.json
-python scripts/profile.py recommend --language en --doc-type manual --retrieval-hints ./handoff/retrieval_hints.json --output ./run/recommended-profile.json
-python scripts/profile.py compare --report ./run/profile-a-validation.json --report ./run/profile-b-validation.json --report-md ./run/profile_compare.md
-python scripts/profile.py experiment --base-profile ./templates/default-en-768.json --set auto_keywords=0,3 --set auto_questions=0,2 --set retrieval.top_k=3,5 --candidate-set ./run/candidate_profile_set.json --report-md ./run/profile_experiment_matrix.md
-python scripts/profile.py experiment --base-profile ./templates/default-en-768.json --bounded-defaults --candidate-set ./run/bounded_enrichment_candidate_profiles.json --report-md ./run/bounded_enrichment_experiment.md
-python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level smoke
-python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level regression --queries ./templates/validation-queries.example.json --report-md ./run/validation.md
-python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level benchmark --queries ./templates/benchmark-queries.example.json --qrels ./templates/qrels.example.json --chunk-snapshot ./run/chunk_snapshot.json --observed-state ./run/kb_refresh_report.json --gate-config ./templates/benchmark-gate.example.json --include-raw --report-md ./run/benchmark.md
-python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level benchmark --queries ./templates/benchmark-queries.example.json --qrels ./templates/qrels.example.json --retention-json ./run/public_query_result_retention.json --retention-md ./run/public_query_result_retention.md
+python scripts/build.py inspect-handoff --handoff ./handoff --report-md ./run/handoff-inspection.md --json
 ```
 
-When a host agent should prepare config, run smoke checks, or perform end-to-end validation for the user, read `references/host-agent-setup.md` first. When an end user needs a copy-paste prompt to give their own host agent, use `references/user-onboarding-prompt.md`.
+### Canonical workflow: validate build readiness without mutation
 
-Notes:
+```bash
+python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb-example --profile ./templates/default-en-768.json --dry-run --json
+```
 
-- `build.py` creates the dataset, uploads Markdown, triggers parse, waits for parse completion by default, and emits `kb_manifest.json`.
-- `templates/kb_manifest.schema.json` documents the public `kb_manifest.json` contract for host agents and downstream consumers.
-- When a `doc_manifest.json` contains `quality_gate.status: BLOCKED`, `build.py` refuses to upload by default. Use `--allow-blocked` only after the user explicitly accepts the risk.
-- Use `--dry-run` to validate local inputs without touching RAGFlow; dry-run prints JSON and does not write `kb_manifest.json`. Add `--retrieval-hints`, or place `retrieval_hints.json` next to `doc_manifest.json`, to include table/image/quality-risk hint counts in readiness output. Add `--ingest-plan`, or place `ragflow_ingest_plan.yaml/json` next to `doc_manifest.json`, when dry-run should materialize reviewed top-level language evidence. Dry-run and live build JSON include `build_payload_preview`, which separates dataset payload fields that will be sent to RAGFlow from local-only profile hints, retrieval-hint advisory fields, unsupported/gated settings, read-back-mapped read-only server defaults, and native-only controls. `parser_config.image_context_size` and `parser_config.table_context_size` may appear in read-back/audit reports as server defaults, but observed dataset create probes rejected them; `create_dataset()` payloads filter them out and future update behavior requires a version-bound contract. They also include `handoff_consumption_status`, which classifies handoff artifacts and parameter fields as materialized to RAGFlow, materialized to the manifest, advisory after build, local audit only, unsupported/gated, read-only server default, unknown API mapping, or native-parser-only. Dry-run JSON also includes `parameter_materialization_inventory`, which classifies selected-profile parser settings, sidecar recommendations, and known RAGFlow UI controls by disposition, parser path, target, read-back API key when known, reason, and required verification. Retrieval hints remain advisory unless the user materializes a reviewed profile or runs a later review command; keyword/question candidates are not silently converted into `auto_keywords` or `auto_questions`, unsupported, read-only server-default, and native-only parser keys are filtered out of `create_dataset()` payloads, and assistant/query parameters are not written through the KB creation API. Add `--probe-kb-name-collision` only with reviewed read-only endpoint config when dry-run should list datasets and warn about exact or suffixed KB-name collisions before live creation. `default-en-768.json` and `default-zh-512.json` stay model-neutral for portability; use `bge-m3-en-768.json` or `bge-m3-zh-512.json`, or set `profile.embedding_model`, when `--expected-embedding-model` should check a concrete deployment model. Dry-run and live build JSON include `post_build_recommendations`, with `activation-plan` as the standard route-readiness review after `kb_manifest.json` exists.
-- Use `--no-wait` only when the host platform should continue while RAGFlow parses asynchronously.
-- Use `--batch-size` on live Markdown builds or gated image ingestion when large upload sets should trigger parse in bounded document-ID groups; generated JSON records per-batch document IDs, progress, parse status, and retryable failure summaries.
-- Use `--checkpoint` and `--resume` on live Markdown builds or gated image ingestion to continue after dataset creation, partial upload, parse trigger, or parse wait interruption. Resume skips checkpoint-confirmed documents by default; use `--force-reupload-confirmed` only after explicitly accepting duplicate-upload risk.
-- Live Markdown build, gated image-ingestion, asset plan, validation, cleanup, and related JSON reports include standardized `runtime_metrics.stage_timings` when those stages run; live upload reports also include `runtime_metrics.throughput` for upload and parse-wait rates.
-- `parse-report` and gated image-ingestion execution reports include `performance_warnings` for slow phases, high chunk counts, and polling near timeout.
-- When `ragflow-doc-to-md pipeline` produced the handoff, review `ragflow_ingest_plan.yaml`, `profile_suggestions.json`, and `retrieval_hints.json`, then run `build.py --dry-run` against `doc_manifest.json` before any live build. Use `inspect-handoff` first to check sidecar completeness, image assets, and ingestion readiness.
-- Use `asset-upload-plan` to review a non-live Markdown plus local image package plan before upload; it reports Markdown image references, discovered/manifest image artifacts, missing image assets, unreferenced handoff images, sidecars, package paths, and optional local zip contents without calling RAGFlow. Sidecar image paths such as `images/...` are resolved against both the handoff root and `documents/` fallback, while semantic aliases remain advisory warnings rather than upload blockers.
-- Use `consistency-check` after dry-run or build artifact collection to compare retrieval hints, asset upload intent, chunk-profile markers, and KB manifest evidence without contacting RAGFlow.
-- When replacing a legacy ingestion workflow, treat `ragflow_ingest_plan.yaml` as the non-secret handoff guide, not as a private RAGFlow config file. Live build still requires user-reviewed credentials, profile choice, quality gate readiness, and explicit approval.
-- Use `model-providers probe` before live builds to check read-only RAGFlow model-provider endpoints, optional expected embedding/rerank model names, explicit adapter empty-input request shapes, and optional `--redaction-report` sidecars without creating datasets.
-- Use `inspect-handoff` before upload when a `ragflow-doc-to-md package --rich` handoff includes optional sidecars.
-- Use `metadata` and `tagset` subcommands to prepare advisory public metadata and tag reports offline. Metadata summaries can be attached to build reports with `--metadata`; default upload behavior is unchanged.
-- Use `metadata suggest-request` and `metadata suggest-review` as the explicit LLM-adapter boundary. The request command does not call an LLM; review checks external candidates with the same deterministic metadata lint before use.
-- Use `benchmark import/sample/preflight/summarize/gate` and `snapshot-chunks` for offline benchmark lifecycle checks around `validate.py --level benchmark`; these commands do not touch RAGFlow. `benchmark import --checkpoint --batch-size ...` can be resumed with `--resume` when normalizing large local query/qrel sets.
-- Treat document-only qrels, one-document benchmarks, and saturated hit-rate/MRR results as exploratory evidence. Promote a profile only after benchmark strength shows enough query diversity, expected terms or chunks, modality coverage for table/image cases when relevant, and no unresolved cost or cleanup review.
-- Benchmark summarize/gate/trend/delta reports include deterministic root-cause hints for coverage, ranking, pollution, grounding, citation, abstention, and cost/latency regressions when matching metrics are present.
-- Use `benchmark suggest` to derive conservative `top_k` and `similarity_threshold` experiment suggestions from benchmark metrics, optional baseline deltas, and optional gate thresholds.
-- Use `suppression-report` on validation or benchmark reports to review bridge-term, source-boundary, allowed-tag, and unexpected-tag candidates. Run benchmark validation with `--include-raw --max-report-chunks ...` when tag localization needs raw chunk tags; raw payloads are opt-in, and suppression reports are advisory only.
-- Use `validate.py --retention-json ... --retention-md ...` to retain a public-safe per-query result artifact for future A/B/C/D/E comparisons. The command validates local benchmark and observed-state inputs before retrieval. Validation and retention reports record the actual read-only RAGFlow/retrieval call count and `writes_live_ragflow=false`. The retention report records per-query metrics, result ranks, stable content hashes, and hashed dataset/document/chunk references while omitting raw query text, raw chunk text, raw dataset IDs, raw document IDs, and raw chunk IDs. Keep `global_best_per_query_count` separate from `pairwise_win_count` when summarizing multi-candidate comparisons.
-- Use `qa generate` to create a deterministic, offline grounded QA scaffold from exact source spans; it does not call an LLM or mutate RAGFlow.
-- Use `qa validate` before feeding generated QA into benchmark gates; it checks required questions, answers, evidence spans, and exact source-span grounding when `--sources` or `--source-dir` is provided.
-- Use `qa map-evidence` after `snapshot-chunks` to map exact QA evidence spans onto chunk snapshot IDs and stable hashes for strict `expected_chunks` qrels; the report includes deterministic mapping confidence and mapped chunk coverage.
-- For Markdown candidate snapshots, use `--markdown-boundary-mode auto` as the guided offline choice. `file` preserves the legacy one-file/one-chunk behavior, while `markers` is an expert fail-closed override for canonical `<!-- chunk -->` boundaries. These modes do not observe RAGFlow server chunks; add `--include-content` only for private exact-span evidence mapping.
-- Use `segment-metadata report` to measure document metadata and segment provenance coverage in chunk snapshots before relying on segment-aware benchmark analysis.
-- Use `topology advise` before upload when deciding whether a corpus should become a new KB, merge with an existing route, or be reviewed for splitting; it is advisory only and does not edit RAGFlow or routing config.
-- Use `topology split-plan` to turn split-review signals into sidecar KB grouping suggestions and boundary route-test questions before creating separate KBs.
-- Use `activation-plan` after build to review content, chunks, route registration, hints, optional centroids, ingest-plan/profile consistency, and route-test readiness without editing route config.
-- Use `parse-report` with local status/log/profile sidecars to review parse states, stale counts, slow phases, expensive parser settings, requested/effective parser config visibility, and advisory profile drift; `--documents-json` can carry read-only API-exported effective `parser_config` when RAGFlow exposes it, while `--observed-state` can reuse a `refresh-report` sidecar. It does not call RAGFlow or repair DB/Redis/Docker/system services.
-- Use `refresh-report` with reviewed credentials to read current document states and chunk counts from an existing dataset. It only calls the read-only document-list API, emits `ragflow_kb_refresh_report_v1`, and does not upload, parse, delete, or repair services.
-- Use `parameter-audit` after a dry-run and a read-back export to compare requested dataset language/parser settings with observed values. It emits `ragflow_parameter_read_back_audit_v1`, distinguishes API payload keys from UI labels, keeps unknown UI mappings blocked, marks native parser controls separately from Markdown handoff settings, supports `--redaction-report`, and does not call or mutate RAGFlow. The report always records canonical SHA-256 digests for supplied inputs. Add a caller-generated UUIDv4 through `--evidence-bundle-id` only when both files belong to one reviewed evidence bundle; add `--ragflow-contract-version` and `--ragflow-contract-source` together when the version source is known. These fields are caller assertions, so the report keeps `tool_verified_same_run: false` and does not derive identity from KB names or dataset IDs.
-- Reuse `--observed-state ./run/kb_refresh_report.json` with `parse-report`, `snapshot-chunks`, `health-report`, and `scripts/validate.py --level benchmark` when downstream reports should share the same current document-state evidence.
-- Use `health-report` to aggregate local KB manifests, parse reports, observed-state sidecars, activation plans, and optional `model-providers probe` sidecars into embedding-model, provider-readiness, chunk-completeness, parse-state, and route-readiness risks without live calls or private repairs. Build outputs and `kb_manifest.json` now preserve embedding model evidence, and `--expected-embedding-model` warns when a built KB needs rebuild or re-parse after a model change.
-- Use `optimize --plan-only` to load candidate profiles, resolve benchmark artifacts, lint candidates, and plan disposable KB experiment names without creating or deleting anything in RAGFlow; add `--command-manifest-output` to write a dry-run review manifest of the disposable build, validation, diagnostic, and cleanup-preview commands.
-- Use `optimize readiness` after `optimize cleanup-plan` to review credentials, exact live-build confirmation, run-id confirmation, and cleanup artifact state without contacting RAGFlow.
-- Use `optimize --execute` only after reviewing the command manifest; it builds selected disposable candidate KBs and writes retained candidate `kb_manifest.json` files. Add `--validate-benchmark` to run benchmark validation for each built candidate, write retained validation reports, and inline compact candidate benchmark metrics in the execute report. It requires `--confirm-live-build`, exact `--confirm-kb-name`, and exact `--confirm-run-id`.
-- Use `optimize summarize` after candidate validation reports exist; it ranks profile results and writes a best-profile report without building or validating live KBs. Pass `--cleanup-plan`, `--readiness-report`, and `--cleanup-execution-report` when available so the summary carries cleanup lifecycle status, machine-readable next steps, and a sanitized field-trial record suggestion. Failed, missing, or zero-chunk validation results trigger local non-live diagnostics from candidate manifests when available.
-- Use `optimize cleanup-plan` after planning or experiment builds to produce a non-mutating aggregate cleanup plan; ready targets include exact `cleanup.py --execute --confirm-dataset-id ... --confirm-kb-name ...` commands, while missing manifests remain pending.
-- Use `optimize cleanup-execute` only after reviewing `cleanup-plan`; it deletes every ready target in the aggregate cleanup plan and requires repeated exact `--confirm-dataset-id` plus matching `--confirm-kb-name` values for all ready targets. `--readiness-report` can reuse exact cleanup confirmations from an `ok=true` live-readiness artifact, but deletion still requires `--execute` and a matching cleanup plan.
-- Use `append.py` without `--execute` first; it creates an append plan and does not mutate RAGFlow. `--execute` uploads only planned new files and parses only the newly uploaded document IDs.
-- Use `cleanup.py` without `--execute` first; deletion requires `--execute`, an exact `--confirm-dataset-id`, and the matching `--confirm-kb-name` when the name is known.
-- Use `probe.py` to check safe RAGFlow API compatibility before live build operations.
-- Use `diagnose.py` to explain manifest, parse-state, duplicate-name, short-ID, and zero-chunk symptoms without private database access.
-- Use `profile.py lint/explain/recommend/compare` to review chunk profiles before upload and compare validation reports after profile experiments. Add `profile.py recommend --retrieval-hints` to include handoff table/image hints in the recommendation report and rationale.
-- Use `profile.py experiment` to expand an offline enrichment experiment matrix into a local candidate profile set for `optimize --profile-set`; it records retrieval settings and warns about slow or LLM-backed enrichment without touching RAGFlow. Add `--bounded-defaults` when the first review should test only the small `auto_keywords` and `auto_questions` matrix `0`/`1` before any disposable live comparison. When varying chunk size, use only one of `chunk_size`, `chunk_token_num`, or `parser_config.chunk_token_num`; aliased combinations are collapsed by default and can be blocked with `--fail-on-duplicate-effective-profiles`.
-- `profile.py compare` and `optimize summarize` surface latency, parse-time, operational cost, empty-result, chunk-count, and benchmark quality metrics when existing validation reports provide them.
-- `validate.py` supports `smoke`, `regression`, and `benchmark`; regression requires a query set, and benchmark requires both a query set and qrels.
-- Query sets are small JSON files with `question`, optional `min_chunks`, `expected_terms`, and `expected_documents`.
-- Benchmark qrels are small JSON files mapping query IDs to relevant documents/chunks; qrels can include `expected_chunks` that match live chunk IDs or stable chunk snapshot hashes, and query/qrel metadata can include expected or allowed tags for pollution diagnostics. Chunk snapshots include content/provenance coverage and per-document chunk distribution. Benchmark reports include hit rate, MRR, precision@k, recall@k, nDCG@k, MAP@k, empty-result rate, strict chunk recall when applicable, wrong-document/tag pollution metrics when metadata is present, query-type breakdown, optional gate checks, and optional baseline deltas.
+### Canonical workflow: build one reviewed kb
+
+```bash
+python scripts/build.py --doc-manifest ./handoff/doc_manifest.json --kb-name kb-example --profile ./templates/default-en-768.json --output ./run/kb_manifest.json
+```
+
+Run this only after the same inputs pass dry-run and the user explicitly approves the live
+build and exact KB name.
+
+### Canonical workflow: validate retrieval quality
+
+```bash
+python scripts/validate.py --kb-manifest ./run/kb_manifest.json --level smoke --report-md ./run/validation.md
+```
+
+### Canonical workflow: inspect kb health
+
+```bash
+python scripts/build.py health-report --kb-manifest ./run/kb_manifest.json --report-json ./run/kb-health.json --report-md ./run/kb-health.md --json
+```
+
+### Canonical workflow: clean up a disposable kb
+
+```bash
+python scripts/cleanup.py --kb-manifest ./run/kb_manifest.json --output ./run/cleanup-plan.json
+python scripts/cleanup.py --kb-manifest ./run/kb_manifest.json --execute --confirm-dataset-id DATASET_ID --confirm-kb-name kb-example --config /private/path/ragflow-config.local.yaml
+```
+
+Review the preview first. Execute only with the exact dataset ID, matching KB name, and a
+separate cleanup approval.
+
+## Decision and stop rules
+
+- Inspect the handoff and dry-run before every build.
+- Use `Inspect a handoff` only to review handoff content, quality, or an existing blocker;
+  when asked whether the handoff and profile are build-ready without touching RAGFlow,
+  use only `Validate build readiness without mutation` and do not prepend or combine
+  `Inspect a handoff`.
+- Use core `Inspect KB health` when diagnosing overall KB health or failures from retained
+  manifests, reports, or other existing artifacts. Load advanced diagnostics only for a
+  named finding or an explicit deeper diagnostic investigation; the verb `diagnose` alone
+  is not an advanced trigger.
+- Stop on `BLOCKED`, missing identity, name collision, profile failure, absent authority,
+  or cleanup ambiguity. Do not substitute a raw API mutation.
+- Live build, read-only refresh/query, and cleanup are separate approvals.
+- Use the smallest validation level that answers the request; benchmark and optimization
+  are advanced workflows, not default build steps.
+- Validating a supplied build profile in the core dry-run is not advanced profile work.
+
+## Advanced triggers
+
+Open [Advanced workflows](references/advanced-workflows.md) only for a named finding or an
+explicit request involving images, append/resume, metadata, profile selection, profile
+comparison or experimentation, benchmark evidence, grounded QA, topology, routing
+activation, diagnostics, or optimization. For private configuration and smoke setup, use
+[Host agent setup](references/host-agent-setup.md).
+
+## Security
+
+Keep credentials and endpoints outside tracked files. Never guess identifiers, publish
+raw retrieved content, broaden mutation authority, or execute cleanup without exact
+confirmation and retained proof.
