@@ -9,7 +9,7 @@ from typing import Any, Mapping
 from urllib.parse import quote
 
 from .config import RagflowConfig
-from .http import JSONHTTPClient
+from .http import HTTPError, JSONHTTPClient
 
 
 class RAGFlowClient:
@@ -93,7 +93,12 @@ class RAGFlowClient:
     def trigger_parse(self, dataset_id: str, document_ids: list[str]) -> Any:
         """Trigger parsing for uploaded documents."""
 
-        return self.post(f"/datasets/{dataset_id}/documents/parse", {"document_ids": document_ids})
+        response = self.post(f"/datasets/{dataset_id}/chunks", {"document_ids": document_ids})
+        if isinstance(response, Mapping) and response.get("code") not in (None, 0, "0"):
+            code = response.get("code")
+            message = response.get("message") or response.get("msg") or "unknown error"
+            raise HTTPError(f"RAGFlow parse trigger failed with application code {code}: {message}")
+        return response
 
     def list_documents(self, dataset_id: str, *, page: int = 1, page_size: int = 200) -> Any:
         """List documents in a dataset."""

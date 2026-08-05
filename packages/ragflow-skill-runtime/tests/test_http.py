@@ -7,12 +7,13 @@ from ragflow_skill_runtime import RAGFlowClient, RagflowConfig
 
 
 class RecordingHTTPClient:
-    def __init__(self) -> None:
+    def __init__(self, response=None) -> None:
         self.calls = []
+        self.response = {"code": 0} if response is None else response
 
     def request_json(self, method, url, *, json_body=None, **kwargs):
         self.calls.append((method, url, json_body, kwargs))
-        return SimpleNamespace(data={"code": 0})
+        return SimpleNamespace(data=self.response)
 
 
 class HttpClientConfigTests(unittest.TestCase):
@@ -40,6 +41,34 @@ class HttpClientConfigTests(unittest.TestCase):
         self.assertEqual(method, "DELETE")
         self.assertEqual(url, "https://ragflow.example.test/api/v1/datasets")
         self.assertEqual(body, {"ids": ["ds-delete"]})
+
+    def test_trigger_parse_uses_dataset_chunks_endpoint(self) -> None:
+        client = RAGFlowClient(RagflowConfig(base_url="https://ragflow.example.test", api_key="test-key"))
+        recorder = RecordingHTTPClient({"code": 0, "data": True})
+        client.http = recorder
+
+        response = client.trigger_parse("ds-parse", ["doc-a", "doc-b"])
+
+        self.assertEqual(response, {"code": 0, "data": True})
+        self.assertEqual(len(recorder.calls), 1)
+        method, url, body, _kwargs = recorder.calls[0]
+        self.assertEqual(method, "POST")
+        self.assertEqual(url, "https://ragflow.example.test/api/v1/datasets/ds-parse/chunks")
+        self.assertEqual(body, {"document_ids": ["doc-a", "doc-b"]})
+
+    def test_trigger_parse_rejects_nonzero_application_code(self) -> None:
+        for code in (100, "100"):
+            with self.subTest(code=code):
+                client = RAGFlowClient(
+                    RagflowConfig(base_url="https://ragflow.example.test", api_key="test-key")
+                )
+                recorder = RecordingHTTPClient({"code": code, "message": "parse rejected"})
+                client.http = recorder
+
+                with self.assertRaisesRegex(RuntimeError, "application code 100: parse rejected"):
+                    client.trigger_parse("ds-parse", ["doc-a"])
+
+                self.assertEqual(len(recorder.calls), 1)
 
 
 if __name__ == "__main__":
