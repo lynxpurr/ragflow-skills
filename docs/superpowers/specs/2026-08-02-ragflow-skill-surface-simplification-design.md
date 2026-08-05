@@ -1,7 +1,7 @@
 ---
 doc_type: spec
 topic: skill-surface-simplification
-status: approved
+status: active
 created: 2026-08-02
 updated: 2026-08-05
 canonical: true
@@ -14,7 +14,8 @@ related: []
 
 # RAGFlow Skill Surface Simplification And Agent Command Selection Design
 
-Status: approved; design-only; no implementation or live-operation authority
+Status: active; Phase 1/2 implemented; Phase 3 separately gated; no implementation or
+live-operation authority
 
 Date: 2026-08-02
 
@@ -60,6 +61,22 @@ Owning and related context:
 - `docs/43-agent-session-handoff-lessons.md`
 - `tools/report_surface_inventory.py`
 - `tools/runtime_resilience_inventory.py`
+
+## 2026-08-05 Phase 1/2 Implementation Closeout
+
+The owner-authorized Phase 1/2 implementation is complete in commits
+`b209b674eac568634dae7d2f81e9d15b76562ae2` and
+`04eaec05d35758cc3e5920fe4613d802d6d1ce29`. Static guidance contracts, all 104 command
+classifications, the twelve-case selection review, compatibility inventories, the full
+release path, and the post-implementation roadmap and closeout calibration passed their
+approved gates. Sanitized selection results are retained in
+`docs/evidence/2026-08-05-ragflow-skill-surface-selection-review.md`.
+
+This spec remains `active` as the canonical owner of the implemented guidance contract
+and the boundary separating Phase 3. It retains `implementation_authority=false`: Phase 3
+warnings, aliases, consolidation, deprecation, or deletion still require a separate
+approved design and implementation plan. No live operation, Stage 8C, L4, Wave 2D, or
+other gated work is opened by this closeout.
 
 ## Objective
 
