@@ -62,10 +62,13 @@ def load_cleanup_module():
 
 class FakeOptimizeBuildClient:
     instances: list["FakeOptimizeBuildClient"] = []
+    fail_update = False
 
     def __init__(self, config):
         self.config = config
         self.created: list[tuple[str, dict[str, object]]] = []
+        self.updated: list[tuple[str, dict[str, object]]] = []
+        self.operations: list[tuple[str, str]] = []
         self.uploads: list[tuple[str, str]] = []
         self.parsed: list[tuple[str, list[str]]] = []
         self.retrievals: list[tuple[str, list[str], int]] = []
@@ -76,7 +79,15 @@ class FakeOptimizeBuildClient:
     def create_dataset(self, name, *, profile=None):
         dataset_id = f"ds-{len(self.created) + 1}"
         self.created.append((name, dict(profile or {})))
+        self.operations.append(("create", dataset_id))
         self.documents[dataset_id] = []
+        return {"data": {"id": dataset_id}}
+
+    def update_dataset(self, dataset_id, updates):
+        self.updated.append((str(dataset_id), dict(updates)))
+        self.operations.append(("update", str(dataset_id)))
+        if FakeOptimizeBuildClient.fail_update:
+            raise RuntimeError("dataset update rejected")
         return {"data": {"id": dataset_id}}
 
     def upload_document(self, dataset_id, file_path):
@@ -130,10 +141,12 @@ class FakeCheckpointBuildClient:
     instances: list["FakeCheckpointBuildClient"] = []
     dataset_counter = 0
     upload_counter = 0
+    fail_update = False
 
     def __init__(self, config):
         self.config = config
         self.created: list[tuple[str, dict[str, object]]] = []
+        self.updated: list[tuple[str, dict[str, object]]] = []
         self.uploads: list[tuple[str, str]] = []
         self.parsed: list[tuple[str, list[str]]] = []
         self.documents: dict[str, list[dict[str, object]]] = {}
@@ -144,6 +157,12 @@ class FakeCheckpointBuildClient:
         dataset_id = f"ds-checkpoint-{FakeCheckpointBuildClient.dataset_counter}"
         self.created.append((str(name), dict(profile or {})))
         self.documents[dataset_id] = []
+        return {"data": {"id": dataset_id}}
+
+    def update_dataset(self, dataset_id, updates):
+        self.updated.append((str(dataset_id), dict(updates)))
+        if FakeCheckpointBuildClient.fail_update:
+            raise RuntimeError("dataset update rejected")
         return {"data": {"id": dataset_id}}
 
     def upload_document(self, dataset_id, file_path):
@@ -891,7 +910,8 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["retrieval_hints_summary"]["quality_risk_count"], 1)
         preview = payload["build_payload_preview"]
         self.assertEqual(preview["schema"], "ragflow_kb_build_payload_preview_v1")
-        self.assertEqual(preview["dataset_create_payload"]["language"], "English")
+        self.assertNotIn("language", preview["dataset_create_payload"])
+        self.assertEqual(preview["dataset_update_payload"], {"language": "English"})
         self.assertNotIn("__language__", preview["dataset_create_payload"]["parser_config"])
         fields = {item["field"]: item for item in preview["fields"]}
         self.assertEqual(fields["parser_config.__language__"]["status"], "local_audit_only")
@@ -1043,7 +1063,8 @@ class KbBuildCliTests(unittest.TestCase):
         preview = payload["build_payload_preview"]
         self.assertEqual(preview["language"]["value"], "Chinese")
         self.assertEqual(preview["language"]["source"], "ragflow_ingest_plan.recommended_build.parser_profile.language")
-        self.assertEqual(preview["dataset_create_payload"]["language"], "Chinese")
+        self.assertNotIn("language", preview["dataset_create_payload"])
+        self.assertEqual(preview["dataset_update_payload"], {"language": "Chinese"})
 
     def test_build_dry_run_reports_generic_embedding_model_not_configured(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1179,9 +1200,26 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(manifest["embedding_model"]["model"], "unknown")
         self.assertEqual(manifest["embedding_model"]["reason"], "profile_embedding_model_missing")
         created_profile = FakeOptimizeBuildClient.instances[0].created[0][1]
-        self.assertEqual(created_profile["language"], "English")
+        self.assertNotIn("language", created_profile)
         self.assertNotIn("__language__", created_profile["parser_config"])
-        self.assertEqual(manifest["build_payload_preview"]["dataset_create_payload"]["language"], "English")
+        self.assertEqual(
+            FakeOptimizeBuildClient.instances[0].updated,
+            [("ds-1", {"language": "English"})],
+        )
+        self.assertEqual(
+            FakeOptimizeBuildClient.instances[0].operations[:2],
+            [("create", "ds-1"), ("update", "ds-1")],
+        )
+        self.assertGreaterEqual(payload["runtime_partial_failure"]["status_counts"]["success"], 5)
+        self.assertIn(
+            "update_dataset",
+            [item["stage"] for item in payload["runtime_metrics"]["stage_timings"]],
+        )
+        self.assertNotIn("language", manifest["build_payload_preview"]["dataset_create_payload"])
+        self.assertEqual(
+            manifest["build_payload_preview"]["dataset_update_payload"],
+            {"language": "English"},
+        )
         self.assertEqual(manifest["build_payload_preview"]["fields"][0]["status"], "materialized_to_ragflow")
 
     def test_build_live_path_materializes_language_from_ingest_plan_with_fake_client(self) -> None:
@@ -1241,8 +1279,12 @@ class KbBuildCliTests(unittest.TestCase):
 
         self.assertEqual(code, 0, stdout.getvalue())
         created_profile = FakeOptimizeBuildClient.instances[0].created[0][1]
-        self.assertEqual(created_profile["language"], "Chinese")
+        self.assertNotIn("language", created_profile)
         self.assertNotIn("__language__", created_profile["parser_config"])
+        self.assertEqual(
+            FakeOptimizeBuildClient.instances[0].updated,
+            [("ds-1", {"language": "Chinese"})],
+        )
         self.assertEqual(
             manifest["build_payload_preview"]["language"]["source"],
             "ragflow_ingest_plan.recommended_build.parser_profile.language",
@@ -1324,6 +1366,7 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertNotIn("page_index", created_profile["parser_config"])
         self.assertNotIn("table_to_html", created_profile["parser_config"])
         self.assertNotIn("layout_recognize", created_profile["parser_config"])
+        self.assertEqual(FakeOptimizeBuildClient.instances[0].updated, [])
         fields = {item["field"]: item for item in payload["build_payload_preview"]["fields"]}
         self.assertEqual(fields["parser_config.page_index"]["status"], "unsupported_or_gated")
         self.assertEqual(fields["parser_config.table_to_html"]["status"], "unsupported_or_gated")
@@ -1597,14 +1640,283 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(second_payload["checkpoint"]["resume"], True)
         self.assertEqual(second_payload["checkpoint"]["skipped_upload_count"], 2)
         self.assertEqual(second_payload["checkpoint"]["new_upload_count"], 1)
+        self.assertIn("update_dataset", second_payload["runtime_partial_failure"]["skipped_labels"])
+        update_timing = next(
+            item for item in second_payload["runtime_metrics"]["stage_timings"]
+            if item["stage"] == "update_dataset"
+        )
+        self.assertEqual(update_timing["reason"], "resume_reuses_existing_dataset")
         self.assertEqual([Path(item["markdown_path"]).name for item in second_manifest["documents"]], ["a.md", "b.md", "c.md"])
         self.assertEqual(second_checkpoint["summary"]["uploaded_document_count"], 3)
+        self.assertEqual(second_checkpoint["dataset_update"]["status"], "success")
         self.assertEqual(force_code, 0, force_stdout.getvalue())
         self.assertEqual(force_payload["checkpoint"]["force_reupload_confirmed"], True)
         self.assertEqual(
             [Path(path).name for _dataset_id, path in FakeCheckpointBuildClient.instances[2].uploads],
             ["a.md", "b.md", "c.md"],
         )
+
+    def test_build_update_failure_persists_dataset_id_checkpoint(self) -> None:
+        module = load_build_module()
+        FakeCheckpointBuildClient.instances = []
+        FakeCheckpointBuildClient.dataset_counter = 0
+        FakeCheckpointBuildClient.upload_counter = 0
+        FakeCheckpointBuildClient.fail_update = True
+        module.RAGFlowClient = FakeCheckpointBuildClient
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                input_dir = root / "docs"
+                input_dir.mkdir()
+                (input_dir / "sample.md").write_text("# Sample\n\nKnown answer\n", encoding="utf-8")
+                checkpoint = root / "kb_build.checkpoint.json"
+                output = root / "kb_manifest.json"
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    code = module.main(
+                        [
+                            "--input",
+                            str(input_dir),
+                            "--kb-name",
+                            "kb:update-failure",
+                            "--profile",
+                            str(PROFILE_PATH),
+                            "--base-url",
+                            "https://ragflow.example.test",
+                            "--api-key",
+                            "test-key",
+                            "--output",
+                            str(output),
+                            "--checkpoint",
+                            str(checkpoint),
+                            "--json",
+                        ]
+                    )
+                payload = json.loads(stdout.getvalue())
+                self.assertTrue(checkpoint.exists())
+                checkpoint_payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+                self.assertEqual(code, 2, stdout.getvalue())
+                self.assertFalse(payload["ok"])
+                self.assertFalse(output.exists())
+                self.assertEqual(checkpoint_payload["dataset"]["id"], "ds-checkpoint-1")
+                self.assertEqual(checkpoint_payload["dataset_update"]["status"], "error")
+                self.assertEqual(checkpoint_payload["dataset_update"]["payload"], {"language": "English"})
+                self.assertTrue(checkpoint_payload["dataset_update"]["payload_sha256"])
+                self.assertIn("dataset update rejected", checkpoint_payload["dataset_update"]["error"])
+                self.assertEqual(payload["status"], "partial_failure")
+                self.assertEqual(payload["runtime_partial_failure"]["summary"]["status"], "partial")
+                self.assertIn("update_dataset", payload["runtime_partial_failure"]["failure_labels"])
+                self.assertIn(
+                    "update_dataset",
+                    [item["stage"] for item in payload["runtime_metrics"]["stage_timings"]],
+                )
+        finally:
+            FakeCheckpointBuildClient.fail_update = False
+
+    def test_build_resume_retries_update_after_failed_update(self) -> None:
+        module = load_build_module()
+        FakeCheckpointBuildClient.instances = []
+        FakeCheckpointBuildClient.dataset_counter = 0
+        FakeCheckpointBuildClient.upload_counter = 0
+        module.RAGFlowClient = FakeCheckpointBuildClient
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                input_dir = root / "docs"
+                input_dir.mkdir()
+                (input_dir / "sample.md").write_text("# Sample\n\nKnown answer\n", encoding="utf-8")
+                checkpoint = root / "kb_build.checkpoint.json"
+                first_output = root / "kb_manifest.first.json"
+                first_stdout = io.StringIO()
+                FakeCheckpointBuildClient.fail_update = True
+                with contextlib.redirect_stdout(first_stdout):
+                    first_code = module.main(
+                        [
+                            "--input", str(input_dir), "--kb-name", "kb:update-resume",
+                            "--profile", str(PROFILE_PATH), "--base-url", "https://ragflow.example.test",
+                            "--api-key", "test-key", "--output", str(first_output),
+                            "--checkpoint", str(checkpoint), "--json",
+                        ]
+                    )
+                FakeCheckpointBuildClient.fail_update = False
+                second_output = root / "kb_manifest.second.json"
+                second_stdout = io.StringIO()
+                with contextlib.redirect_stdout(second_stdout):
+                    second_code = module.main(
+                        [
+                            "--input", str(input_dir), "--kb-name", "kb:update-resume",
+                            "--profile", str(PROFILE_PATH), "--base-url", "https://ragflow.example.test",
+                            "--api-key", "test-key", "--output", str(second_output),
+                            "--checkpoint", str(checkpoint), "--resume", "--no-wait", "--json",
+                        ]
+                    )
+                first_payload = json.loads(first_stdout.getvalue())
+                second_payload = json.loads(second_stdout.getvalue())
+                checkpoint_payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+
+            self.assertEqual(first_code, 2, first_stdout.getvalue())
+            self.assertEqual(second_code, 0, second_stdout.getvalue())
+            self.assertEqual(FakeCheckpointBuildClient.instances[1].created, [])
+            self.assertEqual(
+                FakeCheckpointBuildClient.instances[1].updated,
+                [("ds-checkpoint-1", {"language": "English"})],
+            )
+            self.assertEqual(checkpoint_payload["dataset_update"]["status"], "success")
+            self.assertEqual(second_payload["runtime_partial_failure"]["summary"]["status"], "partial")
+            self.assertNotIn("update_dataset", second_payload["runtime_partial_failure"]["skipped_labels"])
+            update_timing = next(
+                item for item in second_payload["runtime_metrics"]["stage_timings"]
+                if item["stage"] == "update_dataset"
+            )
+            self.assertEqual(update_timing["status"], "success")
+            self.assertEqual(update_timing["reason"], "resume_retries_incomplete_update")
+            self.assertEqual(first_payload["dataset_id"], "ds-checkpoint-1")
+        finally:
+            FakeCheckpointBuildClient.fail_update = False
+
+    def test_build_resume_update_failure_preserves_confirmed_uploads(self) -> None:
+        module = load_build_module()
+        FakeCheckpointBuildClient.instances = []
+        FakeCheckpointBuildClient.dataset_counter = 0
+        FakeCheckpointBuildClient.upload_counter = 0
+        module.RAGFlowClient = FakeCheckpointBuildClient
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                input_dir = root / "docs"
+                input_dir.mkdir()
+                for name in ("a.md", "b.md"):
+                    (input_dir / name).write_text(f"# {name}\n\nKnown answer\n", encoding="utf-8")
+                checkpoint = root / "kb_build.checkpoint.json"
+                first_output = root / "kb_manifest.first.json"
+                first_stdout = io.StringIO()
+                with contextlib.redirect_stdout(first_stdout):
+                    first_code = module.main(
+                        [
+                            "--input", str(input_dir), "--kb-name", "kb:update-preserve",
+                            "--profile", str(PROFILE_PATH), "--base-url", "https://ragflow.example.test",
+                            "--api-key", "test-key", "--output", str(first_output),
+                            "--checkpoint", str(checkpoint), "--no-wait", "--json",
+                        ]
+                    )
+                checkpoint_payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+                checkpoint_payload["dataset_update"]["status"] = "error"
+                checkpoint.write_text(json.dumps(checkpoint_payload), encoding="utf-8")
+
+                FakeCheckpointBuildClient.fail_update = True
+                second_output = root / "kb_manifest.second.json"
+                second_stdout = io.StringIO()
+                with contextlib.redirect_stdout(second_stdout):
+                    second_code = module.main(
+                        [
+                            "--input", str(input_dir), "--kb-name", "kb:update-preserve",
+                            "--profile", str(PROFILE_PATH), "--base-url", "https://ragflow.example.test",
+                            "--api-key", "test-key", "--output", str(second_output),
+                            "--checkpoint", str(checkpoint), "--resume", "--no-wait", "--json",
+                        ]
+                    )
+                resumed_checkpoint = json.loads(checkpoint.read_text(encoding="utf-8"))
+
+            self.assertEqual(first_code, 0, first_stdout.getvalue())
+            self.assertEqual(second_code, 2, second_stdout.getvalue())
+            self.assertEqual(resumed_checkpoint["dataset_update"]["status"], "error")
+            self.assertEqual(len(resumed_checkpoint["uploaded_documents"]), 2)
+            self.assertEqual(
+                {item["name"] for item in resumed_checkpoint["uploaded_documents"]},
+                {"a.md", "b.md"},
+            )
+            self.assertFalse(second_output.exists())
+        finally:
+            FakeCheckpointBuildClient.fail_update = False
+
+    def test_optimize_update_failure_persists_candidate_manifest(self) -> None:
+        module = load_build_module()
+        FakeOptimizeBuildClient.instances = []
+        FakeOptimizeBuildClient.fail_update = True
+        module.RAGFlowClient = FakeOptimizeBuildClient
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                docs = root / "docs"
+                docs.mkdir()
+                (docs / "sample.md").write_text("# Sample\n\nKnown answer.\n", encoding="utf-8")
+                profile = root / "profile.json"
+                profile.write_text(
+                    json.dumps(
+                        {
+                            "profile_id": "candidate-a",
+                            "chunk_size": 512,
+                            "chunk_overlap": 64,
+                            "parser_config": {
+                                "chunk_token_num": 512,
+                                "__language__": "English",
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                output = root / "optimization_execute_plan.json"
+                artifact_dir = root / "opt-artifacts"
+                queries = root / "queries.json"
+                qrels = root / "qrels.json"
+                queries.write_text(
+                    json.dumps({"queries": [{"id": "q1", "question": "What is known?"}]}),
+                    encoding="utf-8",
+                )
+                qrels.write_text(json.dumps({"q1": {"sample.md": 1}}), encoding="utf-8")
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    code = module.main(
+                        [
+                            "optimize",
+                            "--execute",
+                            "--input",
+                            str(docs),
+                            "--kb-name",
+                            "kb:optimize-update-failure",
+                            "--profile",
+                            str(profile),
+                            "--queries",
+                            str(queries),
+                            "--qrels",
+                            str(qrels),
+                            "--run-id",
+                            "update-failure",
+                            "--artifact-dir",
+                            str(artifact_dir),
+                            "--output",
+                            str(output),
+                            "--base-url",
+                            "https://ragflow.example.test",
+                            "--api-key",
+                            "fake-key",
+                            "--confirm-live-build",
+                            "--confirm-kb-name",
+                            "kb:optimize-update-failure",
+                            "--confirm-run-id",
+                            "update-failure",
+                            "--poll-interval",
+                            "0",
+                            "--json",
+                        ]
+                    )
+                payload = json.loads(stdout.getvalue())
+                candidate_manifest = artifact_dir / "candidate-a" / "kb_manifest.json"
+                self.assertTrue(candidate_manifest.exists())
+                candidate_payload = json.loads(candidate_manifest.read_text(encoding="utf-8"))
+
+            self.assertEqual(code, 2, stdout.getvalue())
+            self.assertFalse(payload["ok"])
+            self.assertFalse(output.exists())
+            self.assertEqual(candidate_payload["dataset"]["id"], "ds-1")
+            self.assertEqual(candidate_payload["dataset"]["name"], "kb:optimize-update-failure__opt__update-failure__candidate-a")
+            self.assertEqual(candidate_payload["documents"], [])
+            self.assertEqual(candidate_payload["dataset_update"]["status"], "error")
+            self.assertEqual(candidate_payload["dataset_update"]["payload"], {"language": "English"})
+            self.assertTrue(candidate_payload["dataset_update"]["payload_sha256"])
+            self.assertIn("dataset update rejected", candidate_payload["dataset_update"]["error"])
+        finally:
+            FakeOptimizeBuildClient.fail_update = False
 
     def test_build_dry_run_accepts_doc_manifest_paths_relative_to_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -8516,6 +8828,15 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(candidate_payload["documents"][0]["chunk_count"], 2)
         self.assertEqual(len(FakeOptimizeBuildClient.instances), 1)
         self.assertEqual(len(FakeOptimizeBuildClient.instances[0].created), 1)
+        self.assertNotIn("language", FakeOptimizeBuildClient.instances[0].created[0][1])
+        self.assertEqual(
+            FakeOptimizeBuildClient.instances[0].updated,
+            [("ds-1", {"language": "English"})],
+        )
+        self.assertEqual(
+            FakeOptimizeBuildClient.instances[0].operations[:2],
+            [("create", "ds-1"), ("update", "ds-1")],
+        )
         self.assertEqual(len(FakeOptimizeBuildClient.instances[0].uploads), 1)
         self.assertEqual(len(FakeOptimizeBuildClient.instances[0].parsed), 1)
         self.assertEqual(len(FakeOptimizeBuildClient.instances[0].retrievals), 0)

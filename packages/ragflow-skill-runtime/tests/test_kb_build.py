@@ -588,7 +588,12 @@ class KbBuildTests(unittest.TestCase):
         fields = {item["field"]: item for item in preview["fields"]}
 
         self.assertEqual(preview["schema"], BUILD_PAYLOAD_PREVIEW_SCHEMA)
-        self.assertEqual(preview["dataset_create_payload"]["language"], "Chinese")
+        self.assertNotIn("language", preview["dataset_create_payload"])
+        self.assertEqual(preview["dataset_update_payload"], {"language": "Chinese"})
+        self.assertEqual(
+            preview["language"]["source"],
+            "profile.parser_config.__language__",
+        )
         self.assertEqual(fields["language"]["status"], "materialized_to_ragflow")
         self.assertEqual(fields["parser_config.delimiter"]["status"], "materialized_to_ragflow")
         self.assertEqual(fields["parser_config.image_context_size"]["status"], "read_only_server_default")
@@ -625,6 +630,40 @@ class KbBuildTests(unittest.TestCase):
         self.assertEqual(preview["summary"]["unsupported_or_gated_field_count"], 2)
         self.assertEqual(preview["summary"]["native_parser_only_field_count"], 2)
         self.assertEqual(preview["summary"]["retrieval_hint_keyword_candidate_count"], 2)
+
+    def test_empty_delimiter_is_omitted_from_payload_and_read_back_audit(self) -> None:
+        profile = ChunkProfile.from_dict(
+            {
+                "profile_id": "default-en-512",
+                "language": "English",
+                "parser_config": {"chunk_token_num": 512, "delimiter": ""},
+            }
+        )
+        preview = make_build_payload_preview(kb_name="kb:test", profile=profile)
+        inventory = make_parameter_materialization_inventory(profile=profile)
+        audit = create_parameter_read_back_audit(
+            dry_run_report={
+                "schema": "ragflow_kb_build_dry_run_v1",
+                "build_payload_preview": preview,
+                "parameter_materialization_inventory": inventory,
+            },
+            observed_state={
+                "data": {"language": "English", "parser_config": {"chunk_token_num": 512}}
+            },
+        )
+
+        preview_fields = {item["field"]: item for item in preview["fields"]}
+        inventory_fields = {item["field"]: item for item in inventory["fields"]}
+        audit_fields = {item["field"]: item for item in audit["fields"]}
+        self.assertNotIn("delimiter", preview["dataset_create_payload"]["parser_config"])
+        self.assertEqual(preview_fields["parser_config.delimiter"]["status"], "local_audit_only")
+        self.assertIsNone(preview_fields["parser_config.delimiter"]["target"])
+        self.assertEqual(
+            preview_fields["parser_config.delimiter"]["reason"],
+            "empty_delimiter_omitted_from_dataset_create",
+        )
+        self.assertEqual(inventory_fields["profile.parser_config.delimiter"]["status"], "local_audit_only")
+        self.assertNotIn("dataset.parser_config.delimiter", audit_fields)
 
     def test_parameter_materialization_inventory_classifies_sidecars_and_ui_controls(self) -> None:
         profile = ChunkProfile.from_dict(

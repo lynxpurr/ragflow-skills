@@ -393,7 +393,9 @@ def _field_status_counts(fields: list[Mapping[str, Any]], statuses: tuple[str, .
     }
 
 
-def _parser_config_field_status(key: str) -> tuple[str, str | None, str | None]:
+def _parser_config_field_status(key: str, value: Any = None) -> tuple[str, str | None, str | None]:
+    if key == "delimiter" and value == "":
+        return "local_audit_only", None, "empty_delimiter_omitted_from_dataset_create"
     if key in SUPPORTED_PARSER_KEYS:
         return "materialized_to_ragflow", f"dataset.parser_config.{key}", None
     if key in READ_ONLY_SERVER_DEFAULT_PARSER_KEYS:
@@ -538,6 +540,7 @@ def create_parameter_read_back_audit(
     preview_fields = preview.get("fields", []) if isinstance(preview, Mapping) else []
     inventory_fields = inventory.get("fields", []) if isinstance(inventory, Mapping) else []
     dataset_payload = preview.get("dataset_create_payload", {}) if isinstance(preview, Mapping) else {}
+    dataset_update_payload = preview.get("dataset_update_payload", {}) if isinstance(preview, Mapping) else {}
     observed_parser_config, parser_config_source = _extract_read_back_parser_config(observed_state)
     observed_language, language_source = _extract_read_back_language(observed_state)
     observed_parser_config_available = observed_parser_config is not None
@@ -752,6 +755,11 @@ def create_parameter_read_back_audit(
                 inventory.get("schema") if isinstance(inventory, Mapping) else None
             ),
             "dataset_payload_keys": sorted(str(key) for key in dataset_payload) if isinstance(dataset_payload, Mapping) else [],
+            "dataset_update_payload_keys": (
+                sorted(str(key) for key in dataset_update_payload)
+                if isinstance(dataset_update_payload, Mapping)
+                else []
+            ),
         },
         "observed_state": {
             "available": isinstance(observed_state, Mapping),
@@ -933,7 +941,11 @@ def make_parameter_materialization_inventory(
             parser_path_scope="markdown_handoff",
             value=language.get("value"),
             reason=language.get("reason") if isinstance(language.get("reason"), str) else None,
-            required_verification=("fake_client_dataset_payload", "ragflow_read_back_audit"),
+            required_verification=(
+                "fake_client_dataset_create_payload",
+                "fake_client_dataset_update_payload",
+                "ragflow_read_back_audit",
+            ),
         )
 
     for key in sorted(profile.parser_config):
@@ -951,7 +963,7 @@ def make_parameter_materialization_inventory(
                 required_verification=("dry_run_payload_preview",),
             )
             continue
-        status, target, reason = _parser_config_field_status(key)
+        status, target, reason = _parser_config_field_status(key, value)
         add_field(
             field,
             status=status,
@@ -1154,6 +1166,7 @@ def make_build_payload_preview(
     dataset_payload = effective_profile.to_dataset_payload()
     language = select_build_language(profile, ragflow_ingest_plan=ragflow_ingest_plan)
     dataset_create_payload = {"name": kb_name, **dataset_payload}
+    dataset_update_payload = {"language": language["value"]} if language.get("value") else {}
     fields: list[dict[str, Any]] = []
 
     def add_field(
@@ -1217,7 +1230,7 @@ def make_build_payload_preview(
                 reason="internal_parser_metadata_not_sent",
             )
             continue
-        status, target, reason = _parser_config_field_status(key)
+        status, target, reason = _parser_config_field_status(key, value)
         add_field(
             field,
             status=status,
@@ -1288,6 +1301,7 @@ def make_build_payload_preview(
         "kb_name": kb_name,
         "language": language,
         "dataset_create_payload": dataset_create_payload,
+        "dataset_update_payload": dataset_update_payload,
         "fields": fields,
         "source_sidecars": {
             "retrieval_hints": "loaded" if isinstance(retrieval_hints, Mapping) else "not_loaded",

@@ -77,8 +77,28 @@ class RAGFlowClient:
 
         payload: dict[str, Any] = {"name": name}
         if profile:
-            payload.update({k: v for k, v in profile.items() if v is not None})
+            for key, value in profile.items():
+                if value is None or key == "language":
+                    continue
+                if key == "parser_config" and isinstance(value, Mapping):
+                    value = {
+                        parser_key: parser_value
+                        for parser_key, parser_value in value.items()
+                        if not str(parser_key).startswith("__")
+                        and not (parser_key == "delimiter" and parser_value == "")
+                    }
+                payload[key] = value
         return self.post("/datasets", payload)
+
+    def update_dataset(self, dataset_id: str, updates: Mapping[str, Any]) -> Any:
+        """Update one dataset with settings that are not accepted during creation."""
+
+        response = self.put(f"/datasets/{dataset_id}", updates)
+        if isinstance(response, Mapping) and response.get("code") not in (None, 0, "0"):
+            code = response.get("code")
+            message = response.get("message") or response.get("msg") or "unknown error"
+            raise HTTPError(f"RAGFlow dataset update failed with application code {code}: {message}")
+        return response
 
     def get_dataset(self, dataset_id: str) -> Any:
         """Fetch one dataset by ID."""
