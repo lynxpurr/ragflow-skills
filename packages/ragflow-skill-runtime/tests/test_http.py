@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import unittest
 
 from ragflow_skill_runtime import RAGFlowClient, RagflowConfig
+from ragflow_skill_runtime.http import HTTPError
 
 
 class RecordingHTTPClient:
@@ -41,6 +42,54 @@ class HttpClientConfigTests(unittest.TestCase):
         self.assertEqual(method, "DELETE")
         self.assertEqual(url, "https://ragflow.example.test/api/v1/datasets")
         self.assertEqual(body, {"ids": ["ds-delete"]})
+
+    def test_update_dataset_uses_dataset_resource(self) -> None:
+        client = RAGFlowClient(RagflowConfig(base_url="https://ragflow.example.test", api_key="test-key"))
+        recorder = RecordingHTTPClient()
+        client.http = recorder
+
+        response = client.update_dataset("ds-update", {"language": "English"})
+
+        self.assertEqual(response, {"code": 0})
+        self.assertEqual(len(recorder.calls), 1)
+        method, url, body, _kwargs = recorder.calls[0]
+        self.assertEqual(method, "PUT")
+        self.assertEqual(url, "https://ragflow.example.test/api/v1/datasets/ds-update")
+        self.assertEqual(body, {"language": "English"})
+
+    def test_update_dataset_rejects_nonzero_application_code(self) -> None:
+        for code in (100, "100"):
+            with self.subTest(code=code):
+                client = RAGFlowClient(
+                    RagflowConfig(base_url="https://ragflow.example.test", api_key="test-key")
+                )
+                recorder = RecordingHTTPClient({"code": code, "message": "update rejected"})
+                client.http = recorder
+
+                with self.assertRaisesRegex(HTTPError, "update rejected"):
+                    client.update_dataset("ds-update", {"language": "English"})
+
+    def test_create_dataset_normalizes_v0255_create_profile_fields(self) -> None:
+        client = RAGFlowClient(RagflowConfig(base_url="https://ragflow.example.test", api_key="test-key"))
+        recorder = RecordingHTTPClient({"code": 0, "data": {"id": "ds-create"}})
+        client.http = recorder
+
+        client.create_dataset(
+            "kb:test",
+            profile={
+                "language": "English",
+                "chunk_method": "naive",
+                "parser_config": {
+                    "chunk_token_num": 512,
+                    "delimiter": "",
+                    "__language__": "English",
+                },
+            },
+        )
+
+        _method, _url, body, _kwargs = recorder.calls[0]
+        self.assertNotIn("language", body)
+        self.assertEqual(body["parser_config"], {"chunk_token_num": 512})
 
     def test_trigger_parse_uses_dataset_chunks_endpoint(self) -> None:
         client = RAGFlowClient(RagflowConfig(base_url="https://ragflow.example.test", api_key="test-key"))

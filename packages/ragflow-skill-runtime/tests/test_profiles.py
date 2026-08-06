@@ -98,6 +98,29 @@ class ProfileTests(unittest.TestCase):
         self.assertTrue(manifest["parser_config"]["layout_recognize"])
         self.assertEqual(manifest["parser_config"]["__language__"], "Chinese")
 
+    def test_dataset_create_payload_omits_post_create_language_and_empty_delimiter(self) -> None:
+        profile = ChunkProfile.from_dict(
+            {
+                "profile_id": "default-en-512",
+                "language": "English",
+                "chunk_size": 512,
+                "parser_config": {
+                    "chunk_token_num": 512,
+                    "delimiter": "",
+                    "__language__": "English",
+                },
+            }
+        )
+
+        payload = profile.to_dataset_payload()
+        manifest = profile.to_manifest_dict()
+
+        self.assertNotIn("language", payload)
+        self.assertNotIn("delimiter", payload["parser_config"])
+        self.assertEqual(manifest["language"], "English")
+        self.assertEqual(manifest["parser_config"]["delimiter"], "")
+        self.assertEqual(manifest["parser_config"]["__language__"], "English")
+
     def test_lint_profile_accepts_chunk_marker_delimiter(self) -> None:
         profile = ChunkProfile.from_dict(
             {
@@ -235,6 +258,7 @@ class ProfileTests(unittest.TestCase):
 
         self.assertTrue(payload["ok"])
         self.assertNotIn("__language__", payload["api_payload"]["parser_config"])
+        self.assertEqual(payload["api_update_payload"], {"language": "English"})
         self.assertEqual(payload["summary"]["language"], "English")
 
     def test_profile_suggestion_materialization_clamps_delimiter_profile_and_preserves_source(self) -> None:

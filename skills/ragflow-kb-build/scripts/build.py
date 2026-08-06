@@ -520,6 +520,23 @@ def _checkpoint_report(
     }
 
 
+def _dataset_update_state(
+    updates: Mapping[str, Any],
+    *,
+    status: str,
+    error: str | None = None,
+) -> dict[str, Any]:
+    payload_bytes = json.dumps(dict(updates), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    state: dict[str, Any] = {
+        "status": str(status),
+        "payload": dict(updates),
+        "payload_sha256": hashlib.sha256(payload_bytes).hexdigest(),
+    }
+    if error:
+        state["error"] = str(error)
+    return state
+
+
 def _write_ingestion_checkpoint(
     checkpoint_path: str | None,
     *,
@@ -528,6 +545,7 @@ def _write_ingestion_checkpoint(
     dataset_name: str | None,
     records: Mapping[str, Mapping[str, Any]],
     created_at: str | None = None,
+    dataset_update: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not checkpoint_path:
         return None
@@ -554,6 +572,8 @@ def _write_ingestion_checkpoint(
             ),
         },
     }
+    if dataset_update is not None:
+        payload["dataset_update"] = dict(dataset_update)
     _write_json_file(checkpoint_path, payload)
     return payload
 
@@ -1009,7 +1029,36 @@ def _build_candidate_kb(
 
     dataset_response = client.create_dataset(kb_name, profile=profile.to_dataset_payload())
     dataset_id = extract_dataset_id(dataset_response)
-    uploaded = []
+    uploaded: list[tuple[Any, str, str, int | None]] = []
+    dataset_update_payload = {"language": profile.language} if profile.language else {}
+    dataset_update = _dataset_update_state(
+        dataset_update_payload,
+        status="pending" if dataset_update_payload else "not_required",
+    )
+
+    def write_candidate_manifest() -> None:
+        payload = make_kb_manifest_payload(
+            base_url=config.base_url,
+            dataset_id=dataset_id,
+            dataset_name=kb_name,
+            profile=profile,
+            documents=uploaded,
+        )
+        if metadata_summary:
+            payload["metadata_summary"] = metadata_summary
+        payload["dataset_update"] = dict(dataset_update)
+        _write_json_file(manifest_path, payload)
+
+    write_candidate_manifest()
+    if dataset_update_payload:
+        try:
+            client.update_dataset(dataset_id, dataset_update_payload)
+        except Exception as exc:
+            dataset_update = _dataset_update_state(dataset_update_payload, status="error", error=str(exc))
+            write_candidate_manifest()
+            raise
+        dataset_update = _dataset_update_state(dataset_update_payload, status="success")
+        write_candidate_manifest()
     document_ids: list[str] = []
     for doc in docs:
         response = client.upload_document(dataset_id, doc.path)
@@ -1039,16 +1088,7 @@ def _build_candidate_kb(
                 for doc, document_id, status, chunk_count in uploaded
             ]
 
-    payload = make_kb_manifest_payload(
-        base_url=config.base_url,
-        dataset_id=dataset_id,
-        dataset_name=kb_name,
-        profile=profile,
-        documents=uploaded,
-    )
-    if metadata_summary:
-        payload["metadata_summary"] = metadata_summary
-    _write_json_file(manifest_path, payload)
+    write_candidate_manifest()
     return {
         "profile_id": candidate.get("profile_id"),
         "disposable_kb_name": kb_name,
@@ -1456,6 +1496,12 @@ def _run(args: argparse.Namespace) -> int:
         confirmed_uploads: dict[str, dict[str, Any]] = {}
         checkpoint_skipped_upload_count = 0
         checkpoint_new_upload_count = 0
+        dataset_update_payload = {"language": profile.language} if profile.language else {}
+        dataset_update = _dataset_update_state(
+            dataset_update_payload,
+            status="pending" if dataset_update_payload else "not_required",
+        )
+        update_failure_error: str | None = None
         if args.resume:
             checkpoint_payload = _read_ingestion_checkpoint(args.checkpoint, operation="markdown_build")
             checkpoint_created_at = str(checkpoint_payload.get("created_at") or "") or None
@@ -1465,7 +1511,67 @@ def _run(args: argparse.Namespace) -> int:
                 raise BuildError("ingestion checkpoint dataset.name does not match --kb-name")
             dataset_id = _checkpoint_dataset_id(checkpoint_payload)
             confirmed_uploads = _checkpoint_uploaded_map(checkpoint_payload)
+            checkpoint_records = {key: dict(record) for key, record in confirmed_uploads.items()}
             stage_results.append({"label": "create_dataset", "status": "skipped"})
+            prior_update = checkpoint_payload.get("dataset_update")
+            prior_update_status = prior_update.get("status") if isinstance(prior_update, Mapping) else None
+            prior_update_digest = prior_update.get("payload_sha256") if isinstance(prior_update, Mapping) else None
+            update_already_succeeded = bool(
+                dataset_update_payload
+                and prior_update_status == "success"
+                and prior_update_digest == dataset_update["payload_sha256"]
+            )
+            if update_already_succeeded:
+                dataset_update = _dataset_update_state(dataset_update_payload, status="success")
+                stage_results.append({"label": "update_dataset", "status": "skipped"})
+                stage_timings.append(
+                    {
+                        "stage": "update_dataset",
+                        "operation": "update_dataset",
+                        "status": "skipped",
+                        "duration_ms": 0.0,
+                        "reason": "resume_reuses_existing_dataset",
+                    }
+                )
+            elif dataset_update_payload:
+                update_start = datetime.now(timezone.utc)
+                update_status = "success"
+                try:
+                    client.update_dataset(dataset_id, dataset_update_payload)
+                except Exception as exc:
+                    update_status = "error"
+                    update_failure_error = str(exc)
+                    dataset_update = _dataset_update_state(
+                        dataset_update_payload,
+                        status="error",
+                        error=update_failure_error,
+                    )
+                else:
+                    dataset_update = _dataset_update_state(dataset_update_payload, status="success")
+                finally:
+                    update_elapsed_ms = (datetime.now(timezone.utc) - update_start).total_seconds() * 1000
+                    stage_latency_ms.append(update_elapsed_ms)
+                    stage_results.append({"label": "update_dataset", "status": update_status})
+                    stage_timings.append(
+                        {
+                            "stage": "update_dataset",
+                            "operation": "update_dataset",
+                            "status": update_status,
+                            "duration_ms": update_elapsed_ms,
+                            "reason": "resume_retries_incomplete_update"
+                            if update_status == "success"
+                            else "resume_update_failed",
+                        }
+                    )
+                _write_ingestion_checkpoint(
+                    args.checkpoint,
+                    operation="markdown_build",
+                    dataset_id=dataset_id,
+                    dataset_name=args.kb_name,
+                    records=checkpoint_records,
+                    created_at=checkpoint_created_at,
+                    dataset_update=dataset_update,
+                )
         else:
             stage_start = datetime.now(timezone.utc)
             dataset_response = client.create_dataset(args.kb_name, profile=profile.to_dataset_payload())
@@ -1487,7 +1593,88 @@ def _run(args: argparse.Namespace) -> int:
                 dataset_id=dataset_id,
                 dataset_name=args.kb_name,
                 records=checkpoint_records,
+                dataset_update=dataset_update,
             )
+            if dataset_update_payload:
+                update_start = datetime.now(timezone.utc)
+                update_status = "success"
+                try:
+                    client.update_dataset(dataset_id, dataset_update_payload)
+                except Exception as exc:
+                    update_status = "error"
+                    update_failure_error = str(exc)
+                    dataset_update = _dataset_update_state(
+                        dataset_update_payload,
+                        status="error",
+                        error=update_failure_error,
+                    )
+                else:
+                    dataset_update = _dataset_update_state(dataset_update_payload, status="success")
+                finally:
+                    update_elapsed_ms = (datetime.now(timezone.utc) - update_start).total_seconds() * 1000
+                    stage_latency_ms.append(update_elapsed_ms)
+                    stage_results.append({"label": "update_dataset", "status": update_status})
+                    stage_timings.append(
+                        {
+                            "stage": "update_dataset",
+                            "operation": "update_dataset",
+                            "status": update_status,
+                            "duration_ms": update_elapsed_ms,
+                        }
+                    )
+                _write_ingestion_checkpoint(
+                    args.checkpoint,
+                    operation="markdown_build",
+                    dataset_id=dataset_id,
+                    dataset_name=args.kb_name,
+                    records=checkpoint_records,
+                    dataset_update=dataset_update,
+                )
+            _write_ingestion_checkpoint(
+                args.checkpoint,
+                operation="markdown_build",
+                dataset_id=dataset_id,
+                dataset_name=args.kb_name,
+                records=checkpoint_records,
+                dataset_update=dataset_update,
+            )
+
+        if update_failure_error:
+            runtime_partial_failure = build_runtime_partial_failure_report(
+                "ragflow_kb_build_live",
+                stage_results,
+                success_statuses=("success",),
+                warning_statuses=("warning",),
+                failure_statuses=("error", "timeout"),
+                skipped_statuses=("skipped",),
+                timeout_statuses=("timeout",),
+            )
+            runtime_metrics = build_runtime_metrics_summary(
+                "ragflow_kb_build_live",
+                counters={"stage_count": len(stage_results), "document_count": 0},
+                latency_samples_ms=stage_latency_ms,
+                stage_timings=stage_timings,
+            )
+            _dump_json(
+                {
+                    "ok": False,
+                    "status": "partial_failure",
+                    "error": update_failure_error,
+                    "dataset_id": dataset_id,
+                    "build_payload_preview": build_payload_preview,
+                    "runtime_partial_failure": runtime_partial_failure,
+                    "runtime_metrics": runtime_metrics,
+                    "checkpoint": _checkpoint_report(
+                        checkpoint_path=args.checkpoint,
+                        resume=args.resume,
+                        force_reupload_confirmed=args.force_reupload_confirmed,
+                        skipped_upload_count=checkpoint_skipped_upload_count,
+                        new_upload_count=checkpoint_new_upload_count,
+                        total_confirmed_upload_count=0,
+                    ),
+                }
+            )
+            return 2
 
         uploaded = []
         document_ids: list[str] = []
@@ -1585,6 +1772,7 @@ def _run(args: argparse.Namespace) -> int:
                 dataset_name=args.kb_name,
                 records=checkpoint_records,
                 created_at=checkpoint_created_at,
+                dataset_update=dataset_update,
             )
 
         parse_response = None
@@ -1633,6 +1821,7 @@ def _run(args: argparse.Namespace) -> int:
                         dataset_name=args.kb_name,
                         records=checkpoint_records,
                         created_at=checkpoint_created_at,
+                        dataset_update=dataset_update,
                     )
                     break
                 finally:
@@ -1655,6 +1844,7 @@ def _run(args: argparse.Namespace) -> int:
                         dataset_name=args.kb_name,
                         records=checkpoint_records,
                         created_at=checkpoint_created_at,
+                        dataset_update=dataset_update,
                     )
             parse_response = parse_responses[0] if len(parse_responses) == 1 else parse_responses
             if not args.no_wait and parse_success_document_ids:
@@ -1732,6 +1922,7 @@ def _run(args: argparse.Namespace) -> int:
             dataset_name=args.kb_name,
             records=checkpoint_records,
             created_at=checkpoint_created_at,
+            dataset_update=dataset_update,
         )
 
         runtime_partial_failure = build_runtime_partial_failure_report(

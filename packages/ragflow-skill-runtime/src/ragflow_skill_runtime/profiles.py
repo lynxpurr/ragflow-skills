@@ -114,14 +114,14 @@ class ChunkProfile:
         parser_config = {
             key: value
             for key, value in self.parser_config.items()
-            if not key.startswith("__") and key in SUPPORTED_PARSER_KEYS
+            if not key.startswith("__")
+            and key in SUPPORTED_PARSER_KEYS
+            and not (key == "delimiter" and value == "")
         }
         payload: dict[str, Any] = {
             "chunk_method": self.chunk_method,
             "parser_config": parser_config,
         }
-        if self.language:
-            payload["language"] = self.language
         if self.embedding_model:
             payload["embedding_model"] = self.embedding_model
         return payload
@@ -402,6 +402,7 @@ def explain_profile(profile: ChunkProfile) -> dict[str, Any]:
         "schema": "ragflow_profile_explanation_v1",
         "profile": profile.to_manifest_dict(),
         "api_payload": profile.to_dataset_payload(),
+        "api_update_payload": {"language": profile.language} if profile.language else {},
         "summary": {
             "chunk_method": profile.chunk_method,
             "chunk_size": profile.chunk_size,
