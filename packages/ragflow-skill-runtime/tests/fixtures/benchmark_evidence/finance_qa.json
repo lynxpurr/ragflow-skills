@@ -1,0 +1,41 @@
+{
+  "schema": "ragflow_grounded_qa_v1",
+  "items": [
+    {
+      "id": "qa-finance-numeric-001",
+      "query_id": "finance-numeric-001",
+      "question": "What synthetic percentage is shown for the finance example?",
+      "answer": "The synthetic percentage is 42 percent.",
+      "evidence": [
+        {
+          "document": "filing-a.md",
+          "text": "Synthetic finance value: 42 percent."
+        }
+      ]
+    },
+    {
+      "id": "qa-finance-table-001",
+      "query_id": "finance-table-001",
+      "question": "Which synthetic table row contains alpha revenue?",
+      "answer": "The synthetic table row contains alpha revenue.",
+      "evidence": [
+        {
+          "document": "filing-a.md",
+          "text": "Synthetic row label: alpha revenue."
+        }
+      ]
+    },
+    {
+      "id": "qa-finance-negative-001",
+      "query_id": "finance-negative-001",
+      "question": "Which synthetic filing supplies the unavailable beta forecast?",
+      "answer": "The beta forecast is not available in the synthetic filing.",
+      "evidence": [
+        {
+          "document": "filing-a.md",
+          "text": "Synthetic negative evidence: not available."
+        }
+      ]
+    }
+  ]
+}

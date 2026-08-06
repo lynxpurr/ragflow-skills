@@ -24,6 +24,35 @@
     "requested_mode": "agentic",
     "top_k": 5,
     "chunk_count": 1,
-    "synthesis": "host-assisted"
-  }
+    "synthesis": "host-assisted",
+    "duration_ms": 42.5,
+    "retrieval_ms": 38.2,
+    "evidence_count": 1
+  },
+  "evidence": [
+    {
+      "rank": 1,
+      "citation_id": "[1]",
+      "score": 0.885,
+      "similarity": 0.92,
+      "term_coverage": 0.5,
+      "matched_terms": [
+        "project"
+      ],
+      "matched_keywords": [
+        "project"
+      ],
+      "document_name": "source.md",
+      "document_id": "document-id",
+      "dataset_id": "dataset-id",
+      "chunk_id": "chunk-id",
+      "content_preview": "A concise evidence chunk returned by RAGFlow.",
+      "reasons": [
+        "similarity",
+        "question-term-overlap",
+        "important-keyword-overlap",
+        "top-ranked"
+      ]
+    }
+  ]
 }

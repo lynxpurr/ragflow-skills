@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -12,6 +13,15 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from build_release import DIST_DIR, PUBLIC_SKILLS, ROOT, build_release
+from document_lifecycle_check import run_document_lifecycle_check
+from forward_test_prompt_check import run_forward_test_prompt_check
+from generated_markdown_audit import run_generated_markdown_audit
+from manifest_schema_check import run_manifest_schema_check
+from rename_governance_check import run_rename_governance_check
+from report_surface_inventory import discover_public_commands
+from runtime_resilience_inventory import run_runtime_resilience_inventory
+from schema_identity_check import run_schema_identity_check
+from version_date_drift_check import run_version_date_drift_check
 
 
 TEXT_SUFFIXES = {
@@ -37,6 +47,7 @@ IGNORED_DIRS = {
     ".ruff_cache",
     ".venv",
     "__pycache__",
+    "doc",
     "dist",
     "htmlcov",
     "venv",
@@ -49,9 +60,251 @@ PRIVATE_FILE_NAMES = {
 }
 
 ALLOW_MARKER = "release-hygiene: allow"
+SUITE_REVIEW_SCHEMA = "ragflow_skill_suite_review_v1"
+GENERATED_REPORT_SAFETY_SCHEMA = "ragflow_generated_report_safety_check_v1"
+REQUIRED_REFERENCE_FILES = (
+    "host-agent-setup.md",
+    "user-onboarding-prompt.md",
+)
+DEFAULT_GENERATED_REPORT_ROOTS = (
+    Path("skills"),
+    Path("tools/fixtures/generated-reports"),
+)
+MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
+REDACTION_PLACEHOLDER_RE = re.compile(r"<redacted:[^>]+>")
+DESCRIPTION_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "for",
+    "from",
+    "in",
+    "into",
+    "needs",
+    "of",
+    "or",
+    "the",
+    "to",
+    "use",
+    "when",
+    "with",
+}
+STALE_REFERENCE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("skill_suite_stale_reference", re.compile(r"\b(?:ragflux|ragflow-saas|kb ops)\b", re.IGNORECASE)),
+    ("skill_suite_private_reference", re.compile(r"dedao|得到|薛兆丰|opc-bridge|shared-infra", re.IGNORECASE)),  # release-hygiene: allow
+)
+ALLOWED_STALE_REFERENCE_TOKENS = ("chunk-markers-ragflux-like",)
+REPEATED_WARNING_PATTERN = re.compile(
+    r"\b(?:do not|don't|never|must not|without|does not|no real|real keys|real api keys|secret|"
+    r"api key|mutate|mutation|llm)\b",
+    re.IGNORECASE,
+)
+WARNING_REFERENCE_POINTERS = (
+    "references/host-agent-setup.md",
+    "references/user-onboarding-prompt.md",
+)
+ADVANCED_REFERENCE_FILE = "advanced-workflows.md"
+GUIDANCE_TIERS = {"core", "advanced", "internal_candidate", "deprecated_candidate"}
+PRIMARY_GUIDANCE_NONBLANK_LIMITS = {
+    "SKILL.md": 90,
+    "skills/ragflow-doc-to-md/SKILL.md": 120,
+    "skills/ragflow-kb-build/SKILL.md": 120,
+    "skills/ragflow-query/SKILL.md": 120,
+}
+REQUIRED_CHILD_SECTIONS = (
+    "## When to use",
+    "## Inputs and outputs",
+    "## Canonical workflows",
+    "## Decision and stop rules",
+    "## Advanced triggers",
+    "## Security",
+)
+CANONICAL_WORKFLOW_OWNERS = {
+    "convert ordinary documents": "ragflow-doc-to-md",
+    "inspect and decide deterministically": "ragflow-doc-to-md",
+    "inspect a handoff": "ragflow-kb-build",
+    "validate build readiness without mutation": "ragflow-kb-build",
+    "build one reviewed kb": "ragflow-kb-build",
+    "validate retrieval quality": "ragflow-kb-build",
+    "inspect kb health": "ragflow-kb-build",
+    "clean up a disposable kb": "ragflow-kb-build",
+    "retrieve evidence": "ragflow-query",
+    "review answer support": "ragflow-query",
+}
+CORE_EXAMPLE_BLOCK_COUNTS = {
+    "ragflow-doc-to-md": 2,
+    "ragflow-kb-build": 6,
+    "ragflow-query": 2,
+}
+REQUIRED_ROOT_GUIDANCE = (
+    "dry-run before mutation",
+    "explicit approval",
+    "private config",
+    "exact dataset id",
+    "do not bypass",
+)
+CANONICAL_WORKFLOW_SECTION_RE = re.compile(
+    r"^### Canonical workflow: (.+?)\s*$\n(.*?)(?=^##(?:#)?\s|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+SHELL_EXAMPLE_BLOCK_RE = re.compile(r"```(?:bash|sh)\n(.*?)```", re.DOTALL)
+FORBIDDEN_PRIMARY_GUIDANCE = (
+    re.compile(r"--allow-blocked\b", re.IGNORECASE),
+    re.compile(r"\bPOST\s+/datasets\b", re.IGNORECASE),
+    re.compile(r"\braw HTTP\b.*\b(?:bypass|workaround)\b", re.IGNORECASE),
+    re.compile(r"\b(?:ignore|bypass|proceed past)\b.*\bBLOCKED\b", re.IGNORECASE),
+    re.compile(
+        r"(?<!chunk-markers-)\bragflux\b|\bragflow-kb-ops\b|\bragflow-smart-query\b|\brag-systems\b",
+        re.IGNORECASE,
+    ),
+)
+
+COMMAND_GUIDANCE_GROUPS: dict[tuple[str, str], tuple[str, ...]] = {
+    ("ragflow-doc-to-md", "core"): (
+        "ragflow-doc-to-md",
+        "ragflow-doc-to-md adaptive",
+    ),
+    ("ragflow-doc-to-md", "advanced"): (
+        "ragflow-doc-to-md backend probe",
+        "ragflow-doc-to-md backend warmup",
+        "ragflow-doc-to-md compare-adaptive-summaries",
+        "ragflow-doc-to-md compare-retained-package",
+        "ragflow-doc-to-md inspect",
+        "ragflow-doc-to-md inspect-source",
+        "ragflow-doc-to-md package",
+        "ragflow-doc-to-md postprocess",
+        "ragflow-doc-to-md segment-plan",
+        "ragflow-doc-to-md split",
+    ),
+    ("ragflow-doc-to-md", "internal_candidate"): (),
+    ("ragflow-doc-to-md", "deprecated_candidate"): (),
+    ("ragflow-kb-build", "core"): (
+        "ragflow-kb-build",
+        "ragflow-kb-build cleanup",
+        "ragflow-kb-build health-report",
+        "ragflow-kb-build inspect-handoff",
+        "ragflow-kb-build validate",
+    ),
+    ("ragflow-kb-build", "advanced"): (
+        "ragflow-kb-build activation-plan",
+        "ragflow-kb-build append",
+        "ragflow-kb-build benchmark delta",
+        "ragflow-kb-build benchmark gate",
+        "ragflow-kb-build benchmark import",
+        "ragflow-kb-build benchmark preflight",
+        "ragflow-kb-build benchmark sample",
+        "ragflow-kb-build benchmark suggest",
+        "ragflow-kb-build benchmark summarize",
+        "ragflow-kb-build benchmark trend",
+        "ragflow-kb-build consistency-check",
+        "ragflow-kb-build diagnose",
+        "ragflow-kb-build image-ingestion-execute",
+        "ragflow-kb-build image-ingestion-readiness",
+        "ragflow-kb-build inspect-kb",
+        "ragflow-kb-build metadata generate-template",
+        "ragflow-kb-build metadata lint",
+        "ragflow-kb-build metadata merge",
+        "ragflow-kb-build metadata suggest-request",
+        "ragflow-kb-build metadata suggest-review",
+        "ragflow-kb-build model-providers probe",
+        "ragflow-kb-build optimize",
+        "ragflow-kb-build optimize cleanup-plan",
+        "ragflow-kb-build optimize readiness",
+        "ragflow-kb-build optimize summarize",
+        "ragflow-kb-build parameter-audit",
+        "ragflow-kb-build parse-report",
+        "ragflow-kb-build probe",
+        "ragflow-kb-build profile compare",
+        "ragflow-kb-build profile decision",
+        "ragflow-kb-build profile experiment",
+        "ragflow-kb-build profile explain",
+        "ragflow-kb-build profile lint",
+        "ragflow-kb-build profile recommend",
+        "ragflow-kb-build qa apollo-evaluate",
+        "ragflow-kb-build qa apollo-validate",
+        "ragflow-kb-build qa generate",
+        "ragflow-kb-build qa map-evidence",
+        "ragflow-kb-build qa suggest-request",
+        "ragflow-kb-build qa suggest-review",
+        "ragflow-kb-build qa validate",
+        "ragflow-kb-build refresh-report",
+        "ragflow-kb-build segment-metadata report",
+        "ragflow-kb-build snapshot-chunks",
+        "ragflow-kb-build suppression-report",
+        "ragflow-kb-build tagset export",
+        "ragflow-kb-build tagset generate-template",
+        "ragflow-kb-build tagset lint",
+        "ragflow-kb-build tagset report",
+        "ragflow-kb-build topology advise",
+        "ragflow-kb-build topology split-plan",
+    ),
+    ("ragflow-kb-build", "internal_candidate"): (
+        "ragflow-kb-build qa apollo-judge-request",
+        "ragflow-kb-build qa apollo-judge-review",
+    ),
+    ("ragflow-kb-build", "deprecated_candidate"): (),
+    ("ragflow-query", "core"): (
+        "ragflow-query ask",
+        "ragflow-query audit-citations",
+        "ragflow-query evaluate-answer",
+    ),
+    ("ragflow-query", "advanced"): (
+        "ragflow-query agentic-plan",
+        "ragflow-query assistant-profile recommend",
+        "ragflow-query assistant-test-plan",
+        "ragflow-query cache-report",
+        "ragflow-query centroid build",
+        "ragflow-query cross-language-ab",
+        "ragflow-query diagnose-result",
+        "ragflow-query endpoint-report",
+        "ragflow-query evaluator request",
+        "ragflow-query evaluator review",
+        "ragflow-query fusion",
+        "ragflow-query intent classify",
+        "ragflow-query intent route",
+        "ragflow-query list-kbs",
+        "ragflow-query pollution-report",
+        "ragflow-query rerank-ab",
+        "ragflow-query rewrite",
+        "ragflow-query route",
+        "ragflow-query route-activation-check",
+        "ragflow-query route-diagnose",
+        "ragflow-query route-report",
+        "ragflow-query route-test",
+        "ragflow-query session enrich",
+        "ragflow-query session inspect",
+        "ragflow-query table-strategy",
+        "ragflow-query validation-suggestions",
+    ),
+    ("ragflow-query", "internal_candidate"): (
+        "ragflow-query agentic-answer request",
+        "ragflow-query agentic-answer review",
+        "ragflow-query bootstrap-smoke",
+        "ragflow-query fallback-test",
+        "ragflow-query fusion-test",
+    ),
+    ("ragflow-query", "deprecated_candidate"): (),
+}
 
 FORBIDDEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("personal_home_path", re.compile(r"/home/zenz")),  # release-hygiene: allow
+    ("personal_home_path", re.compile(r"/(?:home|Users)/[A-Za-z0-9._-]+(?:/|$)")),
+    (
+        "private_ipv4_literal",
+        re.compile(
+            r"\b(?:10(?:\.[0-9]{1,3}){3}|"
+            r"192"
+            r"\."
+            r"168(?:\.[0-9]{1,3}){2}|"
+            r"172\.(?:1[6-9]|2[0-9]|3[01])(?:\.[0-9]{1,3}){2})\b"
+        ),
+    ),
+    (
+        "secret_token_literal",
+        re.compile(
+            r"\b(?:ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{20,}|"
+            r"AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35})\b"
+        ),
+    ),
     ("opc_bridge_path", re.compile(r"opc-bridge|shared-infra", re.IGNORECASE)),  # release-hygiene: allow
     ("private_dedao_reference", re.compile(r"dedao|得到|薛兆丰", re.IGNORECASE)),  # release-hygiene: allow
     ("ragflow_localhost_default", re.compile(r"localhost:9380|127\.0\.0\.1:9380")),  # release-hygiene: allow
@@ -236,6 +489,671 @@ def validate_skill_frontmatter(skill_root: Path, *, base: Path) -> list[Finding]
     return findings
 
 
+def _skill_frontmatter_values(skill_root: Path) -> dict[str, str]:
+    skill_md = skill_root / "SKILL.md"
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    if not text.startswith("---\n"):
+        return {}
+    end = text.find("\n---", 4)
+    if end == -1:
+        return {}
+    values: dict[str, str] = {}
+    for line in text[4:end].splitlines():
+        if not line.strip() or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def _suite_markdown_files(skill_root: Path) -> list[Path]:
+    files = [skill_root / "SKILL.md"]
+    references_dir = skill_root / "references"
+    if references_dir.exists():
+        files.extend(sorted(path for path in references_dir.glob("*.md") if path.is_file()))
+    return files
+
+
+def _clean_markdown_link_target(raw_target: str) -> str:
+    target = raw_target.strip()
+    if target.startswith("<") and ">" in target:
+        target = target[1 : target.index(">")]
+    elif " " in target:
+        target = target.split(None, 1)[0]
+    target = target.strip("<>")
+    target = target.split("#", 1)[0].split("?", 1)[0]
+    return target.strip()
+
+
+def _is_external_or_anchor_link(target: str) -> bool:
+    if not target or target.startswith("#"):
+        return True
+    if target.startswith(("http://", "https://", "mailto:")):
+        return True
+    return bool(re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target))
+
+
+def scan_markdown_links(skill_root: Path, *, base: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    for path in _suite_markdown_files(skill_root):
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            for match in MARKDOWN_LINK_RE.finditer(line):
+                target = _clean_markdown_link_target(match.group(1))
+                if _is_external_or_anchor_link(target):
+                    continue
+                if target.startswith("/"):
+                    findings.append(
+                        Finding(
+                            check="skill_suite_absolute_link",
+                            path=_relative(path, base),
+                            line=line_no,
+                            message="SKILL.md and references must use relative links, anchors, or external URLs",
+                        )
+                    )
+                    continue
+                resolved = (path.parent / target).resolve()
+                try:
+                    resolved.relative_to(skill_root.resolve())
+                except ValueError:
+                    findings.append(
+                        Finding(
+                            check="skill_suite_link_escapes_skill",
+                            path=_relative(path, base),
+                            line=line_no,
+                            message=f"relative link escapes the skill directory: {target}",
+                        )
+                    )
+                    continue
+                if not resolved.exists():
+                    findings.append(
+                        Finding(
+                            check="skill_suite_broken_link",
+                            path=_relative(path, base),
+                            line=line_no,
+                            message=f"broken relative link: {target}",
+                        )
+                    )
+    return findings
+
+
+def scan_stale_skill_references(skill_root: Path, *, base: Path) -> list[Finding]:
+    findings: list[Finding] = []
+
+    def scan_line_for(label: str, line: str) -> str:
+        if label != "skill_suite_stale_reference":
+            return line
+        sanitized = line
+        for token in ALLOWED_STALE_REFERENCE_TOKENS:
+            sanitized = re.sub(re.escape(token), "", sanitized, flags=re.IGNORECASE)
+        return sanitized
+
+    for path in _suite_markdown_files(skill_root):
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            if ALLOW_MARKER in line:
+                continue
+            for label, pattern in STALE_REFERENCE_PATTERNS:
+                if pattern.search(scan_line_for(label, line)):
+                    findings.append(
+                        Finding(
+                            check=label,
+                            path=_relative(path, base),
+                            line=line_no,
+                            message="stale, private, or removed skill reference found",
+                        )
+                    )
+    return findings
+
+
+def validate_required_references(
+    skill_root: Path,
+    *,
+    base: Path,
+    required_reference_files: tuple[str, ...] = REQUIRED_REFERENCE_FILES,
+) -> list[Finding]:
+    findings: list[Finding] = []
+    references_dir = skill_root / "references"
+    for filename in required_reference_files:
+        path = references_dir / filename
+        if not path.exists():
+            findings.append(
+                Finding(
+                    check="skill_suite_missing_reference",
+                    path=_relative(path, base),
+                    message=f"missing shared reference file: {filename}",
+                )
+            )
+    return findings
+
+
+def validate_shared_reference_hashes(
+    skills_root: Path,
+    *,
+    base: Path,
+    public_skills: tuple[str, ...],
+    required_reference_files: tuple[str, ...] = REQUIRED_REFERENCE_FILES,
+) -> list[Finding]:
+    findings: list[Finding] = []
+    for filename in required_reference_files:
+        digests: dict[str, list[str]] = {}
+        for skill_name in public_skills:
+            path = skills_root / skill_name / "references" / filename
+            if not path.exists():
+                continue
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            digests.setdefault(digest, []).append(skill_name)
+        if len(digests) > 1:
+            findings.append(
+                Finding(
+                    check="skill_suite_reference_drift",
+                    path=_relative(skills_root, base),
+                    message=f"shared reference file differs across skills: {filename}",
+                )
+            )
+    return findings
+
+
+def _description_tokens(description: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", description.lower())
+        if len(token) > 2 and token not in DESCRIPTION_STOPWORDS
+    }
+
+
+def detect_description_overlap(
+    skills_root: Path,
+    *,
+    base: Path,
+    public_skills: tuple[str, ...],
+    threshold: float = 0.78,
+) -> list[Finding]:
+    findings: list[Finding] = []
+    descriptions: dict[str, str] = {}
+    for skill_name in public_skills:
+        values = _skill_frontmatter_values(skills_root / skill_name)
+        description = values.get("description", "")
+        if description:
+            descriptions[skill_name] = description
+    names = sorted(descriptions)
+    for left_index, left_name in enumerate(names):
+        left_tokens = _description_tokens(descriptions[left_name])
+        if not left_tokens:
+            continue
+        for right_name in names[left_index + 1 :]:
+            right_tokens = _description_tokens(descriptions[right_name])
+            if not right_tokens:
+                continue
+            union = left_tokens | right_tokens
+            score = len(left_tokens & right_tokens) / len(union) if union else 0.0
+            if descriptions[left_name] == descriptions[right_name] or score >= threshold:
+                findings.append(
+                    Finding(
+                        check="skill_suite_description_overlap",
+                        path=_relative(skills_root / left_name / "SKILL.md", base),
+                        message=(
+                            f"description overlaps with {right_name}/SKILL.md "
+                            f"(jaccard={score:.2f})"
+                        ),
+                    )
+                )
+    return findings
+
+
+def _normalize_warning_line(line: str) -> str:
+    line = re.sub(r"^\s*(?:[-*]|\d+\.)\s*", "", line.strip())
+    line = re.sub(r"`([^`]+)`", r"\1", line)
+    line = re.sub(r"\s+", " ", line)
+    return line.strip().lower()
+
+
+def _is_centralized_warning_pointer(line: str) -> bool:
+    lowered = line.lower()
+    return any(pointer in lowered for pointer in WARNING_REFERENCE_POINTERS)
+
+
+def _is_required_reference_file(path: Path, skill_root: Path) -> bool:
+    references_dir = skill_root / "references"
+    try:
+        relative = path.relative_to(references_dir)
+    except ValueError:
+        return False
+    return len(relative.parts) == 1 and relative.name in REQUIRED_REFERENCE_FILES
+
+
+def detect_repeated_warnings(
+    skills_root: Path,
+    *,
+    base: Path,
+    public_skills: tuple[str, ...],
+    min_skill_count: int = 2,
+) -> list[Finding]:
+    occurrences: dict[str, list[dict[str, Any]]] = {}
+    for skill_name in public_skills:
+        skill_root = skills_root / skill_name
+        for path in _suite_markdown_files(skill_root):
+            if not path.exists() or _is_required_reference_file(path, skill_root):
+                continue
+            for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                normalized = _normalize_warning_line(line)
+                if (
+                    not normalized
+                    or _is_centralized_warning_pointer(normalized)
+                    or not REPEATED_WARNING_PATTERN.search(normalized)
+                ):
+                    continue
+                occurrences.setdefault(normalized, []).append(
+                    {
+                        "skill": skill_name,
+                        "path": path,
+                        "line": line_no,
+                    }
+                )
+
+    findings: list[Finding] = []
+    for warning, warning_occurrences in sorted(occurrences.items()):
+        skill_names = sorted({str(item["skill"]) for item in warning_occurrences})
+        if len(skill_names) < min_skill_count:
+            continue
+        first = sorted(warning_occurrences, key=lambda item: (_relative(item["path"], base), item["line"]))[0]
+        findings.append(
+            Finding(
+                check="skill_suite_repeated_warning",
+                path=_relative(first["path"], base),
+                line=int(first["line"]),
+                message=(
+                    f"warning text is repeated across {len(skill_names)} skills "
+                    f"({', '.join(skill_names)}); centralize detailed guidance in "
+                    "references/host-agent-setup.md and link to it"
+                ),
+            )
+        )
+    return findings
+
+
+def _is_redaction_sidecar(path: Path) -> bool:
+    return path.name.endswith((".redaction.json", "_redaction.json"))
+
+
+def _candidate_redaction_sidecars(path: Path) -> tuple[Path, ...]:
+    if _is_redaction_sidecar(path):
+        return ()
+    return (
+        path.with_name(f"{path.stem}.redaction.json"),
+        path.with_name(f"{path.stem}_redaction.json"),
+    )
+
+
+def _valid_redaction_sidecar(path: Path) -> bool:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    return (
+        payload.get("schema") == "ragflow_report_redaction_report_v1"
+        and payload.get("ok") is True
+        and int(summary.get("redaction_count") or 0) > 0
+    )
+
+
+def _iter_generated_report_candidates(root: Path) -> Iterable[Path]:
+    if not root.exists():
+        return
+    for path in iter_files(root):
+        if path.suffix.lower() in {".json", ".md", ".yaml", ".yml"}:
+            yield path
+
+
+def run_generated_report_safety_check(
+    *,
+    root: Path = ROOT,
+    report_roots: tuple[Path, ...] = DEFAULT_GENERATED_REPORT_ROOTS,
+) -> dict[str, Any]:
+    """Scan public generated reports/examples for raw sensitive literals and redaction sidecars."""
+
+    root = root.resolve()
+    findings: list[Finding] = []
+    checked_files: list[str] = []
+    placeholder_files: list[str] = []
+    sidecar_files: list[str] = []
+    for relative_root in report_roots:
+        report_root = (root / relative_root).resolve() if not relative_root.is_absolute() else relative_root.resolve()
+        for path in _iter_generated_report_candidates(report_root):
+            text = _read_text(path)
+            if text is None:
+                continue
+            relative_path = _relative(path, root)
+            checked_files.append(relative_path)
+            if _is_redaction_sidecar(path):
+                sidecar_files.append(relative_path)
+                if not _valid_redaction_sidecar(path):
+                    findings.append(
+                        Finding(
+                            check="generated_report_redaction_sidecar",
+                            path=relative_path,
+                            message="redaction sidecar must use ragflow_report_redaction_report_v1 with redaction_count > 0",
+                        )
+                    )
+                continue
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                if ALLOW_MARKER in line:
+                    continue
+                for label, pattern in FORBIDDEN_PATTERNS:
+                    if pattern.search(line):
+                        findings.append(
+                            Finding(
+                                check="generated_report_sensitive_literal",
+                                path=relative_path,
+                                line=line_no,
+                                message=f"generated report or example contains unredacted sensitive literal: {label}",
+                            )
+                        )
+            if REDACTION_PLACEHOLDER_RE.search(text):
+                placeholder_files.append(relative_path)
+                if not any(_valid_redaction_sidecar(sidecar) for sidecar in _candidate_redaction_sidecars(path)):
+                    findings.append(
+                        Finding(
+                            check="generated_report_missing_redaction_sidecar",
+                            path=relative_path,
+                            message="generated report with redaction placeholders must have a valid adjacent redaction sidecar",
+                        )
+                    )
+
+    return {
+        "ok": not findings,
+        "schema": GENERATED_REPORT_SAFETY_SCHEMA,
+        "root": str(root),
+        "report_roots": [_relative((root / path).resolve() if not path.is_absolute() else path.resolve(), root) for path in report_roots],
+        "summary": {
+            "checked_file_count": len(checked_files),
+            "placeholder_file_count": len(placeholder_files),
+            "sidecar_file_count": len(sidecar_files),
+            "finding_count": len(findings),
+        },
+        "checked_files": sorted(checked_files),
+        "placeholder_files": sorted(placeholder_files),
+        "sidecar_files": sorted(sidecar_files),
+        "findings": [finding.to_dict() for finding in findings],
+    }
+
+
+def _nonblank_line_count(text: str) -> int:
+    return sum(1 for line in text.splitlines() if line.strip())
+
+
+def _primary_skill_paths(root: Path) -> dict[str, Path]:
+    return {
+        "SKILL.md": root / "SKILL.md",
+        **{
+            f"skills/{skill_name}/SKILL.md": root / "skills" / skill_name / "SKILL.md"
+            for skill_name in PUBLIC_SKILLS
+        },
+    }
+
+
+def validate_primary_guidance(*, root: Path = ROOT) -> tuple[list[Finding], dict[str, Any]]:
+    root = root.resolve()
+    findings: list[Finding] = []
+    nonblank_lines: dict[str, int] = {}
+    workflows: dict[str, list[str]] = {}
+    workflow_example_counts: dict[str, list[int]] = {}
+    core_example_block_count = 0
+
+    for relative, path in _primary_skill_paths(root).items():
+        if not path.exists():
+            findings.append(Finding("skill_surface_missing_primary", relative, "primary skill file is missing"))
+            continue
+        text = path.read_text(encoding="utf-8")
+        count = _nonblank_line_count(text)
+        nonblank_lines[relative] = count
+        if count > PRIMARY_GUIDANCE_NONBLANK_LIMITS[relative]:
+            findings.append(
+                Finding(
+                    "skill_surface_nonblank_budget",
+                    relative,
+                    f"nonblank line count {count} exceeds {PRIMARY_GUIDANCE_NONBLANK_LIMITS[relative]}",
+                )
+            )
+        for pattern in FORBIDDEN_PRIMARY_GUIDANCE:
+            match = pattern.search(text)
+            if match:
+                findings.append(
+                    Finding(
+                        "skill_surface_forbidden_guidance",
+                        relative,
+                        f"forbidden primary guidance matched: {match.group(0)}",
+                    )
+                )
+        if relative == "SKILL.md":
+            lowered = text.lower()
+            for phrase in REQUIRED_ROOT_GUIDANCE:
+                if phrase not in lowered:
+                    findings.append(
+                        Finding(
+                            "skill_surface_missing_root_safety",
+                            relative,
+                            f"missing root safety guidance: {phrase}",
+                        )
+                    )
+            for match in MARKDOWN_LINK_RE.finditer(text):
+                target = _clean_markdown_link_target(match.group(1))
+                if _is_external_or_anchor_link(target):
+                    continue
+                resolved = (path.parent / target).resolve()
+                try:
+                    resolved.relative_to(root)
+                except ValueError:
+                    findings.append(
+                        Finding(
+                            "skill_surface_root_link_escapes_repo",
+                            relative,
+                            f"root skill link escapes repository: {target}",
+                        )
+                    )
+                    continue
+                if not resolved.exists():
+                    findings.append(
+                        Finding(
+                            "skill_surface_broken_root_link",
+                            relative,
+                            f"broken root skill link: {target}",
+                        )
+                    )
+            continue
+        skill_name = path.parent.name
+        for section in REQUIRED_CHILD_SECTIONS:
+            if section not in text:
+                findings.append(Finding("skill_surface_missing_section", relative, f"missing section: {section}"))
+        advanced_reference = path.parent / "references" / ADVANCED_REFERENCE_FILE
+        if not advanced_reference.exists() or "references/advanced-workflows.md" not in text:
+            findings.append(
+                Finding(
+                    "skill_surface_missing_advanced_reference",
+                    relative,
+                    "child skill must link its packaged advanced workflow index",
+                )
+            )
+        for name, body in CANONICAL_WORKFLOW_SECTION_RE.findall(text):
+            workflow = name.strip().lower()
+            workflows.setdefault(workflow, []).append(skill_name)
+            workflow_examples = [
+                block for block in SHELL_EXAMPLE_BLOCK_RE.findall(body) if "python scripts/" in block
+            ]
+            workflow_example_counts.setdefault(workflow, []).append(len(workflow_examples))
+            if len(workflow_examples) != 1:
+                findings.append(
+                    Finding(
+                        "skill_surface_workflow_example_count",
+                        relative,
+                        f"canonical workflow {workflow!r} has {len(workflow_examples)} preferred examples; expected 1",
+                    )
+                )
+        example_blocks = [
+            block for block in SHELL_EXAMPLE_BLOCK_RE.findall(text) if "python scripts/" in block
+        ]
+        core_example_block_count += len(example_blocks)
+        if len(example_blocks) != CORE_EXAMPLE_BLOCK_COUNTS[skill_name]:
+            findings.append(
+                Finding(
+                    "skill_surface_core_example_count",
+                    relative,
+                    f"core example blocks {len(example_blocks)} do not equal {CORE_EXAMPLE_BLOCK_COUNTS[skill_name]}",
+                )
+            )
+
+    for workflow, owners in sorted(workflows.items()):
+        if len(owners) != 1:
+            findings.append(
+                Finding(
+                    "skill_surface_duplicate_workflow",
+                    "skills",
+                    f"canonical workflow {workflow!r} has owners {sorted(owners)}",
+                )
+            )
+    actual_workflow_owners = {
+        name: owners[0]
+        for name, owners in workflows.items()
+        if len(owners) == 1
+    }
+    if actual_workflow_owners != CANONICAL_WORKFLOW_OWNERS:
+        findings.append(
+            Finding(
+                "skill_surface_workflow_contract",
+                "skills",
+                "canonical workflow names and owners do not match the approved ten-family contract",
+            )
+        )
+
+    return findings, {
+        "nonblank_lines": nonblank_lines,
+        "canonical_workflow_count": len(workflows),
+        "core_example_block_count": core_example_block_count,
+        "workflow_example_counts": workflow_example_counts,
+    }
+
+
+def validate_command_guidance_classification(
+    *, root: Path = ROOT
+) -> tuple[list[Finding], dict[str, Any]]:
+    findings: list[Finding] = []
+    declared: dict[str, list[tuple[str, str]]] = {}
+    tier_counts = {tier: 0 for tier in sorted(GUIDANCE_TIERS)}
+    owner_counts = {skill_name: 0 for skill_name in PUBLIC_SKILLS}
+    for (owner, tier), commands in COMMAND_GUIDANCE_GROUPS.items():
+        if owner not in PUBLIC_SKILLS or tier not in GUIDANCE_TIERS:
+            findings.append(Finding("skill_surface_invalid_classification", "tools/release_hygiene_check.py", f"invalid owner/tier: {owner}/{tier}"))
+        for command in commands:
+            declared.setdefault(command, []).append((owner, tier))
+            tier_counts[tier] += 1
+            owner_counts[owner] += 1
+
+    inventory_discovered = True
+    try:
+        discovered = {item.command: item.skill for item in discover_public_commands(root)}
+    except FileNotFoundError:
+        inventory_discovered = False
+        discovered = {}
+        findings.append(
+            Finding(
+                "skill_surface_inventory_discovery_failed",
+                "skills",
+                "public command inventory requires the public CLI scripts",
+            )
+        )
+    for command, entries in sorted(declared.items()):
+        if len(entries) != 1:
+            findings.append(Finding("skill_surface_duplicate_classification", "tools/release_hygiene_check.py", f"{command} is declared {len(entries)} times"))
+            continue
+        if not inventory_discovered:
+            continue
+        owner, _ = entries[0]
+        if command not in discovered:
+            findings.append(Finding("skill_surface_stale_classification", "tools/release_hygiene_check.py", f"classified command is not discovered: {command}"))
+        elif discovered[command] != owner:
+            findings.append(Finding("skill_surface_owner_mismatch", "tools/release_hygiene_check.py", f"{command} is owned by {discovered[command]}, not {owner}"))
+    if inventory_discovered:
+        for command in sorted(set(discovered) - set(declared)):
+            findings.append(Finding("skill_surface_unclassified_command", "tools/release_hygiene_check.py", f"public command lacks guidance classification: {command}"))
+
+    return findings, {
+        "discovered_command_count": len(discovered),
+        "classified_command_count": len(declared),
+        "tier_counts": tier_counts,
+        "owner_counts": owner_counts,
+    }
+
+
+def run_suite_review(
+    *,
+    skills_root: Path = ROOT / "skills",
+    public_skills: tuple[str, ...] = PUBLIC_SKILLS,
+) -> dict[str, Any]:
+    """Run static suite-drift checks over the public skill set."""
+
+    skills_root = skills_root.resolve()
+    findings: list[Finding] = []
+    checked_files: list[str] = []
+    for skill_name in public_skills:
+        skill_root = skills_root / skill_name
+        if not skill_root.exists():
+            findings.append(
+                Finding(
+                    check="skill_suite_missing_skill",
+                    path=_relative(skill_root, skills_root),
+                    message="public skill directory is missing",
+                )
+            )
+            continue
+        findings.extend(validate_skill_frontmatter(skill_root, base=skills_root))
+        findings.extend(validate_required_references(skill_root, base=skills_root))
+        findings.extend(scan_markdown_links(skill_root, base=skills_root))
+        findings.extend(scan_stale_skill_references(skill_root, base=skills_root))
+        checked_files.extend(_relative(path, skills_root) for path in _suite_markdown_files(skill_root) if path.exists())
+
+    findings.extend(
+        validate_shared_reference_hashes(
+            skills_root,
+            base=skills_root,
+            public_skills=public_skills,
+        )
+    )
+    findings.extend(detect_description_overlap(skills_root, base=skills_root, public_skills=public_skills))
+    findings.extend(detect_repeated_warnings(skills_root, base=skills_root, public_skills=public_skills))
+    suite_root = skills_root.parent
+    primary_findings, primary_summary = validate_primary_guidance(root=suite_root)
+    command_findings, command_summary = validate_command_guidance_classification(root=suite_root)
+    findings.extend(primary_findings)
+    findings.extend(command_findings)
+    return {
+        "ok": not findings,
+        "schema": SUITE_REVIEW_SCHEMA,
+        "skills_root": str(skills_root),
+        "public_skills": list(public_skills),
+        "required_reference_files": list(REQUIRED_REFERENCE_FILES),
+        "summary": {
+            "skill_count": len(public_skills),
+            "checked_file_count": len(checked_files),
+            "finding_count": len(findings),
+            "repeated_warning_count": sum(1 for finding in findings if finding.check == "skill_suite_repeated_warning"),
+            "primary_guidance": primary_summary,
+            "command_guidance": command_summary,
+        },
+        "checked_files": sorted(checked_files),
+        "findings": [finding.to_dict() for finding in findings],
+    }
+
+
 def validate_release_shape(dist_dir: Path) -> list[Finding]:
     findings = []
     if not dist_dir.exists():
@@ -272,6 +1190,15 @@ def validate_release_shape(dist_dir: Path) -> list[Finding]:
                 )
             )
         findings.extend(validate_skill_frontmatter(skill_root, base=dist_dir))
+        advanced_reference = skill_root / "references" / ADVANCED_REFERENCE_FILE
+        if not advanced_reference.exists():
+            findings.append(
+                Finding(
+                    check="release_shape",
+                    path=_relative(advanced_reference, dist_dir),
+                    message="missing packaged advanced workflow index",
+                )
+            )
     return findings
 
 
@@ -280,6 +1207,15 @@ def run_hygiene_check(
     dist_dir: Path = DIST_DIR,
     rebuild: bool = True,
     scan_source: bool = True,
+    suite_review: bool = False,
+    schema_identity: bool = True,
+    manifest_schema: bool = True,
+    rename_governance: bool = True,
+    forward_test_prompts: bool = True,
+    version_date_drift: bool = True,
+    generated_report_safety: bool = True,
+    runtime_resilience_inventory: bool = True,
+    document_lifecycle: bool = True,
 ) -> dict[str, Any]:
     if rebuild:
         build_release(dist_dir)
@@ -302,7 +1238,7 @@ def run_hygiene_check(
         for skill_name in PUBLIC_SKILLS:
             findings.extend(validate_skill_frontmatter(ROOT / "skills" / skill_name, base=ROOT))
 
-    return {
+    payload: dict[str, Any] = {
         "ok": not findings,
         "dist": str(dist_dir),
         "rebuilt": rebuild,
@@ -311,6 +1247,46 @@ def run_hygiene_check(
         "public_skills": list(PUBLIC_SKILLS),
         "findings": [finding.to_dict() for finding in findings],
     }
+    if suite_review:
+        suite_payload = run_suite_review(skills_root=ROOT / "skills", public_skills=PUBLIC_SKILLS)
+        payload["suite_review"] = suite_payload
+        payload["ok"] = bool(payload["ok"] and suite_payload["ok"])
+    if schema_identity:
+        schema_identity_payload = run_schema_identity_check(root=ROOT)
+        payload["schema_identity"] = schema_identity_payload
+        payload["ok"] = bool(payload["ok"] and schema_identity_payload["ok"])
+    if manifest_schema:
+        manifest_schema_payload = run_manifest_schema_check(root=ROOT)
+        payload["manifest_schema"] = manifest_schema_payload
+        payload["ok"] = bool(payload["ok"] and manifest_schema_payload["ok"])
+    if rename_governance:
+        rename_governance_payload = run_rename_governance_check(root=ROOT)
+        payload["rename_governance"] = rename_governance_payload
+        payload["ok"] = bool(payload["ok"] and rename_governance_payload["ok"])
+    if forward_test_prompts:
+        forward_test_prompt_payload = run_forward_test_prompt_check(root=ROOT)
+        payload["forward_test_prompts"] = forward_test_prompt_payload
+        payload["ok"] = bool(payload["ok"] and forward_test_prompt_payload["ok"])
+    if version_date_drift:
+        version_date_drift_payload = run_version_date_drift_check(root=ROOT)
+        payload["version_date_drift"] = version_date_drift_payload
+        payload["ok"] = bool(payload["ok"] and version_date_drift_payload["ok"])
+    if generated_report_safety:
+        generated_report_payload = run_generated_report_safety_check(root=ROOT)
+        payload["generated_report_safety"] = generated_report_payload
+        payload["ok"] = bool(payload["ok"] and generated_report_payload["ok"])
+        generated_markdown_payload = run_generated_markdown_audit(root=ROOT)
+        payload["generated_markdown_audit"] = generated_markdown_payload
+        payload["ok"] = bool(payload["ok"] and generated_markdown_payload["ok"])
+    if runtime_resilience_inventory:
+        runtime_resilience_payload = run_runtime_resilience_inventory(root=ROOT)
+        payload["runtime_resilience_inventory"] = runtime_resilience_payload
+        payload["ok"] = bool(payload["ok"] and runtime_resilience_payload["ok"])
+    if document_lifecycle:
+        document_lifecycle_payload = run_document_lifecycle_check(root=ROOT)
+        payload["document_lifecycle"] = document_lifecycle_payload
+        payload["ok"] = bool(payload["ok"] and document_lifecycle_payload["ok"])
+    return payload
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -318,12 +1294,30 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dist", default=str(DIST_DIR), help="Release artifact directory")
     parser.add_argument("--no-build", action="store_true", help="Check an existing dist directory")
     parser.add_argument("--dist-only", action="store_true", help="Skip public source checks")
+    parser.add_argument("--suite-review", action="store_true", help="Run static public skill suite drift checks")
+    parser.add_argument("--skip-schema-identity", action="store_true", help="Skip static schema identity checks")
+    parser.add_argument("--skip-manifest-schema", action="store_true", help="Skip public manifest JSON Schema checks")
+    parser.add_argument("--skip-rename-governance", action="store_true", help="Skip static rename governance checks")
+    parser.add_argument("--skip-forward-test-prompts", action="store_true", help="Skip host-agent forward-test prompt checks")
+    parser.add_argument("--skip-version-date-drift", action="store_true", help="Skip static version/date drift checks")
+    parser.add_argument("--skip-generated-report-safety", action="store_true", help="Skip generated report/example safety checks")
+    parser.add_argument("--skip-runtime-resilience-inventory", action="store_true", help="Skip static runtime-resilience inventory checks")
+    parser.add_argument("--skip-document-lifecycle", action="store_true", help="Skip documentation lifecycle and link checks")
     args = parser.parse_args(argv)
 
     payload = run_hygiene_check(
         dist_dir=Path(args.dist).resolve(),
         rebuild=not args.no_build,
         scan_source=not args.dist_only,
+        suite_review=args.suite_review,
+        schema_identity=not args.skip_schema_identity,
+        manifest_schema=not args.skip_manifest_schema,
+        rename_governance=not args.skip_rename_governance,
+        forward_test_prompts=not args.skip_forward_test_prompts,
+        version_date_drift=not args.skip_version_date_drift,
+        generated_report_safety=not args.skip_generated_report_safety,
+        runtime_resilience_inventory=not args.skip_runtime_resilience_inventory,
+        document_lifecycle=not args.skip_document_lifecycle,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if payload["ok"] else 1

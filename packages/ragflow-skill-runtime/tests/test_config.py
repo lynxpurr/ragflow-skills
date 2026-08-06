@@ -66,8 +66,11 @@ class ConfigTests(unittest.TestCase):
                 "mineru:\n"
                 "  base_url: https://mineru.example.test/api/v1/agent\n"
                 "  api_key: ${MINERU_API_KEY}\n"
+                "  cli_path: ${MINERU_CLI_PATH}\n"
+                "  cli_backend: pipeline\n"
                 "  timeout: 123\n"
-                "  enable_table: true\n",
+                "  enable_table: true\n"
+                "  verify_ssl: false\n",
                 encoding="utf-8",
             )
             data = read_config_file(
@@ -75,14 +78,102 @@ class ConfigTests(unittest.TestCase):
                 env={
                     "RAGFLOW_API_KEY": "ragflow-secret",
                     "MINERU_API_KEY": "mineru-secret",
+                    "MINERU_CLI_PATH": "/opt/mineru/bin/mineru",
                 },
             )
 
         self.assertEqual(data["ragflow"]["api_key"], "ragflow-secret")
         self.assertEqual(data["doc_to_md"]["backend"], "mineru")
         self.assertEqual(data["mineru"]["api_key"], "mineru-secret")
+        self.assertEqual(data["mineru"]["cli_path"], "/opt/mineru/bin/mineru")
+        self.assertEqual(data["mineru"]["cli_backend"], "pipeline")
         self.assertEqual(data["mineru"]["timeout"], 123)
         self.assertTrue(data["mineru"]["enable_table"])
+        self.assertFalse(data["mineru"]["verify_ssl"])
+
+    def test_load_skill_config_reads_mineru_asset_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / ".ragflow"
+            config_dir.mkdir()
+            (config_dir / "config.local.yaml").write_text(
+                "mineru:\n"
+                "  asset_mode: markdown_assets\n",
+                encoding="utf-8",
+            )
+
+            config = load_skill_config(env={}, cwd=root)
+
+        self.assertEqual(config.mineru.asset_mode, "markdown_assets")
+
+    def test_environment_overrides_mineru_asset_mode(self) -> None:
+        config = load_skill_config(
+            env={
+                "MINERU_ASSET_MODE": "markdown_assets",
+            }
+        )
+
+        self.assertEqual(config.mineru.asset_mode, "markdown_assets")
+
+    def test_load_skill_config_reads_mineru_v4_options(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / ".ragflow"
+            config_dir.mkdir()
+            (config_dir / "config.local.yaml").write_text(
+                "mineru:\n"
+                "  v4_model_version: MinerU-HTML\n"
+                "  v4_result_mode: full_zip\n"
+                "  v4_data_id_prefix: case\n",
+                encoding="utf-8",
+            )
+
+            config = load_skill_config(env={}, cwd=root)
+
+        self.assertEqual(config.mineru.v4_model_version, "MinerU-HTML")
+        self.assertEqual(config.mineru.v4_result_mode, "full_zip")
+        self.assertEqual(config.mineru.v4_data_id_prefix, "case")
+
+    def test_environment_overrides_mineru_v4_options(self) -> None:
+        config = load_skill_config(
+            env={
+                "MINERU_V4_MODEL_VERSION": "vlm",
+                "MINERU_V4_RESULT_MODE": "full_zip",
+                "MINERU_V4_DATA_ID_PREFIX": "run",
+            }
+        )
+
+        self.assertEqual(config.mineru.v4_model_version, "vlm")
+        self.assertEqual(config.mineru.v4_result_mode, "full_zip")
+        self.assertEqual(config.mineru.v4_data_id_prefix, "run")
+
+    def test_load_skill_config_reads_doc_table_quality(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / ".ragflow"
+            config_dir.mkdir()
+            (config_dir / "config.local.yaml").write_text(
+                "doc_to_md:\n"
+                "  table_quality: auto\n"
+                "  allow_table_quality_fallback: true\n",
+                encoding="utf-8",
+            )
+
+            config = load_skill_config(env={}, cwd=root)
+
+        self.assertEqual(config.doc_to_md.table_quality, "auto")
+        self.assertTrue(config.doc_to_md.allow_table_quality_fallback)
+
+    def test_environment_overrides_doc_table_quality(self) -> None:
+        config = load_skill_config(
+            env={
+                "DOC_TO_MD_TABLE_QUALITY": "high",
+                "DOC_TO_MD_ALLOW_TABLE_QUALITY_FALLBACK": "true",
+            }
+        )
+
+        self.assertEqual(config.doc_to_md.table_quality, "high")
+        self.assertTrue(config.doc_to_md.allow_table_quality_fallback)
 
     def test_load_skill_config_merges_project_local_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -98,6 +189,8 @@ class ConfigTests(unittest.TestCase):
                 "  backend: remote\n"
                 "mineru:\n"
                 "  base_url: https://mineru.example.test/api/v1/agent\n"
+                "  cli_path: /opt/mineru/bin/mineru\n"
+                "  cli_backend: pipeline\n"
                 "  timeout: 300\n",
                 encoding="utf-8",
             )
@@ -121,7 +214,21 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.doc_to_md.backend, "mineru")
         self.assertEqual(config.mineru.base_url, "https://mineru.example.test/api/v1/agent")
         self.assertEqual(config.mineru.api_key, "local-mineru-key")
+        self.assertEqual(config.mineru.cli_path, "/opt/mineru/bin/mineru")
+        self.assertEqual(config.mineru.cli_backend, "pipeline")
         self.assertEqual(config.mineru.timeout, 120)
+        self.assertTrue(config.mineru.verify_ssl)
+
+    def test_load_skill_config_reads_mineru_cli_from_environment(self) -> None:
+        config = load_skill_config(
+            env={
+                "MINERU_CLI_PATH": "/opt/mineru/bin/mineru",
+                "MINERU_CLI_BACKEND": "pipeline",
+            }
+        )
+
+        self.assertEqual(config.mineru.cli_path, "/opt/mineru/bin/mineru")
+        self.assertEqual(config.mineru.cli_backend, "pipeline")
 
     def test_environment_overrides_verify_ssl(self) -> None:
         config = load_config(
@@ -132,6 +239,16 @@ class ConfigTests(unittest.TestCase):
         )
 
         self.assertFalse(config.verify_ssl)
+
+    def test_environment_overrides_mineru_verify_ssl(self) -> None:
+        config = load_skill_config(
+            env={
+                "MINERU_BASE_URL": "https://mineru.example.test",
+                "MINERU_VERIFY_SSL": "false",
+            }
+        )
+
+        self.assertFalse(config.mineru.verify_ssl)
 
     def test_missing_base_url_raises_when_normalized_property_used(self) -> None:
         config = load_config(env={})

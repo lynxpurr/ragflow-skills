@@ -5,27 +5,79 @@ from __future__ import annotations
 import base64
 import hashlib
 import html
+import io
 import json
+import os
 import re
 import shutil
+import signal
+import socket
+import ssl
 import subprocess
+import tempfile
 import time
+import unicodedata
+import uuid
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html.parser import HTMLParser
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 from urllib import error, request
+from urllib.parse import unquote, urljoin, urlparse
+
+from .runtime_metrics import normalize_stage_timing
+from .runtime_resilience import build_runtime_partial_failure_report
 
 
 class DocConvertError(RuntimeError):
     """Raised when document conversion cannot proceed."""
 
 
+class MinerUFastAPIError(DocConvertError):
+    """Raised for categorized MinerU FastAPI async protocol failures."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str,
+        stage: str | None = None,
+        http_status: int | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(message)
+        self.category = category
+        self.stage = stage
+        self.http_status = http_status
+        self.retryable = retryable
+
+
+class MinerUV4Error(DocConvertError):
+    """Raised for categorized MinerU v4 platform-compatible protocol failures."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str,
+        stage: str | None = None,
+        http_status: int | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(message)
+        self.category = category
+        self.stage = stage
+        self.http_status = http_status
+        self.retryable = retryable
+
+
 MARKDOWN_EXTENSIONS = {".md", ".markdown", ".mdown", ".mkd"}
 TEXT_EXTENSIONS = {".txt", ".text"}
 HTML_EXTENSIONS = {".html", ".htm"}
 BUILTIN_EXTENSIONS = MARKDOWN_EXTENSIONS | TEXT_EXTENSIONS | HTML_EXTENSIONS
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 PANDOC_AUTO_EXTENSIONS = {
     ".docx",
     ".epub",
@@ -35,9 +87,91 @@ PANDOC_AUTO_EXTENSIONS = {
     ".org",
     ".tex",
 }
+MINERU_AUTO_EXTENSIONS = {
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".ppt",
+    ".pptx",
+    ".xls",
+    ".xlsx",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".bmp",
+    ".tif",
+    ".tiff",
+    ".webp",
+}
 DEFAULT_MINERU_BASE_URL = "https://mineru.net/api/v1/agent"
+BACKEND_PROBE_REPORT_SCHEMA = "ragflow_doc_backend_probe_report_v1"
+BACKEND_PROBE_STATUSES = ("available", "missing", "wrong_protocol", "timeout", "not_configured")
+BACKEND_PROBE_RUNTIME_SUCCESS_STATUSES = ("available",)
+BACKEND_PROBE_RUNTIME_FAILURE_STATUSES = ("missing", "wrong_protocol", "timeout")
+BACKEND_PROBE_RUNTIME_SKIPPED_STATUSES = ("not_configured",)
+BACKEND_WARMUP_REPORT_SCHEMA = "ragflow_doc_backend_warmup_report_v1"
+BACKEND_WARMUP_STATUSES = ("success", "failed")
+DOC_RUNTIME_REPORT_SCHEMA = "ragflow_doc_runtime_report_v1"
+MINERU_FASTAPI_ASSET_SIDECAR_SCHEMA = "ragflow_mineru_fastapi_asset_sidecar_v1"
+PROCESS_ATTEMPT_STATUSES = ("success", "failed", "timeout", "execution_error")
+CONVERSION_BACKENDS = (
+    "builtin",
+    "pandoc",
+    "mineru-cli",
+    "remote",
+    "mineru",
+    "mineru-agent",
+    "mineru-fastapi",
+    "mineru-v4",
+    "mineru-platform",
+    "mineru-sync",
+    "mineru-local",
+)
 MINERU_DONE_STATE = "done"
 MINERU_FAILED_STATE = "failed"
+MINERU_FASTAPI_DONE_STATES = {"completed", "done"}
+MINERU_FASTAPI_FAILED_STATES = {"failed", "fail", "error"}
+MINERU_FASTAPI_PENDING_STATES = {"pending", "processing", "queued", "running"}
+MINERU_FASTAPI_RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
+MINERU_FASTAPI_DEFAULT_END_PAGE_ID = 99999
+MINERU_FASTAPI_ASSET_MODES = {"markdown_only", "markdown_assets"}
+MINERU_FASTAPI_BACKENDS = {
+    "pipeline",
+    "hybrid-auto-engine",
+    "vlm-auto-engine",
+    "hybrid-http-client",
+    "vlm-http-client",
+    "hybrid-engine",
+    "vlm-engine",
+}
+MINERU_FASTAPI_BACKEND_ALIASES = {
+    "hybrid-engine": "hybrid-auto-engine",
+    "vlm-engine": "vlm-auto-engine",
+}
+MINERU_V4_MODEL_VERSIONS = {"pipeline", "vlm", "MinerU-HTML"}
+MINERU_V4_RESULT_MODES = {"full_zip"}
+MINERU_V4_DONE_STATES = {"done", "completed", "success", "succeeded"}
+MINERU_V4_FAILED_STATES = {"failed", "fail", "error"}
+MINERU_V4_PENDING_STATES = {
+    "waiting",
+    "waiting-file",
+    "waiting_file",
+    "uploading",
+    "pending",
+    "running",
+    "processing",
+    "queued",
+    "extracting",
+    "converting",
+}
+MINERU_FASTAPI_MAX_IMAGE_BYTES = 512 * 1024 * 1024
+MARKDOWN_IMAGE_RE = re.compile(r"(!\[[^\]]*]\()([^)]+)(\))")
+HTML_IMAGE_SRC_RE = re.compile(r"(<img\b[^>]*?\bsrc=[\"'])([^\"']+)([\"'][^>]*>)", re.IGNORECASE)
+DATA_URL_RE = re.compile(r"^data:([^;,]+)?(?:;[^,]*)?;base64,(.*)$", re.IGNORECASE | re.DOTALL)
+OPAQUE_IMAGE_STEM_RE = re.compile(r"^[a-f0-9]{24,}$", re.IGNORECASE)
+WORD_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{1,}")
+MARKDOWN_HEADING_RE = re.compile(r"^\s*#{1,6}\s+(.+?)\s*$")
+MARKDOWN_IMAGE_INLINE_RE = re.compile(r"!\[([^\]]*)]\(([^)]+)\)")
 
 
 @dataclass(frozen=True)
@@ -53,15 +187,19 @@ class ConvertedDocument:
     sha256: str
     title: str | None = None
     warnings: list[str] = field(default_factory=list)
+    assets: dict[str, Any] = field(default_factory=dict)
 
     def to_manifest_entry(self, *, output_root: Path) -> dict[str, Any]:
-        return {
+        entry = {
             "source_path": self.source.source_path,
             "markdown_path": self.markdown_path.relative_to(output_root).as_posix(),
             "sha256": self.sha256,
             "title": self.title,
             "warnings": list(self.warnings),
         }
+        if self.assets:
+            entry["assets"] = self.assets
+        return entry
 
 
 def sha256_file(path: str | Path) -> str:
@@ -101,8 +239,18 @@ def safe_markdown_name(source: SourceDocument, *, used: set[str]) -> str:
     """Create a stable, collision-resistant Markdown filename."""
 
     raw = source.source_path.rsplit("/", 1)[-1]
-    stem = Path(raw).stem or "document"
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip(".-") or "document"
+    stem = unicodedata.normalize("NFC", Path(raw).stem or "document")
+    safe_parts: list[str] = []
+    last_was_separator = False
+    for char in stem:
+        category = unicodedata.category(char)
+        if char in "._-" or category[0] in {"L", "N"}:
+            safe_parts.append(char)
+            last_was_separator = False
+        elif not last_was_separator:
+            safe_parts.append("-")
+            last_was_separator = True
+    safe = "".join(safe_parts).strip(".-") or "document"
     candidate = f"{safe}.md"
     counter = 2
     while candidate in used:
@@ -304,6 +452,10 @@ def _json_request(
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise DocConvertError(f"MinerU request failed with HTTP {exc.code}: {detail}") from exc
+    except TimeoutError as exc:
+        raise DocConvertError(f"MinerU request timed out after {timeout:g}s") from exc
+    except socket.timeout as exc:
+        raise DocConvertError(f"MinerU request timed out after {timeout:g}s") from exc
     except error.URLError as exc:
         raise DocConvertError(f"MinerU request failed: {exc.reason}") from exc
     except json.JSONDecodeError as exc:
@@ -317,10 +469,16 @@ def _json_request(
     return data
 
 
-def _download_text(url: str, *, timeout: float) -> str:
+def _ssl_context(*, verify_ssl: bool) -> ssl.SSLContext | None:
+    if verify_ssl:
+        return None
+    return ssl._create_unverified_context()
+
+
+def _download_text(url: str, *, timeout: float, verify_ssl: bool = True) -> str:
     req = request.Request(url, headers={"Accept": "text/markdown,text/plain,*/*"})
     try:
-        with request.urlopen(req, timeout=timeout) as resp:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
             return resp.read().decode("utf-8")
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
@@ -340,6 +498,181 @@ def _upload_file(upload_url: str, source: SourceDocument, *, timeout: float) -> 
         raise DocConvertError(f"MinerU upload failed with HTTP {exc.code}: {detail}") from exc
     except error.URLError as exc:
         raise DocConvertError(f"MinerU upload failed: {exc.reason}") from exc
+
+
+def _multipart_body(
+    *,
+    fields: Mapping[str, Any],
+    file_field: str,
+    filename: str,
+    file_content: bytes,
+) -> tuple[bytes, str]:
+    boundary = f"----ragflow-skill-{uuid.uuid4().hex}"
+    chunks: list[bytes] = []
+    for key, value in fields.items():
+        if value in (None, ""):
+            continue
+        values = value if isinstance(value, (list, tuple)) else [value]
+        for item in values:
+            if item in (None, ""):
+                continue
+            rendered = "true" if item is True else "false" if item is False else str(item)
+            chunks.extend(
+                [
+                    f"--{boundary}\r\n".encode("utf-8"),
+                    f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"),
+                    rendered.encode("utf-8"),
+                    b"\r\n",
+                ]
+            )
+    chunks.extend(
+        [
+            f"--{boundary}\r\n".encode("utf-8"),
+            (
+                f'Content-Disposition: form-data; name="{file_field}"; '
+                f'filename="{filename}"\r\n'
+            ).encode("utf-8"),
+            b"Content-Type: application/octet-stream\r\n\r\n",
+            file_content,
+            b"\r\n",
+            f"--{boundary}--\r\n".encode("utf-8"),
+        ]
+    )
+    return b"".join(chunks), boundary
+
+
+def _extract_markdown_from_mapping(
+    data: Mapping[str, Any],
+    *,
+    timeout: float,
+    verify_ssl: bool = True,
+) -> str | None:
+    for key in ("markdown", "content", "md", "text", "result"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+
+    value = data.get("md_content")
+    if isinstance(value, str) and value.strip():
+        return value
+
+    for key in ("markdown_url", "md_url", "url"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return _download_text(value, timeout=timeout, verify_ssl=verify_ssl)
+
+    for key in ("data", "result", "results", "output"):
+        value = data.get(key)
+        if isinstance(value, Mapping):
+            markdown = _extract_markdown_from_mapping(value, timeout=timeout, verify_ssl=verify_ssl)
+            if markdown is not None:
+                return markdown
+
+    for value in data.values():
+        if isinstance(value, Mapping):
+            markdown = _extract_markdown_from_mapping(value, timeout=timeout, verify_ssl=verify_ssl)
+            if markdown is not None:
+                return markdown
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, Mapping):
+                    markdown = _extract_markdown_from_mapping(item, timeout=timeout, verify_ssl=verify_ssl)
+                    if markdown is not None:
+                        return markdown
+    return None
+
+
+def _extract_markdown_candidate_from_mapping(
+    data: Mapping[str, Any],
+    *,
+    timeout: float,
+    verify_ssl: bool = True,
+) -> tuple[bool, str | None]:
+    for key in ("markdown", "content", "md", "text", "result", "md_content"):
+        if key not in data:
+            continue
+        value = data.get(key)
+        if isinstance(value, str):
+            return True, value
+        if isinstance(value, Mapping):
+            found, markdown = _extract_markdown_candidate_from_mapping(
+                value,
+                timeout=timeout,
+                verify_ssl=verify_ssl,
+            )
+            if found:
+                return found, markdown
+
+    for key in ("markdown_url", "md_url", "url"):
+        if key not in data:
+            continue
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return True, _download_text(value, timeout=timeout, verify_ssl=verify_ssl)
+        if isinstance(value, str):
+            return True, ""
+
+    for key in ("data", "result", "results", "output"):
+        value = data.get(key)
+        if isinstance(value, Mapping):
+            found, markdown = _extract_markdown_candidate_from_mapping(
+                value,
+                timeout=timeout,
+                verify_ssl=verify_ssl,
+            )
+            if found:
+                return found, markdown
+
+    for value in data.values():
+        if isinstance(value, Mapping):
+            found, markdown = _extract_markdown_candidate_from_mapping(
+                value,
+                timeout=timeout,
+                verify_ssl=verify_ssl,
+            )
+            if found:
+                return found, markdown
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, Mapping):
+                    found, markdown = _extract_markdown_candidate_from_mapping(
+                        item,
+                        timeout=timeout,
+                        verify_ssl=verify_ssl,
+                    )
+                    if found:
+                        return found, markdown
+    return False, None
+
+
+def _validate_mineru_response_status(data: Mapping[str, Any]) -> None:
+    success = data.get("success")
+    if success is False:
+        message = data.get("msg") or data.get("message") or data.get("error") or "unknown MinerU error"
+        raise DocConvertError(f"MinerU sync API returned error: {message}")
+    code = data.get("code")
+    if code not in (None, 0, "0", 200, "200"):
+        message = data.get("msg") or data.get("message") or data.get("error") or "unknown MinerU error"
+        raise DocConvertError(f"MinerU sync API returned code {code}: {message}")
+    status = data.get("status") or data.get("state")
+    if isinstance(status, str) and status.lower() in {"error", "failed", "fail"}:
+        message = data.get("msg") or data.get("message") or data.get("error") or "unknown MinerU error"
+        raise DocConvertError(f"MinerU sync API returned status {status}: {message}")
+
+
+def _mineru_sync_parse_url(base_url: str) -> str:
+    root = base_url.rstrip("/")
+    if root.endswith("/parse"):
+        return root
+    return f"{root}/parse"
+
+
+def _should_try_mineru_service_auto(base_url: str | None, api_key: str | None) -> bool:
+    if not base_url:
+        return False
+    if base_url.rstrip("/") == DEFAULT_MINERU_BASE_URL and not api_key:
+        return False
+    return True
 
 
 def mineru_agent_convert(
@@ -418,6 +751,3419 @@ def mineru_agent_convert(
     raise DocConvertError(f"MinerU parsing timed out after {timeout:g}s; last state: {last_state}")
 
 
+def mineru_sync_convert(
+    source: SourceDocument,
+    *,
+    base_url: str,
+    api_key: str | None = None,
+    timeout: float = 300.0,
+    language: str = "ch",
+    page_range: str | None = None,
+    enable_table: bool = True,
+    is_ocr: bool = False,
+    enable_formula: bool = True,
+) -> str:
+    """Convert one file through a synchronous MinerU multipart /parse API."""
+
+    if timeout <= 0:
+        raise DocConvertError("MinerU timeout must be greater than zero")
+    url = _mineru_sync_parse_url(base_url)
+    body, boundary = _multipart_body(
+        fields={
+            "language": language,
+            "page_range": page_range,
+            "enable_table": enable_table,
+            "is_ocr": is_ocr,
+            "enable_formula": enable_formula,
+        },
+        file_field="file",
+        filename=source.path.name,
+        file_content=source.path.read_bytes(),
+    )
+    headers = {
+        "Accept": "application/json,text/markdown,text/plain,*/*",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            content_type = resp.headers.get("Content-Type", "")
+            raw = resp.read()
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise DocConvertError(f"MinerU sync request failed with HTTP {exc.code}: {detail}") from exc
+    except error.URLError as exc:
+        raise DocConvertError(f"MinerU sync request failed: {exc.reason}") from exc
+
+    text = raw.decode("utf-8", errors="replace")
+    stripped = text.lstrip()
+    if "json" not in content_type.lower() and not stripped.startswith("{"):
+        if stripped:
+            return text
+        raise DocConvertError("MinerU sync response is empty")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise DocConvertError("MinerU sync response is not valid JSON") from exc
+    if not isinstance(data, Mapping):
+        raise DocConvertError("MinerU sync response must be a JSON object")
+    _validate_mineru_response_status(data)
+    markdown = _extract_markdown_from_mapping(data, timeout=timeout)
+    if not isinstance(markdown, str):
+        raise DocConvertError("MinerU sync response must include markdown, content, text, result, or markdown_url")
+    return markdown
+
+
+def _multipart_json_request(
+    url: str,
+    *,
+    fields: Mapping[str, Any],
+    file_field: str,
+    filename: str,
+    file_content: bytes,
+    api_key: str | None = None,
+    timeout: float = 120.0,
+) -> Mapping[str, Any]:
+    body, boundary = _multipart_body(
+        fields=fields,
+        file_field=file_field,
+        filename=filename,
+        file_content=file_content,
+    )
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise DocConvertError(f"MinerU FastAPI request failed with HTTP {exc.code}: {detail}") from exc
+    except TimeoutError as exc:
+        raise DocConvertError(f"MinerU FastAPI request timed out after {timeout:g}s") from exc
+    except socket.timeout as exc:
+        raise DocConvertError(f"MinerU FastAPI request timed out after {timeout:g}s") from exc
+    except error.URLError as exc:
+        raise DocConvertError(f"MinerU FastAPI request failed: {exc.reason}") from exc
+    except json.JSONDecodeError as exc:
+        raise DocConvertError("MinerU FastAPI response is not valid JSON") from exc
+    if not isinstance(data, Mapping):
+        raise DocConvertError("MinerU FastAPI response must be a JSON object")
+    return data
+
+
+def _redacted_endpoint(url: str | None) -> str | None:
+    if not url:
+        return None
+    parsed = urlparse(str(url))
+    if parsed.scheme not in {"http", "https"}:
+        return "<redacted-endpoint>"
+    path = parsed.path.rstrip("/")
+    return f"{parsed.scheme}://<redacted-host>{path}"
+
+
+def _trim_remote_detail(detail: str, *, limit: int = 500) -> str:
+    value = re.sub(r"https?://[^\s\"'<>]+", "<redacted-url>", detail.strip())
+    value = re.sub(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer <redacted>", value)
+    if len(value) <= limit:
+        return value
+    return value[: limit - 3] + "..."
+
+
+def _mineru_fastapi_http_category(code: int) -> str:
+    if code in {401, 403}:
+        return "auth_failed"
+    if code in {408, 504}:
+        return "request_timeout"
+    if code == 429 or 500 <= code <= 599:
+        return "transient_remote_error"
+    return "protocol_error"
+
+
+def _mineru_fastapi_request_json_once(
+    url: str,
+    *,
+    method: str = "GET",
+    payload: Mapping[str, Any] | None = None,
+    api_key: str | None = None,
+    timeout: float = 120.0,
+    verify_ssl: bool = True,
+    stage: str,
+) -> Mapping[str, Any]:
+    headers = {"Accept": "application/json"}
+    body = None
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except error.HTTPError as exc:
+        detail = _trim_remote_detail(exc.read().decode("utf-8", errors="replace"))
+        category = _mineru_fastapi_http_category(exc.code)
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} failed with HTTP {exc.code}: {detail}",
+            category=category,
+            stage=stage,
+            http_status=exc.code,
+            retryable=exc.code in MINERU_FASTAPI_RETRY_HTTP_CODES,
+        ) from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} timed out after {timeout:g}s",
+            category="request_timeout",
+            stage=stage,
+            retryable=True,
+        ) from exc
+    except error.URLError as exc:
+        reason = exc.reason
+        category = "request_timeout" if isinstance(reason, (TimeoutError, socket.timeout)) else "transient_remote_error"
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} request failed: {reason}",
+            category=category,
+            stage=stage,
+            retryable=True,
+        ) from exc
+    except OSError as exc:
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} request failed: {exc}",
+            category="transient_remote_error",
+            stage=stage,
+            retryable=True,
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} response is not valid JSON",
+            category="protocol_error",
+            stage=stage,
+        ) from exc
+    if not isinstance(data, Mapping):
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} response must be a JSON object",
+            category="protocol_error",
+            stage=stage,
+        )
+    code = data.get("code")
+    if code not in (None, 0, "0", 200, "200"):
+        message = data.get("msg") or data.get("message") or data.get("error") or "unknown MinerU FastAPI error"
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} response returned code {code}: {message}",
+            category="protocol_error",
+            stage=stage,
+        )
+    return data
+
+
+def _mineru_fastapi_multipart_json_once(
+    url: str,
+    *,
+    fields: Mapping[str, Any],
+    file_field: str,
+    filename: str,
+    file_content: bytes,
+    api_key: str | None = None,
+    timeout: float = 120.0,
+    verify_ssl: bool = True,
+    stage: str,
+) -> Mapping[str, Any]:
+    body, boundary = _multipart_body(
+        fields=fields,
+        file_field=file_field,
+        filename=filename,
+        file_content=file_content,
+    )
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except error.HTTPError as exc:
+        detail = _trim_remote_detail(exc.read().decode("utf-8", errors="replace"))
+        category = _mineru_fastapi_http_category(exc.code)
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} failed with HTTP {exc.code}: {detail}",
+            category=category,
+            stage=stage,
+            http_status=exc.code,
+            retryable=exc.code in MINERU_FASTAPI_RETRY_HTTP_CODES,
+        ) from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} timed out after {timeout:g}s",
+            category="request_timeout",
+            stage=stage,
+            retryable=True,
+        ) from exc
+    except error.URLError as exc:
+        reason = exc.reason
+        category = "request_timeout" if isinstance(reason, (TimeoutError, socket.timeout)) else "transient_remote_error"
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} request failed: {reason}",
+            category=category,
+            stage=stage,
+            retryable=True,
+        ) from exc
+    except OSError as exc:
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} request failed: {exc}",
+            category="transient_remote_error",
+            stage=stage,
+            retryable=True,
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} response is not valid JSON",
+            category="protocol_error",
+            stage=stage,
+        ) from exc
+    if not isinstance(data, Mapping):
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} response must be a JSON object",
+            category="protocol_error",
+            stage=stage,
+        )
+    code = data.get("code")
+    if code not in (None, 0, "0", 200, "200"):
+        message = data.get("msg") or data.get("message") or data.get("error") or "unknown MinerU FastAPI error"
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI {stage} response returned code {code}: {message}",
+            category="protocol_error",
+            stage=stage,
+        )
+    return data
+
+
+def _mineru_fastapi_retry_delay(backoff: float, retry_index: int, *, deadline: float) -> float:
+    delay = max(backoff, 0.0) * (2 ** max(retry_index - 1, 0))
+    remaining = max(deadline - time.monotonic(), 0.0)
+    return min(delay, remaining)
+
+
+def _mineru_fastapi_call_with_retries(
+    operation,
+    *,
+    stage: str,
+    deadline: float,
+    retry_budget: int,
+    retry_backoff_seconds: float,
+    metrics: dict[str, int],
+) -> Mapping[str, Any]:
+    retries = 0
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise MinerUFastAPIError(
+                f"MinerU FastAPI {stage} timed out before the next request",
+                category="request_timeout",
+                stage=stage,
+            )
+        metrics["http_attempts"] = int(metrics.get("http_attempts", 0)) + 1
+        try:
+            return operation(timeout=min(max(remaining, 0.1), 120.0))
+        except MinerUFastAPIError as exc:
+            if not exc.retryable or retries >= retry_budget:
+                raise
+            delay = _mineru_fastapi_retry_delay(retry_backoff_seconds, retries + 1, deadline=deadline)
+            if delay <= 0:
+                raise
+            retries += 1
+            metrics["retry_count"] = int(metrics.get("retry_count", 0)) + 1
+            time.sleep(delay)
+
+
+def _mineru_fastapi_page_bounds(page_range: str | None) -> tuple[int, int]:
+    if not page_range:
+        return 0, MINERU_FASTAPI_DEFAULT_END_PAGE_ID
+    value = page_range.strip()
+    if not value:
+        return 0, MINERU_FASTAPI_DEFAULT_END_PAGE_ID
+    if value.lower() in {"all", "*"}:
+        return 0, MINERU_FASTAPI_DEFAULT_END_PAGE_ID
+    if "-" in value:
+        start_raw, end_raw = value.split("-", 1)
+        start_page_id = int(start_raw.strip()) if start_raw.strip() else 0
+        end_page_id = (
+            int(end_raw.strip()) if end_raw.strip() else MINERU_FASTAPI_DEFAULT_END_PAGE_ID
+        )
+    else:
+        start_page_id = int(value)
+        end_page_id = start_page_id
+    if start_page_id < 0 or end_page_id < 0 or end_page_id < start_page_id:
+        raise DocConvertError("MinerU FastAPI page_range must have non-negative start and end page ids")
+    return start_page_id, end_page_id
+
+
+def _mineru_fastapi_language_list(language: str) -> list[str]:
+    values = [item.strip() for item in str(language or "ch").split(",")]
+    return [item for item in values if item] or ["ch"]
+
+
+def _normalize_mineru_fastapi_asset_mode(asset_mode: str | None) -> str:
+    mode = (asset_mode or "markdown_only").strip().lower().replace("-", "_")
+    if mode not in MINERU_FASTAPI_ASSET_MODES:
+        allowed = ", ".join(sorted(MINERU_FASTAPI_ASSET_MODES))
+        raise DocConvertError(f"MinerU FastAPI asset mode must be one of: {allowed}")
+    return mode
+
+
+def _normalize_mineru_fastapi_backend(backend: str | None) -> tuple[str, str]:
+    requested = (backend or "pipeline").strip().lower()
+    if not requested:
+        requested = "pipeline"
+    if requested not in MINERU_FASTAPI_BACKENDS:
+        allowed = ", ".join(sorted(MINERU_FASTAPI_BACKENDS))
+        raise DocConvertError(f"MinerU FastAPI backend must be one of: {allowed}")
+    return requested, MINERU_FASTAPI_BACKEND_ALIASES.get(requested, requested)
+
+
+def _mineru_fastapi_asset_policy(
+    fields: Mapping[str, Any],
+    *,
+    asset_mode: str,
+    saved_images: int = 0,
+    image_paths: list[str] | None = None,
+    image_assets: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    saved_image_paths = list(image_paths or [])
+    sidecar_status = "not_requested" if asset_mode == "markdown_only" else "saved"
+    if asset_mode != "markdown_only" and saved_images == 0:
+        sidecar_status = "requested_empty"
+    return {
+        "mode": asset_mode,
+        "sidecar_schema": MINERU_FASTAPI_ASSET_SIDECAR_SCHEMA,
+        "sidecar_status": sidecar_status,
+        "requested": {
+            "return_md": bool(fields.get("return_md")),
+            "return_images": bool(fields.get("return_images")),
+            "return_content_list": bool(fields.get("return_content_list")),
+            "return_middle_json": bool(fields.get("return_middle_json")),
+            "return_model_output": bool(fields.get("return_model_output")),
+        },
+        "saved": {
+            "images": saved_images > 0,
+            "image_count": saved_images,
+            "image_paths": saved_image_paths[:50],
+            "image_assets": [_public_image_asset_record(item) for item in list(image_assets or [])[:50]],
+            "content_list": False,
+            "middle_json": False,
+            "model_output": False,
+        },
+        "manifest_assets": saved_images > 0,
+        "reason": (
+            "Markdown-only release path; MinerU structured assets were not requested."
+            if asset_mode == "markdown_only"
+            else "Markdown asset mode requested MinerU images and saved recognized image assets beside Markdown."
+        ),
+    }
+
+
+def _download_bytes(url: str, *, timeout: float, verify_ssl: bool = True, api_key: str | None = None) -> bytes:
+    headers = {"Accept": "image/*,application/octet-stream,*/*"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = request.Request(url, headers=headers)
+    try:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
+            return resp.read()
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise DocConvertError(f"MinerU asset download failed with HTTP {exc.code}: {detail}") from exc
+    except error.URLError as exc:
+        raise DocConvertError(f"MinerU asset download failed: {exc.reason}") from exc
+
+
+def _safe_asset_filename(value: str | None, *, default: str) -> str:
+    raw = (value or default).strip().replace("\\", "/")
+    name = PurePosixPath(raw).name or default
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip(".-") or default
+    suffix = Path(safe).suffix.lower()
+    if suffix not in IMAGE_EXTENSIONS:
+        safe = f"{safe}.png"
+    return safe
+
+
+def _asset_filename_is_opaque(value: str | None) -> bool:
+    if not value:
+        return False
+    stem = Path(PurePosixPath(str(value).replace("\\", "/")).name).stem
+    if OPAQUE_IMAGE_STEM_RE.fullmatch(stem):
+        return True
+    compact = re.sub(r"[^A-Za-z0-9]", "", stem)
+    return len(compact) >= 32 and len(re.findall(r"[a-fA-F0-9]", compact)) >= 24
+
+
+def _slugify_image_label(*values: str | None) -> str:
+    words: list[str] = []
+    for value in values:
+        if not value:
+            continue
+        for word in WORD_TOKEN_RE.findall(value):
+            lowered = word.strip("_-").lower()
+            if lowered and lowered not in {"image", "img", "figure", "fig", "picture"}:
+                words.append(lowered)
+            if len(words) >= 5:
+                break
+        if len(words) >= 5:
+            break
+    if not words:
+        return "image"
+    return "-".join(words)[:64].strip("-") or "image"
+
+
+def _semantic_image_kind(*values: str | None) -> str:
+    text = " ".join(value.lower() for value in values if value)
+    if any(token in text for token in ("logo", "brand", "商标", "标识")):
+        return "logo"
+    if any(token in text for token in ("table", "spreadsheet", "表格", "表截图")):
+        return "table"
+    if any(token in text for token in ("chart", "graph", "plot", "diagram", "curve", "图表", "曲线", "示意图")):
+        return "chart"
+    return "image"
+
+
+def _line_without_images(line: str) -> str:
+    value = MARKDOWN_IMAGE_INLINE_RE.sub(" ", line)
+    value = HTML_IMAGE_SRC_RE.sub(" ", value)
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = value.lstrip("#").strip()
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _semantic_image_filename(
+    *,
+    original_name: str,
+    sequence: int,
+    alt_text: str | None,
+    line_context: str | None,
+    heading: str | None,
+) -> str:
+    suffix = Path(original_name).suffix.lower()
+    if suffix not in IMAGE_EXTENSIONS:
+        suffix = ".png"
+    kind = _semantic_image_kind(alt_text, line_context, heading, original_name)
+    slug = _slugify_image_label(alt_text, line_context, heading)
+    prefix = f"image-{sequence:03d}"
+    if slug == kind:
+        return f"{prefix}_{kind}{suffix}"
+    return f"{prefix}_{kind}_{slug}{suffix}"
+
+
+def _unique_semantic_asset_name(
+    directory: Path,
+    preferred_name: str,
+    *,
+    source_name: str,
+    used_names: set[str],
+) -> str:
+    path = Path(preferred_name)
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", path.stem).strip(".-") or "image"
+    suffix = path.suffix.lower() if path.suffix.lower() in IMAGE_EXTENSIONS else ".png"
+    candidate = f"{stem}{suffix}"
+    existing = {item.name for item in directory.iterdir()} if directory.is_dir() else set()
+    existing.discard(source_name)
+    counter = 2
+    while candidate in used_names or candidate in existing:
+        candidate = f"{stem}-{counter}{suffix}"
+        counter += 1
+    used_names.add(candidate)
+    return candidate
+
+
+def semantic_rename_markdown_images(
+    markdown: str,
+    *,
+    markdown_path: Path,
+    source_root: Path | None = None,
+) -> tuple[str, list[dict[str, str]]]:
+    """Rename opaque local image filenames using nearby Markdown semantics.
+
+    The file content hash remains available through manifests and sidecars; this pass
+    only replaces human-hostile hash basenames in local Markdown image references.
+    """
+
+    root = source_root or markdown_path.parent
+    lines = markdown.splitlines(keepends=True)
+    target_rewrites: dict[str, str] = {}
+    records: list[dict[str, str]] = []
+    used_by_dir: dict[Path, set[str]] = {}
+    current_heading: str | None = None
+    sequence = 0
+
+    def rename_target(raw_target: str, *, alt_text: str | None, line_context: str | None) -> str | None:
+        nonlocal sequence
+        target_path, target_suffix, angle_wrapped = _split_markdown_asset_target(raw_target)
+        if not target_path:
+            return None
+        lookup_path = target_path.split("#", 1)[0].split("?", 1)[0]
+        lookup_keys = {
+            lookup_path.replace("\\", "/").lstrip("./"),
+            PurePosixPath(lookup_path.replace("\\", "/")).name,
+        }
+        for key in lookup_keys:
+            if key and key in target_rewrites:
+                new_relative = target_rewrites[key]
+                return f"<{new_relative}>{target_suffix}" if angle_wrapped else f"{new_relative}{target_suffix}"
+        source_path = _local_asset_source_path(
+            lookup_path,
+            markdown_path=markdown_path,
+            source_root=root,
+        )
+        if source_path is None or not _asset_filename_is_opaque(source_path.name):
+            return None
+        old_relative = os.path.relpath(source_path, markdown_path.parent).replace("\\", "/")
+        if old_relative in target_rewrites:
+            new_relative = target_rewrites[old_relative]
+            return f"<{new_relative}>{target_suffix}" if angle_wrapped else f"{new_relative}{target_suffix}"
+
+        sequence += 1
+        preferred = _semantic_image_filename(
+            original_name=source_path.name,
+            sequence=sequence,
+            alt_text=alt_text,
+            line_context=line_context,
+            heading=current_heading,
+        )
+        used_names = used_by_dir.setdefault(source_path.parent, set())
+        new_name = _unique_semantic_asset_name(
+            source_path.parent,
+            preferred,
+            source_name=source_path.name,
+            used_names=used_names,
+        )
+        destination = source_path.with_name(new_name)
+        source_path.rename(destination)
+        new_relative = os.path.relpath(destination, markdown_path.parent).replace("\\", "/")
+        target_rewrites[old_relative] = new_relative
+        target_rewrites[lookup_path.replace("\\", "/").lstrip("./")] = new_relative
+        target_rewrites[PurePosixPath(lookup_path.replace("\\", "/")).name] = new_relative
+        records.append(
+            {
+                "old_path": old_relative,
+                "new_path": new_relative,
+                "reason": "opaque_hash_filename",
+            }
+        )
+        return f"<{new_relative}>{target_suffix}" if angle_wrapped else f"{new_relative}{target_suffix}"
+
+    rewritten_lines: list[str] = []
+    for line in lines:
+        stripped_context = _line_without_images(line)
+        heading_match = MARKDOWN_HEADING_RE.match(stripped_context)
+        if heading_match:
+            current_heading = heading_match.group(1).strip()
+        line_context = stripped_context or current_heading
+
+        def replace_markdown(match: re.Match[str]) -> str:
+            prefix, raw_target, suffix = match.groups()
+            alt_match = MARKDOWN_IMAGE_INLINE_RE.match(match.group(0))
+            alt_text = alt_match.group(1) if alt_match else ""
+            replacement = rename_target(raw_target, alt_text=alt_text, line_context=line_context)
+            if not replacement:
+                return match.group(0)
+            return f"{prefix}{replacement}{suffix}"
+
+        def replace_html(match: re.Match[str]) -> str:
+            prefix, raw_target, suffix = match.groups()
+            replacement = rename_target(raw_target, alt_text=None, line_context=line_context)
+            if not replacement:
+                return match.group(0)
+            target, _target_suffix, _angle_wrapped = _split_markdown_asset_target(replacement)
+            return f"{prefix}{target}{suffix}"
+
+        rewritten = MARKDOWN_IMAGE_RE.sub(replace_markdown, line)
+        rewritten = HTML_IMAGE_SRC_RE.sub(replace_html, rewritten)
+        rewritten_lines.append(rewritten)
+
+    return "".join(rewritten_lines), records
+
+
+def _looks_like_download_url(value: str | None) -> bool:
+    text = (value or "").strip()
+    if not text:
+        return False
+    parsed = urlparse(text)
+    return parsed.scheme in {"http", "https"} or text.startswith("/")
+
+
+def _resolve_asset_url(value: str, *, base_url: str) -> str:
+    text = value.strip()
+    parsed = urlparse(text)
+    if parsed.scheme in {"http", "https"}:
+        return text
+    return urljoin(f"{base_url.rstrip('/')}/", text)
+
+
+def _public_image_asset_record(item: Mapping[str, str]) -> dict[str, str]:
+    record: dict[str, str] = {"path": item.get("path", "")}
+    if item.get("sha256"):
+        record["sha256"] = item["sha256"]
+    if item.get("bytes"):
+        record["bytes"] = item["bytes"]
+    return record
+
+
+def _safe_asset_stem(source: SourceDocument) -> str:
+    stem = Path(source.source_path).stem or source.path.stem or "document"
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip(".-") or "document"
+
+
+def _safe_asset_document_stem(value: str | None, *, source: SourceDocument) -> str:
+    if not value:
+        return _safe_asset_stem(source)
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip(".-") or _safe_asset_stem(source)
+
+
+def _asset_reference_keys(value: str | None) -> set[str]:
+    if not value:
+        return set()
+    raw = value.strip()
+    if not raw:
+        return set()
+    decoded = unquote(raw).replace("\\", "/")
+    keys = {decoded, decoded.lstrip("./")}
+    basename = PurePosixPath(decoded).name
+    if basename:
+        keys.add(basename)
+    return {item for item in keys if item}
+
+
+def _decode_inline_asset(value: str) -> tuple[bytes | None, str | None]:
+    stripped = value.strip()
+    if not stripped:
+        return None, None
+    match = DATA_URL_RE.match(stripped)
+    if match:
+        media_type = (match.group(1) or "").lower()
+        payload = match.group(2).strip()
+        try:
+            return base64.b64decode(payload, validate=True), media_type
+        except (ValueError, TypeError):
+            return None, media_type
+    if stripped.lower().startswith(("http://", "https://")):
+        return None, None
+    try:
+        return base64.b64decode(stripped, validate=True), None
+    except (ValueError, TypeError):
+        return None, None
+
+
+def _image_suffix_from_media_type(media_type: str | None) -> str | None:
+    if not media_type:
+        return None
+    mapping = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/webp": ".webp",
+        "image/bmp": ".bmp",
+        "image/tiff": ".tiff",
+    }
+    return mapping.get(media_type.lower())
+
+
+def _asset_candidate_from_mapping(
+    data: Mapping[str, Any],
+    *,
+    default_key: str | None = None,
+) -> dict[str, Any] | None:
+    source_key = str(
+        data.get("source_key")
+        or data.get("key")
+        or data.get("path")
+        or data.get("relative_path")
+        or data.get("filename")
+        or data.get("file_name")
+        or data.get("name")
+        or default_key
+        or ""
+    )
+    filename = str(
+        data.get("filename")
+        or data.get("file_name")
+        or data.get("name")
+        or data.get("path")
+        or data.get("relative_path")
+        or default_key
+        or "image.png"
+    )
+    content_value = (
+        data.get("content")
+        or data.get("data")
+        or data.get("base64")
+        or data.get("b64")
+        or data.get("image_base64")
+        or data.get("data_base64")
+    )
+    url = data.get("url") or data.get("image_url") or data.get("download_url")
+    if isinstance(content_value, str):
+        return {"source_key": source_key, "filename": filename, "content": content_value}
+    if isinstance(url, str) and _looks_like_download_url(url):
+        return {"source_key": source_key or url, "filename": filename or url, "url": url}
+    return None
+
+
+def _asset_candidates_from_value(value: Any, *, default_key: str | None = None) -> list[dict[str, Any]]:
+    if isinstance(value, str):
+        if _looks_like_download_url(value):
+            return [{"source_key": default_key or value, "filename": default_key or value, "url": value}]
+        if _decode_inline_asset(value)[0] is not None:
+            return [{"source_key": default_key or value, "filename": default_key or "image.png", "content": value}]
+        return []
+    if isinstance(value, Mapping):
+        candidate = _asset_candidate_from_mapping(value, default_key=default_key)
+        return [candidate] if candidate else []
+    if isinstance(value, list):
+        output: list[dict[str, Any]] = []
+        for index, item in enumerate(value, start=1):
+            output.extend(_asset_candidates_from_value(item, default_key=default_key or f"image-{index}.png"))
+        return output
+    return []
+
+
+def _collect_mineru_fastapi_image_candidates(data: Any) -> list[dict[str, Any]]:
+    image_keys = {"images", "image", "image_artifacts", "assets", "files"}
+    zip_keys = {"zip", "zip_content", "zip_base64", "zip_data", "result_zip", "output_zip"}
+    candidates: list[dict[str, Any]] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                key_text = str(key)
+                key_lower = key_text.lower()
+                if key_lower in image_keys:
+                    if isinstance(item, Mapping):
+                        for image_key, image_value in item.items():
+                            candidates.extend(_asset_candidates_from_value(image_value, default_key=str(image_key)))
+                    else:
+                        candidates.extend(_asset_candidates_from_value(item))
+                elif key_lower in zip_keys and isinstance(item, str):
+                    candidates.append({"source_key": key_text, "filename": f"{key_text}.zip", "zip_content": item})
+                elif isinstance(item, (Mapping, list)):
+                    visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(data)
+    return candidates
+
+
+def _extract_zip_image_assets(value: str) -> list[dict[str, Any]]:
+    payload, _ = _decode_inline_asset(value)
+    if not payload:
+        return []
+    output: list[dict[str, Any]] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            for name in archive.namelist():
+                suffix = Path(name).suffix.lower()
+                if suffix not in IMAGE_EXTENSIONS:
+                    continue
+                with archive.open(name) as handle:
+                    output.append({"source_key": name, "filename": name, "bytes": handle.read()})
+    except zipfile.BadZipFile:
+        return []
+    return output
+
+
+def _write_mineru_fastapi_image_assets(
+    result_payload: Mapping[str, Any],
+    *,
+    source: SourceDocument,
+    asset_output_dir: str | Path,
+    asset_document_stem: str | None,
+    base_url: str,
+    api_key: str | None,
+    timeout: float,
+    verify_ssl: bool,
+) -> list[dict[str, str]]:
+    output_root = Path(asset_output_dir)
+    document_stem = _safe_asset_document_stem(asset_document_stem, source=source)
+    image_dir = output_root / "images" / document_stem
+    staging_dir = output_root / "images" / f".{document_stem}.tmp-{uuid.uuid4().hex}"
+    saved: list[dict[str, str]] = []
+    used_names: set[str] = set()
+
+    def unique_name(raw_name: str | None, *, default: str) -> str:
+        base = _safe_asset_filename(raw_name, default=default)
+        candidate = base
+        counter = 2
+        while candidate in used_names:
+            path = Path(base)
+            candidate = f"{path.stem}-{counter}{path.suffix}"
+            counter += 1
+        used_names.add(candidate)
+        return candidate
+
+    candidates: list[dict[str, Any]] = []
+    for candidate in _collect_mineru_fastapi_image_candidates(result_payload):
+        if "zip_content" in candidate:
+            candidates.extend(_extract_zip_image_assets(str(candidate["zip_content"])))
+        else:
+            candidates.append(candidate)
+
+    try:
+        for index, candidate in enumerate(candidates, start=1):
+            raw_bytes = candidate.get("bytes")
+            media_type = None
+            if isinstance(raw_bytes, bytes):
+                content = raw_bytes
+            elif isinstance(candidate.get("url"), str):
+                content = _download_bytes(
+                    _resolve_asset_url(str(candidate["url"]), base_url=base_url),
+                    timeout=timeout,
+                    verify_ssl=verify_ssl,
+                    api_key=api_key,
+                )
+            elif isinstance(candidate.get("content"), str):
+                content, media_type = _decode_inline_asset(str(candidate["content"]))
+                if content is None and _looks_like_download_url(str(candidate["content"])):
+                    content = _download_bytes(
+                        _resolve_asset_url(str(candidate["content"]), base_url=base_url),
+                        timeout=timeout,
+                        verify_ssl=verify_ssl,
+                        api_key=api_key,
+                    )
+            else:
+                content = None
+            if not content:
+                continue
+            if len(content) > MINERU_FASTAPI_MAX_IMAGE_BYTES:
+                raise DocConvertError(
+                    f"MinerU image asset exceeds the maximum supported size "
+                    f"({len(content)} > {MINERU_FASTAPI_MAX_IMAGE_BYTES} bytes)"
+                )
+            raw_filename = str(candidate.get("filename") or "")
+            media_suffix = _image_suffix_from_media_type(media_type)
+            default_filename = f"image-{index}{media_suffix or '.png'}"
+            raw_suffix = Path(PurePosixPath(raw_filename.replace("\\", "/")).name).suffix.lower()
+            filename_seed = raw_filename
+            if media_suffix and raw_suffix not in IMAGE_EXTENSIONS:
+                raw_stem = Path(PurePosixPath(raw_filename.replace("\\", "/")).name).stem or Path(default_filename).stem
+                filename_seed = f"{raw_stem}{media_suffix}"
+            filename = unique_name(filename_seed, default=default_filename)
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            destination = staging_dir / filename
+            destination.write_bytes(content)
+            relative = (Path("images") / document_stem / filename).as_posix()
+            source_key = str(candidate.get("source_key") or candidate.get("filename") or filename)
+            saved.append(
+                {
+                    "source_key": source_key,
+                    "path": relative,
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                    "bytes": str(len(content)),
+                }
+            )
+        if saved:
+            image_dir.parent.mkdir(parents=True, exist_ok=True)
+            if image_dir.exists():
+                shutil.rmtree(image_dir)
+            staging_dir.rename(image_dir)
+        elif staging_dir.exists():
+            shutil.rmtree(staging_dir)
+    except Exception:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+        raise
+    return saved
+
+
+def _rewrite_mineru_fastapi_asset_references(markdown: str, saved_assets: list[dict[str, str]]) -> str:
+    if not saved_assets:
+        return markdown
+    exact: dict[str, str] = {}
+    basename: dict[str, str | None] = {}
+    for item in saved_assets:
+        path = item["path"]
+        for key in _asset_reference_keys(item.get("source_key")) | _asset_reference_keys(item.get("path")):
+            exact[key] = path
+            base = PurePosixPath(key).name
+            if base:
+                basename[base] = path if base not in basename else None
+
+    def replacement_for(raw: str) -> str | None:
+        target, suffix, angle_wrapped = _split_markdown_asset_target(raw)
+        target_keys = _asset_reference_keys(target)
+        for key in target_keys:
+            if key in exact:
+                value = exact[key]
+                return f"<{value}>{suffix}" if angle_wrapped else f"{value}{suffix}"
+        base = PurePosixPath(unquote(target).replace("\\", "/")).name
+        if base and basename.get(base):
+            value = basename[base]
+            return f"<{value}>{suffix}" if angle_wrapped else f"{value}{suffix}"
+        return None
+
+    def replace_markdown(match: re.Match[str]) -> str:
+        prefix, raw_target, suffix = match.groups()
+        replacement = replacement_for(raw_target)
+        if not replacement:
+            return match.group(0)
+        return f"{prefix}{replacement}{suffix}"
+
+    def replace_html(match: re.Match[str]) -> str:
+        prefix, raw_target, suffix = match.groups()
+        replacement = replacement_for(raw_target)
+        if not replacement:
+            return match.group(0)
+        target, _, _ = _split_markdown_asset_target(replacement)
+        return f"{prefix}{target}{suffix}"
+
+    markdown = MARKDOWN_IMAGE_RE.sub(replace_markdown, markdown)
+    return HTML_IMAGE_SRC_RE.sub(replace_html, markdown)
+
+
+def _extract_mineru_task_id(data: Mapping[str, Any]) -> str:
+    task_id = data.get("task_id")
+    if isinstance(task_id, str) and task_id:
+        return task_id
+    nested = data.get("data")
+    if isinstance(nested, Mapping):
+        task_id = nested.get("task_id")
+        if isinstance(task_id, str) and task_id:
+            return task_id
+    raise MinerUFastAPIError(
+        "MinerU FastAPI create-task response missing task_id",
+        category="protocol_error",
+        stage="submit",
+    )
+
+
+def _mineru_fastapi_status_state(data: Mapping[str, Any]) -> str:
+    state = data.get("status") or data.get("state")
+    if not isinstance(state, str):
+        nested = data.get("data")
+        if isinstance(nested, Mapping):
+            state = nested.get("status") or nested.get("state")
+    if not isinstance(state, str):
+        raise MinerUFastAPIError(
+            "MinerU FastAPI status response missing status",
+            category="protocol_error",
+            stage="poll",
+        )
+    return state
+
+
+def _mineru_fastapi_error_message(data: Mapping[str, Any]) -> str:
+    for key in ("error", "message", "detail", "msg", "err_msg"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return "unknown error"
+
+
+def _normalize_mineru_v4_model_version(value: str | None) -> tuple[str, str]:
+    requested = str(value or "pipeline").strip() or "pipeline"
+    canonical_by_lower = {item.lower(): item for item in MINERU_V4_MODEL_VERSIONS}
+    canonical = canonical_by_lower.get(requested.lower())
+    if canonical is None:
+        allowed = ", ".join(sorted(MINERU_V4_MODEL_VERSIONS))
+        raise DocConvertError(f"MinerU v4 model_version must be one of: {allowed}")
+    return requested, canonical
+
+
+def _normalize_mineru_v4_result_mode(value: str | None) -> str:
+    mode = str(value or "full_zip").strip().lower().replace("-", "_") or "full_zip"
+    if mode not in MINERU_V4_RESULT_MODES:
+        allowed = ", ".join(sorted(MINERU_V4_RESULT_MODES))
+        raise DocConvertError(f"MinerU v4 result mode must be one of: {allowed}")
+    return mode
+
+
+def _mineru_v4_api_root(base_url: str) -> str:
+    root = str(base_url or "").strip().rstrip("/")
+    if not root:
+        raise DocConvertError("mineru-v4 backend requires --mineru-base-url or MINERU_BASE_URL")
+    parsed = urlparse(root)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise DocConvertError("MinerU v4 base URL must use http or https")
+    if parsed.path.rstrip("/") == "/api/v4":
+        return root
+    if parsed.path.rstrip("/").endswith("/api/v4"):
+        return root
+    return f"{root}/api/v4"
+
+
+def _mineru_v4_file_urls_url(base_url: str) -> str:
+    return f"{_mineru_v4_api_root(base_url)}/file-urls/batch"
+
+
+def _mineru_v4_results_url(base_url: str, batch_id: str) -> str:
+    return f"{_mineru_v4_api_root(base_url)}/extract-results/batch/{batch_id}"
+
+
+def _mineru_v4_http_category(code: int, *, stage: str) -> str:
+    if code in {401, 403}:
+        return "auth_failed"
+    if code == 404:
+        return "wrong_endpoint_shape"
+    if code in {408, 504}:
+        return "request_timeout"
+    if stage == "upload":
+        return "failed_upload"
+    if stage == "poll":
+        return "failed_polling"
+    return "protocol_error"
+
+
+def _mineru_v4_request_json_once(
+    url: str,
+    *,
+    method: str = "GET",
+    payload: Mapping[str, Any] | None = None,
+    api_key: str | None = None,
+    timeout: float = 120.0,
+    verify_ssl: bool = True,
+    stage: str,
+) -> Mapping[str, Any]:
+    headers = {"Accept": "application/json"}
+    body = None
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except error.HTTPError as exc:
+        detail = _trim_remote_detail(exc.read().decode("utf-8", errors="replace"))
+        category = _mineru_v4_http_category(exc.code, stage=stage)
+        raise MinerUV4Error(
+            f"MinerU v4 {stage} failed with HTTP {exc.code}: {detail}",
+            category=category,
+            stage=stage,
+            http_status=exc.code,
+            retryable=exc.code in MINERU_FASTAPI_RETRY_HTTP_CODES,
+        ) from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise MinerUV4Error(
+            f"MinerU v4 {stage} timed out after {timeout:g}s",
+            category="request_timeout",
+            stage=stage,
+            retryable=True,
+        ) from exc
+    except error.URLError as exc:
+        reason = exc.reason
+        category = "request_timeout" if isinstance(reason, (TimeoutError, socket.timeout)) else "transient_remote_error"
+        if stage == "upload":
+            category = "failed_upload"
+        if stage == "poll":
+            category = "failed_polling"
+        raise MinerUV4Error(
+            f"MinerU v4 {stage} request failed: {reason}",
+            category=category,
+            stage=stage,
+            retryable=category in {"request_timeout", "transient_remote_error", "failed_polling"},
+        ) from exc
+    except OSError as exc:
+        raise MinerUV4Error(
+            f"MinerU v4 {stage} request failed: {exc}",
+            category="transient_remote_error",
+            stage=stage,
+            retryable=True,
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise MinerUV4Error(
+            f"MinerU v4 {stage} response is not valid JSON",
+            category="protocol_error",
+            stage=stage,
+        ) from exc
+    if not isinstance(data, Mapping):
+        raise MinerUV4Error(
+            f"MinerU v4 {stage} response must be a JSON object",
+            category="protocol_error",
+            stage=stage,
+        )
+    code = data.get("code")
+    if code not in (None, 0, "0", 200, "200"):
+        message = data.get("msg") or data.get("message") or data.get("error") or "unknown MinerU v4 error"
+        raise MinerUV4Error(
+            f"MinerU v4 {stage} response returned code {code}: {message}",
+            category="protocol_error",
+            stage=stage,
+        )
+    return data
+
+
+def _extract_mineru_v4_data(data: Mapping[str, Any]) -> Mapping[str, Any]:
+    nested = data.get("data")
+    if isinstance(nested, Mapping):
+        return nested
+    return data
+
+
+def _extract_mineru_v4_batch_id(data: Mapping[str, Any]) -> str:
+    payload = _extract_mineru_v4_data(data)
+    batch_id = payload.get("batch_id")
+    if isinstance(batch_id, str) and batch_id:
+        return batch_id
+    raise MinerUV4Error(
+        "MinerU v4 submit response missing batch_id",
+        category="missing_batch_id",
+        stage="submit",
+    )
+
+
+def _extract_mineru_v4_upload_urls(data: Mapping[str, Any], *, file_count: int) -> list[str]:
+    payload = _extract_mineru_v4_data(data)
+    raw_urls = payload.get("file_urls") or payload.get("upload_urls") or payload.get("urls")
+    if not isinstance(raw_urls, list) or len(raw_urls) < file_count:
+        raise MinerUV4Error(
+            "MinerU v4 submit response missing upload URLs",
+            category="missing_upload_urls",
+            stage="submit",
+        )
+    urls: list[str] = []
+    for item in raw_urls[:file_count]:
+        if isinstance(item, str) and item:
+            urls.append(item)
+        elif isinstance(item, Mapping):
+            value = item.get("url") or item.get("file_url") or item.get("upload_url")
+            if isinstance(value, str) and value:
+                urls.append(value)
+    if len(urls) < file_count:
+        raise MinerUV4Error(
+            "MinerU v4 submit response missing upload URLs",
+            category="missing_upload_urls",
+            stage="submit",
+        )
+    return urls
+
+
+def _mineru_v4_data_id(source: SourceDocument, prefix: str | None) -> str:
+    stem = _safe_asset_stem(source)
+    if prefix and str(prefix).strip():
+        safe_prefix = re.sub(r"[^A-Za-z0-9._-]+", "-", str(prefix).strip()).strip(".-") or "document"
+        return f"{safe_prefix}-{stem}"
+    return f"{stem}-{uuid.uuid4().hex[:12]}"
+
+
+def _mineru_v4_upload_file(upload_url: str, source: SourceDocument, *, timeout: float, verify_ssl: bool) -> None:
+    req = request.Request(upload_url, data=source.path.read_bytes(), method="PUT")
+    try:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
+            if resp.status not in (200, 201, 204):
+                raise MinerUV4Error(
+                    f"MinerU v4 upload failed with HTTP {resp.status}",
+                    category="failed_upload",
+                    stage="upload",
+                    http_status=resp.status,
+                )
+    except error.HTTPError as exc:
+        detail = _trim_remote_detail(exc.read().decode("utf-8", errors="replace"))
+        raise MinerUV4Error(
+            f"MinerU v4 upload failed with HTTP {exc.code}: {detail}",
+            category="failed_upload",
+            stage="upload",
+            http_status=exc.code,
+            retryable=exc.code in MINERU_FASTAPI_RETRY_HTTP_CODES,
+        ) from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise MinerUV4Error(
+            f"MinerU v4 upload timed out after {timeout:g}s",
+            category="failed_upload",
+            stage="upload",
+            retryable=True,
+        ) from exc
+    except error.URLError as exc:
+        raise MinerUV4Error(
+            f"MinerU v4 upload failed: {exc.reason}",
+            category="failed_upload",
+            stage="upload",
+            retryable=True,
+        ) from exc
+
+
+def _mineru_v4_result_items(data: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    payload = _extract_mineru_v4_data(data)
+    for key in ("extract_result", "extract_results", "results", "files", "data"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, Mapping)]
+    if any(key in payload for key in ("state", "status", "full_zip_url", "file_name")):
+        return [payload]
+    return []
+
+
+def _mineru_v4_result_state(item: Mapping[str, Any]) -> str:
+    state = item.get("state") or item.get("status")
+    if not isinstance(state, str) or not state:
+        return "unknown"
+    return state
+
+
+def _mineru_v4_result_error(item: Mapping[str, Any]) -> str:
+    for key in ("err_msg", "error", "message", "detail", "msg"):
+        value = item.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return "unknown error"
+
+
+def _mineru_v4_zip_url(item: Mapping[str, Any]) -> str:
+    for key in ("full_zip_url", "full_zip", "zip_url", "result_zip_url", "download_url", "url"):
+        value = item.get(key)
+        if isinstance(value, str) and value:
+            return value
+    raise MinerUV4Error(
+        "MinerU v4 completed result missing full_zip_url",
+        category="missing_zip_url",
+        stage="result",
+    )
+
+
+def _mineru_v4_download_zip(url: str, *, timeout: float, verify_ssl: bool) -> bytes:
+    req = request.Request(url, headers={"Accept": "application/zip,application/octet-stream,*/*"})
+    try:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
+            return resp.read()
+    except error.HTTPError as exc:
+        detail = _trim_remote_detail(exc.read().decode("utf-8", errors="replace"))
+        raise MinerUV4Error(
+            f"MinerU v4 zip download failed with HTTP {exc.code}: {detail}",
+            category="bad_zip",
+            stage="result",
+            http_status=exc.code,
+        ) from exc
+    except error.URLError as exc:
+        raise MinerUV4Error(
+            f"MinerU v4 zip download failed: {exc.reason}",
+            category="bad_zip",
+            stage="result",
+        ) from exc
+
+
+def _safe_mineru_v4_zip_name(name: str) -> PurePosixPath:
+    raw = str(name or "").replace("\\", "/")
+    if not raw or re.match(r"^[A-Za-z]:", raw):
+        raise MinerUV4Error(
+            f"MinerU v4 result zip contains unsafe zip entry: {name}",
+            category="bad_zip",
+            stage="result",
+        )
+    pure = PurePosixPath(raw)
+    if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
+        raise MinerUV4Error(
+            f"MinerU v4 result zip contains unsafe zip entry: {name}",
+            category="bad_zip",
+            stage="result",
+        )
+    return pure
+
+
+def _mineru_v4_markdown_entry(names: list[str]) -> str | None:
+    safe_names = [_safe_mineru_v4_zip_name(name).as_posix() for name in names]
+    for target in ("full.md", "auto/full.md"):
+        if target in safe_names:
+            return target
+    for name in safe_names:
+        if name.endswith("/full.md"):
+            return name
+    markdown_entries = [name for name in safe_names if Path(name).suffix.lower() in MARKDOWN_EXTENSIONS]
+    return sorted(markdown_entries)[0] if markdown_entries else None
+
+
+def _write_mineru_v4_zip_assets(
+    archive: zipfile.ZipFile,
+    *,
+    source: SourceDocument,
+    asset_output_dir: str | Path,
+    asset_document_stem: str | None,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    output_root = Path(asset_output_dir)
+    document_stem = _safe_asset_document_stem(asset_document_stem, source=source)
+    image_dir = output_root / "images" / document_stem
+    artifact_dir = output_root / "artifacts" / document_stem
+    staging_image_dir = output_root / "images" / f".{document_stem}.tmp-{uuid.uuid4().hex}"
+    staging_artifact_dir = output_root / "artifacts" / f".{document_stem}.tmp-{uuid.uuid4().hex}"
+    saved_images: list[dict[str, str]] = []
+    saved_artifacts: list[dict[str, str]] = []
+    used_image_names: set[str] = set()
+    used_artifact_names: set[str] = set()
+
+    def unique_name(raw_name: str, *, default: str, used: set[str]) -> str:
+        base = _safe_asset_filename(raw_name, default=default) if Path(raw_name).suffix.lower() in IMAGE_EXTENSIONS else _safe_json_artifact_filename(raw_name, default=default)
+        candidate = base
+        counter = 2
+        while candidate in used:
+            path = Path(base)
+            candidate = f"{path.stem}-{counter}{path.suffix}"
+            counter += 1
+        used.add(candidate)
+        return candidate
+
+    try:
+        for index, name in enumerate(archive.namelist(), start=1):
+            safe_name = _safe_mineru_v4_zip_name(name).as_posix()
+            suffix = Path(safe_name).suffix.lower()
+            if suffix in IMAGE_EXTENSIONS:
+                content = archive.read(name)
+                filename = unique_name(safe_name, default=f"image-{index}{suffix}", used=used_image_names)
+                staging_image_dir.mkdir(parents=True, exist_ok=True)
+                destination = staging_image_dir / filename
+                destination.write_bytes(content)
+                relative = (Path("images") / document_stem / filename).as_posix()
+                saved_images.append(
+                    {
+                        "source_key": safe_name,
+                        "path": relative,
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                        "bytes": str(len(content)),
+                    }
+                )
+            elif suffix == ".json":
+                content = archive.read(name)
+                filename = unique_name(safe_name, default=f"artifact-{index}.json", used=used_artifact_names)
+                staging_artifact_dir.mkdir(parents=True, exist_ok=True)
+                destination = staging_artifact_dir / filename
+                destination.write_bytes(content)
+                relative = (Path("artifacts") / document_stem / filename).as_posix()
+                saved_artifacts.append(
+                    {
+                        "source_key": safe_name,
+                        "path": relative,
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                        "bytes": str(len(content)),
+                    }
+                )
+        if saved_images:
+            image_dir.parent.mkdir(parents=True, exist_ok=True)
+            if image_dir.exists():
+                shutil.rmtree(image_dir)
+            staging_image_dir.rename(image_dir)
+        elif staging_image_dir.exists():
+            shutil.rmtree(staging_image_dir)
+        if saved_artifacts:
+            artifact_dir.parent.mkdir(parents=True, exist_ok=True)
+            if artifact_dir.exists():
+                shutil.rmtree(artifact_dir)
+            staging_artifact_dir.rename(artifact_dir)
+        elif staging_artifact_dir.exists():
+            shutil.rmtree(staging_artifact_dir)
+    except Exception:
+        if staging_image_dir.exists():
+            shutil.rmtree(staging_image_dir)
+        if staging_artifact_dir.exists():
+            shutil.rmtree(staging_artifact_dir)
+        raise
+    return saved_images, saved_artifacts
+
+
+def _safe_json_artifact_filename(value: str, *, default: str) -> str:
+    name = PurePosixPath(str(value or default).replace("\\", "/")).name or default
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip(".-") or default
+    if Path(safe).suffix.lower() != ".json":
+        safe = f"{Path(safe).stem or 'artifact'}.json"
+    return safe
+
+
+def _mineru_v4_asset_policy(
+    *,
+    asset_mode: str,
+    saved_images: list[dict[str, str]] | None = None,
+    saved_artifacts: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    images = list(saved_images or [])
+    artifacts = list(saved_artifacts or [])
+    sidecar_status = "not_requested" if asset_mode == "markdown_only" else "saved"
+    if asset_mode != "markdown_only" and not images and not artifacts:
+        sidecar_status = "requested_empty"
+    return {
+        "mode": asset_mode,
+        "sidecar_status": sidecar_status,
+        "requested": {
+            "full_zip": True,
+            "save_images": asset_mode == "markdown_assets",
+            "save_json_artifacts": asset_mode == "markdown_assets",
+        },
+        "saved": {
+            "images": bool(images),
+            "image_count": len(images),
+            "image_paths": [item["path"] for item in images[:50]],
+            "image_assets": [_public_image_asset_record(item) for item in images[:50]],
+            "json_artifacts": bool(artifacts),
+            "json_artifact_count": len(artifacts),
+            "json_artifact_paths": [item["path"] for item in artifacts[:50]],
+        },
+        "manifest_assets": bool(images),
+        "reason": (
+            "Markdown-only release path; MinerU v4 zip assets were not materialized."
+            if asset_mode == "markdown_only"
+            else "Markdown asset mode extracted safe image and JSON artifacts from the MinerU v4 result zip."
+        ),
+    }
+
+
+def _extract_mineru_v4_zip_markdown(
+    payload: bytes,
+    *,
+    source: SourceDocument,
+    asset_mode: str,
+    asset_output_dir: str | Path | None,
+    asset_document_stem: str | None,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            names = archive.namelist()
+            safe_names = [_safe_mineru_v4_zip_name(name).as_posix() for name in names]
+            markdown_entry = _mineru_v4_markdown_entry(names)
+            if markdown_entry is None:
+                raise MinerUV4Error(
+                    "MinerU v4 result zip does not contain Markdown",
+                    category="missing_markdown",
+                    stage="result",
+                )
+            markdown = archive.read(markdown_entry).decode("utf-8")
+            if not markdown.strip():
+                raise MinerUV4Error(
+                    "MinerU v4 result zip Markdown is empty",
+                    category="missing_markdown",
+                    stage="result",
+                )
+            saved_images: list[dict[str, str]] = []
+            saved_artifacts: list[dict[str, str]] = []
+            if asset_mode == "markdown_assets":
+                if asset_output_dir is None:
+                    raise DocConvertError("MinerU v4 markdown_assets mode requires an asset output directory")
+                saved_images, saved_artifacts = _write_mineru_v4_zip_assets(
+                    archive,
+                    source=source,
+                    asset_output_dir=asset_output_dir,
+                    asset_document_stem=asset_document_stem,
+                )
+                markdown = _rewrite_mineru_fastapi_asset_references(markdown, saved_images)
+            artifact_summary = {
+                "entry_count": len(safe_names),
+                "markdown_entry": markdown_entry,
+                "image_entry_count": sum(1 for name in safe_names if Path(name).suffix.lower() in IMAGE_EXTENSIONS),
+                "json_entry_count": sum(1 for name in safe_names if Path(name).suffix.lower() == ".json"),
+                "saved_json_artifact_count": len(saved_artifacts),
+            }
+            return markdown, artifact_summary, _mineru_v4_asset_policy(
+                asset_mode=asset_mode,
+                saved_images=saved_images,
+                saved_artifacts=saved_artifacts,
+            )
+    except MinerUV4Error:
+        raise
+    except zipfile.BadZipFile as exc:
+        raise MinerUV4Error(
+            "MinerU v4 result zip is invalid",
+            category="bad_zip",
+            stage="result",
+        ) from exc
+    except UnicodeDecodeError as exc:
+        raise MinerUV4Error(
+            "MinerU v4 result Markdown is not valid UTF-8",
+            category="missing_markdown",
+            stage="result",
+        ) from exc
+
+
+def _probe_mineru_fastapi_backend(
+    *,
+    backend: str,
+    base_url: str | None,
+    api_key: str | None,
+    network_check: bool,
+    timeout: float,
+    verify_ssl: bool = True,
+) -> dict[str, Any]:
+    valid, reason = _valid_http_url(base_url)
+    checks = [
+        {"name": "url_configured", "ok": bool(base_url)},
+        {"name": "http_url", "ok": valid},
+    ]
+    if not base_url:
+        return _backend_probe_entry(backend, "not_configured", [reason], checks)
+    if not valid:
+        return _backend_probe_entry(backend, "wrong_protocol", [reason], checks)
+    if not network_check:
+        checks.append({"name": "network_check", "ok": None, "skipped": True})
+        return _backend_probe_entry(
+            backend,
+            "available",
+            [reason, "network check disabled"],
+            checks,
+        )
+
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = request.Request(f"{base_url.rstrip('/')}/health", headers=headers, method="GET")
+    try:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl=verify_ssl)) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        if exc.code in {401, 403} and not api_key:
+            checks.append({"name": "api_key_configured", "ok": False})
+            return _backend_probe_entry(
+                backend,
+                "not_configured",
+                ["MinerU FastAPI health endpoint requires an API key"],
+                checks,
+            )
+        if exc.code == 404:
+            checks.append({"name": "health_endpoint", "ok": False})
+            return _backend_probe_entry(
+                backend,
+                "missing",
+                [f"health endpoint not found: HTTP {exc.code}: {detail}"],
+                checks,
+            )
+        if exc.code in {401, 403}:
+            checks.append({"name": "api_key_configured", "ok": bool(api_key)})
+            return _backend_probe_entry(
+                backend,
+                "wrong_protocol",
+                [f"MinerU FastAPI health endpoint rejected the request: HTTP {exc.code}: {detail}"],
+                checks,
+            )
+        checks.append({"name": "health_endpoint", "ok": False})
+        return _backend_probe_entry(
+            backend,
+            "wrong_protocol",
+            [f"health endpoint returned HTTP {exc.code}: {detail}"],
+            checks,
+        )
+    except TimeoutError:
+        checks.append({"name": "health_endpoint", "ok": False})
+        return _backend_probe_entry(backend, "timeout", [f"health probe timed out after {timeout:g}s"], checks)
+    except socket.timeout:
+        checks.append({"name": "health_endpoint", "ok": False})
+        return _backend_probe_entry(backend, "timeout", [f"health probe timed out after {timeout:g}s"], checks)
+    except error.URLError as exc:
+        checks.append({"name": "health_endpoint", "ok": False})
+        return _backend_probe_entry(backend, "missing", [f"health probe failed: {exc.reason}"], checks)
+    except json.JSONDecodeError as exc:
+        checks.append({"name": "health_endpoint", "ok": False})
+        return _backend_probe_entry(backend, "wrong_protocol", ["health endpoint did not return valid JSON"], checks)
+    except OSError as exc:
+        checks.append({"name": "health_endpoint", "ok": False})
+        return _backend_probe_entry(backend, "missing", [f"health probe failed: {exc}"], checks)
+
+    if not isinstance(payload, Mapping):
+        checks.append({"name": "health_payload", "ok": False})
+        return _backend_probe_entry(backend, "wrong_protocol", ["health endpoint did not return a JSON object"], checks)
+
+    status = payload.get("status")
+    protocol_version = payload.get("protocol_version")
+    checks.append({"name": "health_status", "ok": status == "healthy"})
+    checks.append({"name": "protocol_version", "ok": protocol_version == 2})
+    checks.append({"name": "verify_ssl", "ok": bool(verify_ssl)})
+    if not isinstance(status, str):
+        return _backend_probe_entry(
+            backend,
+            "wrong_protocol",
+            ["health endpoint status field must be a string"],
+            checks,
+        )
+    if status == "healthy" and protocol_version == 2:
+        return _backend_probe_entry(
+            backend,
+            "available",
+            ["MinerU FastAPI health endpoint reported healthy"],
+            checks,
+        )
+    if status == "healthy":
+        return _backend_probe_entry(
+            backend,
+            "wrong_protocol",
+            [f"MinerU FastAPI protocol_version must be 2; got {protocol_version!r}"],
+            checks,
+        )
+
+    if status == "unhealthy" and not api_key and payload.get("error"):
+        return _backend_probe_entry(
+            backend,
+            "not_configured",
+            [str(payload.get("error"))],
+            checks,
+        )
+
+    message = payload.get("error") or payload.get("detail") or payload.get("message") or "health endpoint did not report healthy"
+    return _backend_probe_entry(
+        backend,
+        "wrong_protocol",
+        [str(message)],
+        checks,
+    )
+
+
+def _probe_mineru_v4_backend(
+    *,
+    backend: str,
+    base_url: str | None,
+    api_key: str | None,
+    network_check: bool,
+    timeout: float,
+    verify_ssl: bool = True,
+) -> dict[str, Any]:
+    checks = [
+        {"name": "url_configured", "ok": bool(base_url)},
+        {"name": "api_key_configured", "ok": bool(api_key)},
+    ]
+    if not base_url or not api_key:
+        reasons = []
+        if not base_url:
+            reasons.append("MinerU v4 endpoint URL is not configured")
+        if not api_key:
+            reasons.append("MinerU v4 API key is not configured")
+        return _backend_probe_entry(backend, "not_configured", reasons, checks)
+    valid, reason = _valid_http_url(base_url)
+    checks.append({"name": "http_url", "ok": valid})
+    if not valid:
+        return _backend_probe_entry(backend, "wrong_protocol", [reason], checks)
+    try:
+        root = _mineru_v4_api_root(base_url)
+    except DocConvertError as exc:
+        checks.append({"name": "v4_url_shape", "ok": False})
+        return _backend_probe_entry(backend, "wrong_protocol", [str(exc)], checks)
+    checks.append({"name": "v4_url_shape", "ok": root.rstrip("/").endswith("/api/v4")})
+    checks.append({"name": "verify_ssl", "ok": bool(verify_ssl)})
+    if network_check:
+        checks.append({"name": "network_check", "ok": None, "skipped": True})
+        return _backend_probe_entry(
+            backend,
+            "available",
+            [
+                "MinerU v4 has no stable lightweight health endpoint in the public contract; "
+                "network probe is protocol-limited, run backend warmup for end-to-end validation"
+            ],
+            checks,
+        )
+    checks.append({"name": "network_check", "ok": None, "skipped": True})
+    return _backend_probe_entry(
+        backend,
+        "available",
+        [f"MinerU v4 endpoint shape accepted at {_redacted_endpoint(root)}; network check disabled"],
+        checks,
+    )
+
+
+def mineru_v4_convert(
+    source: SourceDocument,
+    *,
+    base_url: str,
+    api_key: str | None = None,
+    timeout: float = 300.0,
+    poll_interval: float = 3.0,
+    verify_ssl: bool = True,
+    language: str = "ch",
+    page_range: str | None = None,
+    enable_table: bool = True,
+    is_ocr: bool = False,
+    enable_formula: bool = True,
+    asset_mode: str = "markdown_only",
+    asset_output_dir: str | Path | None = None,
+    asset_document_stem: str | None = None,
+    model_version: str | None = None,
+    result_mode: str | None = "full_zip",
+    data_id_prefix: str | None = None,
+    remote_attempts: list[dict[str, Any]] | None = None,
+) -> str:
+    """Convert one file through the MinerU v4 platform-compatible batch protocol."""
+
+    if timeout <= 0:
+        raise DocConvertError("MinerU v4 timeout must be greater than zero")
+    if poll_interval <= 0:
+        raise DocConvertError("MinerU v4 poll interval must be greater than zero")
+    if not api_key:
+        raise DocConvertError("mineru-v4 backend requires --mineru-api-key or MINERU_API_KEY")
+    normalized_asset_mode = _normalize_mineru_fastapi_asset_mode(asset_mode)
+    if normalized_asset_mode != "markdown_only" and asset_output_dir is None:
+        raise DocConvertError("MinerU v4 markdown_assets mode requires an asset output directory")
+    requested_model, effective_model = _normalize_mineru_v4_model_version(model_version)
+    normalized_result_mode = _normalize_mineru_v4_result_mode(result_mode)
+    root = _mineru_v4_api_root(base_url)
+    data_id = _mineru_v4_data_id(source, data_id_prefix)
+    file_entry: dict[str, Any] = {
+        "name": source.path.name,
+        "data_id": data_id,
+        "is_ocr": bool(is_ocr),
+    }
+    if page_range:
+        file_entry["page_ranges"] = page_range
+    payload: dict[str, Any] = {
+        "files": [file_entry],
+        "model_version": effective_model,
+        "enable_formula": bool(enable_formula),
+        "enable_table": bool(enable_table),
+        "language": language,
+    }
+
+    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    attempt: dict[str, Any] = {
+        "source_path": source.source_path,
+        "backend": "mineru-v4",
+        "endpoint": _redacted_endpoint(root),
+        "requested_mineru_v4_model_version": requested_model,
+        "effective_mineru_v4_model_version": effective_model,
+        "mineru_v4_result_mode": normalized_result_mode,
+        "data_id": data_id,
+        "status": "failed",
+        "task_id": None,
+        "batch_id": None,
+        "poll_count": 0,
+        "status_history": [],
+        "final_status": None,
+        "submit_duration_ms": None,
+        "upload_duration_ms": None,
+        "result_fetch_duration_ms": None,
+        "asset_download_duration_ms": None,
+        "total_duration_ms": None,
+        "timeout_seconds": timeout,
+        "poll_interval_seconds": poll_interval,
+        "http_attempts": 0,
+        "retry_count": 0,
+        "verify_ssl": bool(verify_ssl),
+        "upload": {"count": 0, "status": "not_started"},
+        "zip_download": {"status": "not_started"},
+        "artifact_summary": {},
+        "asset_policy": _mineru_v4_asset_policy(asset_mode=normalized_asset_mode),
+        "error_category": None,
+        "error": None,
+        "failed_stage": None,
+    }
+    stage = "submit"
+
+    def remaining_timeout() -> float:
+        return min(max(deadline - time.monotonic(), 0.1), 120.0)
+
+    try:
+        submit_started = time.monotonic()
+        attempt["http_attempts"] = int(attempt["http_attempts"]) + 1
+        create = _mineru_v4_request_json_once(
+            _mineru_v4_file_urls_url(root),
+            method="POST",
+            payload=payload,
+            api_key=api_key,
+            timeout=remaining_timeout(),
+            verify_ssl=verify_ssl,
+            stage="submit",
+        )
+        attempt["submit_duration_ms"] = round((time.monotonic() - submit_started) * 1000, 3)
+        batch_id = _extract_mineru_v4_batch_id(create)
+        upload_urls = _extract_mineru_v4_upload_urls(create, file_count=1)
+        attempt["batch_id"] = batch_id
+        attempt["task_id"] = batch_id
+
+        stage = "upload"
+        upload_started = time.monotonic()
+        attempt["http_attempts"] = int(attempt["http_attempts"]) + 1
+        _mineru_v4_upload_file(upload_urls[0], source, timeout=remaining_timeout(), verify_ssl=verify_ssl)
+        attempt["upload"] = {"count": 1, "status": "success"}
+        attempt["upload_duration_ms"] = round((time.monotonic() - upload_started) * 1000, 3)
+
+        last_state = "unknown"
+        while time.monotonic() < deadline:
+            stage = "poll"
+            attempt["http_attempts"] = int(attempt["http_attempts"]) + 1
+            status_payload = _mineru_v4_request_json_once(
+                _mineru_v4_results_url(root, batch_id),
+                api_key=api_key,
+                timeout=remaining_timeout(),
+                verify_ssl=verify_ssl,
+                stage="poll",
+            )
+            items = _mineru_v4_result_items(status_payload)
+            if not items:
+                raise MinerUV4Error(
+                    "MinerU v4 poll response missing extract_result entries",
+                    category="failed_polling",
+                    stage="poll",
+                )
+            item = items[0]
+            state = _mineru_v4_result_state(item)
+            normalized_state = state.lower()
+            last_state = state
+            attempt["poll_count"] = int(attempt["poll_count"]) + 1
+            attempt["final_status"] = state
+            status_history = attempt["status_history"]
+            if isinstance(status_history, list):
+                status_history.append(state)
+            if normalized_state in MINERU_V4_DONE_STATES:
+                stage = "result"
+                result_started = time.monotonic()
+                zip_url = _mineru_v4_zip_url(item)
+                zip_started = time.monotonic()
+                attempt["http_attempts"] = int(attempt["http_attempts"]) + 1
+                zip_bytes = _mineru_v4_download_zip(zip_url, timeout=remaining_timeout(), verify_ssl=verify_ssl)
+                attempt["zip_download"] = {
+                    "status": "success",
+                    "bytes": len(zip_bytes),
+                    "duration_ms": round((time.monotonic() - zip_started) * 1000, 3),
+                }
+                markdown, artifact_summary, asset_policy = _extract_mineru_v4_zip_markdown(
+                    zip_bytes,
+                    source=source,
+                    asset_mode=normalized_asset_mode,
+                    asset_output_dir=asset_output_dir,
+                    asset_document_stem=asset_document_stem,
+                )
+                attempt["result_fetch_duration_ms"] = round((time.monotonic() - result_started) * 1000, 3)
+                if normalized_asset_mode == "markdown_assets":
+                    attempt["asset_download_duration_ms"] = attempt["result_fetch_duration_ms"]
+                attempt["artifact_summary"] = artifact_summary
+                attempt["asset_policy"] = asset_policy
+                attempt["status"] = "success"
+                return markdown
+            if normalized_state in MINERU_V4_FAILED_STATES:
+                message = _mineru_v4_result_error(item)
+                raise MinerUV4Error(
+                    f"MinerU v4 parsing failed: {message}",
+                    category="failed_polling",
+                    stage="poll",
+                )
+            if normalized_state not in MINERU_V4_PENDING_STATES:
+                raise MinerUV4Error(
+                    f"MinerU v4 status response returned unknown state: {state}",
+                    category="failed_polling",
+                    stage="poll",
+                )
+            time.sleep(min(poll_interval, max(deadline - time.monotonic(), 0.0)))
+
+        raise MinerUV4Error(
+            f"MinerU v4 parsing timed out after {timeout:g}s; last state: {last_state}",
+            category="request_timeout",
+            stage="poll",
+        )
+    except MinerUV4Error as exc:
+        attempt["status"] = "timeout" if exc.category == "request_timeout" else "failed"
+        attempt["error_category"] = exc.category
+        attempt["http_status"] = exc.http_status
+        attempt["failed_stage"] = exc.stage or stage
+        attempt["error"] = str(exc)
+        if exc.category == "failed_upload":
+            attempt["upload"] = {"count": 0, "status": "failed"}
+        if exc.category == "bad_zip":
+            attempt["zip_download"] = {"status": "failed"}
+        raise
+    except DocConvertError as exc:
+        attempt["status"] = "failed"
+        attempt["error_category"] = "protocol_error"
+        attempt["failed_stage"] = stage
+        attempt["error"] = str(exc)
+        raise
+    finally:
+        attempt["total_duration_ms"] = round((time.monotonic() - started) * 1000, 3)
+        if remote_attempts is not None:
+            remote_attempts.append(attempt)
+
+
+def mineru_fastapi_convert(
+    source: SourceDocument,
+    *,
+    base_url: str,
+    api_key: str | None = None,
+    timeout: float = 300.0,
+    poll_interval: float = 3.0,
+    verify_ssl: bool = True,
+    language: str = "ch",
+    page_range: str | None = None,
+    enable_table: bool = True,
+    is_ocr: bool = False,
+    enable_formula: bool = True,
+    asset_mode: str = "markdown_only",
+    asset_output_dir: str | Path | None = None,
+    asset_document_stem: str | None = None,
+    remote_attempts: list[dict[str, Any]] | None = None,
+    retry_budget: int = 2,
+    retry_backoff_seconds: float = 0.25,
+    fastapi_backend: str | None = None,
+    fastapi_server_url: str | None = None,
+) -> str:
+    """Convert one file through the MinerU 3.2+ FastAPI async task API."""
+
+    if timeout <= 0:
+        raise DocConvertError("MinerU FastAPI timeout must be greater than zero")
+    if poll_interval <= 0:
+        raise DocConvertError("MinerU FastAPI poll interval must be greater than zero")
+    if retry_budget < 0:
+        raise DocConvertError("MinerU FastAPI retry budget must be zero or greater")
+    if retry_backoff_seconds < 0:
+        raise DocConvertError("MinerU FastAPI retry backoff must be zero or greater")
+    if not base_url:
+        raise DocConvertError("mineru-fastapi backend requires --mineru-base-url or MINERU_BASE_URL")
+    normalized_asset_mode = _normalize_mineru_fastapi_asset_mode(asset_mode)
+    if normalized_asset_mode != "markdown_only" and asset_output_dir is None:
+        raise DocConvertError("MinerU FastAPI markdown_assets mode requires an asset output directory")
+
+    start_page_id, end_page_id = _mineru_fastapi_page_bounds(page_range)
+    root = base_url.rstrip("/")
+    request_images = normalized_asset_mode == "markdown_assets"
+    requested_fastapi_backend, resolved_fastapi_backend = _normalize_mineru_fastapi_backend(fastapi_backend)
+    fields: dict[str, Any] = {
+        "lang_list": _mineru_fastapi_language_list(language),
+        "backend": resolved_fastapi_backend,
+        "parse_method": "ocr" if is_ocr else "auto",
+        "formula_enable": enable_formula,
+        "table_enable": enable_table,
+        "image_analysis": True,
+        "return_md": True,
+        "return_middle_json": False,
+        "return_model_output": False,
+        "return_content_list": False,
+        "return_images": request_images,
+        "response_format_zip": False,
+        "return_original_file": False,
+        "client_side_output_generation": False,
+        "start_page_id": start_page_id,
+        "end_page_id": end_page_id,
+    }
+    if fastapi_server_url:
+        fields["server_url"] = fastapi_server_url
+
+    metrics = {"http_attempts": 0, "retry_count": 0}
+    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    attempt: dict[str, Any] = {
+        "source_path": source.source_path,
+        "backend": "mineru-fastapi",
+        "endpoint": _redacted_endpoint(root),
+        "mineru_fastapi_backend": resolved_fastapi_backend,
+        "requested_mineru_fastapi_backend": requested_fastapi_backend,
+        "mineru_fastapi_server_url": _redacted_endpoint(fastapi_server_url) if fastapi_server_url else None,
+        "status": "failed",
+        "task_id": None,
+        "poll_count": 0,
+        "status_history": [],
+        "final_status": None,
+        "submit_duration_ms": None,
+        "result_fetch_duration_ms": None,
+        "asset_download_duration_ms": None,
+        "total_duration_ms": None,
+        "timeout_seconds": timeout,
+        "poll_interval_seconds": poll_interval,
+        "http_attempts": 0,
+        "retry_count": 0,
+        "retry_budget": retry_budget,
+        "retry_backoff_seconds": retry_backoff_seconds,
+        "verify_ssl": bool(verify_ssl),
+        "asset_policy": _mineru_fastapi_asset_policy(fields, asset_mode=normalized_asset_mode),
+        "error_category": None,
+        "error": None,
+        "failed_stage": None,
+    }
+    task_id: str | None = None
+    stage = "submit"
+    try:
+        submit_started = time.monotonic()
+        create = _mineru_fastapi_call_with_retries(
+            lambda *, timeout: _mineru_fastapi_multipart_json_once(
+                f"{root}/tasks",
+                fields=fields,
+                file_field="files",
+                filename=source.path.name,
+                file_content=source.path.read_bytes(),
+                api_key=api_key,
+                timeout=timeout,
+                verify_ssl=verify_ssl,
+                stage="submit",
+            ),
+            stage="submit",
+            deadline=deadline,
+            retry_budget=retry_budget,
+            retry_backoff_seconds=retry_backoff_seconds,
+            metrics=metrics,
+        )
+        attempt["submit_duration_ms"] = round((time.monotonic() - submit_started) * 1000, 3)
+        task_id = _extract_mineru_task_id(create)
+        attempt["task_id"] = task_id
+
+        last_state = "unknown"
+        while time.monotonic() < deadline:
+            remaining = max(deadline - time.monotonic(), 0.1)
+            stage = "poll"
+            status_payload = _mineru_fastapi_call_with_retries(
+                lambda *, timeout: _mineru_fastapi_request_json_once(
+                    f"{root}/tasks/{task_id}",
+                    api_key=api_key,
+                    timeout=timeout,
+                    verify_ssl=verify_ssl,
+                    stage="poll",
+                ),
+                stage="poll",
+                deadline=deadline,
+                retry_budget=retry_budget,
+                retry_backoff_seconds=retry_backoff_seconds,
+                metrics=metrics,
+            )
+            state = _mineru_fastapi_status_state(status_payload)
+            normalized_state = state.lower()
+            last_state = state
+            attempt["poll_count"] = int(attempt["poll_count"]) + 1
+            attempt["final_status"] = state
+            status_history = attempt["status_history"]
+            if isinstance(status_history, list):
+                status_history.append(state)
+            if normalized_state in MINERU_FASTAPI_DONE_STATES:
+                stage = "result"
+                result_started = time.monotonic()
+                result_payload = _mineru_fastapi_call_with_retries(
+                    lambda *, timeout: _mineru_fastapi_request_json_once(
+                        f"{root}/tasks/{task_id}/result",
+                        api_key=api_key,
+                        timeout=timeout,
+                        verify_ssl=verify_ssl,
+                        stage="result",
+                    ),
+                    stage="result",
+                    deadline=deadline,
+                    retry_budget=retry_budget,
+                    retry_backoff_seconds=retry_backoff_seconds,
+                    metrics=metrics,
+                )
+                attempt["result_fetch_duration_ms"] = round((time.monotonic() - result_started) * 1000, 3)
+                found, markdown = _extract_markdown_candidate_from_mapping(
+                    result_payload,
+                    timeout=remaining,
+                    verify_ssl=verify_ssl,
+                )
+                if not found:
+                    raise MinerUFastAPIError(
+                        "MinerU FastAPI result response must include md_content, markdown, content, text, result, or markdown_url",
+                        category="result_missing",
+                        stage="result",
+                    )
+                if not isinstance(markdown, str) or not markdown.strip():
+                    raise MinerUFastAPIError(
+                        "MinerU FastAPI task completed but produced empty Markdown",
+                        category="result_empty",
+                        stage="result",
+                    )
+                saved_assets: list[dict[str, str]] = []
+                if normalized_asset_mode == "markdown_assets" and asset_output_dir is not None:
+                    asset_started = time.monotonic()
+                    saved_assets = _write_mineru_fastapi_image_assets(
+                        result_payload,
+                        source=source,
+                        asset_output_dir=asset_output_dir,
+                        asset_document_stem=asset_document_stem,
+                        base_url=root,
+                        api_key=api_key,
+                        timeout=remaining,
+                        verify_ssl=verify_ssl,
+                    )
+                    attempt["asset_download_duration_ms"] = round((time.monotonic() - asset_started) * 1000, 3)
+                    markdown = _rewrite_mineru_fastapi_asset_references(markdown, saved_assets)
+                    attempt["asset_policy"] = _mineru_fastapi_asset_policy(
+                        fields,
+                        asset_mode=normalized_asset_mode,
+                        saved_images=len(saved_assets),
+                        image_paths=[item["path"] for item in saved_assets],
+                        image_assets=saved_assets,
+                    )
+                attempt["status"] = "success"
+                return markdown
+            if normalized_state in MINERU_FASTAPI_FAILED_STATES:
+                message = _mineru_fastapi_error_message(status_payload)
+                raise MinerUFastAPIError(
+                    f"MinerU FastAPI parsing failed: {message}",
+                    category="task_failed",
+                    stage="poll",
+                )
+            if normalized_state not in MINERU_FASTAPI_PENDING_STATES:
+                raise MinerUFastAPIError(
+                    f"MinerU FastAPI status response returned unknown state: {state}",
+                    category="protocol_error",
+                    stage="poll",
+                )
+            time.sleep(min(poll_interval, max(deadline - time.monotonic(), 0.0)))
+
+        raise MinerUFastAPIError(
+            f"MinerU FastAPI parsing timed out after {timeout:g}s; last state: {last_state}",
+            category="request_timeout",
+            stage="poll",
+        )
+    except MinerUFastAPIError as exc:
+        attempt["status"] = "timeout" if exc.category == "request_timeout" else "failed"
+        attempt["error_category"] = exc.category
+        attempt["http_status"] = exc.http_status
+        attempt["failed_stage"] = exc.stage or stage
+        attempt["error"] = str(exc)
+        raise
+    except DocConvertError as exc:
+        attempt["status"] = "failed"
+        attempt["error_category"] = "protocol_error"
+        attempt["failed_stage"] = stage
+        attempt["error"] = str(exc)
+        raise
+    finally:
+        attempt["http_attempts"] = int(metrics.get("http_attempts", 0))
+        attempt["retry_count"] = int(metrics.get("retry_count", 0))
+        attempt["total_duration_ms"] = round((time.monotonic() - started) * 1000, 3)
+        if remote_attempts is not None:
+            remote_attempts.append(attempt)
+
+
+def resolve_mineru_cli_path(cli_path: str | None = None) -> str | None:
+    """Resolve a local MinerU CLI path from explicit config, environment, or PATH."""
+
+    candidate = cli_path or os.environ.get("MINERU_CLI_PATH") or None
+    if not candidate:
+        candidate = shutil.which("mineru")
+    if not candidate:
+        return None
+    if "/" not in candidate and "\\" not in candidate:
+        return shutil.which(candidate)
+
+    path = Path(candidate).expanduser()
+    if path.exists() and path.is_file():
+        return str(path.resolve())
+    return None
+
+
+def _valid_http_url(value: str | None) -> tuple[bool, str]:
+    if not value:
+        return False, "endpoint URL is not configured"
+    parsed = urlparse(str(value))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False, "endpoint URL must use http or https"
+    return True, f"{parsed.scheme} endpoint configured"
+
+
+def _network_probe(url: str, *, timeout: float) -> tuple[str, list[str]]:
+    req = request.Request(url, method="HEAD", headers={"User-Agent": "ragflow-doc-to-md-backend-probe"})
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            return "available", [f"endpoint responded with HTTP {resp.status}"]
+    except error.HTTPError as exc:
+        if exc.code in {401, 403, 405, 415} or 200 <= exc.code < 500 and exc.code != 404:
+            return "available", [f"endpoint responded with HTTP {exc.code}; service is reachable"]
+        return "wrong_protocol", [f"endpoint responded with HTTP {exc.code}"]
+    except TimeoutError:
+        return "timeout", [f"endpoint probe timed out after {timeout:g}s"]
+    except socket.timeout:
+        return "timeout", [f"endpoint probe timed out after {timeout:g}s"]
+    except error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError) or isinstance(exc.reason, socket.timeout):
+            return "timeout", [f"endpoint probe timed out after {timeout:g}s"]
+        return "missing", [f"endpoint probe failed: {exc.reason}"]
+    except OSError as exc:
+        return "missing", [f"endpoint probe failed: {exc}"]
+
+
+def _probe_http_backend(
+    *,
+    backend: str,
+    url: str | None,
+    network_check: bool,
+    timeout: float,
+    requires_api_key: bool = False,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    valid, reason = _valid_http_url(url)
+    checks = [{"name": "url_configured", "ok": bool(url)}, {"name": "http_url", "ok": valid}]
+    if requires_api_key:
+        checks.append({"name": "api_key_configured", "ok": bool(api_key)})
+    if not url or requires_api_key and not api_key:
+        reasons = [reason] if not url else ["API key is not configured"]
+        return _backend_probe_entry(backend, "not_configured", reasons, checks)
+    if not valid:
+        return _backend_probe_entry(backend, "wrong_protocol", [reason], checks)
+    if network_check:
+        status, reasons = _network_probe(str(url), timeout=timeout)
+        checks.append({"name": "network_check", "ok": status == "available"})
+        return _backend_probe_entry(backend, status, reasons, checks)
+    checks.append({"name": "network_check", "ok": None, "skipped": True})
+    return _backend_probe_entry(
+        backend,
+        "available",
+        [reason, "network check disabled"],
+        checks,
+    )
+
+
+def _backend_probe_entry(
+    backend: str,
+    status: str,
+    reasons: list[str],
+    checks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "backend": backend,
+        "status": status if status in BACKEND_PROBE_STATUSES else "missing",
+        "reasons": reasons,
+        "checks": checks,
+    }
+
+
+def _backend_runtime_partial_failure_report(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    return build_runtime_partial_failure_report(
+        BACKEND_PROBE_REPORT_SCHEMA,
+        entries,
+        label_field="backend",
+        success_statuses=BACKEND_PROBE_RUNTIME_SUCCESS_STATUSES,
+        warning_statuses=(),
+        failure_statuses=BACKEND_PROBE_RUNTIME_FAILURE_STATUSES,
+        skipped_statuses=BACKEND_PROBE_RUNTIME_SKIPPED_STATUSES,
+    )
+
+
+def _probe_single_backend(
+    backend: str,
+    *,
+    remote_url: str | None = None,
+    mineru_base_url: str | None = None,
+    mineru_api_key: str | None = None,
+    mineru_cli_path: str | None = None,
+    mineru_verify_ssl: bool = True,
+    network_check: bool = False,
+    timeout: float = 2.0,
+) -> dict[str, Any]:
+    if backend == "builtin":
+        return _backend_probe_entry(
+            backend,
+            "available",
+            ["built-in Markdown, text, and HTML conversion is always available"],
+            [{"name": "builtin_converter", "ok": True}],
+        )
+    if backend == "pandoc":
+        resolved = shutil.which("pandoc")
+        return _backend_probe_entry(
+            backend,
+            "available" if resolved else "missing",
+            ["pandoc executable found"] if resolved else ["pandoc executable was not found on PATH"],
+            [{"name": "pandoc_on_path", "ok": bool(resolved)}],
+        )
+    if backend == "mineru-cli":
+        resolved = resolve_mineru_cli_path(mineru_cli_path)
+        checks = [
+            {"name": "cli_path_configured", "ok": bool(mineru_cli_path or os.environ.get("MINERU_CLI_PATH"))},
+            {"name": "mineru_on_path", "ok": bool(shutil.which("mineru"))},
+            {"name": "resolved_cli", "ok": bool(resolved)},
+        ]
+        if not resolved:
+            return _backend_probe_entry(
+                backend,
+                "missing",
+                ["mineru executable was not found from config, environment, or PATH"],
+                checks,
+            )
+        return _backend_probe_entry(backend, "available", ["mineru executable resolved"], checks)
+    if backend == "remote":
+        return _probe_http_backend(
+            backend=backend,
+            url=remote_url,
+            network_check=network_check,
+            timeout=timeout,
+        )
+    if backend in {"mineru", "mineru-agent"}:
+        base_url = mineru_base_url or DEFAULT_MINERU_BASE_URL
+        return _probe_http_backend(
+            backend=backend,
+            url=base_url,
+            network_check=network_check,
+            timeout=timeout,
+            requires_api_key=True,
+            api_key=mineru_api_key,
+        )
+    if backend == "mineru-fastapi":
+        return _probe_mineru_fastapi_backend(
+            backend=backend,
+            base_url=mineru_base_url,
+            api_key=mineru_api_key,
+            network_check=network_check,
+            timeout=timeout,
+            verify_ssl=mineru_verify_ssl,
+        )
+    if backend in {"mineru-v4", "mineru-platform"}:
+        return _probe_mineru_v4_backend(
+            backend=backend,
+            base_url=mineru_base_url,
+            api_key=mineru_api_key,
+            network_check=network_check,
+            timeout=timeout,
+            verify_ssl=mineru_verify_ssl,
+        )
+    if backend in {"mineru-sync", "mineru-local"}:
+        if mineru_base_url and str(mineru_base_url).rstrip("/").endswith("/agent"):
+            return _backend_probe_entry(
+                backend,
+                "wrong_protocol",
+                ["mineru-sync expects a synchronous service base URL, not the MinerU Agent API URL"],
+                [{"name": "sync_base_url_shape", "ok": False}],
+            )
+        parse_url = _mineru_sync_parse_url(mineru_base_url) if mineru_base_url else None
+        return _probe_http_backend(
+            backend=backend,
+            url=parse_url,
+            network_check=network_check,
+            timeout=timeout,
+        )
+    return _backend_probe_entry(
+        backend,
+        "wrong_protocol",
+        [f"unsupported backend: {backend}"],
+        [{"name": "known_backend", "ok": False}],
+    )
+
+
+def probe_conversion_backends(
+    *,
+    backend: str = "auto",
+    remote_url: str | None = None,
+    mineru_base_url: str | None = None,
+    mineru_api_key: str | None = None,
+    mineru_cli_path: str | None = None,
+    mineru_verify_ssl: bool = True,
+    network_check: bool = False,
+    timeout: float = 2.0,
+) -> dict[str, Any]:
+    """Probe configured document conversion backend readiness without converting files."""
+
+    normalized_backend = str(backend or "auto").strip().lower()
+    if normalized_backend not in {"auto", *CONVERSION_BACKENDS}:
+        allowed = ", ".join(["auto", *CONVERSION_BACKENDS])
+        raise DocConvertError(f"backend must be one of: {allowed}")
+    if timeout <= 0:
+        raise DocConvertError("probe timeout must be greater than zero")
+    backends = list(CONVERSION_BACKENDS) if normalized_backend == "auto" else [normalized_backend]
+    entries = [
+        _probe_single_backend(
+            item,
+            remote_url=remote_url,
+            mineru_base_url=mineru_base_url,
+            mineru_api_key=mineru_api_key,
+            mineru_cli_path=mineru_cli_path,
+            mineru_verify_ssl=mineru_verify_ssl,
+            network_check=network_check,
+            timeout=timeout,
+        )
+        for item in backends
+    ]
+    status_counts = {status: 0 for status in BACKEND_PROBE_STATUSES}
+    for entry in entries:
+        status_counts[str(entry.get("status"))] = status_counts.get(str(entry.get("status")), 0) + 1
+    runtime_partial_failure = _backend_runtime_partial_failure_report(entries)
+    runtime_partial_summary = runtime_partial_failure["summary"]
+    return {
+        "ok": True,
+        "schema": BACKEND_PROBE_REPORT_SCHEMA,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "selected_backend": normalized_backend,
+        "network_check": bool(network_check),
+        "timeout_seconds": timeout,
+        "allowed_statuses": list(BACKEND_PROBE_STATUSES),
+        "summary": {
+            "backend_count": len(entries),
+            "available": status_counts.get("available", 0),
+            "missing": status_counts.get("missing", 0),
+            "wrong_protocol": status_counts.get("wrong_protocol", 0),
+            "timeout": status_counts.get("timeout", 0),
+            "not_configured": status_counts.get("not_configured", 0),
+            "runtime_partial_failure_status": runtime_partial_summary["status"],
+            "runtime_failure_count": runtime_partial_summary["failure_count"],
+            "runtime_timeout_count": runtime_partial_summary["timeout_count"],
+            "runtime_skipped_count": runtime_partial_summary["skipped_count"],
+        },
+        "runtime_partial_failure": runtime_partial_failure,
+        "backends": entries,
+    }
+
+
+def render_backend_probe_markdown(report: Mapping[str, Any]) -> str:
+    """Render a compact Markdown backend probe report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    runtime_partial = (
+        report.get("runtime_partial_failure")
+        if isinstance(report.get("runtime_partial_failure"), Mapping)
+        else {}
+    )
+    runtime_partial_summary = (
+        runtime_partial.get("summary")
+        if isinstance(runtime_partial.get("summary"), Mapping)
+        else {}
+    )
+    lines = [
+        "# RAGFlow Doc Backend Probe",
+        "",
+        f"- schema: `{report.get('schema', BACKEND_PROBE_REPORT_SCHEMA)}`",
+        f"- selected_backend: `{report.get('selected_backend', '')}`",
+        f"- network_check: `{str(report.get('network_check', False)).lower()}`",
+        f"- available: `{summary.get('available', 0)}`",
+        f"- missing: `{summary.get('missing', 0)}`",
+        f"- wrong_protocol: `{summary.get('wrong_protocol', 0)}`",
+        f"- timeout: `{summary.get('timeout', 0)}`",
+        f"- not_configured: `{summary.get('not_configured', 0)}`",
+    ]
+    if runtime_partial:
+        lines.extend(
+            [
+                f"- runtime_partial_failure_status: `{runtime_partial_summary.get('status', 'unknown')}`",
+                f"- runtime_partial_failure_partial: `{str(runtime_partial_summary.get('partial', False)).lower()}`",
+                f"- runtime_failures: `{runtime_partial_summary.get('failure_count', 0)}`",
+                f"- runtime_timeouts: `{runtime_partial_summary.get('timeout_count', 0)}`",
+                f"- runtime_skipped: `{runtime_partial_summary.get('skipped_count', 0)}`",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "| backend | status | reasons |",
+            "| --- | --- | --- |",
+        ]
+    )
+    for entry in report.get("backends", []):
+        if not isinstance(entry, Mapping):
+            continue
+        reasons = "; ".join(str(item) for item in entry.get("reasons", []) if str(item)).replace("|", "\\|")
+        lines.append(f"| `{entry.get('backend', '')}` | `{entry.get('status', '')}` | {reasons} |")
+    return "\n".join(lines) + "\n"
+
+
+def _short_process_detail(result: subprocess.CompletedProcess[str]) -> str:
+    detail = (result.stderr or result.stdout or "").strip()
+    if len(detail) > 1000:
+        return detail[:1000] + "..."
+    return detail
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_external_asset_reference(value: str) -> bool:
+    lowered = value.strip().lower()
+    return lowered.startswith(("http://", "https://", "data:", "#"))
+
+
+def _split_markdown_asset_target(raw: str) -> tuple[str, str, bool]:
+    value = raw.strip()
+    if not value:
+        return "", "", False
+    if value.startswith("<"):
+        end = value.find(">")
+        if end != -1:
+            return value[1:end], value[end + 1 :], True
+    match = re.match(r"(\S+)(.*)", value, flags=re.DOTALL)
+    if not match:
+        return value, "", False
+    return match.group(1), match.group(2), False
+
+
+def _safe_relative_asset_path(reference_path: str) -> PurePosixPath | None:
+    normalized = reference_path.replace("\\", "/").lstrip("./")
+    if not normalized:
+        return None
+    pure = PurePosixPath(normalized)
+    if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
+        return None
+    return pure
+
+
+def _local_asset_source_path(
+    reference_path: str,
+    *,
+    markdown_path: Path,
+    source_root: Path,
+) -> Path | None:
+    if _is_external_asset_reference(reference_path):
+        return None
+    decoded = unquote(reference_path.strip())
+    if not decoded:
+        return None
+    candidate = Path(decoded)
+    if not candidate.is_absolute():
+        candidate = markdown_path.parent / candidate
+    candidate = candidate.resolve()
+    source_root = source_root.resolve()
+    if not _is_relative_to(candidate, source_root):
+        return None
+    if not candidate.is_file():
+        return None
+    return candidate
+
+
+def _copy_local_markdown_asset(
+    reference_path: str,
+    *,
+    markdown_path: Path,
+    source_root: Path,
+    asset_output_dir: Path,
+) -> str | None:
+    source_path = _local_asset_source_path(
+        reference_path,
+        markdown_path=markdown_path,
+        source_root=source_root,
+    )
+    if not source_path:
+        return None
+
+    relative_target = None
+    if not Path(reference_path).is_absolute():
+        relative_target = _safe_relative_asset_path(reference_path)
+    if relative_target is None:
+        relative_target = PurePosixPath("images") / source_path.name
+
+    destination = asset_output_dir / Path(*relative_target.parts)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source_path.resolve() != destination.resolve():
+        shutil.copy2(source_path, destination)
+    return relative_target.as_posix()
+
+
+def copy_local_markdown_assets(
+    markdown: str,
+    *,
+    markdown_path: Path,
+    source_root: Path,
+    asset_output_dir: str | Path | None,
+) -> str:
+    """Copy local assets referenced by Markdown into a final handoff directory."""
+
+    if asset_output_dir is None:
+        return markdown
+    output_dir = Path(asset_output_dir)
+
+    def replace_markdown(match: re.Match[str]) -> str:
+        prefix, raw_target, suffix = match.groups()
+        target_path, target_suffix, angle_wrapped = _split_markdown_asset_target(raw_target)
+        copied = _copy_local_markdown_asset(
+            target_path,
+            markdown_path=markdown_path,
+            source_root=source_root,
+            asset_output_dir=output_dir,
+        )
+        if not copied:
+            return match.group(0)
+        replacement = f"<{copied}>{target_suffix}" if angle_wrapped else f"{copied}{target_suffix}"
+        return f"{prefix}{replacement}{suffix}"
+
+    def replace_html(match: re.Match[str]) -> str:
+        prefix, raw_target, suffix = match.groups()
+        copied = _copy_local_markdown_asset(
+            raw_target,
+            markdown_path=markdown_path,
+            source_root=source_root,
+            asset_output_dir=output_dir,
+        )
+        if not copied:
+            return match.group(0)
+        return f"{prefix}{copied}{suffix}"
+
+    markdown = MARKDOWN_IMAGE_RE.sub(replace_markdown, markdown)
+    return HTML_IMAGE_SRC_RE.sub(replace_html, markdown)
+
+
+def _short_executable_name(command: list[str]) -> str:
+    executable = command[0] if command else ""
+    return Path(executable).name or executable
+
+
+def _coerce_timeout_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _read_linux_process_stat(pid: int) -> tuple[int, str, str] | None:
+    try:
+        stat = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    close = stat.rfind(")")
+    if close < 0:
+        return None
+    name_start = stat.find("(")
+    name = stat[name_start + 1 : close] if name_start >= 0 else str(pid)
+    fields = stat[close + 2 :].split()
+    if len(fields) < 3:
+        return None
+    try:
+        process_group_id = int(fields[2])
+    except ValueError:
+        return None
+    return process_group_id, name, fields[0]
+
+
+def _collect_process_group_members(process_group_id: int, *, direct_pid: int) -> list[dict[str, Any]]:
+    proc_root = Path("/proc")
+    if os.name != "posix" or not proc_root.is_dir():
+        return []
+    members: list[dict[str, Any]] = []
+    current_pid = os.getpid()
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == current_pid:
+            continue
+        stat = _read_linux_process_stat(pid)
+        if not stat:
+            continue
+        member_group_id, name, state = stat
+        if member_group_id != process_group_id:
+            continue
+        members.append(
+            {
+                "pid": pid,
+                "name": name,
+                "state": state,
+                "direct_child": pid == direct_pid,
+            }
+        )
+    return sorted(members, key=lambda item: int(item["pid"]))
+
+
+def _cleanup_timed_out_process(
+    process: subprocess.Popen[str],
+    *,
+    process_group_id: int | None,
+) -> dict[str, Any]:
+    kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+    cleanup: dict[str, Any] = {
+        "attempted": True,
+        "method": "process_group" if os.name == "posix" and process_group_id is not None else "process",
+        "signals_sent": [],
+        "process_exited": False,
+        "leftover_processes": [],
+        "leftover_process_count": 0,
+    }
+    use_process_group = (
+        os.name == "posix"
+        and process_group_id is not None
+        and process_group_id != os.getpgrp()
+    )
+
+    def send_signal(sig: signal.Signals, name: str) -> None:
+        try:
+            if use_process_group:
+                os.killpg(process_group_id, sig)
+            elif sig == signal.SIGTERM:
+                process.terminate()
+            else:
+                process.kill()
+            cleanup["signals_sent"].append(name)
+        except ProcessLookupError:
+            return
+        except OSError as exc:
+            cleanup.setdefault("errors", []).append(f"{name}: {exc.__class__.__name__}")
+
+    send_signal(signal.SIGTERM, "SIGTERM")
+    try:
+        process.wait(timeout=0.5)
+    except subprocess.TimeoutExpired:
+        pass
+
+    leftovers = (
+        _collect_process_group_members(process_group_id, direct_pid=process.pid)
+        if use_process_group
+        else []
+    )
+    if process.poll() is None or leftovers:
+        send_signal(kill_signal, "SIGKILL" if kill_signal != signal.SIGTERM else "KILL")
+        try:
+            process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            pass
+
+    cleanup["process_exited"] = process.poll() is not None
+    final_leftovers = (
+        _collect_process_group_members(process_group_id, direct_pid=process.pid)
+        if use_process_group
+        else []
+    )
+    cleanup["leftover_processes"] = final_leftovers
+    cleanup["leftover_process_count"] = len(final_leftovers)
+    return cleanup
+
+
+def _close_process_pipes(process: subprocess.Popen[str]) -> None:
+    for stream in (process.stdout, process.stderr):
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+
+def _run_local_process_with_cleanup(
+    command: list[str],
+    *,
+    timeout: float,
+    backend: str,
+    source_path: str,
+) -> tuple[subprocess.CompletedProcess[str] | None, dict[str, Any]]:
+    started_at = datetime.now(timezone.utc).isoformat()
+    started = time.monotonic()
+    event: dict[str, Any] = {
+        "backend": backend,
+        "source_path": source_path,
+        "executable": _short_executable_name(command),
+        "timeout_seconds": timeout,
+        "started_at": started_at,
+    }
+    try:
+        process = subprocess.Popen(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=os.name == "posix",
+        )
+    except OSError as exc:
+        event.update(
+            {
+                "status": "execution_error",
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                "returncode": None,
+                "error_type": exc.__class__.__name__,
+                "cleanup": {
+                    "attempted": False,
+                    "method": "none",
+                    "signals_sent": [],
+                    "process_exited": False,
+                    "leftover_processes": [],
+                    "leftover_process_count": 0,
+                },
+            }
+        )
+        return None, event
+
+    event["pid"] = process.pid
+    process_group_id: int | None = None
+    if os.name == "posix":
+        try:
+            process_group_id = os.getpgid(process.pid)
+        except OSError:
+            process_group_id = None
+
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        cleanup = _cleanup_timed_out_process(process, process_group_id=process_group_id)
+        _close_process_pipes(process)
+        event.update(
+            {
+                "status": "timeout",
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                "returncode": process.returncode,
+                "cleanup": cleanup,
+            }
+        )
+        return (
+            subprocess.CompletedProcess(
+                command,
+                process.returncode,
+                _coerce_timeout_output(exc.stdout),
+                _coerce_timeout_output(exc.stderr),
+            ),
+            event,
+        )
+
+    status = "success" if process.returncode == 0 else "failed"
+    event.update(
+        {
+            "status": status,
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "returncode": process.returncode,
+            "cleanup": {
+                "attempted": False,
+                "method": "none",
+                "signals_sent": [],
+                "process_exited": True,
+                "leftover_processes": [],
+                "leftover_process_count": 0,
+            },
+        }
+    )
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr), event
+
+
+def _coerce_duration_ms(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0:
+        return None
+    return round(parsed, 3)
+
+
+def _asset_stage_timings_from_attempts(
+    process_attempts: list[Mapping[str, Any]],
+    remote_attempts: list[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    timings: list[dict[str, Any]] = []
+    for item in process_attempts:
+        duration_ms = _coerce_duration_ms(item.get("asset_copy_duration_ms"))
+        if duration_ms is None:
+            continue
+        timings.append(
+            normalize_stage_timing(
+                {
+                    "stage": "asset",
+                    "operation": "local_asset_copy",
+                    "status": item.get("status") or "unknown",
+                    "duration_ms": duration_ms,
+                    "timing_source": "converter_internal",
+                    "included_in_stage": "conversion",
+                    "counts_toward_total": False,
+                    "backend": item.get("backend"),
+                    "source_path": item.get("source_path"),
+                    "derived_from_attempt": True,
+                }
+            )
+        )
+    for item in remote_attempts:
+        duration_ms = _coerce_duration_ms(item.get("asset_download_duration_ms"))
+        if duration_ms is None:
+            continue
+        timings.append(
+            normalize_stage_timing(
+                {
+                    "stage": "asset",
+                    "operation": "remote_asset_materialization",
+                    "status": item.get("status") or "unknown",
+                    "duration_ms": duration_ms,
+                    "timing_source": "converter_internal",
+                    "included_in_stage": "conversion",
+                    "counts_toward_total": False,
+                    "backend": item.get("backend"),
+                    "source_path": item.get("source_path"),
+                    "derived_from_attempt": True,
+                }
+            )
+        )
+    return timings
+
+
+def _failure_class_from_process_attempt(item: Mapping[str, Any]) -> str | None:
+    status = str(item.get("status") or "")
+    if status == "timeout":
+        return "task_timeout"
+    if status == "execution_error":
+        return "resource_failure"
+    if status == "failed":
+        return "conversion_failure"
+    cleanup = item.get("cleanup", {}) if isinstance(item.get("cleanup"), Mapping) else {}
+    if cleanup.get("attempted") and (
+        not cleanup.get("process_exited")
+        or int(cleanup.get("leftover_process_count", 0) or 0) > 0
+    ):
+        return "resource_failure"
+    return None
+
+
+def _failure_class_from_remote_attempt(item: Mapping[str, Any]) -> str | None:
+    status = str(item.get("status") or "")
+    category = str(item.get("error_category") or "")
+    if status == "timeout" or category == "request_timeout":
+        return "task_timeout"
+    if category == "transient_remote_error":
+        return "resource_failure"
+    if category == "auth_failed":
+        return "credential_failure"
+    if category in {
+        "protocol_error",
+        "result_missing",
+        "result_empty",
+        "task_failed",
+        "wrong_endpoint_shape",
+        "missing_batch_id",
+        "missing_upload_urls",
+        "failed_polling",
+        "missing_zip_url",
+        "bad_zip",
+        "missing_markdown",
+    }:
+        return "protocol_failure"
+    if category == "failed_upload":
+        return "resource_failure"
+    if status == "failed":
+        return "conversion_failure"
+    return None
+
+
+def _failure_classification(
+    process_attempts: list[Mapping[str, Any]],
+    remote_attempts: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    categories: dict[str, int] = {}
+    details: list[dict[str, Any]] = []
+    for kind, attempts, classifier in (
+        ("process", process_attempts, _failure_class_from_process_attempt),
+        ("remote", remote_attempts, _failure_class_from_remote_attempt),
+    ):
+        for item in attempts:
+            failure_class = classifier(item)
+            if not failure_class:
+                continue
+            categories[failure_class] = categories.get(failure_class, 0) + 1
+            details.append(
+                {
+                    "source": kind,
+                    "backend": item.get("backend"),
+                    "source_path": item.get("source_path"),
+                    "status": item.get("status"),
+                    "failure_class": failure_class,
+                    "failed_stage": item.get("failed_stage"),
+                    "error_category": item.get("error_category"),
+                }
+            )
+    return {
+        "failure_count": sum(categories.values()),
+        "timeout_count": categories.get("task_timeout", 0),
+        "resource_failure_count": categories.get("resource_failure", 0),
+        "categories": categories,
+        "details": details,
+    }
+
+
+def _infer_runtime_context(
+    process_attempts: list[Mapping[str, Any]],
+    remote_attempts: list[Mapping[str, Any]],
+    runtime_context: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    context = dict(runtime_context or {})
+    backends = {
+        str(item.get("backend"))
+        for item in [*process_attempts, *remote_attempts]
+        if item.get("backend")
+    }
+    if not context.get("backend"):
+        if len(backends) == 1:
+            context["backend"] = next(iter(backends))
+        elif len(backends) > 1:
+            context["backend"] = "mixed"
+        else:
+            context["backend"] = "unknown"
+    has_local_process = any(str(item.get("backend")) == "mineru-cli" for item in process_attempts)
+    has_persistent_mineru = any(
+        str(item.get("backend")) in {"mineru", "mineru-agent", "mineru-fastapi", "mineru-v4", "mineru-platform", "mineru-sync", "mineru-local"}
+        for item in remote_attempts
+    )
+    if "local_process_startup_included" not in context:
+        context["local_process_startup_included"] = has_local_process
+    if "persistent_mineru_reused" not in context:
+        context["persistent_mineru_reused"] = True if has_persistent_mineru else False if has_local_process else None
+    if "cold_warm" not in context:
+        if has_local_process and has_persistent_mineru:
+            context["cold_warm"] = "mixed"
+        elif has_local_process:
+            context["cold_warm"] = "cold_local_process"
+        elif has_persistent_mineru:
+            context["cold_warm"] = "warm_persistent_service"
+        else:
+            context["cold_warm"] = "unknown"
+    if "model_initialization_included" not in context:
+        context["model_initialization_included"] = "not_reported_by_backend"
+    if "mineru_execution" not in context:
+        if has_local_process and has_persistent_mineru:
+            context["mineru_execution"] = "mixed"
+        elif has_local_process:
+            context["mineru_execution"] = "local_process_per_document"
+        elif has_persistent_mineru:
+            context["mineru_execution"] = "persistent_service_reused"
+        else:
+            context["mineru_execution"] = "not_applicable_or_unknown"
+    return context
+
+
+def _normalize_slow_path_warnings(items: list[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for item in items or []:
+        if not isinstance(item, Mapping):
+            continue
+        code = str(item.get("code") or "").strip()
+        if not code:
+            continue
+        warnings.append(
+            {
+                "code": code,
+                "severity": str(item.get("severity") or "info"),
+                "message": str(item.get("message") or code),
+            }
+        )
+    return warnings
+
+
+def _build_doc_runtime_performance(
+    *,
+    process_attempts: list[Mapping[str, Any]],
+    remote_attempts: list[Mapping[str, Any]],
+    stage_timings: list[Mapping[str, Any]] | None = None,
+    runtime_context: Mapping[str, Any] | None = None,
+    slow_path_warnings: list[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    timings = [normalize_stage_timing(item) for item in (stage_timings or []) if isinstance(item, Mapping)]
+    timings.extend(_asset_stage_timings_from_attempts(process_attempts, remote_attempts))
+    failure_classification = _failure_classification(process_attempts, remote_attempts)
+    counted_durations = [
+        float(item["duration_ms"])
+        for item in timings
+        if item.get("duration_ms") is not None and item.get("counts_toward_total", True)
+    ]
+    summary = {
+        "stage_count": len(timings),
+        "timed_stage_count": sum(1 for item in timings if item.get("duration_ms") is not None),
+        "not_measured_stage_count": sum(1 for item in timings if item.get("duration_ms") is None),
+        "known_duration_ms": round(sum(counted_durations), 3),
+        "timeout_failure_count": failure_classification["timeout_count"],
+        "resource_failure_count": failure_classification["resource_failure_count"],
+    }
+    return {
+        "measurement_scope": "command_runtime",
+        "runtime_context": _infer_runtime_context(process_attempts, remote_attempts, runtime_context),
+        "summary": summary,
+        "stage_timings": timings,
+        "failure_classification": failure_classification,
+        "slow_path_warnings": _normalize_slow_path_warnings(slow_path_warnings),
+    }
+
+
+def make_doc_runtime_report_payload(
+    *,
+    output_root: str | Path,
+    process_attempts: list[Mapping[str, Any]],
+    remote_attempts: list[Mapping[str, Any]] | None = None,
+    handoff_mode: str | None = None,
+    handoff_advisory: list[Mapping[str, Any]] | None = None,
+    stage_timings: list[Mapping[str, Any]] | None = None,
+    runtime_context: Mapping[str, Any] | None = None,
+    slow_path_warnings: list[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Create a portable report for conversion runtime attempts."""
+
+    normalized = [dict(attempt) for attempt in process_attempts]
+    normalized_remote = [dict(attempt) for attempt in (remote_attempts or [])]
+    normalized_advisory = [dict(item) for item in (handoff_advisory or [])]
+    cleanups = [
+        item.get("cleanup", {}) if isinstance(item.get("cleanup"), Mapping) else {}
+        for item in normalized
+    ]
+    remote_error_categories: dict[str, int] = {}
+    for item in normalized_remote:
+        category = item.get("error_category")
+        if isinstance(category, str) and category:
+            remote_error_categories[category] = remote_error_categories.get(category, 0) + 1
+    summary = {
+        "process_attempts": len(normalized),
+        "success": sum(1 for item in normalized if item.get("status") == "success"),
+        "failed": sum(1 for item in normalized if item.get("status") == "failed"),
+        "timeout": sum(1 for item in normalized if item.get("status") == "timeout"),
+        "execution_error": sum(1 for item in normalized if item.get("status") == "execution_error"),
+        "cleanup_attempts": sum(1 for cleanup in cleanups if cleanup.get("attempted")),
+        "leftover_processes": sum(
+            int(cleanup.get("leftover_process_count", 0) or 0)
+            for cleanup in cleanups
+        ),
+        "remote_attempts": len(normalized_remote),
+        "remote_success": sum(1 for item in normalized_remote if item.get("status") == "success"),
+        "remote_failed": sum(1 for item in normalized_remote if item.get("status") == "failed"),
+        "remote_timeout": sum(1 for item in normalized_remote if item.get("status") == "timeout"),
+        "remote_retry_count": sum(int(item.get("retry_count", 0) or 0) for item in normalized_remote),
+        "http_attempts": sum(int(item.get("http_attempts", 0) or 0) for item in normalized_remote),
+        "remote_insecure_tls": sum(1 for item in normalized_remote if item.get("verify_ssl") is False),
+        "remote_error_categories": remote_error_categories,
+    }
+    performance = _build_doc_runtime_performance(
+        process_attempts=normalized,
+        remote_attempts=normalized_remote,
+        stage_timings=stage_timings,
+        runtime_context=runtime_context,
+        slow_path_warnings=slow_path_warnings,
+    )
+    summary["stage_timing_count"] = performance["summary"]["stage_count"]
+    summary["stage_timing_known_duration_ms"] = performance["summary"]["known_duration_ms"]
+    summary["timeout_failure_count"] = performance["summary"]["timeout_failure_count"]
+    summary["resource_failure_count"] = performance["summary"]["resource_failure_count"]
+    if handoff_mode:
+        summary["handoff_mode"] = handoff_mode
+    if handoff_mode or normalized_advisory:
+        summary["handoff_advisory_count"] = len(normalized_advisory)
+    summary["incomplete_cleanup"] = sum(
+        1
+        for cleanup in cleanups
+        if cleanup.get("attempted")
+        and (
+            not cleanup.get("process_exited")
+            or int(cleanup.get("leftover_process_count", 0) or 0) > 0
+        )
+    )
+    payload = {
+        "schema": DOC_RUNTIME_REPORT_SCHEMA,
+        "version": "0.1",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source_root": ".",
+        "output_root": ".",
+        "summary": summary,
+        "process_attempts": normalized,
+        "remote_attempts": normalized_remote,
+        "performance": performance,
+    }
+    if handoff_mode:
+        payload["handoff_mode"] = handoff_mode
+    if normalized_advisory:
+        payload["handoff_advisory"] = normalized_advisory
+    return payload
+
+
+def render_doc_runtime_markdown(report: Mapping[str, Any]) -> str:
+    """Render a compact Markdown runtime report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    handoff_mode = report.get("handoff_mode") or summary.get("handoff_mode")
+    lines = [
+        "# RAGFlow Doc Runtime Report",
+        "",
+        f"- schema: `{report.get('schema', DOC_RUNTIME_REPORT_SCHEMA)}`",
+    ]
+    if handoff_mode:
+        lines.append(f"- handoff_mode: `{handoff_mode}`")
+    lines.extend(
+        [
+            f"- process attempts: `{summary.get('process_attempts', 0)}`",
+            f"- success: `{summary.get('success', 0)}`",
+            f"- failed: `{summary.get('failed', 0)}`",
+            f"- timeout: `{summary.get('timeout', 0)}`",
+            f"- cleanup attempts: `{summary.get('cleanup_attempts', 0)}`",
+            f"- leftover processes: `{summary.get('leftover_processes', 0)}`",
+            f"- incomplete cleanup: `{summary.get('incomplete_cleanup', 0)}`",
+            f"- remote attempts: `{summary.get('remote_attempts', 0)}`",
+            f"- remote success: `{summary.get('remote_success', 0)}`",
+            f"- remote failed: `{summary.get('remote_failed', 0)}`",
+            f"- remote timeout: `{summary.get('remote_timeout', 0)}`",
+            f"- remote retries: `{summary.get('remote_retry_count', 0)}`",
+            f"- http attempts: `{summary.get('http_attempts', 0)}`",
+            f"- stage timings: `{summary.get('stage_timing_count', 0)}`",
+            f"- known stage duration ms: `{summary.get('stage_timing_known_duration_ms', 0)}`",
+            f"- timeout failures: `{summary.get('timeout_failure_count', 0)}`",
+            f"- resource failures: `{summary.get('resource_failure_count', 0)}`",
+            f"- quality table count: `{summary.get('quality_table_count', 0)}`",
+            f"- quality HTML table count: `{summary.get('quality_html_table_count', 0)}`",
+        ]
+    )
+    performance = report.get("performance", {}) if isinstance(report.get("performance"), Mapping) else {}
+    if performance:
+        perf_summary = performance.get("summary", {}) if isinstance(performance.get("summary"), Mapping) else {}
+        context = performance.get("runtime_context", {}) if isinstance(performance.get("runtime_context"), Mapping) else {}
+        failure = (
+            performance.get("failure_classification", {})
+            if isinstance(performance.get("failure_classification"), Mapping)
+            else {}
+        )
+        lines.extend(
+            [
+                "",
+                "## Performance Telemetry",
+                "",
+                f"- configured backend: `{context.get('configured_backend', context.get('backend', 'unknown'))}`",
+                f"- observed backend: `{context.get('backend', 'unknown')}`",
+                f"- cold_warm: `{context.get('cold_warm', 'unknown')}`",
+                f"- mineru_execution: `{context.get('mineru_execution', 'unknown')}`",
+                f"- persistent_mineru_reused: `{context.get('persistent_mineru_reused')}`",
+                f"- local_process_startup_included: `{context.get('local_process_startup_included')}`",
+                f"- model_initialization_included: `{context.get('model_initialization_included', 'unknown')}`",
+                f"- table_quality: `{context.get('table_quality', 'standard')}`",
+                f"- table_quality_degraded: `{context.get('table_quality_degraded', False)}`",
+                f"- table_quality_fallback_count: `{context.get('table_quality_fallback_count', 0)}`",
+                f"- known_duration_ms: `{perf_summary.get('known_duration_ms', 0)}`",
+                f"- failure_count: `{failure.get('failure_count', 0)}`",
+            ]
+        )
+        warnings = performance.get("slow_path_warnings", [])
+        if isinstance(warnings, list) and warnings:
+            lines.extend(["", "Slow path warnings:"])
+            for item in warnings:
+                if not isinstance(item, Mapping):
+                    continue
+                lines.append(
+                    f"- `{item.get('severity', 'info')}` `{item.get('code', 'slow_path')}`: {item.get('message', '')}"
+                )
+        stage_timings = performance.get("stage_timings", [])
+        if isinstance(stage_timings, list) and stage_timings:
+            lines.extend(
+                [
+                    "",
+                    "| Stage | Operation | Status | Duration ms | Timing source | Included in |",
+                    "| --- | --- | --- | --- | --- | --- |",
+                ]
+            )
+            for item in stage_timings:
+                if not isinstance(item, Mapping):
+                    continue
+                row = [
+                    str(item.get("stage", "")).replace("|", "\\|"),
+                    str(item.get("operation", "")).replace("|", "\\|"),
+                    str(item.get("status", "")).replace("|", "\\|"),
+                    str(item.get("duration_ms", "") if item.get("duration_ms") is not None else "").replace("|", "\\|"),
+                    str(item.get("timing_source", "")).replace("|", "\\|"),
+                    str(item.get("included_in_stage", "") or "").replace("|", "\\|"),
+                ]
+                lines.append("| " + " | ".join(row) + " |")
+    lines.extend(
+        [
+            "",
+            "| Source | Backend | Status | Cleanup | Leftovers |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+    )
+    attempts = report.get("process_attempts", [])
+    if isinstance(attempts, list):
+        for item in attempts:
+            if not isinstance(item, Mapping):
+                continue
+            cleanup = item.get("cleanup", {}) if isinstance(item.get("cleanup"), Mapping) else {}
+            cleanup_state = "attempted" if cleanup.get("attempted") else "not needed"
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        str(item.get("source_path", "")),
+                        str(item.get("backend", "")),
+                        str(item.get("status", "")),
+                        cleanup_state,
+                        str(cleanup.get("leftover_process_count", 0)),
+                    ]
+                )
+                + " |"
+            )
+    remote_attempts = report.get("remote_attempts", [])
+    if isinstance(remote_attempts, list) and remote_attempts:
+        lines.extend(
+            [
+                "",
+                "## Remote Attempts",
+                "",
+                "| Source | Backend | Status | Task | Polls | Final | HTTP | Retries | Error Category | Stage | Endpoint |",
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            ]
+        )
+        for item in remote_attempts:
+            if not isinstance(item, Mapping):
+                continue
+            row = [
+                str(item.get("source_path", "")).replace("|", "\\|"),
+                str(item.get("backend", "")).replace("|", "\\|"),
+                str(item.get("status", "")).replace("|", "\\|"),
+                str(item.get("task_id", "") or "").replace("|", "\\|"),
+                str(item.get("poll_count", 0)).replace("|", "\\|"),
+                str(item.get("final_status", "") or "").replace("|", "\\|"),
+                str(item.get("http_attempts", 0)).replace("|", "\\|"),
+                str(item.get("retry_count", 0)).replace("|", "\\|"),
+                str(item.get("error_category", "") or "").replace("|", "\\|"),
+                str(item.get("failed_stage", "") or "").replace("|", "\\|"),
+                str(item.get("endpoint", "") or "").replace("|", "\\|"),
+            ]
+            lines.append("| " + " | ".join(row) + " |")
+    advisories = report.get("handoff_advisory", [])
+    if isinstance(advisories, list) and advisories:
+        lines.extend(["", "## Handoff Advisory", ""])
+        for item in advisories:
+            if not isinstance(item, Mapping):
+                continue
+            severity = str(item.get("severity", "info"))
+            code = str(item.get("code", "handoff_advisory"))
+            message = str(item.get("message", ""))
+            lines.append(f"- `{severity}` `{code}`: {message}")
+    return "\n".join(lines) + "\n"
+
+
+def mineru_cli_convert(
+    source: SourceDocument,
+    *,
+    cli_path: str | None = None,
+    cli_backend: str | None = None,
+    timeout: float = 300.0,
+    asset_output_dir: str | Path | None = None,
+    process_attempts: list[dict[str, Any]] | None = None,
+) -> str:
+    """Convert one file through an installed local MinerU CLI."""
+
+    if timeout <= 0:
+        raise DocConvertError("MinerU CLI timeout must be greater than zero")
+    resolved_cli = resolve_mineru_cli_path(cli_path)
+    if not resolved_cli:
+        hint = "MINERU_CLI_PATH, mineru.cli_path, or a mineru binary on PATH"
+        raise DocConvertError(f"mineru-cli backend requires {hint}")
+
+    backend = (cli_backend or "pipeline").strip() or "pipeline"
+    with tempfile.TemporaryDirectory(prefix="ragflow-skill-mineru-") as tmp:
+        output_dir = Path(tmp) / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        command = [
+            resolved_cli,
+            "-b",
+            backend,
+            "-p",
+            str(source.path),
+            "-o",
+            str(output_dir),
+        ]
+        result, process_attempt = _run_local_process_with_cleanup(
+            command,
+            timeout=timeout,
+            backend="mineru-cli",
+            source_path=source.source_path,
+        )
+        if process_attempts is not None:
+            process_attempts.append(process_attempt)
+
+        if process_attempt["status"] == "timeout":
+            raise DocConvertError(f"MinerU CLI timed out after {timeout:g}s for {source.source_path}")
+        if process_attempt["status"] == "execution_error":
+            error_type = process_attempt.get("error_type", "OSError")
+            raise DocConvertError(f"MinerU CLI could not be executed: {error_type}")
+        if result is None:
+            raise DocConvertError(f"MinerU CLI did not return a process result for {source.source_path}")
+
+        if result.returncode != 0:
+            detail = _short_process_detail(result)
+            raise DocConvertError(f"MinerU CLI failed for {source.source_path}: {detail or result.returncode}")
+
+        markdown_files = sorted(
+            path for path in output_dir.rglob("*.md") if path.is_file()
+        )
+        if not markdown_files:
+            detail = _short_process_detail(result)
+            suffix = f": {detail}" if detail else ""
+            raise DocConvertError(f"MinerU CLI produced no Markdown output for {source.source_path}{suffix}")
+        markdown_file = markdown_files[0]
+        markdown = markdown_file.read_text(encoding="utf-8")
+        asset_started = time.monotonic()
+        converted_markdown = copy_local_markdown_assets(
+            markdown,
+            markdown_path=markdown_file,
+            source_root=output_dir,
+            asset_output_dir=asset_output_dir,
+        )
+        process_attempt["asset_copy_duration_ms"] = round((time.monotonic() - asset_started) * 1000, 3)
+        process_attempt["asset_copy_included_in_conversion"] = True
+        return converted_markdown
+
+
 def pandoc_convert(source: SourceDocument) -> str:
     """Convert with an installed pandoc binary."""
 
@@ -436,6 +4182,47 @@ def pandoc_convert(source: SourceDocument) -> str:
     return result.stdout
 
 
+def image_fallback_markdown(
+    source: SourceDocument,
+    *,
+    asset_output_dir: str | Path | None,
+) -> str:
+    """Preserve an unconverted source image as Markdown that requires review."""
+
+    if asset_output_dir is None:
+        raise DocConvertError("image fallback requires an asset output directory")
+    suffix = source.path.suffix.lower()
+    if suffix not in IMAGE_EXTENSIONS:
+        raise DocConvertError(f"image fallback only supports image files: {source.source_path}")
+    digest = sha256_file(source.path)
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(source.source_path).stem).strip(".-") or "image"
+    image_name = f"{stem}-{digest[:12]}{suffix}"
+    output_dir = Path(asset_output_dir) / "images"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    destination = output_dir / image_name
+    if source.path.resolve() != destination.resolve():
+        shutil.copy2(source.path, destination)
+    title = Path(source.source_path).stem or "Image"
+    alt = title.replace("[", "").replace("]", "").strip() or "source image"
+    return (
+        f"# {title}\n\n"
+        "> Source image preserved for manual review because OCR/conversion was unavailable.\n\n"
+        f"![{alt}](images/{image_name})\n"
+    )
+
+
+def _image_fallback_result(
+    source: SourceDocument,
+    *,
+    warnings: list[str],
+    asset_output_dir: str | Path | None,
+) -> tuple[str, list[str]]:
+    warnings.append(
+        "image_fallback_review_required: source image preserved because OCR/conversion was unavailable"
+    )
+    return image_fallback_markdown(source, asset_output_dir=asset_output_dir), warnings
+
+
 def convert_source_to_markdown(
     source: SourceDocument,
     *,
@@ -448,11 +4235,25 @@ def convert_source_to_markdown(
     mineru_api_key: str | None = None,
     mineru_timeout: float = 300.0,
     mineru_poll_interval: float = 3.0,
+    mineru_verify_ssl: bool = True,
+    mineru_cli_path: str | None = None,
+    mineru_cli_backend: str | None = None,
+    mineru_fastapi_backend: str | None = None,
+    mineru_fastapi_server_url: str | None = None,
+    mineru_v4_model_version: str | None = None,
+    mineru_v4_result_mode: str | None = "full_zip",
+    mineru_v4_data_id_prefix: str | None = None,
+    asset_output_dir: str | Path | None = None,
+    asset_document_stem: str | None = None,
     mineru_language: str = "ch",
     mineru_page_range: str | None = None,
     mineru_enable_table: bool = True,
     mineru_is_ocr: bool = False,
     mineru_enable_formula: bool = True,
+    mineru_asset_mode: str = "markdown_only",
+    process_attempts: list[dict[str, Any]] | None = None,
+    remote_attempts: list[dict[str, Any]] | None = None,
+    allow_image_fallback: bool = False,
 ) -> tuple[str, list[str]]:
     """Convert one source document to Markdown and return warnings."""
 
@@ -469,6 +4270,28 @@ def convert_source_to_markdown(
     if backend in {"auto", "builtin"} and suffix in HTML_EXTENSIONS:
         return html_to_markdown(source.path.read_text(encoding="utf-8")), warnings
 
+    should_try_mineru_cli = backend == "mineru-cli" or (
+        backend == "auto"
+        and suffix in MINERU_AUTO_EXTENSIONS
+        and resolve_mineru_cli_path(mineru_cli_path)
+    )
+    if should_try_mineru_cli:
+        try:
+            return mineru_cli_convert(
+                source,
+                cli_path=mineru_cli_path,
+                cli_backend=mineru_cli_backend,
+                timeout=mineru_timeout,
+                asset_output_dir=asset_output_dir,
+                process_attempts=process_attempts,
+            ), warnings
+        except DocConvertError as exc:
+            if backend == "mineru-cli":
+                if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                    return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
+                raise
+            warnings.append(str(exc))
+
     should_try_pandoc = backend == "pandoc" or (backend == "auto" and suffix in PANDOC_AUTO_EXTENSIONS)
     if should_try_pandoc:
         try:
@@ -479,34 +4302,340 @@ def convert_source_to_markdown(
             warnings.append(str(exc))
 
     if backend in {"auto", "remote"} and remote_url:
-        return remote_convert(
-            source,
-            remote_url=remote_url,
-            api_key=remote_api_key,
-            timeout=remote_timeout,
-        ), warnings
+        try:
+            return remote_convert(
+                source,
+                remote_url=remote_url,
+                api_key=remote_api_key,
+                timeout=remote_timeout,
+            ), warnings
+        except DocConvertError:
+            if backend == "remote" and allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
+            raise
     if backend == "remote" and not remote_url:
+        if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+            return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
         raise DocConvertError("remote backend requires --remote-url")
-    if backend == "mineru":
-        return mineru_agent_convert(
-            source,
-            base_url=mineru_base_url or DEFAULT_MINERU_BASE_URL,
-            api_key=mineru_api_key,
-            timeout=mineru_timeout,
-            poll_interval=mineru_poll_interval,
-            language=mineru_language,
-            page_range=mineru_page_range,
-            enable_table=mineru_enable_table,
-            is_ocr=mineru_is_ocr,
-            enable_formula=mineru_enable_formula,
-        ), warnings
+    if backend == "auto" and suffix in MINERU_AUTO_EXTENSIONS and _should_try_mineru_service_auto(
+        mineru_base_url,
+        mineru_api_key,
+    ):
+        try:
+            if mineru_base_url.rstrip("/").endswith("/agent"):
+                return mineru_agent_convert(
+                    source,
+                    base_url=mineru_base_url,
+                    api_key=mineru_api_key,
+                    timeout=mineru_timeout,
+                    poll_interval=mineru_poll_interval,
+                    language=mineru_language,
+                    page_range=mineru_page_range,
+                    enable_table=mineru_enable_table,
+                    is_ocr=mineru_is_ocr,
+                    enable_formula=mineru_enable_formula,
+                ), warnings
+            return mineru_sync_convert(
+                source,
+                base_url=mineru_base_url,
+                api_key=mineru_api_key,
+                timeout=mineru_timeout,
+                language=mineru_language,
+                page_range=mineru_page_range,
+                enable_table=mineru_enable_table,
+                is_ocr=mineru_is_ocr,
+                enable_formula=mineru_enable_formula,
+            ), warnings
+        except DocConvertError:
+            if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
+            raise
+    if backend in {"mineru", "mineru-agent"}:
+        try:
+            return mineru_agent_convert(
+                source,
+                base_url=mineru_base_url or DEFAULT_MINERU_BASE_URL,
+                api_key=mineru_api_key,
+                timeout=mineru_timeout,
+                poll_interval=mineru_poll_interval,
+                language=mineru_language,
+                page_range=mineru_page_range,
+                enable_table=mineru_enable_table,
+                is_ocr=mineru_is_ocr,
+                enable_formula=mineru_enable_formula,
+            ), warnings
+        except DocConvertError:
+            if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
+            raise
+    if backend == "mineru-fastapi":
+        if not mineru_base_url:
+            if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
+            raise DocConvertError("mineru-fastapi backend requires --mineru-base-url or MINERU_BASE_URL")
+        try:
+            return mineru_fastapi_convert(
+                source,
+                base_url=mineru_base_url,
+                api_key=mineru_api_key,
+                timeout=mineru_timeout,
+                poll_interval=mineru_poll_interval,
+                verify_ssl=mineru_verify_ssl,
+                language=mineru_language,
+                page_range=mineru_page_range,
+                enable_table=mineru_enable_table,
+                is_ocr=mineru_is_ocr,
+                enable_formula=mineru_enable_formula,
+                asset_mode=mineru_asset_mode,
+                asset_output_dir=asset_output_dir,
+                asset_document_stem=asset_document_stem,
+                remote_attempts=remote_attempts,
+                fastapi_backend=mineru_fastapi_backend,
+                fastapi_server_url=mineru_fastapi_server_url,
+            ), warnings
+        except DocConvertError:
+            if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
+            raise
+    if backend in {"mineru-v4", "mineru-platform"}:
+        if not mineru_base_url:
+            if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
+            raise DocConvertError("mineru-v4 backend requires --mineru-base-url or MINERU_BASE_URL")
+        try:
+            return mineru_v4_convert(
+                source,
+                base_url=mineru_base_url,
+                api_key=mineru_api_key,
+                timeout=mineru_timeout,
+                poll_interval=mineru_poll_interval,
+                verify_ssl=mineru_verify_ssl,
+                language=mineru_language,
+                page_range=mineru_page_range,
+                enable_table=mineru_enable_table,
+                is_ocr=mineru_is_ocr,
+                enable_formula=mineru_enable_formula,
+                asset_mode=mineru_asset_mode,
+                asset_output_dir=asset_output_dir,
+                asset_document_stem=asset_document_stem,
+                model_version=mineru_v4_model_version,
+                result_mode=mineru_v4_result_mode,
+                data_id_prefix=mineru_v4_data_id_prefix,
+                remote_attempts=remote_attempts,
+            ), warnings
+        except DocConvertError:
+            if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
+            raise
+    if backend in {"mineru-sync", "mineru-local"}:
+        if not mineru_base_url:
+            if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
+            raise DocConvertError("mineru-sync backend requires --mineru-base-url or MINERU_BASE_URL")
+        try:
+            return mineru_sync_convert(
+                source,
+                base_url=mineru_base_url,
+                api_key=mineru_api_key,
+                timeout=mineru_timeout,
+                language=mineru_language,
+                page_range=mineru_page_range,
+                enable_table=mineru_enable_table,
+                is_ocr=mineru_is_ocr,
+                enable_formula=mineru_enable_formula,
+            ), warnings
+        except DocConvertError:
+            if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+                return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
+            raise
+
+    if allow_image_fallback and suffix in IMAGE_EXTENSIONS:
+        return _image_fallback_result(source, warnings=warnings, asset_output_dir=asset_output_dir)
 
     supported = ", ".join(sorted(BUILTIN_EXTENSIONS))
     attempted = f"; attempted fallback: {'; '.join(warnings)}" if warnings else ""
     raise DocConvertError(
         f"no converter available for {source.source_path} ({suffix or 'no extension'}); "
-        f"builtin supports {supported}, or configure pandoc/remote/mineru backend{attempted}"
+        f"builtin supports {supported}, or configure pandoc/remote/mineru-cli/mineru/mineru-fastapi/mineru-v4/mineru-sync backend{attempted}"
     )
+
+
+def warmup_conversion_backend(
+    *,
+    fixture_path: str | Path,
+    backend: str = "auto",
+    output_markdown: str | Path | None = None,
+    remote_url: str | None = None,
+    remote_api_key: str | None = None,
+    remote_timeout: float = 120.0,
+    mineru_base_url: str | None = None,
+    mineru_api_key: str | None = None,
+    mineru_timeout: float = 300.0,
+    mineru_poll_interval: float = 3.0,
+    mineru_verify_ssl: bool = True,
+    mineru_cli_path: str | None = None,
+    mineru_cli_backend: str | None = None,
+    mineru_fastapi_backend: str | None = None,
+    mineru_fastapi_server_url: str | None = None,
+    mineru_v4_model_version: str | None = None,
+    mineru_v4_result_mode: str | None = "full_zip",
+    mineru_v4_data_id_prefix: str | None = None,
+    mineru_language: str = "ch",
+    mineru_page_range: str | None = None,
+    mineru_enable_table: bool = True,
+    mineru_is_ocr: bool = False,
+    mineru_enable_formula: bool = True,
+) -> dict[str, Any]:
+    """Run an explicit fixture through a configured converter and report the result."""
+
+    normalized_backend = str(backend or "auto").strip().lower()
+    if normalized_backend not in {"auto", *CONVERSION_BACKENDS}:
+        allowed = ", ".join(["auto", *CONVERSION_BACKENDS])
+        raise DocConvertError(f"backend must be one of: {allowed}")
+
+    fixture = Path(fixture_path).expanduser()
+    output_path = Path(output_markdown).expanduser() if output_markdown else None
+    fixture_entry: dict[str, Any] = {
+        "name": fixture.name,
+        "suffix": fixture.suffix.lower(),
+        "exists": fixture.is_file(),
+    }
+    process_attempts: list[dict[str, Any]] = []
+    remote_attempts: list[dict[str, Any]] = []
+    started = time.monotonic()
+    status = "failed"
+    error_message: str | None = None
+    markdown_chars = 0
+    markdown_sha256: str | None = None
+    title: str | None = None
+    warnings: list[str] = []
+    output_written = False
+
+    if fixture.is_file():
+        try:
+            fixture_entry["bytes"] = fixture.stat().st_size
+            fixture_entry["sha256"] = sha256_file(fixture)
+            with tempfile.TemporaryDirectory(prefix="ragflow-skill-warmup-") as tmp:
+                asset_output_dir = output_path.parent if output_path else Path(tmp) / "assets"
+                source = SourceDocument(path=fixture.resolve(), source_path=fixture.name)
+                markdown, warnings = convert_source_to_markdown(
+                    source,
+                    mode="convert",
+                    backend=normalized_backend,
+                    remote_url=remote_url,
+                    remote_api_key=remote_api_key,
+                    remote_timeout=remote_timeout,
+                    mineru_base_url=mineru_base_url,
+                    mineru_api_key=mineru_api_key,
+                    mineru_timeout=mineru_timeout,
+                    mineru_poll_interval=mineru_poll_interval,
+                    mineru_verify_ssl=mineru_verify_ssl,
+                    mineru_cli_path=mineru_cli_path,
+                    mineru_cli_backend=mineru_cli_backend,
+                    mineru_fastapi_backend=mineru_fastapi_backend,
+                    mineru_fastapi_server_url=mineru_fastapi_server_url,
+                    mineru_v4_model_version=mineru_v4_model_version,
+                    mineru_v4_result_mode=mineru_v4_result_mode,
+                    mineru_v4_data_id_prefix=mineru_v4_data_id_prefix,
+                    asset_output_dir=asset_output_dir,
+                    mineru_language=mineru_language,
+                    mineru_page_range=mineru_page_range,
+                    mineru_enable_table=mineru_enable_table,
+                    mineru_is_ocr=mineru_is_ocr,
+                    mineru_enable_formula=mineru_enable_formula,
+                    process_attempts=process_attempts,
+                    remote_attempts=remote_attempts,
+                )
+                markdown_chars = len(markdown)
+                markdown_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+                title = extract_markdown_title(markdown)
+                if output_path:
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text(markdown, encoding="utf-8")
+                    output_written = True
+                status = "success"
+        except (DocConvertError, OSError, UnicodeDecodeError) as exc:
+            error_message = str(exc)
+    else:
+        error_message = f"fixture file not found: {fixture.name or fixture}"
+
+    runtime_report = (
+        make_doc_runtime_report_payload(
+            output_root=".",
+            process_attempts=process_attempts,
+            remote_attempts=remote_attempts,
+        )
+        if process_attempts or remote_attempts
+        else None
+    )
+    duration_ms = round((time.monotonic() - started) * 1000, 3)
+    summary = {
+        "status": status,
+        "duration_ms": duration_ms,
+        "markdown_chars": markdown_chars,
+        "warning_count": len(warnings),
+        "process_attempts": len(process_attempts),
+        "remote_attempts": len(remote_attempts),
+        "remote_retry_count": runtime_report["summary"]["remote_retry_count"] if runtime_report else 0,
+        "http_attempts": runtime_report["summary"]["http_attempts"] if runtime_report else 0,
+        "cleanup_attempts": runtime_report["summary"]["cleanup_attempts"] if runtime_report else 0,
+        "leftover_processes": runtime_report["summary"]["leftover_processes"] if runtime_report else 0,
+    }
+    return {
+        "ok": status == "success",
+        "schema": BACKEND_WARMUP_REPORT_SCHEMA,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "selected_backend": normalized_backend,
+        "allowed_statuses": list(BACKEND_WARMUP_STATUSES),
+        "status": status,
+        "summary": summary,
+        "fixture": fixture_entry,
+        "output": {
+            "markdown_written": output_written,
+            "markdown_name": output_path.name if output_path else None,
+            "markdown_chars": markdown_chars,
+            "markdown_sha256": markdown_sha256,
+            "title": title,
+        },
+        "warnings": warnings,
+        "error": error_message,
+        "runtime_report": runtime_report,
+    }
+
+
+def render_backend_warmup_markdown(report: Mapping[str, Any]) -> str:
+    """Render a compact Markdown backend warmup report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    fixture = report.get("fixture", {}) if isinstance(report.get("fixture"), Mapping) else {}
+    output = report.get("output", {}) if isinstance(report.get("output"), Mapping) else {}
+    lines = [
+        "# RAGFlow Doc Backend Warmup",
+        "",
+        f"- schema: `{report.get('schema', BACKEND_WARMUP_REPORT_SCHEMA)}`",
+        f"- selected_backend: `{report.get('selected_backend', '')}`",
+        f"- status: `{report.get('status', '')}`",
+        f"- fixture: `{fixture.get('name', '')}`",
+        f"- fixture suffix: `{fixture.get('suffix', '')}`",
+        f"- duration_ms: `{summary.get('duration_ms', 0)}`",
+        f"- markdown_chars: `{summary.get('markdown_chars', 0)}`",
+        f"- warnings: `{summary.get('warning_count', 0)}`",
+        f"- process_attempts: `{summary.get('process_attempts', 0)}`",
+        f"- remote_attempts: `{summary.get('remote_attempts', 0)}`",
+        f"- remote_retries: `{summary.get('remote_retry_count', 0)}`",
+        f"- http_attempts: `{summary.get('http_attempts', 0)}`",
+        f"- cleanup_attempts: `{summary.get('cleanup_attempts', 0)}`",
+        f"- leftover_processes: `{summary.get('leftover_processes', 0)}`",
+        f"- markdown_written: `{str(output.get('markdown_written', False)).lower()}`",
+    ]
+    if report.get("error"):
+        error_text = str(report.get("error")).replace("|", "\\|")
+        lines.extend(["", f"Error: {error_text}"])
+    warnings = report.get("warnings", [])
+    if isinstance(warnings, list) and warnings:
+        lines.extend(["", "## Warnings", ""])
+        lines.extend(f"- {str(item)}" for item in warnings)
+    return "\n".join(lines) + "\n"
 
 
 def make_doc_manifest_payload(

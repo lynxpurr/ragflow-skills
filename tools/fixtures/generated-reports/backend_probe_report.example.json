@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "schema": "ragflow_doc_backend_probe_report_v1",
+  "selected_backend": "remote",
+  "endpoint_summary": "https://<redacted:private-host>/convert",
+  "config_path": "<redacted:config-path>",
+  "auth": "Bearer <redacted:bearer-token>",
+  "summary": {
+    "backend_count": 1,
+    "available": 1
+  }
+}

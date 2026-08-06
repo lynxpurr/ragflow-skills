@@ -1,0 +1,26 @@
+{
+  "version": "0.1",
+  "default_kb": "kb:general-sample",
+  "knowledge_bases": [
+    {
+      "name": "kb:general-sample",
+      "dataset_id": "dataset-general-sample",
+      "description": "General sample knowledge base for onboarding and fallback questions.",
+      "hints": ["general", "sample", "onboarding", "getting started"],
+      "params": {
+        "top_k": 5,
+        "similarity_threshold": 0.1
+      }
+    },
+    {
+      "name": "kb:technical-sample",
+      "dataset_id": "dataset-technical-sample",
+      "description": "Technical sample knowledge base for API, configuration, and integration topics.",
+      "hints": ["api", "configuration", "integration", "runtime", "developer"],
+      "params": {
+        "top_k": 6,
+        "similarity_threshold": 0.08
+      }
+    }
+  ]
+}

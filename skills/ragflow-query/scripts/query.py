@@ -5,9 +5,12 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+from datetime import datetime, timezone
 import json
 import os
+import re
 import sys
+import time
 from typing import Any
 
 
@@ -26,23 +29,129 @@ def bootstrap_core() -> None:
 bootstrap_core()
 
 from ragflow_skill_runtime import (  # noqa: E402
+    AgenticPlanError,
+    AssistantReviewError,
     ConfigError,
+    CentroidRoutingError,
+    NormalizedChunk,
     QueryResult,
+    QueryIntentError,
+    QueryRewriteError,
+    QuerySessionError,
+    TableQueryStrategyError,
     RAGFlowClient,
     RetrievalError,
+    RoutingError,
+    audit_citations,
+    attach_stage_timings_to_runtime_metrics,
+    build_agentic_execution_trace,
+    build_agentic_plan,
+    build_centroid_index,
+    build_centroid_plan,
+    build_host_synthesis_contract,
+    build_runtime_metrics_summary,
+    build_runtime_partial_failure_report,
+    create_agentic_answer_request,
+    build_query_rewrite_plan,
+    build_table_query_strategy_report,
+    build_validation_query_suggestions,
+    build_query_output_cache_report,
+    classify_query_intent,
+    build_query_session_inspection,
+    build_query_endpoint_report,
+    build_query_trace,
+    create_answer_evaluator_request,
+    diagnose_query_result,
+    evaluate_answer,
+    configured_private_hosts_from_urls,
+    evidence_from_query_payload,
+    load_pollution_terms,
+    load_assistant_profile,
+    load_assistant_test_plan,
+    load_query_fallback_test_cases,
+    load_query_session,
+    load_retrieval_hints,
+    load_route_activation_plan,
+    load_route_test_report,
+    load_route_test_queries,
     load_config,
+    load_centroid_index,
+    load_fusion_test_cases,
     load_kb_manifest,
+    load_multi_query_file,
+    load_routing_config,
     normalize_retrieval_response,
+    normalize_retrieval_status,
+    query_fusion_report,
+    query_cross_language_ab_report,
+    query_pollution_report,
+    query_rerank_ab_report,
+    render_citation_audit_markdown,
+    render_answer_evaluation_markdown,
+    render_agentic_answer_request_markdown,
+    render_agentic_answer_review_markdown,
+    render_answer_evaluator_request_markdown,
+    render_answer_evaluator_review_markdown,
+    render_assistant_profile_recommendation_markdown,
+    render_assistant_test_plan_review_markdown,
+    render_agentic_plan_markdown,
+    render_centroid_build_markdown,
+    render_centroid_plan_markdown,
+    render_query_cross_language_ab_markdown,
+    render_query_fusion_markdown,
+    render_query_fusion_test_markdown,
+    render_query_intent_markdown,
+    render_query_output_cache_markdown,
+    render_query_session_enrichment_markdown,
+    render_query_session_inspection_markdown,
+    render_query_diagnostic_markdown,
+    render_query_endpoint_report_markdown,
+    render_query_fallback_test_markdown,
+    render_query_pollution_markdown,
+    render_query_rerank_ab_markdown,
+    render_query_rewrite_markdown,
+    render_query_route_decision_markdown,
+    render_table_query_strategy_markdown,
+    render_validation_query_suggestions_markdown,
+    render_query_trace_markdown,
+    render_route_activation_check_markdown,
+    render_route_diagnose_markdown,
+    render_route_report_markdown,
+    render_route_test_markdown,
+    run_fusion_tests,
+    run_query_fallback_tests,
+    recommend_assistant_profile,
+    review_answer_evaluator_output,
+    review_agentic_answer,
+    review_assistant_test_plan,
     resolve_dataset_ids,
+    route_question,
+    route_query_intent,
+    enrich_query_with_session,
+    run_route_activation_check,
+    run_route_diagnose,
+    run_route_report,
+    run_route_tests,
+    run_with_retry,
+    sanitize_report_payload,
+    weight_evidence,
+    write_centroid_plan,
+    write_centroid_report,
+    RuntimeRetryPolicy,
 )
+
+
+_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 
 
 def _json_dump(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
-def _error(message: str, *, json_output: bool) -> int:
+def _error(message: str, *, json_output: bool, details: dict[str, Any] | None = None) -> int:
     payload = {"ok": False, "error": message}
+    if details:
+        payload.update(details)
     if json_output:
         _json_dump(payload)
     else:
@@ -52,17 +161,412 @@ def _error(message: str, *, json_output: bool) -> int:
 
 def _load_runtime(args: argparse.Namespace):
     overrides = {}
-    if args.base_url:
+    if getattr(args, "base_url", None):
         overrides["base_url"] = args.base_url
-    if args.api_key:
+    if getattr(args, "api_key", None):
         overrides["api_key"] = args.api_key
-    return load_config(config_file=args.config, overrides=overrides)
+    if getattr(args, "timeout", None) is not None:
+        overrides["timeout"] = args.timeout
+    return load_config(config_file=getattr(args, "config", None), overrides=overrides)
+
+
+def _routing_config_path(args: argparse.Namespace) -> str | None:
+    return getattr(args, "routing_config", None) or os.environ.get("RAGFLOW_ROUTING_CONFIG")
+
+
+def _centroid_index_path(args: argparse.Namespace) -> str | None:
+    return getattr(args, "centroid_index", None) or os.environ.get("RAGFLOW_CENTROID_INDEX")
+
+
+def _load_routing(args: argparse.Namespace):
+    path = _routing_config_path(args)
+    if not path:
+        raise RoutingError("routing config is required; pass --routing-config or set RAGFLOW_ROUTING_CONFIG")
+    return load_routing_config(path)
+
+
+def _load_centroid_index(args: argparse.Namespace) -> dict[str, Any] | None:
+    path = _centroid_index_path(args)
+    return load_centroid_index(path) if path else None
+
+
+def _write_text(path: str | None, text: str) -> None:
+    if not path:
+        return
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(text, encoding="utf-8")
+
+
+def _write_json(path: str | None, data: Any) -> None:
+    if path:
+        _write_text(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+
+def _collect_urls(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return _URL_RE.findall(value)
+    if isinstance(value, dict):
+        urls: list[str] = []
+        for item in value.values():
+            urls.extend(_collect_urls(item))
+        return urls
+    if isinstance(value, (list, tuple)):
+        urls = []
+        for item in value:
+            urls.extend(_collect_urls(item))
+        return urls
+    return []
+
+
+def _read_json(path: str | Path) -> Any:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _read_optional_json_mapping(path: str | None, *, label: str) -> dict[str, Any] | None:
+    if not path:
+        return None
+    payload = _read_json(path)
+    if not isinstance(payload, dict):
+        raise AssistantReviewError(f"{label} must be a JSON object")
+    return payload
+
+
+def _read_query_vector(path: str | Path) -> list[float] | dict[str, Any]:
+    payload = _read_json(path)
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        return payload
+    raise ValueError("query vector JSON must be a vector list or object containing a vector field")
+
+
+def _read_query_outputs(paths: list[str], *, label: str) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for path in paths:
+        raw = _read_json(path)
+        items: list[Any]
+        if isinstance(raw, list):
+            items = raw
+        elif isinstance(raw, dict) and isinstance(raw.get("payloads"), list):
+            items = raw["payloads"]
+        else:
+            items = [raw]
+        for index, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                raise ValueError(f"{label} query output must be a JSON object: {path}#{index}")
+            payloads.append(item)
+    return payloads
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _fused_chunks(report: dict[str, Any]) -> list[NormalizedChunk]:
+    chunks: list[NormalizedChunk] = []
+    for item in report.get("results", []):
+        if not isinstance(item, dict):
+            continue
+        components = item.get("score_components")
+        first_component = components[0] if isinstance(components, list) and components and isinstance(components[0], dict) else {}
+        dataset_ids = first_component.get("dataset_ids") if isinstance(first_component, dict) else []
+        chunks.append(
+            NormalizedChunk(
+                content=str(item.get("content") or item.get("content_preview") or ""),
+                similarity=float(item.get("rrf_score") or 0.0),
+                document_name=item.get("document_name") if isinstance(item.get("document_name"), str) else None,
+                document_id=item.get("document_id") if isinstance(item.get("document_id"), str) else None,
+                dataset_id=str(dataset_ids[0]) if isinstance(dataset_ids, list) and dataset_ids else None,
+                chunk_id=item.get("chunk_id") if isinstance(item.get("chunk_id"), str) else None,
+                raw=dict(item),
+            )
+        )
+    return chunks
+
+
+def _llm_configured(config: Any) -> bool:
+    return bool(getattr(config, "llm_base_url", None) and getattr(config, "llm_api_key", None))
+
+
+def _build_retrieval_payload(
+    *,
+    question: str,
+    source: str,
+    query_id: str,
+    query_kind: str,
+    dataset_ids: list[str],
+    chunks: list[NormalizedChunk],
+    include_raw: bool,
+) -> dict[str, Any]:
+    evidence = weight_evidence(question, chunks)
+    status_report = normalize_retrieval_status(chunks=chunks, evidence=evidence)
+    return {
+        "ok": True,
+        "question": question,
+        "source": source,
+        "query_id": query_id,
+        "query_kind": query_kind,
+        "dataset_ids": list(dataset_ids),
+        "chunks": [chunk.to_dict(include_raw=include_raw) for chunk in chunks],
+        "evidence": evidence,
+        "retrieval_status": status_report["status"],
+        "retrieval_status_report": status_report,
+    }
+
+
+def _retrieve_once_with_runtime(
+    *,
+    client: RAGFlowClient,
+    question: str,
+    dataset_ids: list[str],
+    top_k: int,
+    similarity_threshold: float | None,
+    retry_budget: int,
+    retry_backoff_seconds: float,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    def operation() -> dict[str, Any]:
+        try:
+            raw = client.retrieve(
+                question=question,
+                dataset_ids=dataset_ids,
+                top_k=top_k,
+                similarity_threshold=similarity_threshold,
+            )
+            chunks = normalize_retrieval_response(raw)
+            evidence = weight_evidence(question, chunks)
+            status_report = normalize_retrieval_status(chunks=chunks, evidence=evidence)
+            return {
+                "ok": bool(status_report["ok"]),
+                "chunks": chunks,
+                "status": status_report["status"],
+                "status_report": status_report,
+                "error": None,
+            }
+        except Exception as exc:  # Keep multi-query and fusion retrievals observable.
+            status_report = normalize_retrieval_status(error=exc)
+            return {
+                "ok": False,
+                "chunks": [],
+                "status": status_report["status"],
+                "status_report": status_report,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            }
+
+    retry_result = run_with_retry(
+        operation,
+        status_getter=lambda value: str(value.get("status") if isinstance(value, dict) else "error"),
+        policy=RuntimeRetryPolicy(retry_budget=retry_budget, backoff_seconds=retry_backoff_seconds),
+    )
+    result = retry_result.result if isinstance(retry_result.result, dict) else {
+        "ok": False,
+        "chunks": [],
+        "status": "error",
+        "error": "retrieval failed",
+    }
+    return result, retry_result.trace
+
+
+def _retrieve_query_payloads(
+    *,
+    client: RAGFlowClient,
+    retrieval_queries: list[dict[str, Any]],
+    dataset_ids: list[str],
+    top_k: int,
+    similarity_threshold: float | None,
+    fusion: str,
+    include_raw: bool,
+    retry_budget: int,
+    retry_backoff_seconds: float,
+) -> tuple[
+    list[dict[str, Any]],
+    list[NormalizedChunk],
+    dict[str, Any] | None,
+    int,
+    dict[str, Any],
+    dict[str, Any],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    payloads: list[dict[str, Any]] = []
+    normalized_by_payload: list[list[NormalizedChunk]] = []
+    retrieval_calls = 0
+    runtime_items: list[dict[str, Any]] = []
+    retry_traces: list[dict[str, Any]] = []
+    retrieval_errors: list[dict[str, Any]] = []
+
+    def record_result(
+        *,
+        query: str,
+        query_id: str,
+        query_kind: str,
+        source: str,
+        target_dataset_ids: list[str],
+        result: dict[str, Any],
+        retry_trace: dict[str, Any],
+    ) -> None:
+        nonlocal retrieval_calls
+        retrieval_calls += int(retry_trace.get("attempt_count") or 0)
+        status = str(result.get("status") or "error")
+        runtime_items.append({"label": source, "status": status})
+        retry_traces.append({"label": source, **retry_trace})
+        chunks = list(result.get("chunks") or [])
+        if result.get("ok"):
+            normalized_by_payload.append(chunks)
+            payload = _build_retrieval_payload(
+                question=query,
+                source=source,
+                query_id=query_id,
+                query_kind=query_kind,
+                dataset_ids=target_dataset_ids,
+                chunks=chunks,
+                include_raw=include_raw,
+            )
+            payload["runtime_retry_trace"] = retry_trace
+            payloads.append(payload)
+            return
+        error_payload = {
+            "ok": False,
+            "question": query,
+            "source": source,
+            "query_id": query_id,
+            "query_kind": query_kind,
+            "dataset_ids": target_dataset_ids,
+            "chunks": [],
+            "evidence": [],
+            "retrieval_status": status,
+            "retrieval_status_report": result.get("status_report"),
+            "error": result.get("error") or "retrieval failed",
+            "error_type": result.get("error_type"),
+            "runtime_retry_trace": retry_trace,
+        }
+        retrieval_errors.append(error_payload)
+        payloads.append(error_payload)
+
+    for query_item in retrieval_queries:
+        query = str(query_item["query"])
+        query_id = str(query_item.get("id") or "query")
+        query_kind = str(query_item.get("kind") or "")
+        source_prefix = str(query_item.get("source") or query_id)
+        if fusion == "rrf" and len(dataset_ids) > 1:
+            for dataset_id in dataset_ids:
+                source = f"{source_prefix}:{query_id}:{dataset_id}"
+                result, retry_trace = _retrieve_once_with_runtime(
+                    client=client,
+                    question=query,
+                    dataset_ids=[dataset_id],
+                    top_k=top_k,
+                    similarity_threshold=similarity_threshold,
+                    retry_budget=retry_budget,
+                    retry_backoff_seconds=retry_backoff_seconds,
+                )
+                record_result(
+                    query=query,
+                    query_id=query_id,
+                    query_kind=query_kind,
+                    source=source,
+                    target_dataset_ids=[dataset_id],
+                    result=result,
+                    retry_trace=retry_trace,
+                )
+        else:
+            source = f"{source_prefix}:{query_id}"
+            result, retry_trace = _retrieve_once_with_runtime(
+                client=client,
+                question=query,
+                dataset_ids=dataset_ids,
+                top_k=top_k,
+                similarity_threshold=similarity_threshold,
+                retry_budget=retry_budget,
+                retry_backoff_seconds=retry_backoff_seconds,
+            )
+            record_result(
+                query=query,
+                query_id=query_id,
+                query_kind=query_kind,
+                source=source,
+                target_dataset_ids=dataset_ids,
+                result=result,
+                retry_trace=retry_trace,
+            )
+    runtime_partial_failure = build_runtime_partial_failure_report(
+        "ragflow_query_ask",
+        runtime_items,
+        success_statuses=("success",),
+        warning_statuses=("empty", "low_quality", "needs_refinement", "partial"),
+        failure_statuses=("error", "timeout"),
+        skipped_statuses=(),
+        timeout_statuses=("timeout",),
+    )
+    runtime_metrics = build_runtime_metrics_summary(
+        "ragflow_query_ask",
+        counters={
+            "planned_retrieval_count": len(runtime_items),
+            "retrieval_call_count": retrieval_calls,
+            "retrieval_error_count": len(retrieval_errors),
+            "retry_count": sum(int(trace.get("retry_count") or 0) for trace in retry_traces),
+        },
+        latency_samples_ms=[
+            float(attempt.get("latency_ms") or 0.0)
+            for trace in retry_traces
+            for attempt in trace.get("attempts", [])
+            if isinstance(attempt, dict)
+        ],
+    )
+    if len(payloads) == 1 and not (fusion == "rrf" and len(dataset_ids) > 1):
+        chunks = normalized_by_payload[0] if normalized_by_payload else []
+        return (
+            payloads,
+            chunks,
+            None,
+            retrieval_calls,
+            runtime_partial_failure,
+            runtime_metrics,
+            retry_traces,
+            retrieval_errors,
+        )
+    fusion_report = query_fusion_report(payloads, top_k=top_k)
+    return (
+        payloads,
+        _fused_chunks(fusion_report),
+        fusion_report,
+        retrieval_calls,
+        runtime_partial_failure,
+        runtime_metrics,
+        retry_traces,
+        retrieval_errors,
+    )
 
 
 def _ask(args: argparse.Namespace) -> int:
     mode = args.mode
-    if mode == "auto":
-        mode = "direct"
+    route_result = None
+    routed_params: dict[str, Any] = {}
+    explicit_dataset_inputs = bool(args.dataset_id or args.kb or args.kb_manifest)
+    started_at = _utc_now()
+    total_start = time.perf_counter()
+    retrieval_duration_ms = 0.0
+    retrieval_calls = 0
+    rewrite_plan = None
+    agentic_plan = None
+    agentic_trace = None
+    host_synthesis_contract = None
+    retrieval_payloads: list[dict[str, Any]] = []
+    retrieval_errors: list[dict[str, Any]] = []
+    runtime_retry_traces: list[dict[str, Any]] = []
+    runtime_partial_failure = build_runtime_partial_failure_report(
+        "ragflow_query_ask",
+        [],
+        success_statuses=("success",),
+        warning_statuses=("empty", "low_quality", "needs_refinement", "partial"),
+        failure_statuses=("error", "timeout"),
+        skipped_statuses=(),
+        timeout_statuses=("timeout",),
+    )
+    runtime_metrics = build_runtime_metrics_summary("ragflow_query_ask")
+    agentic_active = mode == "agentic" and args.host_assisted
+    rewrite_active = bool(args.multi_query or args.rewrite != "none") and not agentic_active
 
     if mode == "agentic" and not args.host_assisted:
         return _error(
@@ -74,22 +578,188 @@ def _ask(args: argparse.Namespace) -> int:
         kb_manifest = load_kb_manifest(args.kb_manifest) if args.kb_manifest else None
         config = _load_runtime(args)
         client = RAGFlowClient(config)
-        dataset_ids = resolve_dataset_ids(
-            client=client,
-            dataset_ids=args.dataset_id,
-            dataset_names=args.kb,
-            kb_manifest=kb_manifest,
+        if mode == "auto" and not explicit_dataset_inputs and _routing_config_path(args):
+            routing = _load_routing(args)
+            route_result = route_question(
+                routing,
+                args.question,
+                centroid_index=_load_centroid_index(args),
+                query_vector=_read_query_vector(args.query_vector_json) if args.query_vector_json else None,
+            )
+            if not route_result.selected:
+                raise RoutingError("auto routing found no matching KB; pass explicit --dataset-id/--kb or add route hints")
+            dataset_ids = [route_result.selected.kb.dataset_id]
+            routed_params = route_result.selected.kb.params
+            mode = "direct"
+        else:
+            if mode == "auto":
+                mode = "direct"
+            dataset_ids = resolve_dataset_ids(
+                client=client,
+                dataset_ids=args.dataset_id,
+                dataset_names=args.kb,
+                kb_manifest=kb_manifest,
+            )
+        effective_top_k = args.top_k or int(routed_params.get("top_k") or 5)
+        effective_similarity_threshold = (
+            args.similarity_threshold
+            if args.similarity_threshold is not None
+            else routed_params.get("similarity_threshold")
         )
-        raw = client.retrieve(
-            question=args.question,
-            dataset_ids=dataset_ids,
-            top_k=args.top_k,
-            similarity_threshold=args.similarity_threshold,
+        if agentic_active:
+            agentic_plan = build_agentic_plan(
+                args.question,
+                retrieval_mode="direct",
+                rewrite_mode=args.rewrite,
+                max_subqueries=args.max_subqueries,
+                reflection_budget=args.reflection_budget,
+            )
+            retrieval_queries = list(agentic_plan.get("retrieval_queries", []))
+        else:
+            multi_queries = load_multi_query_file(args.multi_query) if args.multi_query else []
+            rewrite_plan = build_query_rewrite_plan(
+                args.question,
+                mode=args.rewrite,
+                multi_queries=multi_queries,
+                llm_configured=_llm_configured(config),
+            )
+            retrieval_queries = rewrite_plan["retrieval_queries"]
+        retrieval_start = time.perf_counter()
+        if retrieval_queries:
+            (
+                retrieval_payloads,
+                chunks,
+                fusion_report,
+                retrieval_calls,
+                runtime_partial_failure,
+                runtime_metrics,
+                runtime_retry_traces,
+                retrieval_errors,
+            ) = _retrieve_query_payloads(
+                client=client,
+                retrieval_queries=retrieval_queries,
+                dataset_ids=dataset_ids,
+                top_k=effective_top_k,
+                similarity_threshold=effective_similarity_threshold,
+                fusion=args.fusion,
+                include_raw=args.include_raw,
+                retry_budget=args.retry_budget if args.retry_budget is not None else 1,
+                retry_backoff_seconds=args.retry_backoff_seconds,
+            )
+        else:
+            chunks = []
+            fusion_report = None
+        retrieval_duration_ms = (time.perf_counter() - retrieval_start) * 1000
+    except (AgenticPlanError, ConfigError, QueryRewriteError, RetrievalError, RoutingError, ValueError, OSError, RuntimeError) as exc:
+        status_report = normalize_retrieval_status(error=exc)
+        return _error(
+            str(exc),
+            json_output=args.json,
+            details={
+                "retrieval_status": status_report["status"],
+                "retrieval_status_report": status_report,
+            },
         )
-        chunks = normalize_retrieval_response(raw)
-    except (ConfigError, RetrievalError, OSError, RuntimeError) as exc:
-        return _error(str(exc), json_output=args.json)
+    if retrieval_errors and not chunks:
+        first_error = retrieval_errors[0]
+        status_report = first_error.get("retrieval_status_report")
+        if not isinstance(status_report, dict):
+            status_report = normalize_retrieval_status(error=first_error.get("error"))
+        return _error(
+            str(first_error.get("error") or "retrieval failed"),
+            json_output=args.json,
+            details={
+                "retrieval_status": status_report["status"],
+                "retrieval_status_report": status_report,
+                "runtime_partial_failure": runtime_partial_failure,
+                "runtime_metrics": runtime_metrics,
+                "retrievals": retrieval_payloads,
+            },
+        )
 
+    total_duration_ms = (time.perf_counter() - total_start) * 1000
+    finished_at = _utc_now()
+    route_payload = route_result.to_dict() if route_result else None
+    evidence = weight_evidence(args.question, chunks)
+    agentic_retrieval_status = None
+    if agentic_plan and agentic_plan.get("status") in {"needs_clarification", "rejected"}:
+        agentic_retrieval_status = str(agentic_plan["status"])
+    status_report = normalize_retrieval_status(
+        chunks=chunks,
+        evidence=evidence,
+        intent_status=agentic_retrieval_status,
+        partial=bool(retrieval_errors),
+    )
+    runtime_metrics = attach_stage_timings_to_runtime_metrics(
+        runtime_metrics,
+        [
+            {
+                "stage": "retrieval",
+                "operation": "retrieve",
+                "status": runtime_partial_failure["summary"]["status"],
+                "duration_ms": retrieval_duration_ms,
+                "document_count": retrieval_calls,
+                "counts_toward_total": False,
+            },
+            {
+                "stage": "query",
+                "operation": mode,
+                "status": status_report["status"],
+                "duration_ms": total_duration_ms,
+            },
+        ],
+    )
+    if agentic_plan:
+        agentic_trace = build_agentic_execution_trace(
+            agentic_plan,
+            retrieval_call_count=retrieval_calls,
+            retrieval_latency_ms=retrieval_duration_ms,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+        host_synthesis_contract = build_host_synthesis_contract(
+            agentic_plan,
+            evidence,
+            retrieval_status=status_report,
+        )
+    trace_warnings = [str(item) for item in agentic_plan.get("warnings", [])] if agentic_plan else []
+    if not chunks:
+        trace_warnings.append("retrieval returned zero chunks")
+    trace = build_query_trace(
+        question=args.question,
+        requested_mode=args.mode,
+        effective_mode=mode,
+        dataset_ids=dataset_ids,
+        top_k=effective_top_k,
+        similarity_threshold=effective_similarity_threshold,
+        host_assisted=args.host_assisted,
+        chunk_count=len(chunks),
+        evidence=evidence,
+        route=route_payload,
+        timings_ms={
+            "total": round(total_duration_ms, 3),
+            "retrieval": round(retrieval_duration_ms, 3),
+        },
+        started_at=started_at,
+        finished_at=finished_at,
+        warnings=trace_warnings,
+        rewrite_plan=rewrite_plan if rewrite_active else None,
+        retrieval_status=status_report,
+        retrieval_call_count=retrieval_calls,
+    )
+    if agentic_plan:
+        trace["agentic_plan"] = agentic_plan
+    if agentic_trace:
+        trace["agentic_trace"] = agentic_trace
+    if host_synthesis_contract:
+        trace["host_synthesis_contract"] = host_synthesis_contract
+    if fusion_report:
+        trace["fusion"] = fusion_report
+    trace["runtime_partial_failure"] = runtime_partial_failure
+    trace["runtime_metrics"] = runtime_metrics
+    trace["runtime_retry_traces"] = runtime_retry_traces
+    _write_json(args.trace_json, trace)
+    _write_text(args.trace_md, render_query_trace_markdown(trace))
     result = QueryResult(
         question=args.question,
         mode=mode,
@@ -99,12 +769,52 @@ def _ask(args: argparse.Namespace) -> int:
         host_assisted=args.host_assisted,
         metadata={
             "requested_mode": args.mode,
-            "top_k": args.top_k,
+            "top_k": effective_top_k,
+            "similarity_threshold": effective_similarity_threshold,
+            "fusion": "rrf" if fusion_report else args.fusion,
+            "rewrite": args.rewrite,
+            "retrieval_status": status_report["status"],
+            "retrieval_status_report": status_report,
             "chunk_count": len(chunks),
+            "runtime_partial_failure_status": runtime_partial_failure["summary"]["status"],
+            "runtime_failure_count": runtime_partial_failure["summary"]["failure_count"],
+            "runtime_timeout_count": runtime_partial_failure["summary"]["timeout_count"],
             "synthesis": "host-assisted" if args.host_assisted else "not-requested",
+            "duration_ms": round(total_duration_ms, 3),
+            "retrieval_ms": round(retrieval_duration_ms, 3),
+            "retrieval_call_count": retrieval_calls,
+            **({"rewrite_plan": rewrite_plan} if rewrite_active and rewrite_plan else {}),
+            **({"agentic_plan": agentic_plan} if agentic_plan else {}),
+            **({"agentic_trace": agentic_trace} if agentic_trace else {}),
+            **({"host_synthesis_contract": host_synthesis_contract} if host_synthesis_contract else {}),
+            "evidence_count": len(evidence),
+            **({"fusion_report": fusion_report} if fusion_report else {}),
+            **({"route": route_payload} if route_payload else {}),
         },
     )
-    payload = {"ok": True, **result.to_dict(include_raw=args.include_raw)}
+    payload = {
+        "ok": True,
+        **result.to_dict(include_raw=args.include_raw),
+        "evidence": evidence,
+        "retrieval_status": status_report["status"],
+        "retrieval_status_report": status_report,
+        "runtime_partial_failure": runtime_partial_failure,
+        "runtime_metrics": runtime_metrics,
+    }
+    if retrieval_payloads and (agentic_plan or args.multi_query or args.rewrite != "none" or args.fusion == "rrf"):
+        payload["retrievals"] = retrieval_payloads
+    if rewrite_active and rewrite_plan:
+        payload["rewrite"] = rewrite_plan
+    if agentic_plan:
+        payload["agentic_plan"] = agentic_plan
+    if agentic_trace:
+        payload["agentic_trace"] = agentic_trace
+    if host_synthesis_contract:
+        payload["host_synthesis_contract"] = host_synthesis_contract
+    if fusion_report:
+        payload["fusion"] = fusion_report
+    if args.include_trace:
+        payload["trace"] = trace
     if args.json or args.host_assisted:
         _json_dump(payload)
     else:
@@ -115,6 +825,1565 @@ def _ask(args: argparse.Namespace) -> int:
     return 0
 
 
+def _list_kbs(args: argparse.Namespace) -> int:
+    try:
+        routing = _load_routing(args)
+    except (RoutingError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=True)
+    payload = {
+        "ok": True,
+        "schema": "ragflow_route_kb_list_v1",
+        "count": len(routing.knowledge_bases),
+        "routing_config": routing.to_dict(),
+    }
+    _json_dump(payload)
+    return 0
+
+
+def _route(args: argparse.Namespace) -> int:
+    try:
+        routing = _load_routing(args)
+        result = route_question(
+            routing,
+            args.question,
+            centroid_index=_load_centroid_index(args),
+            query_vector=_read_query_vector(args.query_vector_json) if args.query_vector_json else None,
+        )
+    except (RoutingError, OSError, ValueError, json.JSONDecodeError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    payload = result.to_dict()
+    if args.json:
+        _json_dump(payload)
+    elif result.selected:
+        selected = result.selected
+        print(f"{selected.kb.name}\t{selected.kb.dataset_id}\tscore={selected.score:.2f}")
+    else:
+        print("no route matched", file=sys.stderr)
+    return 0 if result.selected else 1
+
+
+def _sanitize_route_review_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    routing: Any,
+    queries: Any | None,
+    centroid_index: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    routing_payload = routing.to_dict() if hasattr(routing, "to_dict") else {}
+    urls = [
+        *_collect_urls(routing_payload),
+        *_collect_urls(queries or {}),
+        *_collect_urls(centroid_index or {}),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            _routing_config_path(args),
+            getattr(args, "queries", None),
+            _centroid_index_path(args),
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _route_test(args: argparse.Namespace) -> int:
+    try:
+        routing = _load_routing(args)
+        queries = load_route_test_queries(args.queries)
+        centroid_index = _load_centroid_index(args)
+        report = run_route_tests(routing, queries, centroid_index=centroid_index)
+    except (RoutingError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=True)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_route_review_report(
+            report,
+            args,
+            routing,
+            queries,
+            centroid_index,
+        )
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_route_test_markdown(report))
+    _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _route_report(args: argparse.Namespace) -> int:
+    try:
+        routing = _load_routing(args)
+        queries = load_route_test_queries(args.queries) if args.queries else None
+        centroid_index = _load_centroid_index(args)
+        report = run_route_report(routing, queries, centroid_index=centroid_index)
+    except (RoutingError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=True)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_route_review_report(
+            report,
+            args,
+            routing,
+            queries,
+            centroid_index,
+        )
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_route_report_markdown(report))
+    _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _route_diagnose(args: argparse.Namespace) -> int:
+    try:
+        routing = _load_routing(args)
+        queries = load_route_test_queries(args.queries)
+        centroid_index = _load_centroid_index(args)
+        report = run_route_diagnose(routing, queries, centroid_index=centroid_index)
+    except (RoutingError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=True)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_route_review_report(
+            report,
+            args,
+            routing,
+            queries,
+            centroid_index,
+        )
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_route_diagnose_markdown(report))
+    _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_route_activation_check_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    routing: Any,
+    activation_plan: dict[str, Any],
+    queries: Any,
+    route_test_report: dict[str, Any] | None,
+    validation_report: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    routing_payload = routing.to_dict() if hasattr(routing, "to_dict") else {}
+    urls = [
+        *_collect_urls(routing_payload),
+        *_collect_urls(activation_plan),
+        *_collect_urls(queries or {}),
+        *_collect_urls(route_test_report or {}),
+        *_collect_urls(validation_report or {}),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.activation_plan,
+            args.routing_config,
+            args.queries,
+            args.route_test_report,
+            args.validation_report,
+            args.centroid_index,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _route_activation_check(args: argparse.Namespace) -> int:
+    try:
+        routing = _load_routing(args)
+        activation_plan = load_route_activation_plan(args.activation_plan)
+        queries = load_route_test_queries(args.queries) if args.queries else None
+        route_test_report = load_route_test_report(args.route_test_report) if args.route_test_report else None
+        validation_report = _read_json(args.validation_report) if args.validation_report else None
+        if validation_report is not None and not isinstance(validation_report, dict):
+            raise RoutingError("validation report must be a JSON object")
+        report = run_route_activation_check(
+            activation_plan,
+            routing,
+            queries=queries,
+            route_test_report=route_test_report,
+            validation_report=validation_report,
+            min_hit_rate=args.min_hit_rate,
+            max_empty_result_rate=args.max_empty_result_rate,
+            min_validation_query_count=args.min_validation_query_count,
+            centroid_index=_load_centroid_index(args),
+            inputs={
+                "activation_plan": args.activation_plan,
+                "route_config": args.routing_config,
+                "route_tests": args.queries,
+                "route_test_report": args.route_test_report,
+                "validation_report": args.validation_report,
+                "centroid_index": args.centroid_index,
+            },
+        )
+    except (RoutingError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=True)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_route_activation_check_report(
+            report,
+            args,
+            routing,
+            activation_plan,
+            queries,
+            route_test_report,
+            validation_report,
+        )
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_route_activation_check_markdown(report))
+    _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_assistant_profile_recommendation_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    assistant_profile: dict[str, Any],
+    retrieval_hints: dict[str, Any] | None,
+    kb_manifest: dict[str, Any] | None,
+    parse_report: dict[str, Any] | None,
+    activation_plan: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(assistant_profile),
+        *_collect_urls(retrieval_hints or {}),
+        *_collect_urls(kb_manifest or {}),
+        *_collect_urls(parse_report or {}),
+        *_collect_urls(activation_plan or {}),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.assistant_profile,
+            args.retrieval_hints,
+            args.kb_manifest,
+            args.parse_report,
+            args.activation_plan,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _assistant_profile_recommend(args: argparse.Namespace) -> int:
+    try:
+        assistant_profile = load_assistant_profile(args.assistant_profile)
+        retrieval_hints = load_retrieval_hints(args.retrieval_hints) if args.retrieval_hints else None
+        kb_manifest = _read_optional_json_mapping(args.kb_manifest, label="kb manifest")
+        parse_report = _read_optional_json_mapping(args.parse_report, label="parse report")
+        activation_plan = _read_optional_json_mapping(args.activation_plan, label="activation plan")
+        report = recommend_assistant_profile(
+            assistant_profile,
+            retrieval_hints=retrieval_hints,
+            kb_manifest=kb_manifest,
+            parse_report=parse_report,
+            activation_plan=activation_plan,
+            inputs={
+                "assistant_profile": args.assistant_profile,
+                "retrieval_hints": args.retrieval_hints,
+                "kb_manifest": args.kb_manifest,
+                "parse_report": args.parse_report,
+                "activation_plan": args.activation_plan,
+            },
+        )
+    except (AssistantReviewError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=True)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_assistant_profile_recommendation_report(
+            report,
+            args,
+            assistant_profile,
+            retrieval_hints,
+            kb_manifest,
+            parse_report,
+            activation_plan,
+        )
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_assistant_profile_recommendation_markdown(report))
+    _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_assistant_test_plan_review_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    assistant_test_plan: dict[str, Any],
+    assistant_profile: dict[str, Any] | None,
+    retrieval_hints: dict[str, Any] | None,
+    kb_manifest: dict[str, Any] | None,
+    parse_report: dict[str, Any] | None,
+    activation_plan: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(assistant_test_plan),
+        *_collect_urls(assistant_profile or {}),
+        *_collect_urls(retrieval_hints or {}),
+        *_collect_urls(kb_manifest or {}),
+        *_collect_urls(parse_report or {}),
+        *_collect_urls(activation_plan or {}),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.test_plan,
+            args.assistant_profile,
+            args.retrieval_hints,
+            args.kb_manifest,
+            args.parse_report,
+            args.activation_plan,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _assistant_test_plan(args: argparse.Namespace) -> int:
+    try:
+        assistant_test_plan = load_assistant_test_plan(args.test_plan)
+        assistant_profile = load_assistant_profile(args.assistant_profile) if args.assistant_profile else None
+        retrieval_hints = load_retrieval_hints(args.retrieval_hints) if args.retrieval_hints else None
+        kb_manifest = _read_optional_json_mapping(args.kb_manifest, label="kb manifest")
+        parse_report = _read_optional_json_mapping(args.parse_report, label="parse report")
+        activation_plan = _read_optional_json_mapping(args.activation_plan, label="activation plan")
+        report = review_assistant_test_plan(
+            assistant_test_plan,
+            assistant_profile=assistant_profile,
+            retrieval_hints=retrieval_hints,
+            kb_manifest=kb_manifest,
+            parse_report=parse_report,
+            activation_plan=activation_plan,
+            inputs={
+                "assistant_test_plan": args.test_plan,
+                "assistant_profile": args.assistant_profile,
+                "retrieval_hints": args.retrieval_hints,
+                "kb_manifest": args.kb_manifest,
+                "parse_report": args.parse_report,
+                "activation_plan": args.activation_plan,
+            },
+        )
+    except (AssistantReviewError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=True)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_assistant_test_plan_review_report(
+            report,
+            args,
+            assistant_test_plan,
+            assistant_profile,
+            retrieval_hints,
+            kb_manifest,
+            parse_report,
+            activation_plan,
+        )
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_assistant_test_plan_review_markdown(report))
+    _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_centroid_build_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [*_collect_urls(report)]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            *getattr(args, "kb_manifest", []),
+            *getattr(args, "chunk_snapshot", []),
+            getattr(args, "index_output", None),
+            getattr(args, "checkpoint", None),
+            getattr(args, "report_json", None),
+            getattr(args, "report_md", None),
+            getattr(args, "redaction_report", None),
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _centroid_build(args: argparse.Namespace) -> int:
+    try:
+        if args.plan_only:
+            report = build_centroid_plan(
+                kb_manifest_paths=args.kb_manifest,
+                chunk_snapshot_paths=args.chunk_snapshot,
+                index_output=args.index_output,
+                embedding_provider=args.embedding_provider,
+                embedding_model=args.embedding_model,
+                embedding_dimension=args.embedding_dimension,
+                batch_size=args.batch_size,
+                checkpoint_path=args.checkpoint,
+                resume=args.resume,
+            )
+            markdown = render_centroid_plan_markdown(report)
+        else:
+            report = build_centroid_index(
+                kb_manifest_paths=args.kb_manifest,
+                chunk_snapshot_paths=args.chunk_snapshot,
+                index_output=args.index_output,
+                embedding_provider=args.embedding_provider,
+                embedding_model=args.embedding_model,
+                embedding_dimension=args.embedding_dimension,
+                batch_size=args.batch_size,
+                checkpoint_path=args.checkpoint,
+                resume=args.resume,
+            )
+            markdown = render_centroid_build_markdown(report)
+    except (CentroidRoutingError, OSError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_centroid_build_report(report, args)
+        markdown = render_centroid_plan_markdown(report) if args.plan_only else render_centroid_build_markdown(report)
+        _write_json(args.redaction_report, redaction_report)
+    if args.report_json:
+        if args.plan_only:
+            write_centroid_plan(args.report_json, report)
+        else:
+            write_centroid_report(args.report_json, report)
+    _write_text(args.report_md, markdown)
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_query_planning_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    *source_payloads: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [*_collect_urls(report)]
+    for payload in source_payloads:
+        urls.extend(_collect_urls(payload))
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            getattr(args, "config", None),
+            getattr(args, "multi_query", None),
+            getattr(args, "session", None),
+            getattr(args, "report_json", None),
+            getattr(args, "report_md", None),
+            getattr(args, "redaction_report", None),
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _rewrite(args: argparse.Namespace) -> int:
+    try:
+        config = _load_runtime(args) if args.rewrite == "hyde" else None
+        multi_queries = load_multi_query_file(args.multi_query) if args.multi_query else []
+        report = build_query_rewrite_plan(
+            args.question,
+            mode=args.rewrite,
+            multi_queries=multi_queries,
+            llm_configured=_llm_configured(config) if config is not None else False,
+        )
+    except (ConfigError, QueryRewriteError, OSError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_planning_report(report, args, multi_queries)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_rewrite_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _parse_strategy_result_paths(values: list[str] | None) -> dict[str, str]:
+    results: dict[str, str] = {}
+    for value in values or []:
+        if "=" not in value:
+            raise ValueError("--strategy-result must use label=path")
+        label, path = value.split("=", 1)
+        label = label.strip()
+        path = path.strip()
+        if not label or not path:
+            raise ValueError("--strategy-result must use non-empty label=path")
+        results[label] = path
+    return results
+
+
+def _sanitize_table_query_strategy_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    strategy_result_paths: dict[str, str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [*_collect_urls(report)]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            getattr(args, "fixture", None),
+            getattr(args, "retrieval_hints", None),
+            *strategy_result_paths.values(),
+            getattr(args, "report_json", None),
+            getattr(args, "report_md", None),
+            getattr(args, "redaction_report", None),
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _table_strategy(args: argparse.Namespace) -> int:
+    try:
+        strategy_result_paths = _parse_strategy_result_paths(args.strategy_result)
+        report = build_table_query_strategy_report(
+            fixture_path=args.fixture,
+            retrieval_hints_path=args.retrieval_hints,
+            strategy_result_paths=strategy_result_paths,
+            evaluation_target=args.evaluation_target,
+            top_k=args.top_k,
+            rrf_k=args.rrf_k,
+            max_tables_per_case=args.max_tables_per_case,
+        )
+    except (TableQueryStrategyError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_table_query_strategy_report(report, args, strategy_result_paths)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_table_query_strategy_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_validation_suggestions_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [*_collect_urls(report)]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.retrieval_hints,
+            args.report_json,
+            args.report_md,
+            args.queries_json,
+            args.qrels_json,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _validation_suggestions(args: argparse.Namespace) -> int:
+    try:
+        retrieval_hints = load_retrieval_hints(args.retrieval_hints)
+        report = build_validation_query_suggestions(
+            retrieval_hints,
+            max_tables=args.max_tables,
+            max_images=args.max_images,
+        )
+    except (OSError, ValueError, json.JSONDecodeError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_validation_suggestions_report(report, args)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_validation_query_suggestions_markdown(report))
+    _write_json(args.queries_json, report.get("queries_artifact", {}))
+    _write_json(args.qrels_json, report.get("qrels_artifact", {}))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _intent_classify(args: argparse.Namespace) -> int:
+    try:
+        report = classify_query_intent(
+            args.question,
+            low_confidence_threshold=args.low_confidence_threshold,
+        )
+    except QueryIntentError as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_planning_report(report, args)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_intent_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _intent_route(args: argparse.Namespace) -> int:
+    try:
+        report = route_query_intent(
+            args.question,
+            retrieval_mode=args.retrieval_mode,
+            low_confidence_threshold=args.low_confidence_threshold,
+        )
+    except QueryIntentError as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_planning_report(report, args)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_route_decision_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _session_inspect(args: argparse.Namespace) -> int:
+    try:
+        session = load_query_session(args.session)
+        report = build_query_session_inspection(
+            session,
+            max_turns=args.max_turns,
+            max_tokens=args.max_tokens,
+        )
+    except (QuerySessionError, OSError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_planning_report(report, args, session)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_session_inspection_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _session_enrich(args: argparse.Namespace) -> int:
+    try:
+        session = load_query_session(args.session)
+        report = enrich_query_with_session(
+            args.question,
+            session,
+            max_turns=args.max_turns,
+            max_tokens=args.max_tokens,
+        )
+    except (QuerySessionError, OSError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_planning_report(report, args, session)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_session_enrichment_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _agentic_plan(args: argparse.Namespace) -> int:
+    try:
+        report = build_agentic_plan(
+            args.question,
+            retrieval_mode=args.retrieval_mode,
+            rewrite_mode=args.rewrite,
+            max_subqueries=args.max_subqueries,
+            reflection_budget=args.reflection_budget,
+            require_citations=args.require_citations,
+        )
+    except AgenticPlanError as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_planning_report(report, args)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_agentic_plan_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_agentic_answer_request(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _agentic_answer_request(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        report = create_agentic_answer_request(
+            query_payload,
+            model_label=args.model_label,
+            provider_label=args.provider_label,
+            include_evidence_previews=args.include_evidence_previews,
+            max_evidence_chars=args.max_evidence_chars,
+            require_citations=args.require_citations,
+            allow_abstain=args.allow_abstain,
+        )
+    except (AgenticPlanError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_agentic_answer_request(report, args, query_payload)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_agentic_answer_request_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _answer_from_candidate_path(path: str) -> tuple[dict[str, Any], str]:
+    raw = _read_json(path)
+    if not isinstance(raw, dict):
+        raise ValueError("candidate answer must be a JSON object")
+    answer = raw.get("answer")
+    if isinstance(answer, str):
+        return raw, answer
+    if isinstance(answer, dict):
+        for key in ("text", "content", "message"):
+            value = answer.get(key)
+            if isinstance(value, str) and value.strip():
+                return raw, value
+    for key in ("text", "content", "message", "response", "output"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            return raw, value
+    raise ValueError("candidate answer must include answer text")
+
+
+def _sanitize_agentic_answer_review(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+    request_payload: dict[str, Any] | None,
+    candidate_payload: dict[str, Any] | None,
+    answer: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(request_payload or {}),
+        *_collect_urls(candidate_payload or {}),
+        *_collect_urls(answer),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.request,
+            args.candidate,
+            args.answer_file,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _agentic_answer_review(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        request_payload = _read_json(args.request) if args.request else None
+        if request_payload is not None and not isinstance(request_payload, dict):
+            raise ValueError("request must be a JSON object")
+        candidate_payload = None
+        if args.candidate:
+            candidate_payload, answer = _answer_from_candidate_path(args.candidate)
+        else:
+            answer = args.answer
+            if args.answer_file:
+                answer = Path(args.answer_file).read_text(encoding="utf-8")
+            if not answer or not answer.strip():
+                raise ValueError("answer text is required")
+        report = review_agentic_answer(
+            query_payload,
+            answer or "",
+            candidate=candidate_payload,
+            request=request_payload,
+            expected_terms=args.expected_term,
+            require_citation=args.require_citation,
+            allow_abstain=args.allow_abstain,
+            min_cited_evidence_score=args.min_cited_evidence_score,
+            require_advisory=args.require_advisory,
+            require_generated=args.require_generated,
+        )
+    except (AgenticPlanError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_agentic_answer_review(
+            report,
+            args,
+            query_payload,
+            request_payload,
+            candidate_payload,
+            answer or "",
+        )
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_agentic_answer_review_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_answer_evaluator_request(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+    answer: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(answer),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.answer_file,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _answer_evaluator_request(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        answer = args.answer
+        if args.answer_file:
+            answer = Path(args.answer_file).read_text(encoding="utf-8")
+        if not answer or not answer.strip():
+            raise ValueError("answer text is required")
+        report = create_answer_evaluator_request(
+            query_payload,
+            answer,
+            model_label=args.model_label,
+            provider_label=args.provider_label,
+            expected_terms=args.expected_term,
+            require_citation=args.require_citation,
+            allow_abstain=args.allow_abstain,
+            min_cited_evidence_score=args.min_cited_evidence_score,
+            include_answer_text=args.include_answer_text,
+            max_answer_chars=args.max_answer_chars,
+            include_evidence_previews=args.include_evidence_previews,
+            max_evidence_chars=args.max_evidence_chars,
+        )
+    except (AgenticPlanError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_answer_evaluator_request(report, args, query_payload, answer or "")
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_answer_evaluator_request_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_answer_evaluator_review(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any] | None,
+    request_payload: dict[str, Any],
+    candidate_payload: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload or {}),
+        *_collect_urls(request_payload),
+        *_collect_urls(candidate_payload),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.request,
+            args.candidate,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _answer_evaluator_review(args: argparse.Namespace) -> int:
+    try:
+        request_payload = _read_json(args.request)
+        if not isinstance(request_payload, dict):
+            raise ValueError("request must be a JSON object")
+        candidate_payload = _read_json(args.candidate)
+        if not isinstance(candidate_payload, dict):
+            raise ValueError("candidate must be a JSON object")
+        query_payload = None
+        if args.query_output:
+            query_payload = _read_json(args.query_output)
+            if not isinstance(query_payload, dict):
+                raise ValueError("query output must be a JSON object")
+        report = review_answer_evaluator_output(
+            request_payload,
+            candidate_payload,
+            query_payload=query_payload,
+            require_advisory=args.require_advisory,
+            require_generated=args.require_generated,
+        )
+    except (AgenticPlanError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_answer_evaluator_review(
+            report,
+            args,
+            query_payload,
+            request_payload,
+            candidate_payload,
+        )
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_answer_evaluator_review_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _audit_citations(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        answer = args.answer
+        if args.answer_file:
+            answer = Path(args.answer_file).read_text(encoding="utf-8")
+        if not answer or not answer.strip():
+            raise ValueError("answer text is required")
+        evidence = evidence_from_query_payload(query_payload)
+        report = audit_citations(answer, evidence)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_citation_audit_report(report, args, query_payload, answer or "")
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_citation_audit_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_citation_audit_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+    answer: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(answer),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.answer_file,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _sanitize_answer_evaluation_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+    answer: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(report),
+        *_collect_urls(answer),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.answer_file,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _sanitize_query_diagnostic_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+    trace: dict[str, Any] | None,
+    citation_audit: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(trace or {}),
+        *_collect_urls(citation_audit or {}),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.trace_json,
+            args.citation_audit,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _evaluate_answer(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        answer = args.answer
+        if args.answer_file:
+            answer = Path(args.answer_file).read_text(encoding="utf-8")
+        report = evaluate_answer(
+            query_payload,
+            answer or "",
+            expected_terms=args.expected_term,
+            require_citation=args.require_citation,
+            allow_abstain=args.allow_abstain,
+            min_cited_evidence_score=args.min_cited_evidence_score,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_answer_evaluation_report(report, args, query_payload, answer or "")
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_answer_evaluation_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _diagnose_result(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        trace = _read_json(args.trace_json) if args.trace_json else None
+        if trace is not None and not isinstance(trace, dict):
+            raise ValueError("trace JSON must be an object")
+        citation_audit = _read_json(args.citation_audit) if args.citation_audit else None
+        if citation_audit is not None and not isinstance(citation_audit, dict):
+            raise ValueError("citation audit JSON must be an object")
+        report = diagnose_query_result(
+            query_payload,
+            trace=trace,
+            citation_audit=citation_audit,
+            expected_terms=args.expected_term,
+            expected_modalities=args.expected_modality,
+            expected_documents=args.expected_document,
+            expected_dataset_ids=args.expected_dataset_id,
+            expected_tags=args.expected_tag,
+            allowed_tags=args.allowed_tag,
+            min_similarity=args.min_similarity,
+            min_evidence_score=args.min_evidence_score,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_diagnostic_report(
+            report,
+            args,
+            query_payload,
+            trace if isinstance(trace, dict) else None,
+            citation_audit if isinstance(citation_audit, dict) else None,
+        )
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_diagnostic_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_query_pollution_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+    trace: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(trace or {}),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.trace_json,
+            args.expanded_terms_json,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _pollution_report(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        trace = _read_json(args.trace_json) if args.trace_json else None
+        if trace is not None and not isinstance(trace, dict):
+            raise ValueError("trace JSON must be an object")
+        expanded_terms: list[str] = []
+        for term in args.expanded_term:
+            expanded_terms.append(term)
+        if args.expanded_terms_json:
+            expanded_terms.extend(load_pollution_terms(args.expanded_terms_json))
+        report = query_pollution_report(
+            query_payload,
+            trace=trace,
+            expanded_terms=expanded_terms,
+            max_examples=args.max_examples,
+            low_query_coverage_threshold=args.low_query_coverage_threshold,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_pollution_report(
+            report,
+            args,
+            query_payload,
+            trace if isinstance(trace, dict) else None,
+        )
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_pollution_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_query_rerank_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+    rerank_payload: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(rerank_payload),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.rerank_json,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _rerank_ab(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        rerank_payload = _read_json(args.rerank_json) if args.rerank_json else None
+        report = query_rerank_ab_report(
+            query_payload,
+            rerank_payload=rerank_payload,
+            expected_terms=args.expected_term,
+            expected_chunks=args.expected_chunk,
+            top_k=args.top_k,
+            max_examples=args.max_examples,
+            min_top_k_overlap=args.min_top_k_overlap,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_rerank_report(report, args, query_payload, rerank_payload)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_rerank_ab_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_query_cross_language_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    baseline_payloads: list[dict[str, Any]],
+    candidate_payloads: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(baseline_payloads),
+        *_collect_urls(candidate_payloads),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            *args.baseline_output,
+            *args.candidate_output,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _cross_language_ab(args: argparse.Namespace) -> int:
+    try:
+        baseline_payloads = _read_query_outputs(args.baseline_output, label="baseline")
+        candidate_payloads = _read_query_outputs(args.candidate_output, label="candidate")
+        report = query_cross_language_ab_report(
+            baseline_payloads,
+            candidate_payloads,
+            baseline_label=args.baseline_label,
+            candidate_label=args.candidate_label,
+            min_top1_stability=args.min_top1_stability,
+            max_examples=args.max_examples,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_cross_language_report(
+            report,
+            args,
+            baseline_payloads,
+            candidate_payloads,
+        )
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_cross_language_ab_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_query_fusion_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    payloads: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(payloads),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            *args.query_output,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _fusion(args: argparse.Namespace) -> int:
+    try:
+        payloads = []
+        for path in args.query_output:
+            payload = _read_json(path)
+            if not isinstance(payload, dict):
+                raise ValueError(f"query output must be a JSON object: {path}")
+            payloads.append(payload)
+        report = query_fusion_report(
+            payloads,
+            top_k=args.top_k,
+            rrf_k=args.rrf_k,
+            max_per_source=args.max_per_source,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_fusion_report(report, args, payloads)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_fusion_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_query_fusion_test_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    cases: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    query_output_paths: list[str] = []
+    for case in cases:
+        outputs = case.get("query_outputs") if isinstance(case, dict) else None
+        if isinstance(outputs, list):
+            query_output_paths.extend(str(output) for output in outputs if isinstance(output, str))
+    urls = [
+        *_collect_urls(cases),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.cases,
+            *query_output_paths,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _fusion_test(args: argparse.Namespace) -> int:
+    try:
+        cases = load_fusion_test_cases(args.cases)
+        report = run_fusion_tests(
+            cases,
+            top_k=args.top_k,
+            rrf_k=args.rrf_k,
+            max_per_source=args.max_per_source,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_fusion_test_report(report, args, cases)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_fusion_test_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_query_cache_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    query_payload: dict[str, Any],
+    baseline_report: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(query_payload),
+        *_collect_urls(baseline_report),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.query_output,
+            args.baseline_report,
+            args.cache_dir,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _cache_report(args: argparse.Namespace) -> int:
+    try:
+        query_payload = _read_json(args.query_output)
+        if not isinstance(query_payload, dict):
+            raise ValueError("query output must be a JSON object")
+        baseline_report = _read_json(args.baseline_report) if args.baseline_report else None
+        if baseline_report is not None and not isinstance(baseline_report, dict):
+            raise ValueError("baseline report must be a JSON object")
+        if (args.cache_write or args.cache_invalidate) and not args.cache_dir:
+            raise ValueError("--cache-dir is required when --cache-write or --cache-invalidate is enabled")
+        report = build_query_output_cache_report(
+            query_payload,
+            baseline_report=baseline_report,
+            config_version=args.config_version,
+            route_config_version=args.route_config_version,
+            cache_dir=args.cache_dir,
+            cache_ttl_seconds=args.cache_ttl_seconds,
+            cache_namespace=args.cache_namespace,
+            cache_write=args.cache_write,
+            cache_invalidate=args.cache_invalidate,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_cache_report(report, args, query_payload, baseline_report)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_output_cache_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _fallback_test(args: argparse.Namespace) -> int:
+    try:
+        cases = load_query_fallback_test_cases(args.cases)
+        report = run_query_fallback_tests(cases)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _error(str(exc), json_output=args.json)
+    if args.redaction_report:
+        report, redaction_report = _sanitize_query_fallback_test_report(report, args, cases)
+        _write_json(args.redaction_report, redaction_report)
+    _write_json(args.report_json, report)
+    _write_text(args.report_md, render_query_fallback_test_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
+def _sanitize_query_fallback_test_report(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    cases: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        *_collect_urls(cases),
+        *_collect_urls(report),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[
+            args.cases,
+            args.report_json,
+            args.report_md,
+            args.redaction_report,
+        ],
+    )
+    return sanitized, redaction_report
+
+
+def _parse_endpoint_args(values: list[str]) -> list[dict[str, Any]]:
+    endpoints: list[dict[str, Any]] = []
+    for index, raw in enumerate(values or [], start=1):
+        value = str(raw).strip()
+        if not value:
+            continue
+        label = f"custom_{index}"
+        url = value
+        if "=" in value and not value.lower().startswith(("http://", "https://")):
+            candidate_label, candidate_url = value.split("=", 1)
+            if candidate_url.strip():
+                label = candidate_label.strip() or label
+                url = candidate_url.strip()
+        endpoints.append({"label": label, "kind": "custom", "url": url})
+    return endpoints
+
+
+def _sanitize_endpoint_report(report: dict[str, Any], args: argparse.Namespace, runtime: Any, endpoints: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+    urls = [
+        runtime.base_url,
+        runtime.llm_base_url,
+        *(endpoint.get("url") for endpoint in endpoints if isinstance(endpoint.get("url"), str)),
+    ]
+    sanitized, redaction_report = sanitize_report_payload(
+        report,
+        explicit_secrets=[runtime.api_key, runtime.llm_api_key],
+        private_hosts=configured_private_hosts_from_urls(urls),
+        config_paths=[getattr(args, "config", None)],
+    )
+    return sanitized, redaction_report
+
+
+def _endpoint_report(args: argparse.Namespace) -> int:
+    try:
+        runtime = _load_runtime(args)
+        timeout = args.timeout if args.timeout is not None else runtime.timeout or 5.0
+        endpoints = _parse_endpoint_args(args.endpoint)
+        report = build_query_endpoint_report(
+            ragflow_base_url=runtime.base_url,
+            ragflow_api_key=runtime.api_key,
+            llm_base_url=runtime.llm_base_url,
+            llm_api_key=runtime.llm_api_key,
+            extra_endpoints=endpoints,
+            network_check=args.network_check,
+            timeout=timeout,
+            verify_ssl=True if runtime.verify_ssl is None else bool(runtime.verify_ssl),
+            retry_budget=args.retry_budget if args.retry_budget is not None else 1,
+            retry_backoff_seconds=args.retry_backoff_seconds,
+            cache_dir=args.cache_dir,
+            cache_ttl_seconds=args.cache_ttl_seconds,
+            rate_limit_per_second=args.rate_limit_per_second,
+            rate_limit_burst=args.rate_limit_burst,
+            circuit_breaker_failure_threshold=args.circuit_breaker_threshold,
+            circuit_breaker_recovery_seconds=args.circuit_breaker_recovery_seconds,
+        )
+        report, redaction_report = _sanitize_endpoint_report(report, args, runtime, endpoints)
+    except (ConfigError, ValueError) as exc:
+        return _error(str(exc), json_output=args.json)
+    _write_json(args.report_json, report)
+    _write_json(args.redaction_report, redaction_report)
+    _write_text(args.report_md, render_query_endpoint_report_markdown(report))
+    if args.json or not args.report_json:
+        _json_dump(report)
+    return 0 if report["ok"] else 1
+
+
 def _add_runtime_options(parser: argparse.ArgumentParser, *, suppress_defaults: bool = False) -> None:
     default = argparse.SUPPRESS if suppress_defaults else None
     parser.add_argument("--config", default=default, help="Path to JSON or simple YAML config")
@@ -122,23 +2391,608 @@ def _add_runtime_options(parser: argparse.ArgumentParser, *, suppress_defaults: 
     parser.add_argument("--api-key", default=default, help="RAGFlow API key; overrides RAGFLOW_API_KEY")
 
 
+def _add_routing_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--routing-config", help="Routing config path; defaults to RAGFLOW_ROUTING_CONFIG")
+
+
+def _add_centroid_tie_breaker_options(parser: argparse.ArgumentParser, *, include_query_vector: bool) -> None:
+    parser.add_argument(
+        "--centroid-index",
+        help="Optional centroid index path for tie-breaking equal positive hint scores",
+    )
+    if include_query_vector:
+        parser.add_argument(
+            "--query-vector-json",
+            help="JSON vector or object containing a vector field for centroid tie-breaking",
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Portable RAGFlow query CLI")
     _add_runtime_options(parser)
 
     sub = parser.add_subparsers(dest="command", required=True)
+    list_kbs = sub.add_parser("list-kbs", help="List KBs in a routing config")
+    _add_routing_option(list_kbs)
+    list_kbs.set_defaults(func=_list_kbs)
+
+    route = sub.add_parser("route", help="Route a question to a configured KB")
+    _add_routing_option(route)
+    _add_centroid_tie_breaker_options(route, include_query_vector=True)
+    route.add_argument("question")
+    route.add_argument("--json", action="store_true")
+    route.set_defaults(func=_route)
+
+    route_test = sub.add_parser("route-test", help="Run route regression checks")
+    _add_routing_option(route_test)
+    _add_centroid_tie_breaker_options(route_test, include_query_vector=False)
+    route_test.add_argument("--queries", required=True, help="Route-test queries JSON")
+    route_test.add_argument("--report-json", help="Optional JSON report output path")
+    route_test.add_argument("--report-md", help="Optional Markdown report output path")
+    route_test.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    route_test.set_defaults(func=_route_test)
+
+    route_report = sub.add_parser("route-report", help="Summarize route quality coverage")
+    _add_routing_option(route_report)
+    _add_centroid_tie_breaker_options(route_report, include_query_vector=False)
+    route_report.add_argument("--queries", help="Optional route-test queries JSON")
+    route_report.add_argument("--report-json", help="Optional JSON report output path")
+    route_report.add_argument("--report-md", help="Optional Markdown report output path")
+    route_report.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    route_report.set_defaults(func=_route_report)
+
+    route_diagnose = sub.add_parser("route-diagnose", help="Classify route-test failures")
+    _add_routing_option(route_diagnose)
+    _add_centroid_tie_breaker_options(route_diagnose, include_query_vector=False)
+    route_diagnose.add_argument("--queries", required=True, help="Route-test queries JSON")
+    route_diagnose.add_argument("--report-json", help="Optional JSON report output path")
+    route_diagnose.add_argument("--report-md", help="Optional Markdown report output path")
+    route_diagnose.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    route_diagnose.set_defaults(func=_route_diagnose)
+
+    route_activation_check = sub.add_parser(
+        "route-activation-check",
+        help="Check activation-plan route readiness without mutation",
+    )
+    _add_routing_option(route_activation_check)
+    _add_centroid_tie_breaker_options(route_activation_check, include_query_vector=False)
+    route_activation_check.add_argument("--activation-plan", required=True, help="kb_activation_plan_v1 JSON")
+    route_activation_check.add_argument("--queries", help="Optional route-test queries JSON")
+    route_activation_check.add_argument("--route-test-report", help="Optional saved route-test report JSON")
+    route_activation_check.add_argument("--validation-report", help="Optional saved smoke/regression/benchmark validation report JSON")
+    route_activation_check.add_argument("--min-hit-rate", type=float, help="Minimum benchmark hit_rate for route activation")
+    route_activation_check.add_argument("--max-empty-result-rate", type=float, help="Maximum benchmark empty_result_rate for route activation")
+    route_activation_check.add_argument(
+        "--min-validation-query-count",
+        type=int,
+        default=1,
+        help="Minimum smoke or benchmark query count when --validation-report is supplied",
+    )
+    route_activation_check.add_argument("--report-json", help="Optional JSON report output path")
+    route_activation_check.add_argument("--report-md", help="Optional Markdown report output path")
+    route_activation_check.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    route_activation_check.set_defaults(func=_route_activation_check)
+
+    assistant_profile = sub.add_parser(
+        "assistant-profile",
+        help="Review assistant profile sidecars offline",
+    )
+    assistant_profile_sub = assistant_profile.add_subparsers(dest="assistant_profile_command", required=True)
+    assistant_profile_recommend = assistant_profile_sub.add_parser(
+        "recommend",
+        help="Recommend reviewable assistant retrieval settings",
+    )
+    assistant_profile_recommend.add_argument("--assistant-profile", required=True, help="assistant_profile.json")
+    assistant_profile_recommend.add_argument("--retrieval-hints", help="Optional retrieval_hints.json")
+    assistant_profile_recommend.add_argument("--kb-manifest", help="Optional kb_manifest.json build evidence")
+    assistant_profile_recommend.add_argument("--parse-report", help="Optional parse_report.json build evidence")
+    assistant_profile_recommend.add_argument("--activation-plan", help="Optional kb_activation_plan.json build evidence")
+    assistant_profile_recommend.add_argument("--report-json", help="Optional JSON report output path")
+    assistant_profile_recommend.add_argument("--report-md", help="Optional Markdown report output path")
+    assistant_profile_recommend.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    assistant_profile_recommend.set_defaults(func=_assistant_profile_recommend)
+
+    assistant_test_plan = sub.add_parser(
+        "assistant-test-plan",
+        help="Review assistant test plan sidecars offline",
+    )
+    assistant_test_plan.add_argument("--test-plan", required=True, help="assistant_test_plan.json")
+    assistant_test_plan.add_argument("--assistant-profile", help="Optional assistant_profile.json")
+    assistant_test_plan.add_argument("--retrieval-hints", help="Optional retrieval_hints.json")
+    assistant_test_plan.add_argument("--kb-manifest", help="Optional kb_manifest.json build evidence")
+    assistant_test_plan.add_argument("--parse-report", help="Optional parse_report.json build evidence")
+    assistant_test_plan.add_argument("--activation-plan", help="Optional kb_activation_plan.json build evidence")
+    assistant_test_plan.add_argument("--report-json", help="Optional JSON report output path")
+    assistant_test_plan.add_argument("--report-md", help="Optional Markdown report output path")
+    assistant_test_plan.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    assistant_test_plan.set_defaults(func=_assistant_test_plan)
+
+    rewrite = sub.add_parser(
+        "rewrite",
+        help="Plan deterministic query rewrite variants",
+        description="Plan deterministic query rewrite variants",
+    )
+    _add_runtime_options(rewrite, suppress_defaults=True)
+    rewrite.add_argument("question", help="Original query")
+    rewrite.add_argument("--rewrite", choices=["none", "simple", "translate", "hyde"], default="simple")
+    rewrite.add_argument("--multi-query", help="Optional JSON list of host-owned query variants")
+    rewrite.add_argument("--report-json", help="Optional JSON report output path")
+    rewrite.add_argument("--report-md", help="Optional Markdown report output path")
+    rewrite.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    rewrite.add_argument("--json", action="store_true", help="Emit JSON report")
+    rewrite.set_defaults(func=_rewrite)
+
+    table_strategy = sub.add_parser(
+        "table-strategy",
+        help="Plan no-LLM table query expansion and cross-table retrieval strategies",
+        description="Plan no-LLM table query expansion and cross-table retrieval strategies",
+    )
+    table_strategy.add_argument("--fixture", required=True, help="apollo_table_qa_fixture_v1 JSON")
+    table_strategy.add_argument("--retrieval-hints", required=True, help="retrieval_hints.json")
+    table_strategy.add_argument(
+        "--strategy-result",
+        action="append",
+        help="Optional saved result as label=path for offline strategy comparison; repeatable",
+    )
+    table_strategy.add_argument("--evaluation-target", choices=["auto", "answer", "retrieval", "both"], default="retrieval")
+    table_strategy.add_argument("--top-k", type=int, default=8)
+    table_strategy.add_argument("--rrf-k", type=int, default=60)
+    table_strategy.add_argument("--max-tables-per-case", type=int, default=2)
+    table_strategy.add_argument("--report-json", help="Optional JSON report output path")
+    table_strategy.add_argument("--report-md", help="Optional Markdown report output path")
+    table_strategy.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    table_strategy.add_argument("--json", action="store_true", help="Emit JSON report")
+    table_strategy.set_defaults(func=_table_strategy)
+
+    validation_suggestions = sub.add_parser(
+        "validation-suggestions",
+        help="Generate no-LLM benchmark query and qrels suggestions from retrieval hints",
+    )
+    validation_suggestions.add_argument("--retrieval-hints", required=True, help="retrieval_hints.json")
+    validation_suggestions.add_argument("--max-tables", type=int, default=3)
+    validation_suggestions.add_argument("--max-images", type=int, default=3)
+    validation_suggestions.add_argument("--queries-json", help="Optional benchmark queries JSON output path")
+    validation_suggestions.add_argument("--qrels-json", help="Optional benchmark qrels JSON output path")
+    validation_suggestions.add_argument("--report-json", help="Optional JSON report output path")
+    validation_suggestions.add_argument("--report-md", help="Optional Markdown report output path")
+    validation_suggestions.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    validation_suggestions.add_argument("--json", action="store_true", help="Emit JSON report")
+    validation_suggestions.set_defaults(func=_validation_suggestions)
+
+    intent = sub.add_parser("intent", help="Classify and route query intent")
+    intent_sub = intent.add_subparsers(dest="intent_command", required=True)
+    intent_classify = intent_sub.add_parser("classify", help="Classify query intent offline")
+    intent_classify.add_argument("question", help="Question to classify")
+    intent_classify.add_argument("--low-confidence-threshold", type=float, default=0.7)
+    intent_classify.add_argument("--report-json", help="Optional JSON report output path")
+    intent_classify.add_argument("--report-md", help="Optional Markdown report output path")
+    intent_classify.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    intent_classify.add_argument("--json", action="store_true", help="Emit JSON report")
+    intent_classify.set_defaults(func=_intent_classify)
+    intent_route = intent_sub.add_parser("route", help="Create a deterministic intent route decision")
+    intent_route.add_argument("question", help="Question to route")
+    intent_route.add_argument("--retrieval-mode", choices=["auto", "direct"], default="auto")
+    intent_route.add_argument("--low-confidence-threshold", type=float, default=0.7)
+    intent_route.add_argument("--report-json", help="Optional JSON report output path")
+    intent_route.add_argument("--report-md", help="Optional Markdown report output path")
+    intent_route.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    intent_route.add_argument("--json", action="store_true", help="Emit JSON report")
+    intent_route.set_defaults(func=_intent_route)
+
+    session = sub.add_parser("session", help="Inspect and enrich bounded query session context")
+    session_sub = session.add_subparsers(dest="session_command", required=True)
+    session_inspect = session_sub.add_parser("inspect", help="Inspect bounded session context offline")
+    session_inspect.add_argument("--session", required=True, help="ragflow_query_session_v1 JSON or turns list")
+    session_inspect.add_argument("--max-turns", type=int, default=8)
+    session_inspect.add_argument("--max-tokens", type=int, default=400)
+    session_inspect.add_argument("--report-json", help="Optional JSON report output path")
+    session_inspect.add_argument("--report-md", help="Optional Markdown report output path")
+    session_inspect.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    session_inspect.add_argument("--json", action="store_true", help="Emit JSON report")
+    session_inspect.set_defaults(func=_session_inspect)
+    session_enrich = session_sub.add_parser("enrich", help="Enrich a follow-up query with bounded context")
+    session_enrich.add_argument("question", help="Question to enrich")
+    session_enrich.add_argument("--session", required=True, help="ragflow_query_session_v1 JSON or turns list")
+    session_enrich.add_argument("--max-turns", type=int, default=8)
+    session_enrich.add_argument("--max-tokens", type=int, default=400)
+    session_enrich.add_argument("--report-json", help="Optional JSON report output path")
+    session_enrich.add_argument("--report-md", help="Optional Markdown report output path")
+    session_enrich.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    session_enrich.add_argument("--json", action="store_true", help="Emit JSON report")
+    session_enrich.set_defaults(func=_session_enrich)
+
+    agentic_plan = sub.add_parser(
+        "agentic-plan",
+        help="Plan deterministic agentic query orchestration",
+        description="Plan deterministic agentic query orchestration",
+    )
+    agentic_plan.add_argument("question", help="Question to plan")
+    agentic_plan.add_argument("--retrieval-mode", choices=["auto", "direct"], default="auto")
+    agentic_plan.add_argument("--rewrite", choices=["none", "simple", "translate"], default="simple")
+    agentic_plan.add_argument("--max-subqueries", type=int, default=4)
+    agentic_plan.add_argument("--reflection-budget", type=int, default=0)
+    agentic_plan.add_argument("--no-require-citations", dest="require_citations", action="store_false")
+    agentic_plan.add_argument("--report-json", help="Optional JSON report output path")
+    agentic_plan.add_argument("--report-md", help="Optional Markdown report output path")
+    agentic_plan.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    agentic_plan.add_argument("--json", action="store_true", help="Emit JSON report")
+    agentic_plan.set_defaults(func=_agentic_plan, require_citations=True)
+
+    agentic_answer = sub.add_parser("agentic-answer", help="Request or review external agentic answers")
+    agentic_answer_sub = agentic_answer.add_subparsers(dest="agentic_answer_command", required=True)
+    agentic_answer_request = agentic_answer_sub.add_parser(
+        "request",
+        help="Create a no-LLM agentic answer request artifact",
+        description="Create a no-LLM agentic answer request artifact",
+    )
+    agentic_answer_request.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    agentic_answer_request.add_argument("--provider-label", help="Optional external provider label")
+    agentic_answer_request.add_argument("--model-label", help="Optional external model label")
+    agentic_answer_request.add_argument("--max-evidence-chars", type=int, default=1200)
+    agentic_answer_request.add_argument(
+        "--no-evidence-previews",
+        dest="include_evidence_previews",
+        action="store_false",
+        help="Do not include bounded evidence previews in the request",
+    )
+    agentic_answer_request.add_argument("--no-require-citations", dest="require_citations", action="store_false")
+    agentic_answer_request.add_argument("--no-allow-abstain", dest="allow_abstain", action="store_false")
+    agentic_answer_request.add_argument("--report-json", help="Optional JSON report output path")
+    agentic_answer_request.add_argument("--report-md", help="Optional Markdown report output path")
+    agentic_answer_request.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    agentic_answer_request.add_argument("--json", action="store_true", help="Emit JSON report")
+    agentic_answer_request.set_defaults(
+        func=_agentic_answer_request,
+        include_evidence_previews=True,
+        require_citations=True,
+        allow_abstain=True,
+    )
+
+    agentic_answer_review = agentic_answer_sub.add_parser(
+        "review",
+        help="Review an external agentic answer against retrieved evidence",
+        description="Review an external agentic answer against retrieved evidence",
+    )
+    agentic_answer_review.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    agentic_answer_review.add_argument("--request", help="Optional ragflow_agentic_answer_request_v1 JSON")
+    agentic_answer_review_group = agentic_answer_review.add_mutually_exclusive_group(required=True)
+    agentic_answer_review_group.add_argument("--candidate", help="External agentic answer candidate JSON")
+    agentic_answer_review_group.add_argument("--answer", help="External or host-generated answer text")
+    agentic_answer_review_group.add_argument("--answer-file", help="File containing external or host-generated answer text")
+    agentic_answer_review.add_argument("--expected-term", action="append", default=[], help="Expected term; repeatable")
+    agentic_answer_review.add_argument(
+        "--no-require-citation",
+        dest="require_citation",
+        action="store_false",
+        help="Do not fail when evidence exists but answer lacks citations",
+    )
+    agentic_answer_review.add_argument("--allow-abstain", action="store_true", help="Allow no-evidence abstention wording")
+    agentic_answer_review.add_argument("--min-cited-evidence-score", type=float)
+    agentic_answer_review.add_argument("--no-require-advisory", dest="require_advisory", action="store_false")
+    agentic_answer_review.add_argument("--no-require-generated", dest="require_generated", action="store_false")
+    agentic_answer_review.add_argument("--report-json", help="Optional JSON report output path")
+    agentic_answer_review.add_argument("--report-md", help="Optional Markdown report output path")
+    agentic_answer_review.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    agentic_answer_review.add_argument("--json", action="store_true", help="Emit JSON report")
+    agentic_answer_review.set_defaults(
+        func=_agentic_answer_review,
+        require_citation=True,
+        require_advisory=True,
+        require_generated=True,
+    )
+
+    evaluator = sub.add_parser("evaluator", help="Request or review external answer evaluator scores")
+    evaluator_sub = evaluator.add_subparsers(dest="evaluator_command", required=True)
+    evaluator_request = evaluator_sub.add_parser(
+        "request",
+        help="Create a no-LLM answer evaluator request artifact",
+        description="Create a no-LLM answer evaluator request artifact",
+    )
+    evaluator_request.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    evaluator_request_group = evaluator_request.add_mutually_exclusive_group(required=True)
+    evaluator_request_group.add_argument("--answer", help="Host-generated answer text")
+    evaluator_request_group.add_argument("--answer-file", help="File containing host-generated answer text")
+    evaluator_request.add_argument("--provider-label", help="Optional external provider label")
+    evaluator_request.add_argument("--model-label", help="Optional external model label")
+    evaluator_request.add_argument("--expected-term", action="append", default=[], help="Expected term; repeatable")
+    evaluator_request.add_argument("--require-citation", action="store_true", help="Fail when evidence exists but answer lacks citations")
+    evaluator_request.add_argument("--allow-abstain", action="store_true", help="Allow no-evidence abstention wording")
+    evaluator_request.add_argument("--min-cited-evidence-score", type=float)
+    evaluator_request.add_argument("--max-answer-chars", type=int, default=4000)
+    evaluator_request.add_argument("--max-evidence-chars", type=int, default=1200)
+    evaluator_request.add_argument(
+        "--no-answer-text",
+        dest="include_answer_text",
+        action="store_false",
+        help="Do not include bounded answer text in the request",
+    )
+    evaluator_request.add_argument(
+        "--no-evidence-previews",
+        dest="include_evidence_previews",
+        action="store_false",
+        help="Do not include bounded evidence previews in the request",
+    )
+    evaluator_request.add_argument("--report-json", help="Optional JSON report output path")
+    evaluator_request.add_argument("--report-md", help="Optional Markdown report output path")
+    evaluator_request.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    evaluator_request.add_argument("--json", action="store_true", help="Emit JSON report")
+    evaluator_request.set_defaults(
+        func=_answer_evaluator_request,
+        include_answer_text=True,
+        include_evidence_previews=True,
+    )
+
+    evaluator_review = evaluator_sub.add_parser(
+        "review",
+        help="Review external answer evaluator scores",
+        description="Review external answer evaluator scores",
+    )
+    evaluator_review.add_argument("--request", required=True, help="ragflow_answer_evaluator_request_v1 JSON")
+    evaluator_review.add_argument("--candidate", required=True, help="External answer evaluator candidate JSON")
+    evaluator_review.add_argument("--query-output", help="Optional JSON output from query.py ask for request hash verification")
+    evaluator_review.add_argument("--no-require-advisory", dest="require_advisory", action="store_false")
+    evaluator_review.add_argument("--no-require-generated", dest="require_generated", action="store_false")
+    evaluator_review.add_argument("--report-json", help="Optional JSON report output path")
+    evaluator_review.add_argument("--report-md", help="Optional Markdown report output path")
+    evaluator_review.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    evaluator_review.add_argument("--json", action="store_true", help="Emit JSON report")
+    evaluator_review.set_defaults(
+        func=_answer_evaluator_review,
+        require_advisory=True,
+        require_generated=True,
+    )
+
+    audit = sub.add_parser("audit-citations", help="Audit host-generated answer citations")
+    audit.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    answer_group = audit.add_mutually_exclusive_group(required=True)
+    answer_group.add_argument("--answer", help="Host-generated answer text")
+    answer_group.add_argument("--answer-file", help="File containing host-generated answer text")
+    audit.add_argument("--report-json", help="Optional JSON report output path")
+    audit.add_argument("--report-md", help="Optional Markdown report output path")
+    audit.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    audit.add_argument("--json", action="store_true", help="Emit JSON report")
+    audit.set_defaults(func=_audit_citations)
+
+    evaluate = sub.add_parser("evaluate-answer", help="Evaluate a host-generated answer offline")
+    evaluate.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    evaluate_answer_group = evaluate.add_mutually_exclusive_group(required=True)
+    evaluate_answer_group.add_argument("--answer", help="Host-generated answer text")
+    evaluate_answer_group.add_argument("--answer-file", help="File containing host-generated answer text")
+    evaluate.add_argument("--expected-term", action="append", default=[], help="Expected term; repeatable")
+    evaluate.add_argument("--require-citation", action="store_true", help="Fail when evidence exists but answer lacks citations")
+    evaluate.add_argument("--allow-abstain", action="store_true", help="Allow no-evidence abstention wording")
+    evaluate.add_argument("--min-cited-evidence-score", type=float, help="Warn when cited evidence scores are below this threshold")
+    evaluate.add_argument("--report-json", help="Optional JSON report output path")
+    evaluate.add_argument("--report-md", help="Optional Markdown report output path")
+    evaluate.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    evaluate.add_argument("--json", action="store_true", help="Emit JSON report")
+    evaluate.set_defaults(func=_evaluate_answer)
+
+    diagnose = sub.add_parser("diagnose-result", help="Diagnose a saved query result")
+    diagnose.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    diagnose.add_argument("--trace-json", help="Optional query trace JSON from --trace-json")
+    diagnose.add_argument("--citation-audit", help="Optional citation audit JSON")
+    diagnose.add_argument("--expected-term", action="append", default=[], help="Expected term; repeatable")
+    diagnose.add_argument("--expected-modality", action="append", default=[], help="Expected modality such as text, table, image, or mixed; repeatable")
+    diagnose.add_argument("--expected-document", action="append", default=[], help="Expected document name or ID; repeatable")
+    diagnose.add_argument("--expected-dataset-id", action="append", default=[], help="Expected routed dataset ID; repeatable")
+    diagnose.add_argument("--expected-tag", action="append", default=[], help="Expected tag scope; repeatable")
+    diagnose.add_argument("--allowed-tag", action="append", default=[], help="Allowed tag scope for pollution checks; repeatable")
+    diagnose.add_argument("--min-similarity", type=float, default=0.15)
+    diagnose.add_argument("--min-evidence-score", type=float, default=0.2)
+    diagnose.add_argument("--report-json", help="Optional JSON report output path")
+    diagnose.add_argument("--report-md", help="Optional Markdown report output path")
+    diagnose.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    diagnose.add_argument("--json", action="store_true", help="Emit JSON report")
+    diagnose.set_defaults(func=_diagnose_result)
+
+    pollution = sub.add_parser("pollution-report", help="Diagnose likely query expansion or BM25 pollution")
+    pollution.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    pollution.add_argument("--trace-json", help="Optional query trace JSON from --trace-json")
+    pollution.add_argument("--expanded-term", action="append", default=[], help="Expanded or translated term; repeatable")
+    pollution.add_argument("--expanded-terms-json", help="Optional JSON file containing expanded/translated terms")
+    pollution.add_argument("--low-query-coverage-threshold", type=float, default=0.25)
+    pollution.add_argument("--max-examples", type=int, default=5)
+    pollution.add_argument("--report-json", help="Optional JSON report output path")
+    pollution.add_argument("--report-md", help="Optional Markdown report output path")
+    pollution.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    pollution.add_argument("--json", action="store_true", help="Emit JSON report")
+    pollution.set_defaults(func=_pollution_report)
+
+    rerank = sub.add_parser("rerank-ab", help="Compare RAGFlow ordering with an offline rerank candidate")
+    rerank.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    rerank.add_argument("--rerank-json", help="Optional external rerank output JSON")
+    rerank.add_argument("--expected-term", action="append", default=[], help="Expected evidence term; repeatable")
+    rerank.add_argument("--expected-chunk", action="append", default=[], help="Expected chunk id or stable hash; repeatable")
+    rerank.add_argument("--top-k", type=int, default=5)
+    rerank.add_argument("--min-top-k-overlap", type=float, default=0.5)
+    rerank.add_argument("--max-examples", type=int, default=10)
+    rerank.add_argument("--report-json", help="Optional JSON report output path")
+    rerank.add_argument("--report-md", help="Optional Markdown report output path")
+    rerank.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    rerank.add_argument("--json", action="store_true", help="Emit JSON report")
+    rerank.set_defaults(func=_rerank_ab)
+
+    cross_language = sub.add_parser("cross-language-ab", help="Compare saved baseline and cross-language query outputs")
+    cross_language.add_argument("--baseline-output", action="append", required=True, help="Saved baseline query output JSON; repeatable")
+    cross_language.add_argument("--candidate-output", action="append", required=True, help="Saved candidate query output JSON; repeatable")
+    cross_language.add_argument("--baseline-label", default="baseline", help="Label for baseline outputs")
+    cross_language.add_argument("--candidate-label", default="candidate", help="Label for candidate outputs")
+    cross_language.add_argument("--min-top1-stability", type=float, default=0.8)
+    cross_language.add_argument("--max-examples", type=int, default=10)
+    cross_language.add_argument("--report-json", help="Optional JSON report output path")
+    cross_language.add_argument("--report-md", help="Optional Markdown report output path")
+    cross_language.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    cross_language.add_argument("--json", action="store_true", help="Emit JSON report")
+    cross_language.set_defaults(func=_cross_language_ab)
+
+    fusion = sub.add_parser("fusion", help="Fuse saved query outputs with reciprocal rank fusion")
+    fusion.add_argument("--query-output", action="append", required=True, help="JSON output from query.py ask; repeatable")
+    fusion.add_argument("--top-k", type=int, default=10)
+    fusion.add_argument("--rrf-k", type=int, default=60)
+    fusion.add_argument("--max-per-source", type=int)
+    fusion.add_argument("--report-json", help="Optional JSON report output path")
+    fusion.add_argument("--report-md", help="Optional Markdown report output path")
+    fusion.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    fusion.add_argument("--json", action="store_true", help="Emit JSON report")
+    fusion.set_defaults(func=_fusion)
+
+    fusion_test = sub.add_parser("fusion-test", help="Run offline fusion fixture checks")
+    fusion_test.add_argument("--cases", required=True, help="Fusion test cases JSON")
+    fusion_test.add_argument("--top-k", type=int, help="Default top_k for cases that omit it")
+    fusion_test.add_argument("--rrf-k", type=int, help="Default rrf_k for cases that omit it")
+    fusion_test.add_argument("--max-per-source", type=int, help="Default max_per_source for cases that omit it")
+    fusion_test.add_argument("--report-json", help="Optional JSON report output path")
+    fusion_test.add_argument("--report-md", help="Optional Markdown report output path")
+    fusion_test.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    fusion_test.add_argument("--json", action="store_true", help="Emit JSON report")
+    fusion_test.set_defaults(func=_fusion_test)
+
+    cache_report = sub.add_parser("cache-report", help="Report saved query-output cache keys and invalidation")
+    cache_report.add_argument("--query-output", required=True, help="JSON output from query.py ask")
+    cache_report.add_argument("--baseline-report", help="Previous cache-report JSON to compare for invalidation")
+    cache_report.add_argument("--config-version", help="Retrieval config version label included in cache identity")
+    cache_report.add_argument("--route-config-version", help="Route config version label included in cache identity")
+    cache_report.add_argument("--cache-dir", help="Optional local query-output cache metadata ledger directory")
+    cache_report.add_argument(
+        "--cache-ttl-seconds",
+        type=float,
+        help="Query-output cache ledger TTL in seconds when --cache-dir is set; defaults to 3600",
+    )
+    cache_report.add_argument(
+        "--cache-namespace",
+        default="query-output",
+        help="Query-output cache ledger namespace under --cache-dir; defaults to query-output",
+    )
+    cache_report.add_argument(
+        "--cache-write",
+        action="store_true",
+        help="Write/update the local metadata ledger entry; does not store raw query output",
+    )
+    cache_report.add_argument(
+        "--cache-invalidate",
+        action="store_true",
+        help="Delete an invalidated baseline metadata ledger entry when present",
+    )
+    cache_report.add_argument("--report-json", help="Optional JSON report output path")
+    cache_report.add_argument("--report-md", help="Optional Markdown report output path")
+    cache_report.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    cache_report.add_argument("--json", action="store_true", help="Emit JSON report")
+    cache_report.set_defaults(func=_cache_report)
+
+    fallback_test = sub.add_parser("fallback-test", help="Run offline fallback coverage fixtures")
+    fallback_test.add_argument("--cases", help="Optional fallback test cases JSON; defaults to built-in coverage")
+    fallback_test.add_argument("--report-json", help="Optional JSON report output path")
+    fallback_test.add_argument("--report-md", help="Optional Markdown report output path")
+    fallback_test.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    fallback_test.add_argument("--json", action="store_true", help="Emit JSON report")
+    fallback_test.set_defaults(func=_fallback_test)
+
+    endpoint_report = sub.add_parser("endpoint-report", help="Classify query endpoints and optional reachability")
+    _add_runtime_options(endpoint_report, suppress_defaults=True)
+    endpoint_report.add_argument(
+        "--endpoint",
+        action="append",
+        default=[],
+        help="Extra endpoint URL or label=url to classify; repeatable",
+    )
+    endpoint_report.add_argument(
+        "--network-check",
+        action="store_true",
+        help="Run redacted HEAD reachability checks; disabled by default",
+    )
+    endpoint_report.add_argument("--timeout", type=float, help="Reachability timeout in seconds")
+    endpoint_report.add_argument(
+        "--retry-budget",
+        type=int,
+        help="Total reachability attempts per endpoint when --network-check is enabled; defaults to 1",
+    )
+    endpoint_report.add_argument(
+        "--retry-backoff-seconds",
+        type=float,
+        default=0.0,
+        help="Initial retry backoff in seconds for --network-check; defaults to 0",
+    )
+    endpoint_report.add_argument(
+        "--cache-dir",
+        help="Optional directory for read-only endpoint reachability cache entries",
+    )
+    endpoint_report.add_argument(
+        "--cache-ttl-seconds",
+        type=float,
+        default=300.0,
+        help="Endpoint reachability cache TTL in seconds when --cache-dir is set; defaults to 300",
+    )
+    endpoint_report.add_argument(
+        "--rate-limit-per-second",
+        type=float,
+        help="Optional token-bucket rate limit for endpoint reachability attempts",
+    )
+    endpoint_report.add_argument(
+        "--rate-limit-burst",
+        type=int,
+        default=1,
+        help="Token-bucket burst size when --rate-limit-per-second is set; defaults to 1",
+    )
+    endpoint_report.add_argument(
+        "--circuit-breaker-threshold",
+        type=int,
+        help="Open the per-run circuit after this many retryable endpoint failures; disabled by default",
+    )
+    endpoint_report.add_argument(
+        "--circuit-breaker-recovery-seconds",
+        type=float,
+        help="Allow a half-open probe after this many seconds; disabled by default",
+    )
+    endpoint_report.add_argument("--report-json", help="Optional JSON report output path")
+    endpoint_report.add_argument("--report-md", help="Optional Markdown report output path")
+    endpoint_report.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    endpoint_report.add_argument("--json", action="store_true", help="Emit JSON report")
+    endpoint_report.set_defaults(func=_endpoint_report)
+
+    centroid = sub.add_parser("centroid", help="Plan or build optional centroid routing artifacts")
+    centroid_sub = centroid.add_subparsers(dest="centroid_command", required=True)
+    centroid_build = centroid_sub.add_parser("build", help="Plan or build centroid index construction")
+    centroid_build.add_argument("--plan-only", action="store_true", help="Only write a non-mutating build plan")
+    centroid_build.add_argument("--kb-manifest", action="append", default=[], help="User-owned kb_manifest.json; repeatable")
+    centroid_build.add_argument("--chunk-snapshot", action="append", default=[], help="User-owned ragflow_chunk_snapshot_v1 JSON; repeatable")
+    centroid_build.add_argument("--index-output", help="Centroid index output path")
+    centroid_build.add_argument("--embedding-provider", help="Embedding provider label")
+    centroid_build.add_argument("--embedding-model", help="Embedding model")
+    centroid_build.add_argument("--embedding-dimension", type=int, help="Embedding vector dimension")
+    centroid_build.add_argument("--batch-size", type=int, default=64, help="Maximum chunks to process in this run")
+    centroid_build.add_argument("--checkpoint", help="Checkpoint path for bounded build execution")
+    centroid_build.add_argument("--resume", action="store_true", help="Resume from an existing checkpoint")
+    centroid_build.add_argument("--report-json", help="Optional JSON report output path")
+    centroid_build.add_argument("--report-md", help="Optional Markdown report output path")
+    centroid_build.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    centroid_build.add_argument("--json", action="store_true", help="Emit JSON report")
+    centroid_build.set_defaults(func=_centroid_build)
+
     ask = sub.add_parser("ask", help="Ask a question against RAGFlow")
     _add_runtime_options(ask, suppress_defaults=True)
+    _add_routing_option(ask)
     ask.add_argument("question", help="Question to retrieve evidence for")
     ask.add_argument("--mode", choices=["auto", "direct", "agentic"], default="auto")
+    _add_centroid_tie_breaker_options(ask, include_query_vector=True)
     ask.add_argument("--dataset-id", action="append", default=[], help="RAGFlow dataset ID; repeatable")
     ask.add_argument("--kb", action="append", default=[], help="RAGFlow KB/dataset name; repeatable")
     ask.add_argument("--kb-manifest", help="Path to kb_manifest.json")
-    ask.add_argument("--top-k", type=int, default=5)
+    ask.add_argument("--top-k", type=int)
     ask.add_argument("--similarity-threshold", type=float)
+    ask.add_argument("--retry-budget", type=int, default=1, help="Bounded retrieval retry attempts for live ask; defaults to 1")
+    ask.add_argument("--retry-backoff-seconds", type=float, default=0.0, help="Backoff seconds between retryable retrieval attempts")
+    ask.add_argument("--fusion", choices=["none", "rrf"], default="none", help="Fuse per-dataset retrieval results when multiple dataset IDs are selected")
+    ask.add_argument("--rewrite", choices=["none", "simple", "translate", "hyde"], default="none", help="Opt-in query rewrite planning before retrieval")
+    ask.add_argument("--multi-query", help="JSON file with additional host-owned query variants")
     ask.add_argument("--host-assisted", action="store_true", help="Return evidence for host agent synthesis")
+    ask.add_argument("--max-subqueries", type=int, default=4, help="Maximum deterministic subqueries for --mode agentic --host-assisted")
+    ask.add_argument("--reflection-budget", type=int, default=0, help="Record a strict reflection budget in the agentic plan; reflection is not executed")
     ask.add_argument("--json", action="store_true", help="Emit JSON")
     ask.add_argument("--include-raw", action="store_true", help="Include raw RAGFlow chunks in JSON")
+    ask.add_argument("--include-trace", action="store_true", help="Include full query trace in JSON output")
+    ask.add_argument("--trace-json", help="Optional query trace JSON output path")
+    ask.add_argument("--trace-md", help="Optional query trace Markdown output path")
     ask.set_defaults(func=_ask)
     return parser
 

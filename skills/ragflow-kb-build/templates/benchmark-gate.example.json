@@ -1,0 +1,10 @@
+{
+  "thresholds": {
+    "min_hit_rate": 0.8,
+    "min_mrr": 0.6,
+    "min_recall_at_k": 0.6,
+    "min_ndcg_at_k": 0.6,
+    "max_empty_result_rate": 0.2,
+    "max_mrr_drop": 0.1
+  }
+}

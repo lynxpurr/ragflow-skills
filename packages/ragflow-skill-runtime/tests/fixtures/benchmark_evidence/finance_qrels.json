@@ -1,0 +1,47 @@
+{
+  "qrels": [
+    {
+      "query_id": "finance-numeric-001",
+      "expected_documents": [
+        "filing-a.md"
+      ],
+      "expected_chunks": [
+        "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      ],
+      "metadata": {
+        "expected_modalities": [
+          "table",
+          "text"
+        ]
+      }
+    },
+    {
+      "query_id": "finance-table-001",
+      "expected_documents": [
+        "filing-a.md"
+      ],
+      "expected_chunks": [
+        "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "metadata": {
+        "expected_modalities": [
+          "table"
+        ]
+      }
+    },
+    {
+      "query_id": "finance-negative-001",
+      "expected_documents": [
+        "filing-a.md"
+      ],
+      "expected_chunks": [
+        "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      ],
+      "metadata": {
+        "expected_modalities": [
+          "text"
+        ]
+      }
+    }
+  ]
+}

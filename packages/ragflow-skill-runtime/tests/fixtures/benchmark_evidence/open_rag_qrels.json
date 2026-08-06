@@ -1,0 +1,49 @@
+{
+  "qrels": [
+    {
+      "query_id": "open-text-001",
+      "expected_documents": [
+        "paper-a.md"
+      ],
+      "expected_chunks": [
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "metadata": {
+        "expected_modalities": [
+          "text"
+        ]
+      }
+    },
+    {
+      "query_id": "open-table-001",
+      "expected_documents": [
+        "paper-b.md"
+      ],
+      "expected_chunks": [
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "metadata": {
+        "expected_modalities": [
+          "table",
+          "text"
+        ]
+      }
+    },
+    {
+      "query_id": "open-mixed-001",
+      "expected_documents": [
+        "paper-c.md"
+      ],
+      "expected_chunks": [
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "metadata": {
+        "expected_modalities": [
+          "mixed",
+          "table",
+          "image"
+        ]
+      }
+    }
+  ]
+}

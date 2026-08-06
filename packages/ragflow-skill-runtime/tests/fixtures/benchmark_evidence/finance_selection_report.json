@@ -1,0 +1,22 @@
+{
+  "schema": "ragflow_benchmark_selection_report_v1",
+  "subset_id": "finance-synthetic-v1",
+  "selection_criteria": [
+    "table evidence",
+    "numeric evidence",
+    "negative coverage"
+  ],
+  "query_types": [
+    "numeric_reasoning",
+    "table_lookup",
+    "unanswerable"
+  ],
+  "modalities": [
+    "table",
+    "text"
+  ],
+  "excluded_case_counts": {
+    "non_synthetic_source": 0
+  },
+  "decision_tier": "exploratory"
+}

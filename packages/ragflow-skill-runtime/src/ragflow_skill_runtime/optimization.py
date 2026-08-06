@@ -1,0 +1,3690 @@
+"""Offline optimization planning helpers for RAGFlow KB profiles."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable, Mapping
+
+from .benchmark_governance import (
+    CHUNK_SNAPSHOT_REPORT_SCHEMA,
+    BenchmarkGovernanceError,
+    preflight_benchmark_dataset,
+    resolve_benchmark_artifacts,
+)
+from .config import ConfigError, read_config_file
+from .diagnostics import DIAGNOSTIC_REPORT_SCHEMA, diagnose_kb_manifest
+from .handoff import HandoffError, make_doc_ingest_readiness_payload
+from .health_report import HEALTH_REPORT_SCHEMA
+from .kb_build import KB_REFRESH_REPORT_SCHEMA
+from .manifests import ManifestError, load_kb_manifest
+from .parse_report import PARSE_REPORT_SCHEMA
+from .profiles import ChunkProfile, ProfileError, lint_profile, load_profile, recommend_profile
+from .validation import CHUNK_SNAPSHOT_SCHEMA
+
+
+CANDIDATE_PROFILE_SET_SCHEMA = "ragflow_candidate_profile_set_v1"
+OPTIMIZATION_PLAN_SCHEMA = "ragflow_optimization_plan_v1"
+PROFILE_EXPERIMENT_RESULTS_SCHEMA = "ragflow_profile_experiment_results_v1"
+OPTIMIZATION_CLEANUP_PLAN_SCHEMA = "ragflow_optimization_cleanup_plan_v1"
+OPTIMIZATION_CLEANUP_EXECUTION_REPORT_SCHEMA = "ragflow_optimization_cleanup_execution_report_v1"
+OPTIMIZATION_LIVE_READINESS_REPORT_SCHEMA = "ragflow_optimization_live_readiness_report_v1"
+PROFILE_FILE_SUFFIXES = {".json", ".yaml", ".yml"}
+CHUNK_DELIMITER_RE = re.compile(r"<!--\s*chunk\s*-->", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class OptimizationIssue:
+    severity: str
+    code: str
+    message: str
+    field: str | None = None
+    recommendation: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {key: value for key, value in asdict(self).items() if value is not None}
+
+
+@dataclass(frozen=True)
+class _CandidateProfile:
+    profile: ChunkProfile
+    source: dict[str, Any]
+    path: str | None = None
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _read_mapping(path: str | Path) -> dict[str, Any]:
+    source = Path(path)
+    if source.suffix.lower() == ".json":
+        try:
+            data = json.loads(source.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise ProfileError(f"profile set not found: {source}") from exc
+        except json.JSONDecodeError as exc:
+            raise ProfileError(f"profile set is not valid JSON: {source}") from exc
+    else:
+        try:
+            data = read_config_file(source)
+        except ConfigError as exc:
+            raise ProfileError(str(exc)) from exc
+    if not isinstance(data, dict):
+        raise ProfileError(f"profile set must be an object: {source}")
+    return data
+
+
+def _read_json_mapping(path: str | Path, *, label: str) -> dict[str, Any]:
+    source = Path(path)
+    try:
+        data = json.loads(source.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ProfileError(f"{label} not found: {source}") from exc
+    except json.JSONDecodeError as exc:
+        raise ProfileError(f"{label} is not valid JSON: {source}") from exc
+    if not isinstance(data, dict):
+        raise ProfileError(f"{label} must be a JSON object: {source}")
+    return data
+
+
+def _issue_counts(issues: Iterable[OptimizationIssue]) -> dict[str, int]:
+    items = list(issues)
+    return {
+        "errors": sum(1 for issue in items if issue.severity == "error"),
+        "warnings": sum(1 for issue in items if issue.severity == "warning"),
+        "infos": sum(1 for issue in items if issue.severity == "info"),
+    }
+
+
+def _ok(issues: Iterable[OptimizationIssue]) -> bool:
+    return not any(issue.severity == "error" for issue in issues)
+
+
+def _as_path(path: str | Path, *, base_dir: Path | None = None) -> Path:
+    value = Path(path)
+    if value.is_absolute() or base_dir is None:
+        return value
+    return base_dir / value
+
+
+def _profile_files_in_dir(path: str | Path) -> list[Path]:
+    root = Path(path)
+    if not root.exists():
+        raise ProfileError(f"profile dir not found: {root}")
+    if not root.is_dir():
+        raise ProfileError(f"profile dir is not a directory: {root}")
+    files = sorted(item for item in root.iterdir() if item.is_file() and item.suffix.lower() in PROFILE_FILE_SUFFIXES)
+    if not files:
+        raise ProfileError(f"profile dir does not contain JSON/YAML profiles: {root}")
+    return files
+
+
+def _parse_recommendation_spec(value: str | Mapping[str, Any]) -> dict[str, str | None]:
+    if isinstance(value, Mapping):
+        language = str(value.get("language") or "auto")
+        doc_type = str(value.get("doc_type") or value.get("document_type") or "general")
+        profile_id = value.get("profile_id") or value.get("id")
+        return {
+            "language": language,
+            "doc_type": doc_type,
+            "profile_id": str(profile_id) if profile_id else None,
+        }
+    text = str(value).strip()
+    if not text:
+        raise ProfileError("recommendation spec must not be empty")
+    if ":" in text:
+        parts = [part.strip() for part in text.split(":")]
+    elif "/" in text:
+        parts = [part.strip() for part in text.split("/")]
+    elif "," in text:
+        parts = [part.strip() for part in text.split(",")]
+    else:
+        parts = ["auto", text]
+    if len(parts) not in {2, 3} or not parts[0] or not parts[1]:
+        raise ProfileError("recommendation spec must be language:doc_type or language:doc_type:profile_id")
+    return {"language": parts[0], "doc_type": parts[1], "profile_id": parts[2] if len(parts) == 3 and parts[2] else None}
+
+
+def _candidate_from_profile(profile: ChunkProfile, *, source: Mapping[str, Any], path: str | None = None) -> _CandidateProfile:
+    return _CandidateProfile(profile=profile, source=dict(source), path=path)
+
+
+def _load_profile_set_file(path: str | Path) -> tuple[list[_CandidateProfile], list[OptimizationIssue]]:
+    profile_set_path = Path(path)
+    payload = _read_mapping(profile_set_path)
+    issues: list[OptimizationIssue] = []
+    if payload.get("schema") not in {None, CANDIDATE_PROFILE_SET_SCHEMA}:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "profile_set_schema_invalid",
+                f"profile set schema must be {CANDIDATE_PROFILE_SET_SCHEMA}",
+                "schema",
+            )
+        )
+    base_dir = profile_set_path.parent
+    candidates: list[_CandidateProfile] = []
+
+    for index, raw_profile in enumerate(payload.get("profiles", []) if isinstance(payload.get("profiles", []), list) else []):
+        if isinstance(raw_profile, str):
+            profile_path = _as_path(raw_profile, base_dir=base_dir)
+            candidates.append(
+                _candidate_from_profile(
+                    load_profile(profile_path),
+                    source={"type": "profile_set_file", "path": str(profile_set_path), "entry": raw_profile},
+                    path=str(profile_path),
+                )
+            )
+        elif isinstance(raw_profile, Mapping):
+            profile = ChunkProfile.from_dict(raw_profile)
+            candidates.append(
+                _candidate_from_profile(
+                    profile,
+                    source={"type": "profile_set_inline", "path": str(profile_set_path), "index": index},
+                )
+            )
+        else:
+            issues.append(OptimizationIssue("error", "profile_set_entry_invalid", "profiles entries must be objects or paths", f"profiles[{index}]"))
+
+    for raw_path in payload.get("profile_paths", []) if isinstance(payload.get("profile_paths", []), list) else []:
+        profile_path = _as_path(str(raw_path), base_dir=base_dir)
+        candidates.append(
+            _candidate_from_profile(
+                load_profile(profile_path),
+                source={"type": "profile_set_path", "path": str(profile_set_path)},
+                path=str(profile_path),
+            )
+        )
+
+    for raw_dir in payload.get("profile_dirs", []) if isinstance(payload.get("profile_dirs", []), list) else []:
+        profile_dir = _as_path(str(raw_dir), base_dir=base_dir)
+        for profile_path in _profile_files_in_dir(profile_dir):
+            candidates.append(
+                _candidate_from_profile(
+                    load_profile(profile_path),
+                    source={"type": "profile_set_dir", "path": str(profile_set_path), "dir": str(profile_dir)},
+                    path=str(profile_path),
+                )
+            )
+
+    for index, raw_recommendation in enumerate(
+        payload.get("recommendations", []) if isinstance(payload.get("recommendations", []), list) else []
+    ):
+        spec = _parse_recommendation_spec(raw_recommendation)
+        recommendation = recommend_profile(
+            language=spec["language"] or "auto",
+            doc_type=spec["doc_type"] or "general",
+            profile_id=spec["profile_id"],
+        )
+        candidates.append(
+            _candidate_from_profile(
+                recommendation.profile,
+                source={
+                    "type": "profile_set_recommendation",
+                    "path": str(profile_set_path),
+                    "index": index,
+                    "language": recommendation.language,
+                    "doc_type": recommendation.doc_type,
+                },
+            )
+        )
+
+    return candidates, issues
+
+
+def load_candidate_profile_set(
+    *,
+    profile_paths: Iterable[str | Path] | None = None,
+    profile_dirs: Iterable[str | Path] | None = None,
+    profile_set_paths: Iterable[str | Path] | None = None,
+    recommendations: Iterable[str | Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Load candidate profiles from files, directories, profile sets, and recommendations."""
+
+    candidates: list[_CandidateProfile] = []
+    issues: list[OptimizationIssue] = []
+
+    for profile_set_path in profile_set_paths or []:
+        loaded, loaded_issues = _load_profile_set_file(profile_set_path)
+        candidates.extend(loaded)
+        issues.extend(loaded_issues)
+
+    for profile_path_value in profile_paths or []:
+        profile_path = Path(profile_path_value)
+        candidates.append(
+            _candidate_from_profile(
+                load_profile(profile_path),
+                source={"type": "file"},
+                path=str(profile_path),
+            )
+        )
+
+    for profile_dir_value in profile_dirs or []:
+        for profile_path in _profile_files_in_dir(profile_dir_value):
+            candidates.append(
+                _candidate_from_profile(
+                    load_profile(profile_path),
+                    source={"type": "directory", "dir": str(profile_dir_value)},
+                    path=str(profile_path),
+                )
+            )
+
+    for raw_recommendation in recommendations or []:
+        spec = _parse_recommendation_spec(raw_recommendation)
+        recommendation = recommend_profile(
+            language=spec["language"] or "auto",
+            doc_type=spec["doc_type"] or "general",
+            profile_id=spec["profile_id"],
+        )
+        candidates.append(
+            _candidate_from_profile(
+                recommendation.profile,
+                source={"type": "recommendation", "language": recommendation.language, "doc_type": recommendation.doc_type},
+            )
+        )
+
+    if not candidates:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "candidate_profiles_missing",
+                "provide at least one --profile, --profile-dir, --profile-set, or --recommendation",
+                "candidates",
+            )
+        )
+
+    seen: dict[str, int] = {}
+    serialized_candidates = []
+    for index, candidate in enumerate(candidates):
+        lint = lint_profile(candidate.profile)
+        profile_id = candidate.profile.profile_id
+        if profile_id in seen:
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "candidate_profile_duplicate_id",
+                    "candidate profile ids must be unique",
+                    f"candidates[{index}].profile_id",
+                    "Rename one profile_id before running optimization experiments.",
+                )
+            )
+        seen[profile_id] = index
+        serialized_candidates.append(
+            {
+                "profile_id": profile_id,
+                "path": candidate.path,
+                "source": candidate.source,
+                "profile": candidate.profile.to_manifest_dict(),
+                "lint": lint.to_dict(),
+            }
+        )
+
+    summary = _issue_counts(issues)
+    return {
+        "ok": _ok(issues),
+        "schema": CANDIDATE_PROFILE_SET_SCHEMA,
+        "summary": {
+            **summary,
+            "candidate_count": len(serialized_candidates),
+        },
+        "candidates": serialized_candidates,
+        "issues": [issue.to_dict() for issue in issues],
+    }
+
+
+def _slug(value: str, *, default: str = "value") -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.:-]+", "-", value.strip())
+    slug = re.sub(r"-+", "-", slug).strip("-._:")
+    return slug or default
+
+
+def _run_id(value: str | None, *, kb_name: str, profile_ids: Iterable[str], document_paths: Iterable[str | Path]) -> str:
+    if value:
+        return _slug(value, default="run")
+    digest = hashlib.sha256()
+    digest.update(kb_name.encode("utf-8"))
+    for profile_id in sorted(profile_ids):
+        digest.update(profile_id.encode("utf-8"))
+    for document_path in sorted(str(path) for path in document_paths):
+        digest.update(document_path.encode("utf-8"))
+    return digest.hexdigest()[:10]
+
+
+def _disposable_kb_name(base_name: str, *, run_id: str, profile_id: str) -> str:
+    base = _slug(base_name, default="kb")
+    profile = _slug(profile_id, default="profile")
+    name = f"{base}__opt__{run_id}__{profile}"
+    if len(name) <= 120:
+        return name
+    suffix = f"__opt__{run_id}__{profile[:40]}"
+    return f"{base[: max(12, 120 - len(suffix))]}{suffix}"[:120]
+
+
+def _path_or_none(path: str | Path | None) -> str | None:
+    return str(path) if path else None
+
+
+def _existing_optional_path(path: str | Path | None, *, field: str, issues: list[OptimizationIssue]) -> None:
+    if path and not Path(path).exists():
+        issues.append(OptimizationIssue("error", "artifact_not_found", f"artifact not found: {path}", field))
+
+
+def _candidate_artifacts(artifact_dir: str | Path, profile_id: str) -> dict[str, str]:
+    candidate_dir = Path(artifact_dir) / _slug(profile_id, default="profile")
+    return {
+        "candidate_dir": str(candidate_dir),
+        "profile": str(candidate_dir / "profile.json"),
+        "kb_manifest": str(candidate_dir / "kb_manifest.json"),
+        "validation_report": str(candidate_dir / "validation_report.json"),
+        "validation_report_md": str(candidate_dir / "validation_report.md"),
+        "diagnostic_report": str(candidate_dir / "diagnostic_report.json"),
+        "parse_report": str(candidate_dir / "parse_report.json"),
+        "refresh_report": str(candidate_dir / "kb_refresh_report.json"),
+        "chunk_snapshot": str(candidate_dir / "chunk_snapshot.json"),
+        "chunk_snapshot_report": str(candidate_dir / "chunk_snapshot_report.json"),
+        "health_report": str(candidate_dir / "health_report.json"),
+        "cleanup_plan": str(candidate_dir / "cleanup_plan.json"),
+    }
+
+
+def _candidate_table_parent_chunk_preflight_from_handoff(
+    *,
+    doc_manifest_path: str | Path | None,
+    selected_profile: Mapping[str, Any],
+    issues: list[OptimizationIssue],
+    field: str,
+) -> dict[str, Any] | None:
+    if not doc_manifest_path:
+        return None
+    manifest_path = Path(doc_manifest_path)
+    try:
+        readiness = make_doc_ingest_readiness_payload(
+            handoff_root=manifest_path.parent,
+            doc_manifest_name=manifest_path.name,
+            selected_profile=selected_profile,
+        )
+    except (HandoffError, OSError, RuntimeError, ValueError) as exc:
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                "table_parent_chunk_preflight_unavailable",
+                f"table parent chunk preflight could not be computed: {exc}",
+                field,
+            )
+        )
+        return None
+    checks = readiness.get("checks") if isinstance(readiness.get("checks"), Mapping) else {}
+    preflight = checks.get("table_parent_chunk_preflight")
+    if isinstance(preflight, Mapping):
+        return dict(preflight)
+    return None
+
+
+def _build_command(
+    *,
+    doc_manifest_path: str | Path | None,
+    input_path: str | Path | None,
+    kb_name: str,
+    profile_path: str,
+    kb_manifest_path: str,
+    metadata_path: str | Path | None,
+) -> list[str]:
+    command = ["python3", "scripts/build.py"]
+    if doc_manifest_path:
+        command.extend(["--doc-manifest", str(doc_manifest_path)])
+    elif input_path:
+        command.extend(["--input", str(input_path)])
+    command.extend(["--kb-name", kb_name, "--profile", profile_path, "--output", kb_manifest_path])
+    if metadata_path:
+        command.extend(["--metadata", str(metadata_path)])
+    return command
+
+
+def _validate_command(
+    *,
+    kb_manifest_path: str,
+    queries_path: Path | None,
+    qrels_path: Path | None,
+    report_path: str,
+    report_md_path: str,
+    metadata_path: str | Path | None,
+    gate_config_path: str | Path | None,
+    baseline_report_path: str | Path | None,
+    chunk_snapshot_path: str | Path | None,
+    top_k: int,
+    metric_cutoff: int | None,
+) -> list[str]:
+    command = [
+        "python3",
+        "scripts/validate.py",
+        "--kb-manifest",
+        kb_manifest_path,
+        "--level",
+        "benchmark",
+        "--top-k",
+        str(top_k),
+        "--report-json",
+        report_path,
+        "--report-md",
+        report_md_path,
+    ]
+    if queries_path:
+        command.extend(["--queries", str(queries_path)])
+    if qrels_path:
+        command.extend(["--qrels", str(qrels_path)])
+    if metadata_path:
+        command.extend(["--metadata", str(metadata_path)])
+    if gate_config_path:
+        command.extend(["--gate-config", str(gate_config_path)])
+    if baseline_report_path:
+        command.extend(["--baseline-report", str(baseline_report_path)])
+    if chunk_snapshot_path:
+        command.extend(["--chunk-snapshot", str(chunk_snapshot_path)])
+    if metric_cutoff:
+        command.extend(["--metric-cutoff", str(metric_cutoff)])
+    return command
+
+
+def _disabled_mutation_command(command: list[str], *, reason: str) -> dict[str, Any]:
+    return {
+        "command": command,
+        "mutation": True,
+        "requires_execute": True,
+        "enabled": False,
+        "reason": reason,
+    }
+
+
+def create_optimization_plan(
+    *,
+    kb_name: str,
+    document_paths: Iterable[str | Path],
+    input_path: str | Path | None = None,
+    doc_manifest_path: str | Path | None = None,
+    profile_paths: Iterable[str | Path] | None = None,
+    profile_dirs: Iterable[str | Path] | None = None,
+    profile_set_paths: Iterable[str | Path] | None = None,
+    recommendations: Iterable[str | Mapping[str, Any]] | None = None,
+    benchmark_manifest_path: str | Path | None = None,
+    queries_path: str | Path | None = None,
+    qrels_path: str | Path | None = None,
+    qa_path: str | Path | None = None,
+    metadata_path: str | Path | None = None,
+    tagset_path: str | Path | None = None,
+    chunk_snapshot_path: str | Path | None = None,
+    gate_config_path: str | Path | None = None,
+    baseline_report_path: str | Path | None = None,
+    artifact_dir: str | Path = "optimization-artifacts",
+    run_id: str | None = None,
+    top_k: int = 3,
+    metric_cutoff: int | None = None,
+) -> dict[str, Any]:
+    """Create a non-mutating optimization plan for profile experiments."""
+
+    documents = [str(path) for path in document_paths]
+    issues: list[OptimizationIssue] = []
+    if not documents:
+        issues.append(OptimizationIssue("error", "documents_missing", "optimization planning requires at least one Markdown document", "documents"))
+    if not kb_name.strip():
+        issues.append(OptimizationIssue("error", "kb_name_missing", "kb_name is required", "kb_name"))
+    if top_k <= 0:
+        issues.append(OptimizationIssue("error", "top_k_invalid", "top_k must be positive", "top_k"))
+    if metric_cutoff is not None and metric_cutoff <= 0:
+        issues.append(OptimizationIssue("error", "metric_cutoff_invalid", "metric_cutoff must be positive", "metric_cutoff"))
+
+    candidate_set = load_candidate_profile_set(
+        profile_paths=profile_paths,
+        profile_dirs=profile_dirs,
+        profile_set_paths=profile_set_paths,
+        recommendations=recommendations,
+    )
+    for raw_issue in candidate_set.get("issues", []):
+        if isinstance(raw_issue, Mapping):
+            issues.append(
+                OptimizationIssue(
+                    str(raw_issue.get("severity", "warning")),
+                    f"candidate_{raw_issue.get('code', 'issue')}",
+                    str(raw_issue.get("message", "")),
+                    raw_issue.get("field") if isinstance(raw_issue.get("field"), str) else None,
+                    raw_issue.get("recommendation") if isinstance(raw_issue.get("recommendation"), str) else None,
+                )
+            )
+
+    artifacts: dict[str, Path | None]
+    try:
+        artifacts = resolve_benchmark_artifacts(
+            manifest_path=benchmark_manifest_path,
+            queries_path=queries_path,
+            qrels_path=qrels_path,
+            qa_path=qa_path,
+        )
+        preflight = preflight_benchmark_dataset(
+            manifest_path=benchmark_manifest_path,
+            queries_path=queries_path,
+            qrels_path=qrels_path,
+            qa_path=qa_path,
+            chunk_snapshot_path=chunk_snapshot_path,
+            gate_config_path=gate_config_path,
+        )
+    except (BenchmarkGovernanceError, OSError, RuntimeError) as exc:
+        artifacts = {"queries": Path(queries_path) if queries_path else None, "qrels": Path(qrels_path) if qrels_path else None, "qa": Path(qa_path) if qa_path else None}
+        preflight = {"ok": False, "summary": {"errors": 1, "warnings": 0, "infos": 0}, "issues": []}
+        issues.append(OptimizationIssue("error", "benchmark_preflight_failed", str(exc), "benchmark"))
+    else:
+        for raw_issue in preflight.get("issues", []):
+            if isinstance(raw_issue, Mapping):
+                issues.append(
+                    OptimizationIssue(
+                        str(raw_issue.get("severity", "warning")),
+                        f"benchmark_{raw_issue.get('code', 'issue')}",
+                        str(raw_issue.get("message", "")),
+                        raw_issue.get("field") if isinstance(raw_issue.get("field"), str) else None,
+                        raw_issue.get("recommendation") if isinstance(raw_issue.get("recommendation"), str) else None,
+                    )
+                )
+
+    _existing_optional_path(metadata_path, field="metadata", issues=issues)
+    _existing_optional_path(tagset_path, field="tagset", issues=issues)
+    _existing_optional_path(baseline_report_path, field="baseline_report", issues=issues)
+
+    candidate_profile_ids = [
+        str(candidate.get("profile_id"))
+        for candidate in candidate_set.get("candidates", [])
+        if isinstance(candidate, Mapping) and candidate.get("profile_id")
+    ]
+    actual_run_id = _run_id(run_id, kb_name=kb_name, profile_ids=candidate_profile_ids, document_paths=documents)
+
+    disposable_names: dict[str, str] = {}
+    plan_candidates = []
+    for index, candidate in enumerate(candidate_set.get("candidates", [])):
+        if not isinstance(candidate, Mapping):
+            continue
+        profile_id = str(candidate.get("profile_id"))
+        disposable_name = _disposable_kb_name(kb_name, run_id=actual_run_id, profile_id=profile_id)
+        if disposable_name in disposable_names:
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "disposable_kb_name_collision",
+                    "candidate disposable KB names must be unique",
+                    f"candidates[{index}].disposable_kb_name",
+                    "Use unique profile_id values or pass a distinct --run-id.",
+                )
+            )
+        disposable_names[disposable_name] = profile_id
+
+        lint = candidate.get("lint") if isinstance(candidate.get("lint"), Mapping) else {}
+        for raw_issue in lint.get("issues", []) if isinstance(lint.get("issues"), list) else []:
+            if not isinstance(raw_issue, Mapping):
+                continue
+            issues.append(
+                OptimizationIssue(
+                    str(raw_issue.get("severity", "warning")),
+                    f"profile_{raw_issue.get('code', 'issue')}",
+                    str(raw_issue.get("message", "")),
+                    f"candidates[{index}].{raw_issue.get('field')}" if isinstance(raw_issue.get("field"), str) else f"candidates[{index}]",
+                    raw_issue.get("recommendation") if isinstance(raw_issue.get("recommendation"), str) else None,
+                )
+            )
+
+        candidate_artifacts = _candidate_artifacts(artifact_dir, profile_id)
+        profile_path = str(candidate.get("path") or candidate_artifacts["profile"])
+        build_command = _build_command(
+            doc_manifest_path=doc_manifest_path,
+            input_path=input_path,
+            kb_name=disposable_name,
+            profile_path=profile_path,
+            kb_manifest_path=candidate_artifacts["kb_manifest"],
+            metadata_path=metadata_path,
+        )
+        validate_command = _validate_command(
+            kb_manifest_path=candidate_artifacts["kb_manifest"],
+            queries_path=artifacts.get("queries"),
+            qrels_path=artifacts.get("qrels"),
+            report_path=candidate_artifacts["validation_report"],
+            report_md_path=candidate_artifacts["validation_report_md"],
+            metadata_path=metadata_path,
+            gate_config_path=gate_config_path,
+            baseline_report_path=baseline_report_path,
+            chunk_snapshot_path=chunk_snapshot_path,
+            top_k=top_k,
+            metric_cutoff=metric_cutoff,
+        )
+        plan_candidate = {
+            **candidate,
+            "disposable_kb_name": disposable_name,
+            "artifacts": candidate_artifacts,
+            "commands": {
+                "write_generated_profile": None if candidate.get("path") else ["write-json", candidate_artifacts["profile"]],
+                "build": None,
+                "validate": validate_command,
+                "diagnose": [
+                    "python3",
+                    "scripts/diagnose.py",
+                    "--kb-manifest",
+                    candidate_artifacts["kb_manifest"],
+                    "--report-json",
+                    candidate_artifacts["diagnostic_report"],
+                ],
+                "cleanup_preview": [
+                    "python3",
+                    "scripts/cleanup.py",
+                    "--kb-manifest",
+                    candidate_artifacts["kb_manifest"],
+                    "--output",
+                    candidate_artifacts["cleanup_plan"],
+                ],
+            },
+            "mutation_commands": {
+                "build": _disabled_mutation_command(
+                    build_command,
+                    reason="Disposable KB creation is disabled in plan-only output and requires optimize --execute.",
+                )
+            },
+        }
+        table_parent_chunk_preflight = _candidate_table_parent_chunk_preflight_from_handoff(
+            doc_manifest_path=doc_manifest_path,
+            selected_profile=candidate.get("profile") if isinstance(candidate.get("profile"), Mapping) else {},
+            issues=issues,
+            field=f"candidates[{index}].table_parent_chunk_preflight",
+        )
+        if table_parent_chunk_preflight is not None:
+            plan_candidate["table_parent_chunk_preflight"] = table_parent_chunk_preflight
+        plan_candidates.append(plan_candidate)
+
+    issue_summary = _issue_counts(issues)
+    return {
+        "ok": _ok(issues),
+        "schema": OPTIMIZATION_PLAN_SCHEMA,
+        "created_at": _now(),
+        "mode": "plan-only",
+        "mutation_allowed": False,
+        "mutation_guard": {
+            "execute_required": True,
+            "execute_flag": "--execute",
+            "mutation_commands_enabled": False,
+            "disabled_reason": "Plan-only output records mutation command templates but does not enable experiment KB creation.",
+        },
+        "run_id": actual_run_id,
+        "base_kb_name": kb_name,
+        "inputs": {
+            "input": _path_or_none(input_path),
+            "doc_manifest": _path_or_none(doc_manifest_path),
+            "documents": documents,
+            "benchmark": {
+                "manifest": _path_or_none(benchmark_manifest_path),
+                "queries": str(artifacts.get("queries")) if artifacts.get("queries") else None,
+                "qrels": str(artifacts.get("qrels")) if artifacts.get("qrels") else None,
+                "qa": str(artifacts.get("qa")) if artifacts.get("qa") else None,
+                "preflight": preflight,
+            },
+            "metadata": _path_or_none(metadata_path),
+            "tagset": _path_or_none(tagset_path),
+            "chunk_snapshot": _path_or_none(chunk_snapshot_path),
+            "gate_config": _path_or_none(gate_config_path),
+            "baseline_report": _path_or_none(baseline_report_path),
+        },
+        "summary": {
+            **issue_summary,
+            "candidate_count": len(plan_candidates),
+            "document_count": len(documents),
+            "planned_experiment_count": len(plan_candidates),
+            "mutation_steps": 0,
+            "blocked_mutation_command_count": len(plan_candidates),
+        },
+        "candidates": plan_candidates,
+        "steps": [
+            {
+                "order": 1,
+                "name": "preflight_inputs",
+                "mutation": False,
+                "status": "planned",
+            },
+            {
+                "order": 2,
+                "name": "build_disposable_kbs",
+                "mutation": True,
+                "requires_execute": True,
+                "status": "not_run_in_plan_only",
+            },
+            {
+                "order": 3,
+                "name": "run_benchmark_validation",
+                "mutation": False,
+                "status": "not_run_in_plan_only",
+            },
+            {
+                "order": 4,
+                "name": "diagnose_failed_or_zero_chunk_candidates",
+                "mutation": False,
+                "status": "conditional",
+            },
+            {
+                "order": 5,
+                "name": "compare_profiles_and_select_best",
+                "mutation": False,
+                "status": "not_run_in_plan_only",
+            },
+            {
+                "order": 6,
+                "name": "cleanup_disposable_kbs",
+                "mutation": True,
+                "requires_execute": True,
+                "status": "not_run_in_plan_only",
+            },
+        ],
+        "issues": [issue.to_dict() for issue in issues],
+    }
+
+
+def _metric_value(metrics: Mapping[str, Any], key: str) -> float:
+    value = metrics.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value)
+
+
+def _metric_first(mappings: list[Mapping[str, Any]], *keys: str) -> float:
+    for mapping in mappings:
+        for key in keys:
+            value = mapping.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                return float(value)
+    return 0.0
+
+
+def _metric_first_observed(mappings: list[Mapping[str, Any]], *keys: str) -> tuple[float, bool]:
+    for mapping in mappings:
+        for key in keys:
+            value = mapping.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                return float(value), True
+    return 0.0, False
+
+
+def _empty_result_rate(top_metrics: Mapping[str, Any], benchmark_metrics: Mapping[str, Any]) -> float:
+    direct = _metric_first([benchmark_metrics, top_metrics], "empty_result_rate", "empty_rate")
+    if direct:
+        return direct
+    empty_results = _metric_first([top_metrics], "empty_results")
+    total = _metric_first([top_metrics], "total", "query_count")
+    return empty_results / total if total > 0 else 0.0
+
+
+def _validation_report_metrics(report: Mapping[str, Any]) -> dict[str, Any]:
+    top_metrics = report.get("metrics") if isinstance(report.get("metrics"), Mapping) else {}
+    benchmark = report.get("benchmark") if isinstance(report.get("benchmark"), Mapping) else {}
+    benchmark_metrics = benchmark.get("metrics") if isinstance(benchmark.get("metrics"), Mapping) else {}
+    metadata = report.get("metadata") if isinstance(report.get("metadata"), Mapping) else {}
+    timing = report.get("timing") if isinstance(report.get("timing"), Mapping) else {}
+    query_latency_ms, query_latency_ms_observed = _metric_first_observed(
+        [benchmark_metrics, top_metrics, timing, metadata],
+        "query_latency_ms",
+        "average_query_latency_ms",
+        "avg_query_latency_ms",
+        "latency_ms",
+        "duration_ms",
+    )
+    parse_time_ms, parse_time_ms_observed = _metric_first_observed(
+        [top_metrics, timing, metadata],
+        "parse_time_ms",
+        "parse_duration_ms",
+        "average_parse_time_ms",
+        "avg_parse_time_ms",
+    )
+    metrics = {
+        "pass_rate": _metric_value(top_metrics, "pass_rate"),
+        "hit_rate": _metric_value(benchmark_metrics, "hit_rate"),
+        "mrr": _metric_value(benchmark_metrics, "mrr"),
+        "precision_at_k": _metric_value(benchmark_metrics, "precision_at_k"),
+        "recall_at_k": _metric_value(benchmark_metrics, "recall_at_k"),
+        "ndcg_at_k": _metric_value(benchmark_metrics, "ndcg_at_k"),
+        "map_at_k": _metric_value(benchmark_metrics, "map_at_k"),
+        "strict_chunk_recall_at_k": _metric_value(benchmark_metrics, "strict_chunk_recall_at_k"),
+        "expected_chunk_hit_rate": _metric_value(benchmark_metrics, "expected_chunk_hit_rate"),
+        "candidate_snapshot_expected_chunk_recall_at_k": _metric_value(
+            benchmark_metrics,
+            "candidate_snapshot_expected_chunk_recall_at_k",
+        ),
+        "candidate_snapshot_expected_chunk_hit_rate": _metric_value(
+            benchmark_metrics,
+            "candidate_snapshot_expected_chunk_hit_rate",
+        ),
+        "candidate_snapshot_expected_chunk_count": _metric_value(
+            benchmark_metrics,
+            "candidate_snapshot_expected_chunk_count",
+        ),
+        "matched_candidate_snapshot_expected_chunks": _metric_value(
+            benchmark_metrics,
+            "matched_candidate_snapshot_expected_chunks",
+        ),
+        "expected_term_recall_at_k": _metric_value(benchmark_metrics, "expected_term_recall_at_k"),
+        "expected_term_hit_rate": _metric_value(benchmark_metrics, "expected_term_hit_rate"),
+        "table_term_recall_at_k": _metric_value(benchmark_metrics, "table_term_recall_at_k"),
+        "table_term_hit_rate": _metric_value(benchmark_metrics, "table_term_hit_rate"),
+        "table_term_recall_observed": "table_term_recall_at_k" in benchmark_metrics,
+        "empty_result_rate": _empty_result_rate(top_metrics, benchmark_metrics),
+        "average_chunks": _metric_first([top_metrics], "average_chunks", "avg_chunks"),
+        "query_latency_ms": query_latency_ms,
+        "query_latency_ms_observed": query_latency_ms_observed,
+        "parse_time_ms": parse_time_ms,
+        "parse_time_ms_observed": parse_time_ms_observed,
+    }
+    metrics["benchmark_quality_score"] = (metrics["hit_rate"] + metrics["mrr"] + metrics["ndcg_at_k"]) / 3
+    metrics["score"] = (
+        (metrics["pass_rate"] * 0.30)
+        + (metrics["hit_rate"] * 0.20)
+        + (metrics["mrr"] * 0.20)
+        + (metrics["ndcg_at_k"] * 0.15)
+        + (metrics["strict_chunk_recall_at_k"] * 0.10)
+        + (metrics["expected_chunk_hit_rate"] * 0.05)
+        - (metrics["empty_result_rate"] * 0.10)
+    )
+    return metrics
+
+
+def _validation_zero_chunk_count(report: Mapping[str, Any]) -> int:
+    metrics = report.get("metrics") if isinstance(report.get("metrics"), Mapping) else {}
+    metric_empty = metrics.get("empty_results")
+    count = int(metric_empty) if isinstance(metric_empty, int) and not isinstance(metric_empty, bool) else 0
+    case_count = 0
+    for case in report.get("cases", []) if isinstance(report.get("cases"), list) else []:
+        if isinstance(case, Mapping) and case.get("chunk_count") == 0:
+            case_count += 1
+    return max(count, case_count)
+
+
+def _validation_diagnostic_reasons(report: Mapping[str, Any]) -> list[str]:
+    reasons = []
+    if report.get("ok") is False:
+        reasons.append("validation_failed")
+    if _validation_zero_chunk_count(report) > 0:
+        reasons.append("zero_chunks")
+    benchmark = report.get("benchmark") if isinstance(report.get("benchmark"), Mapping) else {}
+    benchmark_metrics = benchmark.get("metrics") if isinstance(benchmark.get("metrics"), Mapping) else {}
+    empty_rate = benchmark_metrics.get("empty_result_rate")
+    if isinstance(empty_rate, (int, float)) and not isinstance(empty_rate, bool) and empty_rate > 0:
+        reasons.append("empty_retrieval")
+    return sorted(set(reasons))
+
+
+def _candidate_table_parent_chunk_preflight(candidate: Mapping[str, Any]) -> dict[str, Any] | None:
+    preflight = candidate.get("table_parent_chunk_preflight")
+    if isinstance(preflight, Mapping):
+        return dict(preflight)
+    return None
+
+
+def _diagnostic_command(candidate: Mapping[str, Any]) -> list[str] | None:
+    commands = candidate.get("commands") if isinstance(candidate.get("commands"), Mapping) else {}
+    command = commands.get("diagnose")
+    return list(command) if isinstance(command, list) else None
+
+
+def _diagnostic_summary(report: Mapping[str, Any]) -> dict[str, Any]:
+    issues = [issue for issue in report.get("issues", []) if isinstance(issue, Mapping)] if isinstance(report.get("issues"), list) else []
+    recommendations = [str(issue.get("recommendation")) for issue in issues if issue.get("recommendation")]
+    issue_types = [str(issue.get("issue_type") or issue.get("code")) for issue in issues if issue.get("issue_type") or issue.get("code")]
+    summary = report.get("summary") if isinstance(report.get("summary"), Mapping) else {}
+    return {
+        "schema": report.get("schema"),
+        "ok": bool(report.get("ok")),
+        "summary": dict(summary),
+        "issue_types": issue_types,
+        "recommendations": recommendations[:5],
+    }
+
+
+def _candidate_diagnostic(
+    candidate: Mapping[str, Any],
+    *,
+    reason_codes: list[str],
+    issues: list[OptimizationIssue],
+    field: str,
+) -> dict[str, Any]:
+    artifacts = candidate.get("artifacts") if isinstance(candidate.get("artifacts"), Mapping) else {}
+    report_path = Path(artifacts["diagnostic_report"]) if isinstance(artifacts.get("diagnostic_report"), str) else None
+    manifest_path = Path(artifacts["kb_manifest"]) if isinstance(artifacts.get("kb_manifest"), str) else None
+    payload: dict[str, Any] = {
+        "required": bool(reason_codes),
+        "reason_codes": reason_codes,
+        "report_path": str(report_path) if report_path else None,
+        "report_available": False,
+        "generated": False,
+        "summary": None,
+        "command": _diagnostic_command(candidate),
+    }
+    if not reason_codes:
+        return payload
+
+    if report_path and report_path.exists():
+        try:
+            diagnostic_report = _read_json_mapping(report_path, label="diagnostic report")
+        except ProfileError as exc:
+            issues.append(OptimizationIssue("warning", "diagnostic_report_invalid", str(exc), field))
+            return payload
+        if diagnostic_report.get("schema") != DIAGNOSTIC_REPORT_SCHEMA:
+            issues.append(
+                OptimizationIssue(
+                    "warning",
+                    "diagnostic_report_schema_invalid",
+                    f"diagnostic report schema should be {DIAGNOSTIC_REPORT_SCHEMA}",
+                    field,
+                )
+            )
+        payload["report_available"] = True
+        payload["summary"] = _diagnostic_summary(diagnostic_report)
+        return payload
+
+    if not manifest_path or not manifest_path.exists():
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                "diagnostic_manifest_missing",
+                "candidate needs diagnostics but its KB manifest is not available yet",
+                field,
+                "Build the candidate or provide its kb_manifest.json, then rerun optimize summarize.",
+            )
+        )
+        return payload
+
+    try:
+        diagnostic_report = diagnose_kb_manifest(load_kb_manifest(manifest_path))
+    except (ManifestError, OSError) as exc:
+        issues.append(OptimizationIssue("warning", "diagnostic_manifest_invalid", str(exc), field))
+        return payload
+
+    if report_path:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(diagnostic_report, ensure_ascii=False, indent=2), encoding="utf-8")
+        payload["report_available"] = True
+        payload["generated"] = True
+    payload["summary"] = _diagnostic_summary(diagnostic_report)
+    return payload
+
+
+def _mapping_copy(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _mapping_items(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _first_sidecar_path(artifacts: Mapping[str, Any], keys: Iterable[str]) -> Path | None:
+    for key in keys:
+        value = artifacts.get(key)
+        if isinstance(value, str) and value:
+            return Path(value)
+    return None
+
+
+def _unavailable_sidecar(schema: str, path: Path | None) -> dict[str, Any]:
+    return {
+        "available": False,
+        "schema": schema,
+        "path": str(path) if path else None,
+    }
+
+
+def _read_runtime_sidecar(
+    artifacts: Mapping[str, Any],
+    *,
+    keys: Iterable[str],
+    expected_schemas: set[str],
+    label: str,
+    issues: list[OptimizationIssue],
+    field: str,
+) -> tuple[dict[str, Any] | None, Path | None]:
+    keys = tuple(keys)
+    first_path = _first_sidecar_path(artifacts, keys)
+    for key in keys:
+        raw_path = artifacts.get(key)
+        if not isinstance(raw_path, str) or not raw_path:
+            continue
+        path = Path(raw_path)
+        if not path.exists():
+            continue
+        try:
+            payload = _read_json_mapping(path, label=label)
+        except ProfileError as exc:
+            issues.append(
+                OptimizationIssue(
+                    "warning",
+                    "runtime_evidence_sidecar_invalid",
+                    str(exc),
+                    field,
+                    "Regenerate the sidecar or remove the invalid artifact path before relying on runtime evidence.",
+                )
+            )
+            return None, path
+        schema = payload.get("schema")
+        if schema not in expected_schemas:
+            expected = " or ".join(sorted(expected_schemas))
+            issues.append(
+                OptimizationIssue(
+                    "warning",
+                    "runtime_evidence_sidecar_schema_invalid",
+                    f"{label} schema should be {expected}",
+                    field,
+                    "Regenerate the sidecar with the matching command before relying on runtime evidence.",
+                )
+            )
+            return None, path
+        return payload, path
+    return None, first_path
+
+
+def _parse_report_runtime_evidence(
+    report: Mapping[str, Any] | None,
+    *,
+    path: Path | None,
+    issues: list[OptimizationIssue],
+    field: str,
+) -> dict[str, Any]:
+    if report is None:
+        return _unavailable_sidecar(PARSE_REPORT_SCHEMA, path)
+    summary = _mapping_copy(report.get("summary"))
+    visibility = _mapping_copy(report.get("profile_visibility"))
+    drift = _mapping_copy(visibility.get("drift"))
+    drifted = bool(drift.get("drift"))
+    if drifted:
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                "runtime_parser_config_drift",
+                "parse-report evidence shows requested parser config differs from effective runtime config",
+                field,
+                "Review requested/effective parser_config before promoting this profile.",
+            )
+        )
+    return {
+        "available": True,
+        "schema": report.get("schema"),
+        "path": str(path) if path else None,
+        "status": report.get("status"),
+        "summary": summary,
+        "requested_parser_config": _mapping_copy(visibility.get("requested_parser_config")),
+        "effective_parser_config": _mapping_copy(visibility.get("effective_parser_config")),
+        "effective_source": visibility.get("effective_source"),
+        "drift": drift,
+        "unsupported_effective_keys": list(visibility.get("unsupported_effective_keys") or []),
+    }
+
+
+def _refresh_report_runtime_evidence(report: Mapping[str, Any] | None, *, path: Path | None) -> dict[str, Any]:
+    if report is None:
+        return _unavailable_sidecar(KB_REFRESH_REPORT_SCHEMA, path)
+    documents = _mapping_items(report.get("documents"))
+    return {
+        "available": True,
+        "schema": report.get("schema"),
+        "path": str(path) if path else None,
+        "summary": _mapping_copy(report.get("summary")),
+        "document_count": len(documents),
+        "documents": documents[:10],
+    }
+
+
+def _first_number(mappings: Iterable[Mapping[str, Any]], key: str, *, default: int | float = 0) -> int | float:
+    for mapping in mappings:
+        value = mapping.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return value
+    return default
+
+
+def _snapshot_content(value: Mapping[str, Any]) -> str:
+    for key in ("content", "text", "content_preview"):
+        item = value.get(key)
+        if isinstance(item, str):
+            return item
+    return ""
+
+
+def _chunk_snapshot_runtime_evidence(report: Mapping[str, Any] | None, *, path: Path | None) -> dict[str, Any]:
+    if report is None:
+        return _unavailable_sidecar(CHUNK_SNAPSHOT_SCHEMA, path)
+
+    schema = str(report.get("schema") or "")
+    summary = _mapping_copy(report.get("summary"))
+    if schema == CHUNK_SNAPSHOT_REPORT_SCHEMA:
+        review = _mapping_copy(report.get("chunk_review"))
+        metrics = _mapping_copy(review.get("metrics"))
+        examples = _mapping_copy(review.get("examples"))
+        boundary_sources = [metrics, summary]
+    else:
+        chunks = _mapping_items(report.get("chunks"))
+        delimiter_indexes: list[int] = []
+        max_chunk_chars = 0
+        for index, chunk in enumerate(chunks, start=1):
+            content = _snapshot_content(chunk)
+            max_chunk_chars = max(max_chunk_chars, len(content))
+            if content and CHUNK_DELIMITER_RE.search(content):
+                delimiter_indexes.append(index)
+        metrics = {
+            "delimiter_visible_chunk_count": len(delimiter_indexes),
+            "max_chunk_chars": max_chunk_chars,
+        }
+        examples = {"delimiter_visible_chunk_indexes": delimiter_indexes[:20]}
+        boundary_sources = [summary, metrics]
+
+    boundary = {
+        "chunk_count": _first_number(boundary_sources, "chunk_count"),
+        "source_chunk_count": _first_number(boundary_sources, "source_chunk_count"),
+        "delimiter_visible_chunk_count": _first_number(boundary_sources, "delimiter_visible_chunk_count"),
+        "possible_split_table_chunk_count": _first_number(boundary_sources, "possible_split_table_chunk_count"),
+        "table_like_chunk_count": _first_number(boundary_sources, "table_like_chunk_count"),
+        "image_only_chunk_count": _first_number(boundary_sources, "image_only_chunk_count"),
+        "max_chunk_chars": _first_number(boundary_sources, "max_chunk_chars"),
+    }
+    delimiter_visible = int(boundary["delimiter_visible_chunk_count"])
+    chunk_count = int(boundary["chunk_count"])
+    if chunk_count <= 0:
+        delimiter_status = "unknown"
+    elif delimiter_visible:
+        delimiter_status = "visible"
+    else:
+        delimiter_status = "consumed"
+
+    return {
+        "available": True,
+        "schema": report.get("schema"),
+        "path": str(path) if path else None,
+        "summary": summary,
+        "boundary_evidence": boundary,
+        "delimiter_consumption": {
+            "status": delimiter_status,
+            "delimiter_visible_chunk_count": delimiter_visible,
+        },
+        "examples": examples,
+    }
+
+
+def _health_report_runtime_evidence(
+    report: Mapping[str, Any] | None,
+    *,
+    path: Path | None,
+    issues: list[OptimizationIssue],
+    field: str,
+) -> dict[str, Any]:
+    if report is None:
+        return _unavailable_sidecar(HEALTH_REPORT_SCHEMA, path)
+    summary = _mapping_copy(report.get("summary"))
+    knowledge_bases = _mapping_items(report.get("knowledge_bases"))
+    distribution = _mapping_items(report.get("embedding_model_distribution"))
+    issue_items = _mapping_items(report.get("issues"))
+    issue_codes = [str(item.get("code")) for item in issue_items if item.get("code")]
+    models = [
+        str(item.get("model"))
+        for item in distribution
+        if item.get("model") and str(item.get("model")) != "unknown"
+    ]
+    if not models:
+        models = sorted({str(item.get("embedding_model")) for item in knowledge_bases if item.get("embedding_model")})
+    rebuild_required = bool(summary.get("embedding_model_rebuild_required_kb_count")) or any(
+        bool(item.get("embedding_model_check", {}).get("rebuild_or_reparse_required"))
+        for item in knowledge_bases
+        if isinstance(item.get("embedding_model_check"), Mapping)
+    )
+    parser_warning_codes = {
+        "parser_performance_review",
+        "stale_or_failed_parse_state",
+        "zero_chunk_documents",
+        "stale_count_fields",
+    }
+    parser_warning = bool(summary.get("stale_parse_kb_count")) or any(code in parser_warning_codes for code in issue_codes)
+    if rebuild_required:
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                "runtime_health_embedding_model_rebuild_required",
+                "health-report evidence indicates embedding model rebuild or re-parse may be required",
+                field,
+                "Rebuild or re-parse affected KBs before treating profile metrics as comparable.",
+            )
+        )
+    if parser_warning:
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                "runtime_health_parser_warning",
+                "health-report evidence contains parser or parse-state warnings",
+                field,
+                "Refresh parse sidecars and resolve stale or failed parse states before promotion.",
+            )
+        )
+    return {
+        "available": True,
+        "schema": report.get("schema"),
+        "path": str(path) if path else None,
+        "status": report.get("status"),
+        "summary": summary,
+        "embedding_models": models,
+        "embedding_model_rebuild_required": rebuild_required,
+        "parser_warning": parser_warning,
+        "issue_codes": issue_codes,
+    }
+
+
+def _candidate_runtime_evidence(
+    candidate: Mapping[str, Any],
+    *,
+    issues: list[OptimizationIssue],
+    field: str,
+) -> dict[str, Any]:
+    artifacts = candidate.get("artifacts") if isinstance(candidate.get("artifacts"), Mapping) else {}
+    parse_report, parse_path = _read_runtime_sidecar(
+        artifacts,
+        keys=("parse_report",),
+        expected_schemas={PARSE_REPORT_SCHEMA},
+        label="parse report",
+        issues=issues,
+        field=f"{field}.parse_report",
+    )
+    refresh_report, refresh_path = _read_runtime_sidecar(
+        artifacts,
+        keys=("refresh_report", "kb_refresh_report"),
+        expected_schemas={KB_REFRESH_REPORT_SCHEMA},
+        label="refresh report",
+        issues=issues,
+        field=f"{field}.refresh_report",
+    )
+    snapshot_report, snapshot_path = _read_runtime_sidecar(
+        artifacts,
+        keys=("chunk_snapshot_report", "chunk_snapshot"),
+        expected_schemas={CHUNK_SNAPSHOT_REPORT_SCHEMA, CHUNK_SNAPSHOT_SCHEMA},
+        label="chunk snapshot",
+        issues=issues,
+        field=f"{field}.chunk_snapshot",
+    )
+    health_report, health_path = _read_runtime_sidecar(
+        artifacts,
+        keys=("health_report",),
+        expected_schemas={HEALTH_REPORT_SCHEMA},
+        label="health report",
+        issues=issues,
+        field=f"{field}.health_report",
+    )
+    evidence = {
+        "parse_report": _parse_report_runtime_evidence(
+            parse_report,
+            path=parse_path,
+            issues=issues,
+            field=f"{field}.parse_report",
+        ),
+        "refresh_report": _refresh_report_runtime_evidence(refresh_report, path=refresh_path),
+        "chunk_snapshot": _chunk_snapshot_runtime_evidence(snapshot_report, path=snapshot_path),
+        "health_report": _health_report_runtime_evidence(
+            health_report,
+            path=health_path,
+            issues=issues,
+            field=f"{field}.health_report",
+        ),
+    }
+    sidecar_count = sum(1 for item in evidence.values() if isinstance(item, Mapping) and item.get("available"))
+    return {
+        "available": sidecar_count > 0,
+        "sidecar_count": sidecar_count,
+        **evidence,
+    }
+
+
+def _result_tradeoffs(result: Mapping[str, Any], winner: Mapping[str, Any]) -> list[str]:
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
+    winner_metrics = winner.get("metrics") if isinstance(winner.get("metrics"), Mapping) else {}
+    tradeoffs = []
+    if _decision_score_value(result) < _decision_score_value(winner):
+        tradeoffs.append("Lower normalized decision score than the recommended profile.")
+    if metrics.get("score", 0.0) < winner_metrics.get("score", 0.0):
+        tradeoffs.append("Lower raw composite score than the recommended profile.")
+    if metrics.get("hit_rate", 0.0) < winner_metrics.get("hit_rate", 0.0):
+        tradeoffs.append("Lower hit rate indicates weaker retrieval coverage.")
+    if metrics.get("mrr", 0.0) < winner_metrics.get("mrr", 0.0):
+        tradeoffs.append("Lower MRR indicates relevant evidence appears later in the ranking.")
+    if metrics.get("strict_chunk_recall_at_k", 0.0) < winner_metrics.get("strict_chunk_recall_at_k", 0.0):
+        tradeoffs.append("Lower strict chunk recall indicates expected chunks are missed more often.")
+    if metrics.get("empty_result_rate", 0.0) > winner_metrics.get("empty_result_rate", 0.0):
+        tradeoffs.append("Higher empty-result rate increases answerability risk.")
+    if not tradeoffs:
+        tradeoffs.append("Best observed balance across the configured benchmark metrics.")
+    return tradeoffs
+
+
+def _recommendation_rationale(winner: Mapping[str, Any], ranked: list[Mapping[str, Any]]) -> list[str]:
+    metrics = winner.get("metrics") if isinstance(winner.get("metrics"), Mapping) else {}
+    decision_score = winner.get("decision_score") if isinstance(winner.get("decision_score"), Mapping) else {}
+    components = decision_score.get("components") if isinstance(decision_score.get("components"), Mapping) else {}
+    table_atomicity = components.get("table_atomicity") if isinstance(components.get("table_atomicity"), Mapping) else {}
+    rationale = [
+        "Selected "
+        f"`{winner.get('profile_id')}` because it has the highest normalized decision score "
+        f"({decision_score.get('score', _decision_score_value(winner)):.4f}; raw composite {metrics.get('score', 0.0):.4f})."
+    ]
+    if metrics.get("hit_rate", 0.0) >= max((item.get("metrics", {}).get("hit_rate", 0.0) for item in ranked), default=0.0):
+        rationale.append("It ties or leads retrieval hit rate across the candidate set.")
+    if metrics.get("mrr", 0.0) >= max((item.get("metrics", {}).get("mrr", 0.0) for item in ranked), default=0.0):
+        rationale.append("It ties or leads ranking quality by MRR.")
+    if metrics.get("strict_chunk_recall_at_k", 0.0) > 0:
+        rationale.append("It preserves expected-chunk evidence according to strict chunk recall.")
+    if metrics.get("candidate_snapshot_expected_chunk_recall_at_k", 0.0) > 0:
+        rationale.append(
+            "Candidate-local expected chunk recall@k is "
+            f"{metrics.get('candidate_snapshot_expected_chunk_recall_at_k', 0.0):.4f}; "
+            "this advisory evidence maps expected terms to the candidate's own chunk boundaries separately from exact reference-snapshot matches."
+        )
+    if metrics.get("table_term_recall_observed") and metrics.get("table_term_recall_at_k", 0.0) > 0:
+        rationale.append(f"Table term recall@k is {metrics.get('table_term_recall_at_k', 0.0):.4f}, so semantic table evidence is present.")
+    if table_atomicity.get("status") == "pass":
+        rationale.append("Table atomicity preflight passed for the selected profile.")
+    elif table_atomicity.get("status") == "risk":
+        rationale.append("Selected profile has table atomicity risk; review table fragmentation before promotion.")
+    risk_ids = [
+        item.get("profile_id")
+        for item in ranked
+        if isinstance(item.get("decision_score"), Mapping)
+        and isinstance(item["decision_score"].get("components"), Mapping)
+        and isinstance(item["decision_score"]["components"].get("table_atomicity"), Mapping)
+        and item["decision_score"]["components"]["table_atomicity"].get("status") == "risk"
+    ]
+    if risk_ids and winner.get("profile_id") not in risk_ids:
+        rationale.append(
+            "Table atomicity risk penalized lower-capacity candidate(s): "
+            + ", ".join(f"`{profile_id}`" for profile_id in risk_ids)
+            + "."
+        )
+    if metrics.get("empty_result_rate", 0.0) == 0:
+        rationale.append("It did not produce empty retrievals in the provided benchmark report.")
+    return rationale
+
+
+def _benchmark_strength_from_plan(plan: Mapping[str, Any]) -> dict[str, Any] | None:
+    inputs = plan.get("inputs") if isinstance(plan.get("inputs"), Mapping) else {}
+    benchmark = inputs.get("benchmark") if isinstance(inputs.get("benchmark"), Mapping) else {}
+    preflight = benchmark.get("preflight") if isinstance(benchmark.get("preflight"), Mapping) else {}
+    strength = preflight.get("benchmark_strength")
+    return dict(strength) if isinstance(strength, Mapping) else None
+
+
+def _recommendation_decision_status(benchmark_strength: Mapping[str, Any] | None) -> str:
+    if not benchmark_strength:
+        return "recommended"
+    status = benchmark_strength.get("status")
+    if status in {"exploratory", "blocked"}:
+        return "insufficient_evidence"
+    return "recommended"
+
+
+def _append_benchmark_strength_rationale(rationale: list[str], benchmark_strength: Mapping[str, Any] | None) -> list[str]:
+    if not benchmark_strength:
+        return rationale
+    status = benchmark_strength.get("status")
+    if status in {"exploratory", "blocked"}:
+        rationale.append("Decision is downgraded because weak benchmark evidence is not sufficient for profile promotion.")
+    return rationale
+
+
+def _benchmark_artifact_followups(benchmark_strength: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    if not benchmark_strength:
+        return []
+    summary = benchmark_strength.get("summary") if isinstance(benchmark_strength.get("summary"), Mapping) else {}
+    issue_codes = set(benchmark_strength.get("issue_codes", []) if isinstance(benchmark_strength.get("issue_codes"), list) else [])
+    followups: list[dict[str, Any]] = []
+    expected_chunk_coverage = summary.get("expected_chunk_coverage")
+    if "missing_strict_evidence" in issue_codes or expected_chunk_coverage == 0:
+        followups.append(
+            {
+                "code": "add_expected_chunk_qrels",
+                "severity": "warning",
+                "reason": "Benchmark artifacts do not include strict expected chunk evidence.",
+                "recommendation": "Run snapshot-chunks and qa map-evidence, then add expected_chunks qrels before promoting an optimized profile.",
+            }
+        )
+    expected_modality_coverage = summary.get("expected_modality_coverage")
+    if expected_modality_coverage == 0:
+        followups.append(
+            {
+                "code": "add_modality_benchmark_cases",
+                "severity": "info",
+                "reason": "Benchmark artifacts do not mark table, image, or mixed-modality expectations.",
+                "recommendation": "Run benchmark suggest with retrieval_hints.json to draft table, image, and mixed-modality benchmark cases.",
+            }
+        )
+    target_document_count = summary.get("target_document_count")
+    single_document_only = (
+        "single_target_document" in issue_codes
+        and isinstance(target_document_count, int)
+        and target_document_count <= 1
+    )
+    if issue_codes == {"single_target_document"} or single_document_only:
+        followups.append(
+            {
+                "code": "add_multi_document_or_negative_cases",
+                "severity": "warning",
+                "reason": "Benchmark qrels cover only one target document.",
+                "recommendation": "Add multi-document or negative cases before treating an optimized profile as promotable.",
+            }
+        )
+        return followups
+    if isinstance(target_document_count, int) and target_document_count <= 1:
+        followups.append(
+            {
+                "code": "add_wrong_document_cases",
+                "severity": "info",
+                "reason": "Benchmark qrels cover only one target document.",
+                "recommendation": "Add negative or wrong-document cases when the handoff or corpus contains multiple documents.",
+            }
+        )
+    return followups
+
+
+def _metric_saturation(results: list[Mapping[str, Any]]) -> dict[str, Any]:
+    saturated_metrics: list[str] = []
+    inspected_metrics = ["hit_rate", "mrr", "recall_at_k"]
+    for metric in inspected_metrics:
+        values: list[float] = []
+        for result in results:
+            metrics = result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
+            values.append(_metric_value(metrics, metric))
+        if len(values) > 1 and len(set(values)) == 1:
+            saturated_metrics.append(metric)
+    return {
+        "status": "saturated" if saturated_metrics else "variable",
+        "inspected_metrics": inspected_metrics,
+        "saturated_metrics": saturated_metrics,
+    }
+
+
+def _non_negative_float(value: Any, *, default: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return max(0.0, float(value))
+
+
+def _int_value(value: Any, *, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _decision_config(
+    plan: Mapping[str, Any],
+    *,
+    score_epsilon: float | None,
+    min_score_delta: float | None,
+) -> dict[str, float]:
+    inputs = plan.get("inputs") if isinstance(plan.get("inputs"), Mapping) else {}
+    raw = plan.get("decision") if isinstance(plan.get("decision"), Mapping) else None
+    if raw is None:
+        raw = inputs.get("decision") if isinstance(inputs.get("decision"), Mapping) else None
+    if raw is None:
+        raw = inputs.get("optimization_decision") if isinstance(inputs.get("optimization_decision"), Mapping) else {}
+    return {
+        "score_epsilon": _non_negative_float(
+            score_epsilon if score_epsilon is not None else raw.get("score_epsilon") if isinstance(raw, Mapping) else None,
+            default=1e-9,
+        ),
+        "min_score_delta": _non_negative_float(
+            min_score_delta if min_score_delta is not None else raw.get("min_score_delta") if isinstance(raw, Mapping) else None,
+            default=0.0,
+        ),
+    }
+
+
+def _profile_enrichment_weight(profile: Mapping[str, Any]) -> float:
+    parser_config = profile.get("parser_config") if isinstance(profile.get("parser_config"), Mapping) else {}
+    keys = ("auto_keywords", "auto_questions")
+    weight = 0.0
+    for key in keys:
+        value = parser_config.get(key, profile.get(key))
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        weight += max(0.0, float(value))
+    return weight
+
+
+def _clamp01(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return min(1.0, max(0.0, float(value)))
+
+
+def _round_score(value: float) -> float:
+    return round(value, 4)
+
+
+def _decision_latency_component(
+    metrics: Mapping[str, Any],
+    *,
+    max_latency_ms: float,
+) -> tuple[dict[str, Any], float]:
+    observed = bool(metrics.get("query_latency_ms_observed"))
+    if observed:
+        value = max(0.0, _metric_value(metrics, "query_latency_ms"))
+        relative = value / max_latency_ms if max_latency_ms > 0 else 0.0
+        penalty = 0.05 * min(1.0, relative)
+        return (
+            {
+                "status": "observed",
+                "value_ms": _round_score(value),
+                "relative": _round_score(relative),
+                "penalty": _round_score(penalty),
+            },
+            penalty,
+        )
+    penalty = 0.025
+    return (
+        {
+            "status": "unknown",
+            "value_ms": None,
+            "relative": None,
+            "penalty": _round_score(penalty),
+        },
+        penalty,
+    )
+
+
+def _decision_parse_time_component(
+    metrics: Mapping[str, Any],
+    *,
+    max_parse_time_ms: float,
+) -> tuple[dict[str, Any], float]:
+    observed = bool(metrics.get("parse_time_ms_observed"))
+    if observed:
+        value = max(0.0, _metric_value(metrics, "parse_time_ms"))
+        relative = value / max_parse_time_ms if max_parse_time_ms > 0 else 0.0
+        penalty = 0.05 * min(1.0, relative)
+        return (
+            {
+                "status": "observed",
+                "value_ms": _round_score(value),
+                "relative": _round_score(relative),
+                "penalty": _round_score(penalty),
+            },
+            penalty,
+        )
+    penalty = 0.025
+    return (
+        {
+            "status": "unknown",
+            "value_ms": None,
+            "relative": None,
+            "penalty": _round_score(penalty),
+        },
+        penalty,
+    )
+
+
+def _decision_enrichment_component(profile: Mapping[str, Any], *, max_enrichment_weight: float) -> tuple[dict[str, Any], float]:
+    weight = _profile_enrichment_weight(profile)
+    relative = weight / max_enrichment_weight if max_enrichment_weight > 0 else 0.0
+    relative = min(1.0, max(0.0, relative))
+    penalty = 0.04 * relative
+    return (
+        {
+            "status": "estimated" if weight > 0 else "none",
+            "weight": _round_score(weight),
+            "relative": _round_score(relative),
+            "penalty": _round_score(penalty),
+        },
+        penalty,
+    )
+
+
+def _decision_cost_component(
+    result: Mapping[str, Any],
+    *,
+    max_latency_ms: float,
+    max_parse_time_ms: float,
+    max_enrichment_weight: float,
+) -> tuple[dict[str, Any], float]:
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
+    profile = result.get("profile") if isinstance(result.get("profile"), Mapping) else {}
+    latency, latency_penalty = _decision_latency_component(metrics, max_latency_ms=max_latency_ms)
+    parse_time, parse_penalty = _decision_parse_time_component(metrics, max_parse_time_ms=max_parse_time_ms)
+    enrichment, enrichment_penalty = _decision_enrichment_component(profile, max_enrichment_weight=max_enrichment_weight)
+    penalty = latency_penalty + parse_penalty + enrichment_penalty
+    max_penalty = 0.14
+    if latency["status"] == "unknown" or parse_time["status"] == "unknown":
+        status = "unknown"
+    elif enrichment["status"] == "estimated":
+        status = "estimated"
+    else:
+        status = "observed"
+    return (
+        {
+            "status": status,
+            "score": _round_score(1.0 - min(1.0, penalty / max_penalty)),
+            "penalty": _round_score(penalty),
+            "latency": latency,
+            "parse_time": parse_time,
+            "enrichment": enrichment,
+        },
+        penalty,
+    )
+
+
+def _decision_modality_component(benchmark_strength: Mapping[str, Any] | None) -> tuple[dict[str, Any], float]:
+    if not benchmark_strength:
+        return ({"status": "unknown", "coverage": None, "score": 1.0, "penalty": 0.0}, 0.0)
+    summary = benchmark_strength.get("summary") if isinstance(benchmark_strength.get("summary"), Mapping) else {}
+    raw_coverage = summary.get("expected_modality_coverage")
+    if isinstance(raw_coverage, bool) or not isinstance(raw_coverage, (int, float)):
+        return ({"status": "unknown", "coverage": None, "score": 1.0, "penalty": 0.0}, 0.0)
+    coverage = _clamp01(raw_coverage)
+    penalty = 0.02 * (1.0 - coverage)
+    return (
+        {
+            "status": "observed" if coverage > 0 else "missing",
+            "coverage": _round_score(coverage),
+            "score": _round_score(coverage),
+            "penalty": _round_score(penalty),
+        },
+        penalty,
+    )
+
+
+def _decision_context_warning_component(result: Mapping[str, Any]) -> tuple[dict[str, Any], float]:
+    warning_codes: list[str] = []
+    if result.get("ok") is False:
+        warning_codes.append("validation_failed")
+    diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), Mapping) else {}
+    if diagnostics.get("required"):
+        warning_codes.extend(str(code) for code in diagnostics.get("reason_codes", []) if code)
+    evidence = result.get("runtime_evidence") if isinstance(result.get("runtime_evidence"), Mapping) else {}
+    parse = evidence.get("parse_report") if isinstance(evidence.get("parse_report"), Mapping) else {}
+    drift = parse.get("drift") if isinstance(parse.get("drift"), Mapping) else {}
+    if drift.get("drift"):
+        warning_codes.append("parser_config_drift")
+    health = evidence.get("health_report") if isinstance(evidence.get("health_report"), Mapping) else {}
+    if health.get("embedding_model_rebuild_required"):
+        warning_codes.append("embedding_model_rebuild_required")
+    if health.get("parser_warning"):
+        warning_codes.append("parser_warning")
+    if isinstance(health.get("issue_codes"), list):
+        warning_codes.extend(str(code) for code in health.get("issue_codes", []) if code)
+    unique_codes = sorted(set(warning_codes))
+    penalty = min(0.05, 0.01 * len(unique_codes))
+    return (
+        {
+            "status": "warning" if unique_codes else "clear",
+            "score": _round_score(1.0 - min(1.0, len(unique_codes) / 5.0)),
+            "warning_count": len(unique_codes),
+            "warning_codes": unique_codes,
+            "penalty": _round_score(penalty),
+        },
+        penalty,
+    )
+
+
+def _table_atomicity_issue_codes(preflight: Mapping[str, Any]) -> list[str]:
+    issues = preflight.get("issues") if isinstance(preflight.get("issues"), list) else []
+    codes = [
+        str(issue.get("code"))
+        for issue in issues
+        if isinstance(issue, Mapping) and isinstance(issue.get("code"), str) and issue.get("code")
+    ]
+    return sorted(set(codes))
+
+
+def _decision_table_atomicity_component(result: Mapping[str, Any]) -> tuple[dict[str, Any], float]:
+    preflight = (
+        result.get("table_parent_chunk_preflight")
+        if isinstance(result.get("table_parent_chunk_preflight"), Mapping)
+        else None
+    )
+    if not preflight:
+        return (
+            {
+                "status": "unknown",
+                "evidence_status": "unknown",
+                "score": 1.0,
+                "penalty": 0.0,
+                "table_count": 0,
+            },
+            0.0,
+        )
+
+    table_count = _int_value(preflight.get("table_count"))
+    exists = bool(preflight.get("exists")) or table_count > 0
+    if not exists:
+        return (
+            {
+                "status": "unknown",
+                "evidence_status": "unknown",
+                "score": 1.0,
+                "penalty": 0.0,
+                "table_count": table_count,
+            },
+            0.0,
+        )
+
+    selected_tokens_raw = preflight.get("selected_profile_chunk_tokens")
+    selected_tokens = (
+        int(selected_tokens_raw)
+        if isinstance(selected_tokens_raw, (int, float)) and not isinstance(selected_tokens_raw, bool)
+        else None
+    )
+    max_estimate = _int_value(preflight.get("max_estimated_parent_chunk_tokens"))
+    issue_codes = _table_atomicity_issue_codes(preflight)
+    issue_risk = bool(issue_codes) and (
+        "table_parent_chunk_profile_too_small" in issue_codes
+        or str(preflight.get("status", "")).lower() in {"review", "risk", "warning", "failed"}
+    )
+    capacity_risk = selected_tokens is not None and max_estimate > selected_tokens
+    if selected_tokens is None:
+        status = "available"
+        penalty = 0.0
+        score = 1.0
+    elif issue_risk or capacity_risk:
+        status = "risk"
+        penalty = 0.03
+        score = 0.0
+    else:
+        status = "pass"
+        penalty = 0.0
+        score = 1.0
+
+    return (
+        {
+            "status": status,
+            "evidence_status": "available",
+            "score": _round_score(score),
+            "penalty": _round_score(penalty),
+            "table_count": table_count,
+            "selected_profile_chunk_tokens": selected_tokens,
+            "max_estimated_parent_chunk_tokens": max_estimate,
+            "max_recommended_min_parent_chunk_tokens": _int_value(preflight.get("max_recommended_min_parent_chunk_tokens")),
+            "issue_codes": issue_codes,
+        },
+        penalty,
+    )
+
+
+def _decision_score_for_result(
+    result: Mapping[str, Any],
+    *,
+    benchmark_strength: Mapping[str, Any] | None,
+    max_latency_ms: float,
+    max_parse_time_ms: float,
+    max_enrichment_weight: float,
+) -> dict[str, Any]:
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
+    pass_rate = _clamp01(metrics.get("pass_rate"))
+    hit_rate = _clamp01(metrics.get("hit_rate"))
+    mrr = _clamp01(metrics.get("mrr"))
+    ndcg = _clamp01(metrics.get("ndcg_at_k"))
+    strict_recall = _clamp01(metrics.get("strict_chunk_recall_at_k"))
+    expected_hit = _clamp01(metrics.get("expected_chunk_hit_rate"))
+    candidate_snapshot_recall = _clamp01(metrics.get("candidate_snapshot_expected_chunk_recall_at_k"))
+    candidate_snapshot_hit = _clamp01(metrics.get("candidate_snapshot_expected_chunk_hit_rate"))
+    empty_rate = _clamp01(metrics.get("empty_result_rate"))
+
+    quality_weighted = (pass_rate * 0.30) + (hit_rate * 0.20) + (mrr * 0.20) + (ndcg * 0.15)
+    strict_weighted = (strict_recall * 0.10) + (expected_hit * 0.05)
+    empty_penalty = empty_rate * 0.10
+    pre_cost_score = max(0.0, quality_weighted + strict_weighted - empty_penalty)
+
+    cost, cost_penalty = _decision_cost_component(
+        result,
+        max_latency_ms=max_latency_ms,
+        max_parse_time_ms=max_parse_time_ms,
+        max_enrichment_weight=max_enrichment_weight,
+    )
+    modality, modality_penalty = _decision_modality_component(benchmark_strength)
+    context, context_penalty = _decision_context_warning_component(result)
+    table_atomicity, table_atomicity_penalty = _decision_table_atomicity_component(result)
+    final_score = _clamp01(pre_cost_score - cost_penalty - modality_penalty - context_penalty - table_atomicity_penalty)
+
+    return {
+        "basis": "normalized_decision_score",
+        "score": _round_score(final_score),
+        "pre_cost_score": _round_score(_clamp01(pre_cost_score)),
+        "raw_score": _round_score(_metric_value(metrics, "score")),
+        "weights": {
+            "quality": 0.85,
+            "strict_evidence": 0.15,
+            "empty_result_risk_penalty": 0.10,
+            "cost_penalty": 0.14,
+            "modality_coverage_penalty": 0.02,
+            "context_warning_penalty": 0.05,
+            "table_atomicity_penalty": 0.03,
+        },
+        "components": {
+            "quality": {
+                "score": _round_score(quality_weighted / 0.85 if 0.85 else 0.0),
+                "weighted_score": _round_score(quality_weighted),
+                "metrics": {
+                    "pass_rate": _round_score(pass_rate),
+                    "hit_rate": _round_score(hit_rate),
+                    "mrr": _round_score(mrr),
+                    "ndcg_at_k": _round_score(ndcg),
+                },
+            },
+            "strict_evidence": {
+                "score": _round_score(strict_weighted / 0.15 if 0.15 else 0.0),
+                "weighted_score": _round_score(strict_weighted),
+                "metrics": {
+                    "strict_chunk_recall_at_k": _round_score(strict_recall),
+                    "expected_chunk_hit_rate": _round_score(expected_hit),
+                    "candidate_snapshot_expected_chunk_recall_at_k": _round_score(candidate_snapshot_recall),
+                    "candidate_snapshot_expected_chunk_hit_rate": _round_score(candidate_snapshot_hit),
+                    "candidate_snapshot_advisory": candidate_snapshot_recall > 0 or candidate_snapshot_hit > 0,
+                },
+            },
+            "modality_coverage": modality,
+            "empty_result_risk": {
+                "score": _round_score(1.0 - empty_rate),
+                "empty_result_rate": _round_score(empty_rate),
+                "penalty": _round_score(empty_penalty),
+            },
+            "cost": cost,
+            "context_warnings": context,
+            "table_atomicity": table_atomicity,
+        },
+    }
+
+
+def _attach_decision_scores(results: list[dict[str, Any]], benchmark_strength: Mapping[str, Any] | None) -> None:
+    observed_latency = [
+        _metric_value(item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}, "query_latency_ms")
+        for item in results
+        if isinstance(item.get("metrics"), Mapping) and bool(item["metrics"].get("query_latency_ms_observed"))
+    ]
+    observed_parse = [
+        _metric_value(item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}, "parse_time_ms")
+        for item in results
+        if isinstance(item.get("metrics"), Mapping) and bool(item["metrics"].get("parse_time_ms_observed"))
+    ]
+    enrichment_weights = [
+        _profile_enrichment_weight(item.get("profile") if isinstance(item.get("profile"), Mapping) else {})
+        for item in results
+    ]
+    max_latency_ms = max(observed_latency, default=0.0)
+    max_parse_time_ms = max(observed_parse, default=0.0)
+    max_enrichment_weight = max(enrichment_weights, default=0.0)
+    for item in results:
+        item["decision_score"] = _decision_score_for_result(
+            item,
+            benchmark_strength=benchmark_strength,
+            max_latency_ms=max_latency_ms,
+            max_parse_time_ms=max_parse_time_ms,
+            max_enrichment_weight=max_enrichment_weight,
+        )
+
+
+def _decision_score_value(result: Mapping[str, Any]) -> float:
+    decision_score = result.get("decision_score") if isinstance(result.get("decision_score"), Mapping) else {}
+    value = decision_score.get("score")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        metrics = result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
+        return _metric_value(metrics, "score")
+    return float(value)
+
+
+def _pre_cost_decision_score_value(result: Mapping[str, Any]) -> float:
+    decision_score = result.get("decision_score") if isinstance(result.get("decision_score"), Mapping) else {}
+    value = decision_score.get("pre_cost_score")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return _decision_score_value(result)
+    return float(value)
+
+
+def _metric_cost_key(metrics: Mapping[str, Any], metric: str, observed_metric: str) -> tuple[int, float]:
+    observed = bool(metrics.get(observed_metric))
+    value = _metric_value(metrics, metric)
+    return (0, value) if observed else (1, 0.0)
+
+
+def _result_sort_key(result: Mapping[str, Any]) -> tuple[float, float, tuple[int, float], tuple[int, float], int]:
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
+    profile = result.get("profile") if isinstance(result.get("profile"), Mapping) else {}
+    candidate_index = result.get("candidate_index")
+    index = int(candidate_index) if isinstance(candidate_index, int) and not isinstance(candidate_index, bool) else 0
+    return (
+        -_decision_score_value(result),
+        _profile_enrichment_weight(profile),
+        _metric_cost_key(metrics, "query_latency_ms", "query_latency_ms_observed"),
+        _metric_cost_key(metrics, "parse_time_ms", "parse_time_ms_observed"),
+        index,
+    )
+
+
+def _co_winners(ranked: list[Mapping[str, Any]], *, score_epsilon: float) -> list[Mapping[str, Any]]:
+    if not ranked:
+        return []
+    top_score = _pre_cost_decision_score_value(ranked[0])
+    winners = []
+    for item in ranked:
+        if abs(_pre_cost_decision_score_value(item) - top_score) <= score_epsilon:
+            winners.append(item)
+    return winners
+
+
+def _score_delta(ranked: list[Mapping[str, Any]]) -> float | None:
+    if len(ranked) < 2:
+        return None
+    return round(_decision_score_value(ranked[0]) - _decision_score_value(ranked[1]), 4)
+
+
+def _cost_review_reasons(winner: Mapping[str, Any] | None, co_winners: list[Mapping[str, Any]]) -> list[str]:
+    if not winner or len(co_winners) <= 1:
+        return []
+    reasons: list[str] = []
+    if any(
+        _profile_enrichment_weight(item.get("profile") if isinstance(item.get("profile"), Mapping) else {}) > 0
+        and (
+            not bool((item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}).get("query_latency_ms_observed"))
+            or not bool((item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}).get("parse_time_ms_observed"))
+        )
+        for item in co_winners
+    ):
+        reasons.append("Quality-tied enrichment profiles require latency and parse-cost evidence before promotion.")
+    winner_metrics = winner.get("metrics") if isinstance(winner.get("metrics"), Mapping) else {}
+    if bool(winner_metrics.get("query_latency_ms_observed")) and bool(winner_metrics.get("parse_time_ms_observed")):
+        winner_latency = _metric_value(winner_metrics, "query_latency_ms")
+        winner_parse = _metric_value(winner_metrics, "parse_time_ms")
+        for item in co_winners:
+            if item is winner:
+                continue
+            metrics = item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}
+            if not bool(metrics.get("query_latency_ms_observed")) or not bool(metrics.get("parse_time_ms_observed")):
+                continue
+            if winner_latency > _metric_value(metrics, "query_latency_ms") or winner_parse > _metric_value(metrics, "parse_time_ms"):
+                reasons.append("The conservative representative is quality-tied but has worse measured latency or parse time.")
+                break
+    return reasons
+
+
+def _decision_status(
+    *,
+    winner: Mapping[str, Any] | None,
+    benchmark_strength: Mapping[str, Any] | None,
+    co_winners: list[Mapping[str, Any]],
+    score_delta: float | None,
+    min_score_delta: float,
+    cost_review_reasons: list[str],
+) -> str:
+    if not winner:
+        return "insufficient_evidence"
+    if benchmark_strength and benchmark_strength.get("status") in {"exploratory", "blocked"}:
+        return "insufficient_evidence"
+    if len(co_winners) == 1 and score_delta is not None and score_delta < min_score_delta:
+        return "insufficient_evidence"
+    if cost_review_reasons:
+        return "needs_cost_review"
+    if len(co_winners) > 1:
+        return "co_winners"
+    return "recommended"
+
+
+def _co_winner_summary(co_winners: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    summaries = []
+    for item in co_winners:
+        metrics = item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}
+        decision_score = item.get("decision_score") if isinstance(item.get("decision_score"), Mapping) else {}
+        summaries.append(
+            {
+                "profile_id": item.get("profile_id"),
+                "rank": item.get("rank"),
+                "score": metrics.get("score"),
+                "raw_score": metrics.get("score"),
+                "decision_score": decision_score.get("score"),
+                "disposable_kb_name": item.get("disposable_kb_name"),
+            }
+        )
+    return summaries
+
+
+def _append_decision_rationale(
+    rationale: list[str],
+    *,
+    decision_status: str,
+    co_winners: list[Mapping[str, Any]],
+    score_delta: float | None,
+    min_score_delta: float,
+    cost_review_reasons: list[str],
+) -> list[str]:
+    if len(co_winners) > 1:
+        profile_ids = ", ".join(f"`{item.get('profile_id')}`" for item in co_winners)
+        rationale.append(f"Multiple profiles are pre-cost decision co-winners within the configured score epsilon: {profile_ids}.")
+    if decision_status == "insufficient_evidence" and score_delta is not None and score_delta < min_score_delta:
+        rationale.append(
+            f"Decision is downgraded because score delta {score_delta:.4f} is below the minimum score delta {min_score_delta:.4f}."
+        )
+    for reason in cost_review_reasons:
+        rationale.append(f"Cost review required: {reason}")
+    return rationale
+
+
+def _optional_report(
+    path: str | Path | None,
+    *,
+    label: str,
+    expected_schema: str,
+    field: str,
+    issues: list[OptimizationIssue],
+) -> dict[str, Any] | None:
+    if not path:
+        return None
+    try:
+        report = _read_json_mapping(path, label=label)
+    except ProfileError as exc:
+        issues.append(OptimizationIssue("warning", f"{field}_invalid", str(exc), field))
+        return None
+    if report.get("schema") != expected_schema:
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                f"{field}_schema_invalid",
+                f"{label} schema should be {expected_schema}",
+                field,
+            )
+        )
+        return None
+    return report
+
+
+def _discover_sibling_report_path(plan_path: str | Path, explicit_path: str | Path | None, filename: str) -> str | Path | None:
+    if explicit_path:
+        return explicit_path
+    candidate = Path(plan_path).parent / filename
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def _cleanup_plan_status(cleanup_plan: Mapping[str, Any] | None) -> dict[str, Any]:
+    if cleanup_plan is None:
+        return {
+            "status": "missing",
+            "target_count": 0,
+            "ready_target_count": 0,
+            "pending_target_count": 0,
+            "invalid_target_count": 0,
+            "ready_targets": [],
+        }
+    summary = cleanup_plan.get("summary") if isinstance(cleanup_plan.get("summary"), Mapping) else {}
+    targets = cleanup_plan.get("targets") if isinstance(cleanup_plan.get("targets"), list) else []
+    target_count = _int_value(summary.get("target_count") if "target_count" in summary else len(targets))
+    ready_target_count = _int_value(
+        summary.get("ready_target_count")
+        if "ready_target_count" in summary
+        else sum(1 for target in targets if isinstance(target, Mapping) and target.get("status") == "ready")
+    )
+    pending_target_count = _int_value(
+        summary.get("pending_target_count")
+        if "pending_target_count" in summary
+        else sum(1 for target in targets if isinstance(target, Mapping) and str(target.get("status", "")).startswith("pending"))
+    )
+    invalid_target_count = _int_value(
+        summary.get("invalid_target_count")
+        if "invalid_target_count" in summary
+        else sum(1 for target in targets if isinstance(target, Mapping) and str(target.get("status", "")).startswith("invalid"))
+    )
+    if cleanup_plan.get("ok") is False or invalid_target_count:
+        status = "invalid"
+    elif target_count == 0:
+        status = "empty"
+    elif pending_target_count:
+        status = "pending"
+    elif ready_target_count:
+        status = "ready"
+    else:
+        status = "present"
+    ready_targets = []
+    for target in targets:
+        if not isinstance(target, Mapping) or target.get("status") != "ready":
+            continue
+        target_payload = target.get("target") if isinstance(target.get("target"), Mapping) else {}
+        dataset_id = target_payload.get("dataset_id")
+        dataset_name = target_payload.get("dataset_name")
+        if isinstance(dataset_id, str) and dataset_id:
+            ready_targets.append(
+                {
+                    "profile_id": target.get("profile_id"),
+                    "disposable_kb_name": target.get("disposable_kb_name"),
+                    "dataset_id": dataset_id,
+                    "dataset_name": dataset_name if isinstance(dataset_name, str) else None,
+                }
+            )
+    return {
+        "status": status,
+        "target_count": target_count,
+        "ready_target_count": ready_target_count,
+        "pending_target_count": pending_target_count,
+        "invalid_target_count": invalid_target_count,
+        "ready_targets": ready_targets,
+    }
+
+
+def _cleanup_execution_status(cleanup_execution_report: Mapping[str, Any] | None) -> dict[str, Any]:
+    if cleanup_execution_report is None:
+        return {
+            "status": "missing",
+            "target_count": 0,
+            "deleted_target_count": 0,
+            "failed_target_count": 0,
+            "cleanup_executed": False,
+        }
+    summary = (
+        cleanup_execution_report.get("summary")
+        if isinstance(cleanup_execution_report.get("summary"), Mapping)
+        else {}
+    )
+    target_count = _int_value(summary.get("target_count"))
+    deleted_target_count = _int_value(summary.get("deleted_target_count") or summary.get("deleted_count") or summary.get("success_count"))
+    failed_target_count = _int_value(summary.get("failed_target_count") or summary.get("failed_count"))
+    cleanup_executed = bool(summary.get("cleanup_executed") is True or deleted_target_count)
+    if cleanup_execution_report.get("ok") is False or failed_target_count:
+        status = "failed"
+    elif cleanup_executed:
+        status = "executed"
+    else:
+        status = "not_executed"
+    return {
+        "status": status,
+        "target_count": target_count,
+        "deleted_target_count": deleted_target_count,
+        "failed_target_count": failed_target_count,
+        "cleanup_executed": cleanup_executed,
+    }
+
+
+def _post_cleanup_verification_status(cleanup_execution_report: Mapping[str, Any] | None, *, cleanup_executed: bool) -> dict[str, Any]:
+    if cleanup_execution_report is None:
+        return {"status": "pending_cleanup", "network_checked": False}
+    verification = cleanup_execution_report.get("post_cleanup_verification")
+    if isinstance(verification, Mapping):
+        payload = dict(verification)
+        payload.setdefault("status", "unknown")
+        payload.setdefault("network_checked", False)
+        return payload
+    summary = (
+        cleanup_execution_report.get("summary")
+        if isinstance(cleanup_execution_report.get("summary"), Mapping)
+        else {}
+    )
+    if summary.get("post_cleanup_verified") is True:
+        return {"status": "verified", "network_checked": True}
+    if cleanup_executed:
+        return {"status": "not_checked", "network_checked": False}
+    return {"status": "pending_cleanup", "network_checked": False}
+
+
+def _cleanup_execute_command(cleanup_plan_path: str | Path | None, ready_targets: list[Mapping[str, Any]]) -> list[str] | None:
+    if not cleanup_plan_path:
+        return None
+    command = [
+        "python3",
+        "scripts/build.py",
+        "optimize",
+        "cleanup-execute",
+        "--cleanup-plan",
+        str(cleanup_plan_path),
+        "--execute",
+    ]
+    for target in ready_targets:
+        dataset_id = target.get("dataset_id")
+        dataset_name = target.get("dataset_name")
+        if not isinstance(dataset_id, str) or not dataset_id:
+            continue
+        command.extend(["--confirm-dataset-id", dataset_id])
+        if isinstance(dataset_name, str) and dataset_name:
+            command.extend(["--confirm-kb-name", dataset_name])
+    return command
+
+
+def _cleanup_next_steps(
+    *,
+    plan_path: str | Path,
+    cleanup_plan_path: str | Path | None,
+    cleanup_lifecycle: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    cleanup_plan = cleanup_lifecycle.get("cleanup_plan") if isinstance(cleanup_lifecycle.get("cleanup_plan"), Mapping) else {}
+    cleanup_execution = (
+        cleanup_lifecycle.get("cleanup_execution")
+        if isinstance(cleanup_lifecycle.get("cleanup_execution"), Mapping)
+        else {}
+    )
+    ready_targets = cleanup_plan.get("ready_targets") if isinstance(cleanup_plan.get("ready_targets"), list) else []
+    default_cleanup_plan = cleanup_plan_path or "cleanup_plan.json"
+    return [
+        {
+            "name": "cleanup-plan",
+            "status": cleanup_plan.get("status", "missing"),
+            "mutation": False,
+            "enabled": True,
+            "command": [
+                "python3",
+                "scripts/build.py",
+                "optimize",
+                "cleanup-plan",
+                "--plan",
+                str(plan_path),
+                "--output",
+                str(default_cleanup_plan),
+            ],
+        },
+        {
+            "name": "readiness",
+            "status": "review",
+            "mutation": False,
+            "enabled": True,
+            "command": [
+                "python3",
+                "scripts/build.py",
+                "optimize",
+                "readiness",
+                "--plan",
+                str(plan_path),
+                "--cleanup-plan",
+                str(default_cleanup_plan),
+            ],
+        },
+        {
+            "name": "cleanup-execute",
+            "status": cleanup_execution.get("status", "missing"),
+            "mutation": True,
+            "requires_execute": True,
+            "enabled": False,
+            "command": _cleanup_execute_command(default_cleanup_plan, [target for target in ready_targets if isinstance(target, Mapping)]),
+        },
+        {
+            "name": "field-trial-record",
+            "status": "suggested",
+            "mutation": False,
+            "enabled": True,
+            "command_group": "record_sanitized_optimize_field_trial",
+        },
+    ]
+
+
+def _optimization_cleanup_lifecycle(
+    *,
+    plan: Mapping[str, Any],
+    plan_path: str | Path,
+    cleanup_plan_path: str | Path | None,
+    cleanup_plan: Mapping[str, Any] | None,
+    readiness_report_path: str | Path | None,
+    readiness_report: Mapping[str, Any] | None,
+    cleanup_execution_report_path: str | Path | None,
+    cleanup_execution_report: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    plan_summary = plan.get("summary") if isinstance(plan.get("summary"), Mapping) else {}
+    execution = plan.get("execution") if isinstance(plan.get("execution"), Mapping) else {}
+    execution_summary = execution.get("summary") if isinstance(execution.get("summary"), Mapping) else {}
+    cleanup_required_count = max(
+        _int_value(plan_summary.get("cleanup_required_count")),
+        _int_value(execution_summary.get("cleanup_required_count")),
+    )
+    cleanup_plan_status = _cleanup_plan_status(cleanup_plan)
+    cleanup_execution_status = _cleanup_execution_status(cleanup_execution_report)
+    cleanup_required = bool(cleanup_required_count or cleanup_plan_status["target_count"] or cleanup_execution_status["target_count"])
+    post_cleanup_verification = _post_cleanup_verification_status(
+        cleanup_execution_report,
+        cleanup_executed=bool(cleanup_execution_status["cleanup_executed"]),
+    )
+    post_cleanup_status = str(post_cleanup_verification.get("status") or "unknown")
+    post_cleanup_read_back_verified = post_cleanup_status in {"verified", "passed"}
+    if not cleanup_required:
+        status = "not_required"
+    elif cleanup_execution_status["status"] == "executed":
+        if post_cleanup_read_back_verified:
+            status = "complete"
+        else:
+            status = "cleanup_executed_unverified"
+    elif cleanup_execution_status["status"] == "failed":
+        status = "cleanup_failed"
+    elif cleanup_plan_status["status"] == "missing":
+        status = "cleanup_plan_missing"
+    else:
+        status = "cleanup_pending"
+    lifecycle = {
+        "status": status,
+        "cleanup_required": cleanup_required,
+        "cleanup_required_count": cleanup_required_count or cleanup_plan_status["target_count"],
+        "plan": {
+            "path": str(plan_path),
+            "mode": plan.get("mode"),
+            "execution_schema": execution.get("schema"),
+        },
+        "readiness": {
+            "path": str(readiness_report_path) if readiness_report_path else None,
+            "status": "missing" if readiness_report is None else "passed" if readiness_report.get("ok") is not False else "failed",
+        },
+        "cleanup_plan": {
+            "path": str(cleanup_plan_path) if cleanup_plan_path else None,
+            **cleanup_plan_status,
+        },
+        "cleanup_execution": {
+            "path": str(cleanup_execution_report_path) if cleanup_execution_report_path else None,
+            **cleanup_execution_status,
+        },
+        "post_cleanup_verification": post_cleanup_verification,
+        "post_cleanup_read_back_verified": post_cleanup_read_back_verified,
+    }
+    lifecycle["next_steps"] = _cleanup_next_steps(
+        plan_path=plan_path,
+        cleanup_plan_path=cleanup_plan_path,
+        cleanup_lifecycle=lifecycle,
+    )
+    return lifecycle
+
+
+def _field_trial_record_suggestion(
+    *,
+    plan: Mapping[str, Any],
+    results: list[Mapping[str, Any]],
+    decision_status: str,
+    recommendation: Mapping[str, Any],
+    cleanup_lifecycle: Mapping[str, Any],
+    benchmark_strength: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    execution = plan.get("execution") if isinstance(plan.get("execution"), Mapping) else {}
+    execution_summary = execution.get("summary") if isinstance(execution.get("summary"), Mapping) else {}
+    return {
+        "schema": "ragflow_field_trial_record_suggestion_v1",
+        "advisory": True,
+        "generated": True,
+        "script_owned_llm_calls": 0,
+        "workflow": "ragflow-kb-build optimize",
+        "run_id": plan.get("run_id"),
+        "candidate_count": len(results),
+        "validated_candidate_count": _int_value(execution_summary.get("validated_candidate_count")) or len(results),
+        "benchmark_validation_passed_count": _int_value(execution_summary.get("benchmark_validation_passed_count")),
+        "benchmark_strength_status": benchmark_strength.get("status") if benchmark_strength else None,
+        "decision_status": decision_status,
+        "recommended_profile_id": recommendation.get("profile_id"),
+        "cleanup_status": cleanup_lifecycle.get("status"),
+        "cleanup_required": bool(cleanup_lifecycle.get("cleanup_required")),
+        "cleanup_executed": bool(
+            (cleanup_lifecycle.get("cleanup_execution") if isinstance(cleanup_lifecycle.get("cleanup_execution"), Mapping) else {}).get(
+                "cleanup_executed"
+            )
+        ),
+        "post_cleanup_verification_status": (
+            cleanup_lifecycle.get("post_cleanup_verification")
+            if isinstance(cleanup_lifecycle.get("post_cleanup_verification"), Mapping)
+            else {}
+        ).get("status"),
+        "command_groups": [
+            "optimize_execute",
+            "optimize_summarize",
+            "optimize_cleanup_plan",
+            "optimize_cleanup_execute",
+            "field_trial_metrics",
+        ],
+    }
+
+
+def summarize_optimization_results(
+    *,
+    plan_path: str | Path,
+    report_paths: Iterable[str | Path] | None = None,
+    cleanup_plan_path: str | Path | None = None,
+    readiness_report_path: str | Path | None = None,
+    cleanup_execution_report_path: str | Path | None = None,
+    score_epsilon: float | None = None,
+    min_score_delta: float | None = None,
+) -> dict[str, Any]:
+    """Summarize completed profile experiment validation reports without live execution."""
+
+    plan = _read_json_mapping(plan_path, label="optimization plan")
+    issues: list[OptimizationIssue] = []
+    if plan.get("schema") != OPTIMIZATION_PLAN_SCHEMA:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "optimization_plan_schema_invalid",
+                f"optimization plan schema must be {OPTIMIZATION_PLAN_SCHEMA}",
+                "schema",
+            )
+        )
+    candidates = plan.get("candidates", [])
+    if not isinstance(candidates, list) or not candidates:
+        issues.append(OptimizationIssue("error", "optimization_plan_candidates_missing", "optimization plan has no candidates", "candidates"))
+        candidates = []
+    cleanup_plan_path = _discover_sibling_report_path(plan_path, cleanup_plan_path, "cleanup_plan.json")
+    readiness_report_path = _discover_sibling_report_path(plan_path, readiness_report_path, "optimization_live_readiness_report.json")
+    cleanup_execution_report_path = _discover_sibling_report_path(
+        plan_path,
+        cleanup_execution_report_path,
+        "cleanup_execution_report.json",
+    )
+    cleanup_plan = _optional_report(
+        cleanup_plan_path,
+        label="optimization cleanup plan",
+        expected_schema=OPTIMIZATION_CLEANUP_PLAN_SCHEMA,
+        field="cleanup_plan",
+        issues=issues,
+    )
+    readiness_report = _optional_report(
+        readiness_report_path,
+        label="optimization live readiness report",
+        expected_schema=OPTIMIZATION_LIVE_READINESS_REPORT_SCHEMA,
+        field="readiness_report",
+        issues=issues,
+    )
+    cleanup_execution_report = _optional_report(
+        cleanup_execution_report_path,
+        label="optimization cleanup execution report",
+        expected_schema=OPTIMIZATION_CLEANUP_EXECUTION_REPORT_SCHEMA,
+        field="cleanup_execution_report",
+        issues=issues,
+    )
+
+    explicit_reports = [Path(path) for path in report_paths or []]
+    if explicit_reports and len(explicit_reports) > len(candidates):
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                "extra_validation_reports_ignored",
+                "more validation reports were provided than plan candidates",
+                "reports",
+            )
+        )
+
+    results = []
+    diagnostics = []
+    for index, candidate in enumerate(candidates):
+        if not isinstance(candidate, Mapping):
+            continue
+        artifact_report = None
+        artifacts = candidate.get("artifacts") if isinstance(candidate.get("artifacts"), Mapping) else {}
+        if isinstance(artifacts.get("validation_report"), str):
+            artifact_report = Path(artifacts["validation_report"])
+        report_path = explicit_reports[index] if index < len(explicit_reports) else artifact_report
+        if not report_path:
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "validation_report_missing",
+                    "no validation report path is available for candidate",
+                    f"candidates[{index}].validation_report",
+                )
+            )
+            diagnostic = _candidate_diagnostic(
+                candidate,
+                reason_codes=["validation_report_missing"],
+                issues=issues,
+                field=f"candidates[{index}].artifacts.kb_manifest",
+            )
+            diagnostics.append(
+                {
+                    "profile_id": candidate.get("profile_id"),
+                    "disposable_kb_name": candidate.get("disposable_kb_name"),
+                    **diagnostic,
+                }
+            )
+            continue
+        if not report_path.exists():
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "validation_report_missing",
+                    f"validation report not found: {report_path}",
+                    f"candidates[{index}].validation_report",
+                )
+            )
+            diagnostic = _candidate_diagnostic(
+                candidate,
+                reason_codes=["validation_report_missing"],
+                issues=issues,
+                field=f"candidates[{index}].artifacts.kb_manifest",
+            )
+            diagnostics.append(
+                {
+                    "profile_id": candidate.get("profile_id"),
+                    "disposable_kb_name": candidate.get("disposable_kb_name"),
+                    **diagnostic,
+                }
+            )
+            continue
+        try:
+            report = _read_json_mapping(report_path, label="validation report")
+        except ProfileError as exc:
+            issues.append(OptimizationIssue("error", "validation_report_invalid", str(exc), f"candidates[{index}].validation_report"))
+            diagnostic = _candidate_diagnostic(
+                candidate,
+                reason_codes=["validation_report_invalid"],
+                issues=issues,
+                field=f"candidates[{index}].artifacts.kb_manifest",
+            )
+            diagnostics.append(
+                {
+                    "profile_id": candidate.get("profile_id"),
+                    "disposable_kb_name": candidate.get("disposable_kb_name"),
+                    **diagnostic,
+                }
+            )
+            continue
+        metrics = _validation_report_metrics(report)
+        reason_codes = _validation_diagnostic_reasons(report)
+        diagnostic = _candidate_diagnostic(
+            candidate,
+            reason_codes=reason_codes,
+            issues=issues,
+            field=f"candidates[{index}].artifacts.kb_manifest",
+        )
+        if diagnostic["required"]:
+            diagnostics.append(
+                {
+                    "profile_id": candidate.get("profile_id"),
+                    "disposable_kb_name": candidate.get("disposable_kb_name"),
+                    **diagnostic,
+                }
+            )
+        runtime_evidence = _candidate_runtime_evidence(candidate, issues=issues, field=f"candidates[{index}].artifacts")
+        result = {
+            "profile_id": candidate.get("profile_id"),
+            "disposable_kb_name": candidate.get("disposable_kb_name"),
+            "profile": candidate.get("profile", {}),
+            "report_path": str(report_path),
+            "ok": bool(report.get("ok")),
+            "dataset": report.get("dataset", {}),
+            "metrics": metrics,
+            "score": metrics["score"],
+            "diagnostics": diagnostic,
+            "runtime_evidence": runtime_evidence,
+            "source": candidate.get("source", {}),
+            "candidate_index": index,
+        }
+        table_parent_chunk_preflight = _candidate_table_parent_chunk_preflight(candidate)
+        if table_parent_chunk_preflight is not None:
+            result["table_parent_chunk_preflight"] = table_parent_chunk_preflight
+        results.append(result)
+
+    if not results:
+        issues.append(OptimizationIssue("error", "validation_reports_missing", "no usable validation reports were found", "reports"))
+
+    metric_saturation = _metric_saturation(results)
+    for metric in metric_saturation["saturated_metrics"]:
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                f"metric_saturation_{metric}",
+                f"{metric} is identical across all candidate validation reports and cannot distinguish profile quality.",
+                f"metrics.{metric}",
+                "Add stricter qrels, expected chunk evidence, or more diverse queries before promoting a profile solely from this experiment.",
+            )
+        )
+
+    benchmark_strength = _benchmark_strength_from_plan(plan)
+    _attach_decision_scores(results, benchmark_strength)
+    decision_config = _decision_config(plan, score_epsilon=score_epsilon, min_score_delta=min_score_delta)
+    ranked = sorted(results, key=_result_sort_key)
+    for rank, item in enumerate(ranked, start=1):
+        item["rank"] = rank
+    winner = ranked[0] if ranked else None
+    benchmark_artifact_followups = _benchmark_artifact_followups(benchmark_strength)
+    co_winner_items = _co_winners(ranked, score_epsilon=decision_config["score_epsilon"])
+    score_delta = _score_delta(ranked)
+    cost_review_reasons = _cost_review_reasons(winner, co_winner_items)
+    decision_status = _decision_status(
+        winner=winner,
+        benchmark_strength=benchmark_strength,
+        co_winners=co_winner_items,
+        score_delta=score_delta,
+        min_score_delta=decision_config["min_score_delta"],
+        cost_review_reasons=cost_review_reasons,
+    )
+    if cost_review_reasons:
+        issues.append(
+            OptimizationIssue(
+                "warning",
+                "optimization_cost_review_required",
+                "quality-tied profile candidates require cost review before promotion",
+                "recommendation.decision_status",
+                "Provide latency, parse-time, or operational-cost evidence for tied enrichment profiles.",
+            )
+        )
+    if winner:
+        rationale = _append_decision_rationale(
+            _append_benchmark_strength_rationale(_recommendation_rationale(winner, ranked), benchmark_strength),
+            decision_status=decision_status,
+            co_winners=co_winner_items,
+            score_delta=score_delta,
+            min_score_delta=decision_config["min_score_delta"],
+            cost_review_reasons=cost_review_reasons,
+        )
+        for item in ranked:
+            item["tradeoffs"] = _result_tradeoffs(item, winner)
+    else:
+        rationale = []
+
+    recommendation_payload = {
+        "decision_status": decision_status,
+        "profile_id": winner.get("profile_id") if winner else None,
+        "disposable_kb_name": winner.get("disposable_kb_name") if winner else None,
+        "score": winner.get("score") if winner else None,
+        "raw_score": winner.get("score") if winner else None,
+        "decision_score": winner.get("decision_score") if winner else None,
+        "co_winner_profile_ids": [item.get("profile_id") for item in co_winner_items],
+        "rationale": rationale,
+    }
+    cleanup_lifecycle = _optimization_cleanup_lifecycle(
+        plan=plan,
+        plan_path=plan_path,
+        cleanup_plan_path=cleanup_plan_path,
+        cleanup_plan=cleanup_plan,
+        readiness_report_path=readiness_report_path,
+        readiness_report=readiness_report,
+        cleanup_execution_report_path=cleanup_execution_report_path,
+        cleanup_execution_report=cleanup_execution_report,
+    )
+    field_trial_record_suggestion = _field_trial_record_suggestion(
+        plan=plan,
+        results=ranked,
+        decision_status=decision_status,
+        recommendation=recommendation_payload,
+        cleanup_lifecycle=cleanup_lifecycle,
+        benchmark_strength=benchmark_strength,
+    )
+
+    issue_summary = _issue_counts(issues)
+    diagnostic_report_count = sum(1 for item in diagnostics if item.get("report_available"))
+    runtime_evidence_candidate_count = sum(
+        1
+        for item in results
+        if isinstance(item.get("runtime_evidence"), Mapping) and item["runtime_evidence"].get("available")
+    )
+    parser_drift_candidate_count = sum(
+        1
+        for item in results
+        if isinstance(item.get("runtime_evidence"), Mapping)
+        and isinstance(item["runtime_evidence"].get("parse_report"), Mapping)
+        and bool(item["runtime_evidence"]["parse_report"].get("drift", {}).get("drift"))
+    )
+    health_warning_candidate_count = sum(
+        1
+        for item in results
+        if isinstance(item.get("runtime_evidence"), Mapping)
+        and isinstance(item["runtime_evidence"].get("health_report"), Mapping)
+        and (
+            bool(item["runtime_evidence"]["health_report"].get("embedding_model_rebuild_required"))
+            or bool(item["runtime_evidence"]["health_report"].get("parser_warning"))
+            or bool(item["runtime_evidence"]["health_report"].get("issue_codes"))
+        )
+    )
+    return {
+        "ok": _ok(issues),
+        "schema": PROFILE_EXPERIMENT_RESULTS_SCHEMA,
+        "created_at": _now(),
+        "plan": str(plan_path),
+        "summary": {
+            **issue_summary,
+            "candidate_count": len(candidates),
+            "result_count": len(results),
+            "best_profile_id": winner.get("profile_id") if winner else None,
+            "failed_candidate_count": sum(1 for item in results if item.get("ok") is False),
+            "zero_chunk_candidate_count": sum(
+                1 for item in diagnostics if "zero_chunks" in (item.get("reason_codes") if isinstance(item.get("reason_codes"), list) else [])
+            ),
+            "diagnostic_required_count": len(diagnostics),
+            "diagnostic_report_count": diagnostic_report_count,
+            "runtime_evidence_candidate_count": runtime_evidence_candidate_count,
+            "parser_drift_candidate_count": parser_drift_candidate_count,
+            "health_warning_candidate_count": health_warning_candidate_count,
+            "benchmark_strength_status": benchmark_strength.get("status") if benchmark_strength else None,
+            "benchmark_artifact_followup_count": len(benchmark_artifact_followups),
+            "saturated_metric_count": len(metric_saturation["saturated_metrics"]),
+            "co_winner_count": len(co_winner_items),
+            "score_basis": "normalized_decision_score",
+            "cleanup_required": bool(cleanup_lifecycle["cleanup_required"]),
+            "cleanup_pending": cleanup_lifecycle["status"] in {"cleanup_plan_missing", "cleanup_pending", "cleanup_failed"},
+            "cleanup_executed": bool(cleanup_lifecycle["cleanup_execution"]["cleanup_executed"]),
+            "cleanup_status": cleanup_lifecycle["status"],
+            "post_cleanup_verification_status": (
+                cleanup_lifecycle["post_cleanup_verification"].get("status")
+                if isinstance(cleanup_lifecycle.get("post_cleanup_verification"), Mapping)
+                else None
+            ),
+            "post_cleanup_read_back_verified": bool(cleanup_lifecycle.get("post_cleanup_read_back_verified")),
+        },
+        "benchmark_strength": benchmark_strength,
+        "benchmark_artifact_followups": benchmark_artifact_followups,
+        "metric_saturation": metric_saturation,
+        "decision": {
+            "status": decision_status,
+            "score_basis": "normalized_decision_score",
+            "score_epsilon": decision_config["score_epsilon"],
+            "min_score_delta": decision_config["min_score_delta"],
+            "score_delta": score_delta,
+            "co_winner_count": len(co_winner_items),
+            "cost_review_required": bool(cost_review_reasons),
+            "cost_review_reasons": cost_review_reasons,
+        },
+        "recommendation": recommendation_payload,
+        "cleanup_lifecycle": cleanup_lifecycle,
+        "next_steps": cleanup_lifecycle["next_steps"],
+        "field_trial_record_suggestion": field_trial_record_suggestion,
+        "winner": winner,
+        "co_winners": _co_winner_summary(co_winner_items),
+        "candidates": ranked,
+        "diagnostics": diagnostics,
+        "issues": [issue.to_dict() for issue in issues],
+    }
+
+
+def _cleanup_command(
+    *,
+    cleanup_script: str,
+    kb_manifest_path: str | None,
+    cleanup_plan_path: str | None,
+    execute: bool,
+    dataset_id: str | None = None,
+    dataset_name: str | None = None,
+    config_path: str | Path | None = None,
+) -> list[str] | None:
+    if not kb_manifest_path and not dataset_id:
+        return None
+    command = ["python3", cleanup_script]
+    if kb_manifest_path:
+        command.extend(["--kb-manifest", kb_manifest_path])
+    elif dataset_id:
+        command.extend(["--dataset-id", dataset_id])
+        if dataset_name:
+            command.extend(["--kb-name", dataset_name])
+    if cleanup_plan_path:
+        command.extend(["--output", cleanup_plan_path])
+    if execute:
+        if not dataset_id:
+            return None
+        command.append("--execute")
+        command.extend(["--confirm-dataset-id", dataset_id])
+        if dataset_name:
+            command.extend(["--confirm-kb-name", dataset_name])
+        if config_path:
+            command.extend(["--config", str(config_path)])
+    return command
+
+
+def create_optimization_cleanup_plan(
+    *,
+    plan_path: str | Path,
+    cleanup_script: str = "scripts/cleanup.py",
+    config_path: str | Path | None = None,
+    require_manifests: bool = False,
+) -> dict[str, Any]:
+    """Create a non-mutating cleanup plan for disposable optimization KBs."""
+
+    plan = _read_json_mapping(plan_path, label="optimization plan")
+    issues: list[OptimizationIssue] = []
+    if plan.get("schema") != OPTIMIZATION_PLAN_SCHEMA:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "optimization_plan_schema_invalid",
+                f"optimization plan schema must be {OPTIMIZATION_PLAN_SCHEMA}",
+                "schema",
+            )
+        )
+
+    candidates = plan.get("candidates", [])
+    if not isinstance(candidates, list) or not candidates:
+        issues.append(OptimizationIssue("error", "optimization_plan_candidates_missing", "optimization plan has no candidates", "candidates"))
+        candidates = []
+
+    targets: list[dict[str, Any]] = []
+    ready_count = 0
+    pending_count = 0
+    invalid_count = 0
+
+    for index, candidate in enumerate(candidates):
+        if not isinstance(candidate, Mapping):
+            issues.append(OptimizationIssue("error", "optimization_candidate_invalid", "optimization candidate must be an object", f"candidates[{index}]"))
+            invalid_count += 1
+            continue
+
+        artifacts = candidate.get("artifacts") if isinstance(candidate.get("artifacts"), Mapping) else {}
+        kb_manifest_path = artifacts.get("kb_manifest") if isinstance(artifacts.get("kb_manifest"), str) else None
+        cleanup_plan_path = artifacts.get("cleanup_plan") if isinstance(artifacts.get("cleanup_plan"), str) else None
+        profile_id = str(candidate.get("profile_id") or f"candidate-{index + 1}")
+        disposable_name = str(candidate.get("disposable_kb_name") or "")
+        dataset_id: str | None = None
+        dataset_name: str | None = disposable_name or None
+        status = "pending_manifest"
+
+        if not kb_manifest_path:
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "cleanup_manifest_path_missing",
+                    "candidate does not include an artifacts.kb_manifest path",
+                    f"candidates[{index}].artifacts.kb_manifest",
+                )
+            )
+            status = "invalid_manifest"
+            invalid_count += 1
+        else:
+            manifest_path = Path(kb_manifest_path)
+            if not manifest_path.exists():
+                severity = "error" if require_manifests else "warning"
+                issues.append(
+                    OptimizationIssue(
+                        severity,
+                        "cleanup_manifest_missing",
+                        f"candidate KB manifest is not available yet: {manifest_path}",
+                        f"candidates[{index}].artifacts.kb_manifest",
+                        "Build the disposable KB first, then regenerate the cleanup plan before executing cleanup.",
+                    )
+                )
+                pending_count += 1
+            else:
+                try:
+                    manifest = load_kb_manifest(manifest_path)
+                except ManifestError as exc:
+                    issues.append(
+                        OptimizationIssue(
+                            "error",
+                            "cleanup_manifest_invalid",
+                            str(exc),
+                            f"candidates[{index}].artifacts.kb_manifest",
+                        )
+                    )
+                    status = "invalid_manifest"
+                    invalid_count += 1
+                else:
+                    dataset_id = manifest.dataset.id
+                    dataset_name = manifest.dataset.name
+                    status = "ready"
+                    ready_count += 1
+                    if disposable_name and dataset_name != disposable_name:
+                        issues.append(
+                            OptimizationIssue(
+                                "warning",
+                                "cleanup_dataset_name_mismatch",
+                                "KB manifest dataset name does not match the planned disposable KB name",
+                                f"candidates[{index}].disposable_kb_name",
+                                "Confirm the target KB name before executing cleanup.",
+                            )
+                        )
+
+        target = {
+            "profile_id": profile_id,
+            "disposable_kb_name": disposable_name or None,
+            "status": status,
+            "action": "delete_dataset",
+            "kb_manifest": kb_manifest_path,
+            "cleanup_plan": cleanup_plan_path,
+            "target": {
+                "dataset_id": dataset_id,
+                "dataset_name": dataset_name,
+            },
+            "required_confirmation": {
+                "confirm_dataset_id": dataset_id,
+                "confirm_kb_name": dataset_name,
+            },
+            "commands": {
+                "preview": _cleanup_command(
+                    cleanup_script=cleanup_script,
+                    kb_manifest_path=kb_manifest_path,
+                    cleanup_plan_path=cleanup_plan_path,
+                    execute=False,
+                    dataset_id=dataset_id,
+                    dataset_name=dataset_name,
+                ),
+                "execute": _cleanup_command(
+                    cleanup_script=cleanup_script,
+                    kb_manifest_path=kb_manifest_path,
+                    cleanup_plan_path=cleanup_plan_path,
+                    execute=True,
+                    dataset_id=dataset_id,
+                    dataset_name=dataset_name,
+                    config_path=config_path,
+                ),
+            },
+        }
+        targets.append(target)
+
+    issue_summary = _issue_counts(issues)
+    return {
+        "ok": _ok(issues),
+        "schema": OPTIMIZATION_CLEANUP_PLAN_SCHEMA,
+        "created_at": _now(),
+        "plan": str(plan_path),
+        "mode": "cleanup-plan",
+        "mutation_allowed": False,
+        "execute": False,
+        "dry_run": True,
+        "requires_exact_confirmation": True,
+        "summary": {
+            **issue_summary,
+            "candidate_count": len(candidates),
+            "target_count": len(targets),
+            "ready_target_count": ready_count,
+            "pending_target_count": pending_count,
+            "invalid_target_count": invalid_count,
+        },
+        "targets": targets,
+        "issues": [issue.to_dict() for issue in issues],
+    }
+
+
+def _cleanup_target_key(dataset_id: str, dataset_name: str | None) -> tuple[str, str | None]:
+    return dataset_id, dataset_name or None
+
+
+def _cleanup_ready_targets(cleanup_plan: Mapping[str, Any], issues: list[OptimizationIssue]) -> list[dict[str, Any]]:
+    targets = cleanup_plan.get("targets")
+    if not isinstance(targets, list):
+        issues.append(OptimizationIssue("error", "cleanup_targets_invalid", "cleanup plan targets must be a list", "cleanup_plan.targets"))
+        return []
+
+    ready: list[dict[str, Any]] = []
+    for index, target in enumerate(targets):
+        if not isinstance(target, Mapping):
+            issues.append(OptimizationIssue("error", "cleanup_target_invalid", "cleanup target must be an object", f"cleanup_plan.targets[{index}]"))
+            continue
+        if target.get("status") != "ready":
+            continue
+        target_payload = target.get("target") if isinstance(target.get("target"), Mapping) else {}
+        dataset_id = target_payload.get("dataset_id")
+        dataset_name = target_payload.get("dataset_name")
+        if not isinstance(dataset_id, str) or not dataset_id:
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "cleanup_ready_target_missing_dataset_id",
+                    "ready cleanup target is missing target.dataset_id",
+                    f"cleanup_plan.targets[{index}].target.dataset_id",
+                )
+            )
+            continue
+        if dataset_name is not None and not isinstance(dataset_name, str):
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "cleanup_ready_target_invalid_dataset_name",
+                    "ready cleanup target target.dataset_name must be a string when present",
+                    f"cleanup_plan.targets[{index}].target.dataset_name",
+                )
+            )
+            continue
+        ready.append(
+            {
+                "index": index,
+                "profile_id": target.get("profile_id"),
+                "disposable_kb_name": target.get("disposable_kb_name"),
+                "dataset_id": dataset_id,
+                "dataset_name": dataset_name,
+            }
+        )
+    return ready
+
+
+def _cleanup_status_counts(cleanup_plan: Mapping[str, Any]) -> dict[str, int]:
+    targets = cleanup_plan.get("targets") if isinstance(cleanup_plan.get("targets"), list) else []
+    return {
+        "target_count": len(targets),
+        "ready_target_count": sum(1 for target in targets if isinstance(target, Mapping) and target.get("status") == "ready"),
+        "pending_target_count": sum(
+            1 for target in targets if isinstance(target, Mapping) and str(target.get("status", "")).startswith("pending")
+        ),
+        "invalid_target_count": sum(
+            1 for target in targets if isinstance(target, Mapping) and str(target.get("status", "")).startswith("invalid")
+        ),
+    }
+
+
+def create_optimization_live_readiness_report(
+    *,
+    plan_path: str | Path,
+    cleanup_plan_path: str | Path | None = None,
+    config_path: str | Path | None = None,
+    ragflow_base_url_configured: bool = False,
+    ragflow_api_key_configured: bool = False,
+    credential_error: str | None = None,
+    confirm_live_build: bool = False,
+    confirm_kb_name: str | None = None,
+    confirm_run_id: str | None = None,
+    cleanup_confirmations: Iterable[tuple[str, str | None]] | None = None,
+    require_cleanup_ready: bool = False,
+) -> dict[str, Any]:
+    """Review live disposable optimization prerequisites without contacting RAGFlow."""
+
+    issues: list[OptimizationIssue] = []
+    plan = _read_json_mapping(plan_path, label="optimization plan")
+    if plan.get("schema") != OPTIMIZATION_PLAN_SCHEMA:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "optimization_plan_schema_invalid",
+                f"optimization plan schema must be {OPTIMIZATION_PLAN_SCHEMA}",
+                "plan.schema",
+            )
+        )
+    if not plan.get("ok"):
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "optimization_plan_not_ok",
+                "live optimization requires an optimization plan with ok=true",
+                "plan.ok",
+                "Fix plan errors before reviewing live execution.",
+            )
+        )
+
+    candidates = plan.get("candidates") if isinstance(plan.get("candidates"), list) else []
+    if not candidates:
+        issues.append(OptimizationIssue("error", "optimization_candidates_missing", "optimization plan has no candidates", "plan.candidates"))
+
+    if credential_error:
+        issues.append(OptimizationIssue("error", "ragflow_config_invalid", credential_error, "config"))
+    if not ragflow_base_url_configured:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "ragflow_base_url_missing",
+                "RAGFlow base URL is required before live disposable optimization",
+                "config.base_url",
+            )
+        )
+    if not ragflow_api_key_configured:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "ragflow_api_key_missing",
+                "RAGFlow API key is required before live disposable optimization",
+                "config.api_key",
+            )
+        )
+
+    base_kb_name = plan.get("base_kb_name")
+    run_id = plan.get("run_id")
+    if not isinstance(base_kb_name, str) or not base_kb_name:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "base_kb_name_missing",
+                "optimization plan must include base_kb_name for exact live confirmation",
+                "plan.base_kb_name",
+            )
+        )
+    if not isinstance(run_id, str) or not run_id:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "run_id_missing",
+                "optimization plan must include run_id for exact live confirmation",
+                "plan.run_id",
+            )
+        )
+    if not confirm_live_build:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "confirm_live_build_missing",
+                "live optimization requires --confirm-live-build",
+                "confirmation.confirm_live_build",
+            )
+        )
+    if confirm_kb_name != base_kb_name:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "confirm_kb_name_mismatch",
+                "live optimization requires --confirm-kb-name to match the planned base KB name exactly",
+                "confirmation.confirm_kb_name",
+            )
+        )
+    if confirm_run_id != run_id:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "confirm_run_id_mismatch",
+                "live optimization requires --confirm-run-id to match the planned run_id exactly",
+                "confirmation.confirm_run_id",
+            )
+        )
+
+    cleanup_plan: dict[str, Any] | None = None
+    cleanup_counts = {"target_count": 0, "ready_target_count": 0, "pending_target_count": 0, "invalid_target_count": 0}
+    ready_targets: list[dict[str, Any]] = []
+    cleanup_exact = False
+    confirmation_pairs = list(cleanup_confirmations or [])
+    if cleanup_plan_path is None:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "cleanup_plan_missing",
+                "live disposable optimization requires a reviewed cleanup plan artifact",
+                "cleanup_plan",
+                "Run optimize cleanup-plan and retain the output before requesting live execution.",
+            )
+        )
+    else:
+        cleanup_plan = _read_json_mapping(cleanup_plan_path, label="optimization cleanup plan")
+        if cleanup_plan.get("schema") != OPTIMIZATION_CLEANUP_PLAN_SCHEMA:
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "cleanup_plan_schema_invalid",
+                    f"cleanup plan schema must be {OPTIMIZATION_CLEANUP_PLAN_SCHEMA}",
+                    "cleanup_plan.schema",
+                )
+            )
+        if cleanup_plan.get("ok") is False:
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "cleanup_plan_not_ok",
+                    "live optimization requires a cleanup plan with ok=true",
+                    "cleanup_plan.ok",
+                    "Regenerate cleanup-plan after resolving cleanup target errors.",
+                )
+            )
+        cleanup_counts = _cleanup_status_counts(cleanup_plan)
+        ready_targets = _cleanup_ready_targets(cleanup_plan, issues)
+        if cleanup_counts["target_count"] != len(candidates):
+            issues.append(
+                OptimizationIssue(
+                    "warning",
+                    "cleanup_target_count_mismatch",
+                    "cleanup plan target count does not match optimization candidate count",
+                    "cleanup_plan.targets",
+                    "Regenerate cleanup-plan from the current optimization plan before live execution.",
+                )
+            )
+        if require_cleanup_ready and cleanup_counts["pending_target_count"]:
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "cleanup_targets_pending",
+                    "cleanup readiness requires all cleanup targets to have retained KB manifests and dataset IDs",
+                    "cleanup_plan.targets",
+                )
+            )
+        if require_cleanup_ready and not ready_targets:
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "cleanup_ready_targets_missing",
+                    "cleanup readiness requires at least one ready cleanup target",
+                    "cleanup_plan.targets",
+                )
+            )
+
+    expected_cleanup = {
+        _cleanup_target_key(str(target["dataset_id"]), target.get("dataset_name") if isinstance(target.get("dataset_name"), str) else None)
+        for target in ready_targets
+    }
+    confirmed_cleanup = {_cleanup_target_key(str(dataset_id), kb_name) for dataset_id, kb_name in confirmation_pairs}
+    if confirmation_pairs and len(confirmed_cleanup) != len(confirmation_pairs):
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "cleanup_confirmation_duplicate",
+                "cleanup confirmations must not contain duplicate dataset ID and KB name pairs",
+                "cleanup_confirmation",
+            )
+        )
+    if ready_targets:
+        if not confirmation_pairs:
+            issues.append(
+                OptimizationIssue(
+                    "error" if require_cleanup_ready else "warning",
+                    "cleanup_confirmation_missing",
+                    "ready cleanup targets need exact dataset ID and KB name confirmations before cleanup execution",
+                    "cleanup_confirmation",
+                )
+            )
+        elif confirmed_cleanup != expected_cleanup:
+            missing = sorted(expected_cleanup - confirmed_cleanup)
+            extra = sorted(confirmed_cleanup - expected_cleanup)
+            details = []
+            if missing:
+                details.append("missing " + ", ".join(f"{dataset_id}:{kb_name or ''}" for dataset_id, kb_name in missing))
+            if extra:
+                details.append("unexpected " + ", ".join(f"{dataset_id}:{kb_name or ''}" for dataset_id, kb_name in extra))
+            issues.append(
+                OptimizationIssue(
+                    "error",
+                    "cleanup_confirmation_mismatch",
+                    "cleanup confirmations must exactly match ready targets" + (f" ({'; '.join(details)})" if details else ""),
+                    "cleanup_confirmation",
+                )
+            )
+        else:
+            cleanup_exact = True
+    elif confirmation_pairs:
+        issues.append(
+            OptimizationIssue(
+                "error",
+                "cleanup_confirmation_unexpected",
+                "cleanup confirmations were supplied but the cleanup plan has no ready targets",
+                "cleanup_confirmation",
+            )
+        )
+
+    issue_summary = _issue_counts(issues)
+    ready_for_live_execution = _ok(issues)
+    cleanup_state = "missing"
+    if cleanup_plan is not None:
+        if cleanup_counts["invalid_target_count"]:
+            cleanup_state = "invalid_targets"
+        elif cleanup_counts["pending_target_count"]:
+            cleanup_state = "pending_manifests"
+        elif cleanup_counts["ready_target_count"]:
+            cleanup_state = "ready_targets"
+        else:
+            cleanup_state = "empty"
+
+    return {
+        "ok": ready_for_live_execution,
+        "schema": OPTIMIZATION_LIVE_READINESS_REPORT_SCHEMA,
+        "created_at": _now(),
+        "mode": "live-readiness",
+        "mutation_allowed": False,
+        "network_checked": False,
+        "plan": str(plan_path),
+        "cleanup_plan": str(cleanup_plan_path) if cleanup_plan_path else None,
+        "config": {
+            "config_path": str(config_path) if config_path else None,
+            "ragflow_base_url_configured": bool(ragflow_base_url_configured),
+            "ragflow_api_key_configured": bool(ragflow_api_key_configured),
+            "credential_error": credential_error,
+        },
+        "confirmation": {
+            "confirm_live_build": bool(confirm_live_build),
+            "confirm_kb_name_matches": confirm_kb_name == base_kb_name,
+            "confirm_run_id_matches": confirm_run_id == run_id,
+            "expected_kb_name": base_kb_name,
+            "expected_run_id": run_id,
+        },
+        "cleanup": {
+            "state": cleanup_state,
+            "require_cleanup_ready": bool(require_cleanup_ready),
+            "target_count": cleanup_counts["target_count"],
+            "ready_target_count": cleanup_counts["ready_target_count"],
+            "pending_target_count": cleanup_counts["pending_target_count"],
+            "invalid_target_count": cleanup_counts["invalid_target_count"],
+            "ready_targets": [
+                {
+                    "profile_id": target.get("profile_id"),
+                    "disposable_kb_name": target.get("disposable_kb_name"),
+                    "dataset_id": target.get("dataset_id"),
+                    "dataset_name": target.get("dataset_name"),
+                }
+                for target in ready_targets
+            ],
+            "confirmation_expected_count": len(expected_cleanup),
+            "confirmation_supplied_count": len(confirmation_pairs),
+            "confirmation_exact": cleanup_exact,
+        },
+        "summary": {
+            **issue_summary,
+            "candidate_count": len(candidates),
+            "ready_for_live_execution": ready_for_live_execution,
+            "cleanup_target_count": cleanup_counts["target_count"],
+            "cleanup_ready_target_count": cleanup_counts["ready_target_count"],
+            "cleanup_pending_target_count": cleanup_counts["pending_target_count"],
+        },
+        "next_steps": [
+            "Run optimize --execute only after explicit user approval."
+            if ready_for_live_execution
+            else "Resolve readiness errors before running optimize --execute.",
+            "Retain every candidate kb_manifest.json produced by live execution.",
+            "Regenerate optimize cleanup-plan after live execution before cleanup-execute.",
+            "Delete disposable KBs only with exact dataset ID and KB name confirmation.",
+        ],
+        "issues": [issue.to_dict() for issue in issues],
+    }
+
+
+def render_optimization_live_readiness_markdown(report: Mapping[str, Any]) -> str:
+    """Render a live optimization readiness report as Markdown."""
+
+    summary = report.get("summary") if isinstance(report.get("summary"), Mapping) else {}
+    config = report.get("config") if isinstance(report.get("config"), Mapping) else {}
+    confirmation = report.get("confirmation") if isinstance(report.get("confirmation"), Mapping) else {}
+    cleanup = report.get("cleanup") if isinstance(report.get("cleanup"), Mapping) else {}
+    lines = [
+        "# RAGFlow Optimization Live Readiness Report",
+        "",
+        f"- Status: `{'passed' if report.get('ok') else 'failed'}`",
+        f"- Mutates RAGFlow: `{str(bool(report.get('mutation_allowed'))).lower()}`",
+        f"- Network checked: `{str(bool(report.get('network_checked'))).lower()}`",
+        f"- Candidates: `{summary.get('candidate_count', 0)}`",
+        f"- Errors: `{summary.get('errors', 0)}`",
+        f"- Warnings: `{summary.get('warnings', 0)}`",
+        "",
+        "## Required Gates",
+        "",
+        "| gate | status |",
+        "|---|---|",
+        f"| RAGFlow base URL configured | `{'yes' if config.get('ragflow_base_url_configured') else 'no'}` |",
+        f"| RAGFlow API key configured | `{'yes' if config.get('ragflow_api_key_configured') else 'no'}` |",
+        f"| Live build confirmation | `{'yes' if confirmation.get('confirm_live_build') else 'no'}` |",
+        f"| KB name confirmation matches | `{'yes' if confirmation.get('confirm_kb_name_matches') else 'no'}` |",
+        f"| Run ID confirmation matches | `{'yes' if confirmation.get('confirm_run_id_matches') else 'no'}` |",
+        f"| Cleanup plan state | `{cleanup.get('state', 'missing')}` |",
+        "",
+        "## Cleanup",
+        "",
+        f"- Targets: `{cleanup.get('target_count', 0)}`",
+        f"- Ready targets: `{cleanup.get('ready_target_count', 0)}`",
+        f"- Pending targets: `{cleanup.get('pending_target_count', 0)}`",
+        f"- Exact cleanup confirmation: `{str(bool(cleanup.get('confirmation_exact'))).lower()}`",
+        "",
+        "## Issues",
+        "",
+        "| severity | code | field | message |",
+        "|---|---|---|---|",
+    ]
+    for issue in report.get("issues", []) if isinstance(report.get("issues"), list) else []:
+        if isinstance(issue, Mapping):
+            lines.append(f"| {issue.get('severity')} | `{issue.get('code')}` | {issue.get('field', '-')} | {issue.get('message')} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_optimization_cleanup_plan_markdown(plan: Mapping[str, Any]) -> str:
+    """Render an optimization cleanup plan as Markdown."""
+
+    summary = plan.get("summary") if isinstance(plan.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow Optimization Cleanup Plan",
+        "",
+        f"- Status: `{'passed' if plan.get('ok') else 'failed'}`",
+        f"- Mutates RAGFlow: `{str(bool(plan.get('mutation_allowed'))).lower()}`",
+        f"- Requires exact confirmation: `{str(bool(plan.get('requires_exact_confirmation'))).lower()}`",
+        f"- Targets: `{summary.get('target_count', 0)}`",
+        f"- Ready targets: `{summary.get('ready_target_count', 0)}`",
+        f"- Pending targets: `{summary.get('pending_target_count', 0)}`",
+        f"- Errors: `{summary.get('errors', 0)}`",
+        f"- Warnings: `{summary.get('warnings', 0)}`",
+        "",
+        "## Targets",
+        "",
+        "| profile | status | dataset id | KB name | manifest |",
+        "|---|---|---|---|---|",
+    ]
+    for target in plan.get("targets", []) if isinstance(plan.get("targets"), list) else []:
+        if not isinstance(target, Mapping):
+            continue
+        target_payload = target.get("target") if isinstance(target.get("target"), Mapping) else {}
+        lines.append(
+            f"| `{target.get('profile_id')}` | `{target.get('status')}` | "
+            f"`{target_payload.get('dataset_id') or '-'}` | `{target_payload.get('dataset_name') or '-'}` | "
+            f"`{target.get('kb_manifest') or '-'}` |"
+        )
+
+    lines.extend(["", "## Issues", "", "| severity | code | field | message |", "|---|---|---|---|"])
+    for issue in plan.get("issues", []) if isinstance(plan.get("issues"), list) else []:
+        if isinstance(issue, Mapping):
+            lines.append(f"| {issue.get('severity')} | `{issue.get('code')}` | {issue.get('field', '-')} | {issue.get('message')} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_best_profile_markdown(results: Mapping[str, Any]) -> str:
+    """Render profile experiment results as a best-profile report."""
+
+    recommendation = results.get("recommendation") if isinstance(results.get("recommendation"), Mapping) else {}
+    summary = results.get("summary") if isinstance(results.get("summary"), Mapping) else {}
+    decision = results.get("decision") if isinstance(results.get("decision"), Mapping) else {}
+    lines = [
+        "# RAGFlow Best Profile Report",
+        "",
+        f"- Status: `{'passed' if results.get('ok') else 'failed'}`",
+        f"- Decision status: `{recommendation.get('decision_status') or '-'}`",
+        f"- Score basis: `{decision.get('score_basis') or summary.get('score_basis') or '-'}`",
+        f"- Recommended profile: `{recommendation.get('profile_id') or '-'}`",
+        f"- Candidate results: `{summary.get('result_count', 0)}`",
+        f"- Errors: `{summary.get('errors', 0)}`",
+        f"- Warnings: `{summary.get('warnings', 0)}`",
+    ]
+    co_winner_ids = recommendation.get("co_winner_profile_ids")
+    if isinstance(co_winner_ids, list) and co_winner_ids:
+        lines.append(f"- Co-winners: {', '.join(f'`{profile_id}`' for profile_id in co_winner_ids)}")
+    lines.extend(["", "## Rationale", ""])
+    for item in recommendation.get("rationale", []) if isinstance(recommendation.get("rationale"), list) else []:
+        lines.append(f"- {item}")
+    followups = results.get("benchmark_artifact_followups")
+    if isinstance(followups, list) and followups:
+        lines.extend(["", "## Benchmark Artifact Follow-ups", ""])
+        for item in followups:
+            if not isinstance(item, Mapping):
+                continue
+            lines.append(f"- `{item.get('code')}`: {item.get('recommendation') or item.get('reason')}")
+    cleanup_lifecycle = results.get("cleanup_lifecycle") if isinstance(results.get("cleanup_lifecycle"), Mapping) else {}
+    if cleanup_lifecycle:
+        cleanup_plan = cleanup_lifecycle.get("cleanup_plan") if isinstance(cleanup_lifecycle.get("cleanup_plan"), Mapping) else {}
+        cleanup_execution = (
+            cleanup_lifecycle.get("cleanup_execution")
+            if isinstance(cleanup_lifecycle.get("cleanup_execution"), Mapping)
+            else {}
+        )
+        verification = (
+            cleanup_lifecycle.get("post_cleanup_verification")
+            if isinstance(cleanup_lifecycle.get("post_cleanup_verification"), Mapping)
+            else {}
+        )
+        lines.extend(
+            [
+                "",
+                "## Cleanup Lifecycle",
+                "",
+                f"- Status: `{cleanup_lifecycle.get('status', '-')}`",
+                f"- Cleanup required: `{str(bool(cleanup_lifecycle.get('cleanup_required'))).lower()}`",
+                f"- Cleanup plan: `{cleanup_plan.get('status', 'missing')}`",
+                f"- Cleanup executed: `{cleanup_execution.get('status', 'missing')}`",
+                f"- Post-cleanup verification: `{verification.get('status', '-')}`",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Ranking",
+            "",
+            "| rank | profile | decision_score | raw_score | hit_rate | mrr | ndcg@k | strict_chunk_recall | candidate_local_chunk_recall | table_term_recall | empty_rate | latency_ms | parse_ms |",
+            "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for candidate in results.get("candidates", []) if isinstance(results.get("candidates"), list) else []:
+        if not isinstance(candidate, Mapping):
+            continue
+        metrics = candidate.get("metrics") if isinstance(candidate.get("metrics"), Mapping) else {}
+        decision_score = candidate.get("decision_score") if isinstance(candidate.get("decision_score"), Mapping) else {}
+        lines.append(
+            f"| {candidate.get('rank', 0)} | `{candidate.get('profile_id')}` | {decision_score.get('score', 0.0):.4f} | "
+            f"{metrics.get('score', 0.0):.4f} | "
+            f"{metrics.get('hit_rate', 0.0):.4f} | {metrics.get('mrr', 0.0):.4f} | "
+            f"{metrics.get('ndcg_at_k', 0.0):.4f} | {metrics.get('strict_chunk_recall_at_k', 0.0):.4f} | "
+            f"{metrics.get('candidate_snapshot_expected_chunk_recall_at_k', 0.0):.4f} | "
+            f"{metrics.get('table_term_recall_at_k', 0.0):.4f} | "
+            f"{metrics.get('empty_result_rate', 0.0):.4f} | {metrics.get('query_latency_ms', 0.0):.1f} | "
+            f"{metrics.get('parse_time_ms', 0.0):.1f} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Decision Score Components",
+            "",
+            "| profile | quality | strict_evidence | modality_coverage | empty_result_risk | cost | cost_status | context_warnings |",
+            "|---|---:|---:|---:|---:|---:|---|---:|",
+        ]
+    )
+    for candidate in results.get("candidates", []) if isinstance(results.get("candidates"), list) else []:
+        if not isinstance(candidate, Mapping):
+            continue
+        decision_score = candidate.get("decision_score") if isinstance(candidate.get("decision_score"), Mapping) else {}
+        components = decision_score.get("components") if isinstance(decision_score.get("components"), Mapping) else {}
+        quality = components.get("quality") if isinstance(components.get("quality"), Mapping) else {}
+        strict = components.get("strict_evidence") if isinstance(components.get("strict_evidence"), Mapping) else {}
+        modality = components.get("modality_coverage") if isinstance(components.get("modality_coverage"), Mapping) else {}
+        empty = components.get("empty_result_risk") if isinstance(components.get("empty_result_risk"), Mapping) else {}
+        cost = components.get("cost") if isinstance(components.get("cost"), Mapping) else {}
+        context = components.get("context_warnings") if isinstance(components.get("context_warnings"), Mapping) else {}
+        lines.append(
+            f"| `{candidate.get('profile_id')}` | {quality.get('score', 0.0):.4f} | {strict.get('score', 0.0):.4f} | "
+            f"{modality.get('score', 0.0):.4f} | {empty.get('score', 0.0):.4f} | {cost.get('score', 0.0):.4f} | "
+            f"`{cost.get('status', '-')}` | {context.get('warning_count', 0)} |"
+        )
+    table_atomicity_rows = []
+    for candidate in results.get("candidates", []) if isinstance(results.get("candidates"), list) else []:
+        if not isinstance(candidate, Mapping):
+            continue
+        decision_score = candidate.get("decision_score") if isinstance(candidate.get("decision_score"), Mapping) else {}
+        components = decision_score.get("components") if isinstance(decision_score.get("components"), Mapping) else {}
+        table_atomicity = components.get("table_atomicity") if isinstance(components.get("table_atomicity"), Mapping) else {}
+        if table_atomicity:
+            table_atomicity_rows.append((candidate, table_atomicity))
+    if table_atomicity_rows:
+        lines.extend(
+            [
+                "",
+                "## Table Atomicity",
+                "",
+                "| profile | status | evidence | selected_chunk_tokens | max_table_parent_tokens | penalty | issues |",
+                "|---|---|---|---:|---:|---:|---|",
+            ]
+        )
+        for candidate, table_atomicity in table_atomicity_rows:
+            issue_codes = table_atomicity.get("issue_codes") if isinstance(table_atomicity.get("issue_codes"), list) else []
+            lines.append(
+                f"| `{candidate.get('profile_id')}` | `{table_atomicity.get('status', '-')}` | "
+                f"`{table_atomicity.get('evidence_status', '-')}` | "
+                f"{table_atomicity.get('selected_profile_chunk_tokens') or 0} | "
+                f"{table_atomicity.get('max_estimated_parent_chunk_tokens') or 0} | "
+                f"{table_atomicity.get('penalty', 0.0):.4f} | "
+                f"{', '.join(str(code) for code in issue_codes) or '-'} |"
+            )
+    lines.extend(["", "## Tradeoffs", ""])
+    for candidate in results.get("candidates", []) if isinstance(results.get("candidates"), list) else []:
+        if not isinstance(candidate, Mapping):
+            continue
+        lines.append(f"### {candidate.get('profile_id')}")
+        for item in candidate.get("tradeoffs", []) if isinstance(candidate.get("tradeoffs"), list) else []:
+            lines.append(f"- {item}")
+        lines.append("")
+    diagnostics = results.get("diagnostics") if isinstance(results.get("diagnostics"), list) else []
+    if diagnostics:
+        lines.extend(["## Diagnostics", "", "| profile | reasons | report | generated | issue types |", "|---|---|---|---:|---|"])
+        for item in diagnostics:
+            if not isinstance(item, Mapping):
+                continue
+            summary = item.get("summary") if isinstance(item.get("summary"), Mapping) else {}
+            issue_types = summary.get("issue_types") if isinstance(summary.get("issue_types"), list) else []
+            reason_codes = item.get("reason_codes") if isinstance(item.get("reason_codes"), list) else []
+            lines.append(
+                f"| `{item.get('profile_id')}` | {', '.join(str(reason) for reason in reason_codes) or '-'} | "
+                f"`{item.get('report_path') or '-'}` | `{str(bool(item.get('generated'))).lower()}` | "
+                f"{', '.join(str(issue) for issue in issue_types) or '-'} |"
+            )
+        lines.append("")
+    runtime_candidates = [
+        candidate
+        for candidate in results.get("candidates", [])
+        if isinstance(candidate, Mapping)
+        and isinstance(candidate.get("runtime_evidence"), Mapping)
+        and candidate["runtime_evidence"].get("available")
+    ]
+    if runtime_candidates:
+        lines.extend(
+            [
+                "## Runtime Evidence",
+                "",
+                "| profile | sidecars | parser drift | effective chunks | delimiter status | delimiter visible | embedding models | health warnings |",
+                "|---|---:|---:|---:|---|---:|---|---|",
+            ]
+        )
+        for candidate in runtime_candidates:
+            evidence = candidate.get("runtime_evidence") if isinstance(candidate.get("runtime_evidence"), Mapping) else {}
+            parse = evidence.get("parse_report") if isinstance(evidence.get("parse_report"), Mapping) else {}
+            refresh = evidence.get("refresh_report") if isinstance(evidence.get("refresh_report"), Mapping) else {}
+            snapshot = evidence.get("chunk_snapshot") if isinstance(evidence.get("chunk_snapshot"), Mapping) else {}
+            health = evidence.get("health_report") if isinstance(evidence.get("health_report"), Mapping) else {}
+            parse_summary = parse.get("summary") if isinstance(parse.get("summary"), Mapping) else {}
+            refresh_summary = refresh.get("summary") if isinstance(refresh.get("summary"), Mapping) else {}
+            boundary = snapshot.get("boundary_evidence") if isinstance(snapshot.get("boundary_evidence"), Mapping) else {}
+            delimiter = snapshot.get("delimiter_consumption") if isinstance(snapshot.get("delimiter_consumption"), Mapping) else {}
+            models = health.get("embedding_models") if isinstance(health.get("embedding_models"), list) else []
+            health_warnings: list[str] = []
+            if health.get("embedding_model_rebuild_required"):
+                health_warnings.append("embedding_rebuild")
+            if health.get("parser_warning"):
+                health_warnings.append("parser")
+            effective_chunks = parse_summary.get("effective_chunk_total", refresh_summary.get("observed_chunk_total", "-"))
+            drift = parse.get("drift") if isinstance(parse.get("drift"), Mapping) else {}
+            lines.append(
+                f"| `{candidate.get('profile_id')}` | {evidence.get('sidecar_count', 0)} | "
+                f"`{str(bool(drift.get('drift'))).lower()}` | {effective_chunks} | "
+                f"`{delimiter.get('status', '-')}` | {boundary.get('delimiter_visible_chunk_count', 0)} | "
+                f"{', '.join(f'`{model}`' for model in models) or '-'} | "
+                f"{', '.join(health_warnings) or '-'} |"
+            )
+        lines.append("")
+    if results.get("issues"):
+        lines.extend(["## Issues", "", "| severity | code | field | message |", "|---|---|---|---|"])
+        for issue in results.get("issues", []) if isinstance(results.get("issues"), list) else []:
+            if isinstance(issue, Mapping):
+                lines.append(f"| {issue.get('severity')} | `{issue.get('code')}` | {issue.get('field', '-')} | {issue.get('message')} |")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def render_optimization_plan_markdown(plan: Mapping[str, Any]) -> str:
+    """Render a compact Markdown view of an optimization plan."""
+
+    summary = plan.get("summary", {}) if isinstance(plan.get("summary"), Mapping) else {}
+    mutation_guard = plan.get("mutation_guard") if isinstance(plan.get("mutation_guard"), Mapping) else {}
+    lines = [
+        "# RAGFlow Optimization Plan",
+        "",
+        f"- Status: `{'passed' if plan.get('ok') else 'failed'}`",
+        f"- Mode: `{plan.get('mode', 'plan-only')}`",
+        f"- Mutates RAGFlow: `{str(bool(plan.get('mutation_allowed'))).lower()}`",
+        f"- Mutation commands enabled: `{str(bool(mutation_guard.get('mutation_commands_enabled'))).lower()}`",
+        f"- Run ID: `{plan.get('run_id')}`",
+        f"- Base KB name: `{plan.get('base_kb_name')}`",
+        f"- Candidates: `{summary.get('candidate_count', 0)}`",
+        f"- Documents: `{summary.get('document_count', 0)}`",
+        f"- Errors: `{summary.get('errors', 0)}`",
+        f"- Warnings: `{summary.get('warnings', 0)}`",
+        "",
+        "## Candidates",
+        "",
+        "| profile | source | disposable KB | lint errors | lint warnings |",
+        "|---|---|---|---:|---:|",
+    ]
+    for candidate in plan.get("candidates", []) if isinstance(plan.get("candidates"), list) else []:
+        if not isinstance(candidate, Mapping):
+            continue
+        lint = candidate.get("lint") if isinstance(candidate.get("lint"), Mapping) else {}
+        lint_summary = lint.get("summary") if isinstance(lint.get("summary"), Mapping) else {}
+        source = candidate.get("source") if isinstance(candidate.get("source"), Mapping) else {}
+        source_label = source.get("type", "unknown")
+        lines.append(
+            f"| `{candidate.get('profile_id')}` | {source_label} | `{candidate.get('disposable_kb_name')}` | "
+            f"{lint_summary.get('errors', 0)} | {lint_summary.get('warnings', 0)} |"
+        )
+    lines.extend(["", "## Issues", "", "| severity | code | field | message |", "|---|---|---|---|"])
+    for issue in plan.get("issues", []) if isinstance(plan.get("issues"), list) else []:
+        if not isinstance(issue, Mapping):
+            continue
+        lines.append(
+            f"| {issue.get('severity')} | `{issue.get('code')}` | {issue.get('field', '-')} | {issue.get('message')} |"
+        )
+    lines.append("")
+    return "\n".join(lines)

@@ -1,0 +1,45 @@
+{
+  "queries": [
+    {
+      "id": "finance-numeric-001",
+      "question": "What synthetic percentage is shown for the finance example?",
+      "expected_terms": [
+        "42 percent"
+      ],
+      "metadata": {
+        "type": "numeric_reasoning",
+        "expected_modalities": [
+          "table",
+          "text"
+        ]
+      }
+    },
+    {
+      "id": "finance-table-001",
+      "question": "Which synthetic table row contains alpha revenue?",
+      "expected_terms": [
+        "alpha revenue"
+      ],
+      "metadata": {
+        "type": "table_lookup",
+        "expected_modalities": [
+          "table"
+        ]
+      }
+    },
+    {
+      "id": "finance-negative-001",
+      "question": "Which synthetic filing supplies the unavailable beta forecast?",
+      "expected_terms": [
+        "not available"
+      ],
+      "metadata": {
+        "type": "unanswerable",
+        "negative_case": true,
+        "expected_modalities": [
+          "text"
+        ]
+      }
+    }
+  ]
+}

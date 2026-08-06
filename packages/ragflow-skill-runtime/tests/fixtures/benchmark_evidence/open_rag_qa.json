@@ -1,0 +1,41 @@
+{
+  "schema": "ragflow_grounded_qa_v1",
+  "items": [
+    {
+      "id": "qa-open-text-001",
+      "query_id": "open-text-001",
+      "question": "Which synthetic text states the alpha revenue label?",
+      "answer": "The synthetic text states alpha revenue.",
+      "evidence": [
+        {
+          "document": "paper-a.md",
+          "text": "Synthetic evidence: alpha revenue."
+        }
+      ]
+    },
+    {
+      "id": "qa-open-table-001",
+      "query_id": "open-table-001",
+      "question": "Which synthetic table reports the 42 percent value?",
+      "answer": "The synthetic table reports 42 percent.",
+      "evidence": [
+        {
+          "document": "paper-b.md",
+          "text": "Synthetic table value: 42 percent."
+        }
+      ]
+    },
+    {
+      "id": "qa-open-mixed-001",
+      "query_id": "open-mixed-001",
+      "question": "Which mixed synthetic record includes the caption evidence label?",
+      "answer": "The mixed synthetic record includes caption evidence.",
+      "evidence": [
+        {
+          "document": "paper-c.md",
+          "text": "Synthetic mixed record: caption evidence."
+        }
+      ]
+    }
+  ]
+}

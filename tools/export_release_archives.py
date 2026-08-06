@@ -89,7 +89,7 @@ def create_skill_archive(
     archive_path.write_bytes(gzip.compress(tar_buffer.getvalue(), compresslevel=9, mtime=mtime))
     return {
         "name": skill_root.name,
-        "archive": str(archive_path),
+        "archive": archive_path.name,
         "sha256": sha256_file(archive_path),
         "bytes": archive_path.stat().st_size,
     }
@@ -138,8 +138,8 @@ def export_release_archives(
         "version": "0.1",
         "created_at": datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(),
         "source_commit": source_commit(),
-        "dist": str(dist_dir),
-        "output_dir": str(output_dir),
+        "dist": dist_dir.name,
+        "output_dir": output_dir.name,
         "hygiene": {
             "ok": hygiene_payload["ok"] if hygiene_payload else None,
             "findings": len(hygiene_payload["findings"]) if hygiene_payload else None,

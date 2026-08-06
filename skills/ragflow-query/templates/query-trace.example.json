@@ -1,0 +1,56 @@
+{
+  "schema": "ragflow_query_trace_v1",
+  "question": "What does this knowledge base say about the project?",
+  "mode": {
+    "requested": "agentic",
+    "effective": "agentic",
+    "host_assisted": true
+  },
+  "dataset_ids": [
+    "dataset-id"
+  ],
+  "retrieval": {
+    "top_k": 5,
+    "similarity_threshold": 0.1,
+    "chunk_count": 1
+  },
+  "route": null,
+  "timings_ms": {
+    "total": 42.5,
+    "retrieval": 38.2
+  },
+  "cost": {
+    "ragflow_retrieval_calls": 1,
+    "llm_calls": 0,
+    "script_owned_synthesis": false
+  },
+  "evidence": [
+    {
+      "rank": 1,
+      "citation_id": "[1]",
+      "score": 0.885,
+      "similarity": 0.92,
+      "term_coverage": 0.5,
+      "matched_terms": [
+        "project"
+      ],
+      "matched_keywords": [
+        "project"
+      ],
+      "document_name": "source.md",
+      "document_id": "document-id",
+      "dataset_id": "dataset-id",
+      "chunk_id": "chunk-id",
+      "content_preview": "A concise evidence chunk returned by RAGFlow.",
+      "reasons": [
+        "similarity",
+        "question-term-overlap",
+        "important-keyword-overlap",
+        "top-ranked"
+      ]
+    }
+  ],
+  "warnings": [],
+  "started_at": "2026-01-01T00:00:00+00:00",
+  "finished_at": "2026-01-01T00:00:00+00:00"
+}

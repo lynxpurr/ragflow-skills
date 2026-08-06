@@ -26,6 +26,7 @@ EXCLUDE_NAMES = {
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
+    "doc",
 }
 
 OPTIONAL_RESOURCE_DIRS = {"agents", "references"}
@@ -93,6 +94,18 @@ script = Path({str(query_script)!r})
 spec = importlib.util.spec_from_file_location("release_query_cli", script)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+routing = Path(__file__).parent / "routing.json"
+routing.write_text(json.dumps({{
+    "version": "0.1",
+    "knowledge_bases": [
+        {{
+            "name": "kb:release-smoke",
+            "dataset_id": "ds-smoke",
+            "hints": ["release smoke"],
+            "params": {{"top_k": 5}}
+        }}
+    ]
+}}, ensure_ascii=False), encoding="utf-8")
 
 class FakeClient:
     def __init__(self, config):
@@ -113,9 +126,12 @@ class FakeClient:
 
 module.RAGFlowClient = FakeClient
 payloads = []
+trace_json = Path(__file__).parent / "query_trace.json"
+trace_md = Path(__file__).parent / "query_trace.md"
 for argv in [
     ["--base-url", "https://ragflow.example.test", "--api-key", "test-key", "ask", "release smoke", "--dataset-id", "ds-smoke", "--mode", "direct", "--json"],
-    ["--base-url", "https://ragflow.example.test", "--api-key", "test-key", "ask", "release smoke", "--dataset-id", "ds-smoke", "--mode", "agentic", "--host-assisted", "--json"],
+    ["--base-url", "https://ragflow.example.test", "--api-key", "test-key", "ask", "release smoke", "--dataset-id", "ds-smoke", "--mode", "agentic", "--host-assisted", "--json", "--trace-json", str(trace_json), "--trace-md", str(trace_md)],
+    ["--base-url", "https://ragflow.example.test", "--api-key", "test-key", "ask", "release smoke", "--mode", "auto", "--routing-config", str(routing), "--json"],
 ]:
     from io import StringIO
     import contextlib
@@ -125,10 +141,62 @@ for argv in [
     if code != 0:
         raise SystemExit(code)
     payload = json.loads(stdout.getvalue())
-    if not payload.get("ok") or not payload.get("chunks"):
+    if not payload.get("ok") or not payload.get("chunks") or not payload.get("evidence"):
         raise SystemExit(2)
     payloads.append(payload)
-print(json.dumps({{"ok": True, "payloads": payloads}}, ensure_ascii=False))
+if not trace_json.exists() or "RAGFlow Query Trace" not in trace_md.read_text(encoding="utf-8"):
+    raise SystemExit(3)
+query_output = Path(__file__).parent / "query_output.json"
+audit_json = Path(__file__).parent / "citation_audit.json"
+audit_md = Path(__file__).parent / "citation_audit.md"
+diagnostic_json = Path(__file__).parent / "query_diagnostic.json"
+diagnostic_md = Path(__file__).parent / "query_diagnostic.md"
+query_output.write_text(json.dumps(payloads[1], ensure_ascii=False, indent=2), encoding="utf-8")
+from io import StringIO
+import contextlib
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    audit_code = module.main([
+        "audit-citations",
+        "--query-output",
+        str(query_output),
+        "--answer",
+        "Release smoke answer [1].",
+        "--report-json",
+        str(audit_json),
+        "--report-md",
+        str(audit_md),
+        "--json",
+    ])
+if audit_code != 0:
+    raise SystemExit(audit_code)
+audit_payload = json.loads(stdout.getvalue())
+if not audit_payload.get("ok") or not audit_json.exists() or not audit_md.exists():
+    raise SystemExit(4)
+stdout = StringIO()
+with contextlib.redirect_stdout(stdout):
+    diagnostic_code = module.main([
+        "diagnose-result",
+        "--query-output",
+        str(query_output),
+        "--trace-json",
+        str(trace_json),
+        "--citation-audit",
+        str(audit_json),
+        "--expected-term",
+        "release",
+        "--report-json",
+        str(diagnostic_json),
+        "--report-md",
+        str(diagnostic_md),
+        "--json",
+    ])
+if diagnostic_code != 0:
+    raise SystemExit(diagnostic_code)
+diagnostic_payload = json.loads(stdout.getvalue())
+if not diagnostic_payload.get("ok") or not diagnostic_json.exists() or not diagnostic_md.exists():
+    raise SystemExit(5)
+print(json.dumps({{"ok": True, "payloads": payloads, "audit": audit_payload, "diagnostic": diagnostic_payload}}, ensure_ascii=False))
 """,
             encoding="utf-8",
         )
@@ -156,8 +224,14 @@ def run_release_check(dist_dir: Path = DIST_DIR) -> int:
         [sys.executable, str(dist_dir / "ragflow-query" / "scripts" / "bootstrap_smoke.py")],
         [sys.executable, str(dist_dir / "ragflow-query" / "scripts" / "query.py"), "--help"],
         [sys.executable, str(dist_dir / "ragflow-doc-to-md" / "scripts" / "convert.py"), "--help"],
+        [sys.executable, str(dist_dir / "ragflow-doc-to-md" / "scripts" / "convert.py"), "adaptive", "--help"],
+        [sys.executable, str(dist_dir / "ragflow-doc-to-md" / "scripts" / "convert.py"), "inspect-source", "--help"],
+        [sys.executable, str(dist_dir / "ragflow-doc-to-md" / "scripts" / "convert.py"), "package", "--help"],
+        [sys.executable, str(dist_dir / "ragflow-doc-to-md" / "scripts" / "convert.py"), "postprocess", "--help"],
         [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "build.py"), "--help"],
+        [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "build.py"), "inspect-handoff", "--help"],
         [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "inspect_kb.py"), "--help"],
+        [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "profile.py"), "--help"],
         [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "validate.py"), "--help"],
     ]
     env = {

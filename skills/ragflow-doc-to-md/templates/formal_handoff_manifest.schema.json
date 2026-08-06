@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/lynxpurr/ragflow-skills/schemas/formal_handoff_manifest-v1.schema.json",
+  "title": "RAGFlow formal handoff package manifest",
+  "type": "object",
+  "required": [
+    "schema",
+    "handoff_mode",
+    "doc_manifest",
+    "source_document_count",
+    "sidecars",
+    "package_hash",
+    "downstream_command_suggestions",
+    "safety"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "ragflow_formal_handoff_manifest_v1"
+    },
+    "created_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "handoff_mode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "thin_preview",
+        "formal_ingest",
+        null
+      ]
+    },
+    "doc_manifest": {
+      "type": "string",
+      "minLength": 1
+    },
+    "formal_handoff_manifest": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_document_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "generated_sidecar_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "missing_sidecars": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "sidecars": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "path",
+          "category",
+          "exists",
+          "safe_relative_path"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "minLength": 1
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "safe_relative_path": {
+            "type": "boolean"
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema_identity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "markdown_files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "document_index",
+          "path",
+          "exists",
+          "safe_relative_path"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "document_index": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "safe_relative_path": {
+            "type": "boolean"
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "image_assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "report_hashes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "schema_versions": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "package_hash": {
+      "type": "string",
+      "minLength": 1
+    },
+    "package_hash_algorithm": {
+      "type": "string",
+      "minLength": 1
+    },
+    "package_hash_inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "downstream_command_suggestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

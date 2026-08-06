@@ -1,55 +1,63 @@
 ---
 name: ragflow-doc-to-md
-description: Convert raw documents into Markdown handoff bundles for portable RAGFlow ingestion. Use when Codex needs to turn PDF, Office, HTML, TXT, or existing Markdown inputs into normalized Markdown plus a thin manifest for downstream KB build workflows.
+description: Convert source documents into reviewed Markdown handoff bundles. Use when Codex needs a formal RAGFlow pre-ingest handoff, a deterministic source inspection, or a thin Markdown preview; specialized backends and packaging stay behind explicit advanced triggers.
 ---
 
 # RAGFlow Doc To MD
 
-Use scripts in this skill to produce Markdown handoff directories that can be consumed by `ragflow-kb-build`.
+## When to use
 
-Inputs:
+Use this skill to convert PDF, Office, HTML, text, image, EPUB, or existing Markdown
+sources into a reviewed handoff for `ragflow-kb-build`. Use `pipeline` for formal ingest;
+use the top-level thin conversion only when the user explicitly wants a preview.
 
-- Existing Markdown via `--mode passthrough`.
-- Plain text and simple HTML via the built-in converter.
-- Office/PDF/EPUB-like formats through `--backend mineru`, `--backend pandoc` when pandoc is installed, or `--backend remote --remote-url ...`.
+## Inputs and outputs
 
-Command examples:
+Inputs are a source file or directory, an output directory, and a reviewed backend or
+private config when conversion is required. A formal handoff includes `documents/*.md`,
+`doc_manifest.json`, `quality_report.json`, `formal_handoff_manifest.json`,
+`retrieval_hints.json`, and `ragflow_ingest_plan.yaml` when available.
 
-```bash
-python scripts/convert.py --input ./docs --output ./handoff --mode passthrough
-python scripts/convert.py --input ./raw --output ./handoff --backend builtin
-python scripts/convert.py --input ./raw --output ./handoff --backend mineru
-python scripts/convert.py --input ./raw --output ./handoff --backend remote --remote-url https://converter.example/api/convert
-python scripts/convert.py --config /path/to/ragflow-config.local.yaml --input ./raw --output ./handoff --json
-```
+## Canonical workflows
 
-Use `templates/ragflow-config.example.yaml` as the shared config template. Put the real config in a stable host-agent config path, such as Hermes or OpenClaw config storage, and point scripts to it with `RAGFLOW_CONFIG` or `--config`. Do not put real keys in the skill folder.
-
-When a host agent should prepare config, run smoke checks, or perform end-to-end validation for the user, read `references/host-agent-setup.md` first.
-
-MinerU service conversion can be configured through the host agent environment:
+### Canonical workflow: convert ordinary documents
 
 ```bash
-DOC_TO_MD_BACKEND=mineru
-MINERU_BASE_URL=https://mineru.net/api/v1/agent
-MINERU_API_KEY=...
-MINERU_TIMEOUT=300
-MINERU_POLL_INTERVAL=3
+python scripts/convert.py pipeline --input ./raw --output ./handoff --backend auto --postprocess-profile chunk-markers-dense --json
 ```
 
-Generic remote conversion can also be configured through the host agent environment:
+Review the quality gate and handoff manifests before passing the bundle downstream.
+Existing Markdown may use `--mode passthrough`; conversion-required inputs need a backend
+that is already configured and approved by the host.
+
+### Canonical workflow: inspect and decide deterministically
 
 ```bash
-DOC_TO_MD_BACKEND=remote
-DOC_TO_MD_REMOTE_URL=https://converter.example/api/convert
-DOC_TO_MD_REMOTE_API_KEY=...
-DOC_TO_MD_TIMEOUT=120
+python scripts/convert.py adaptive --input ./raw --output ./review --decision-only --backend auto --json
 ```
 
-Notes:
+Use the decision-only report when backend choice, table signals, or document quality is
+uncertain. Execute the full adaptive path only after its selected backend and output path
+are acceptable.
 
-- The output directory contains `documents/*.md` plus `doc_manifest.json`.
-- `doc_manifest.json` uses `source_root: "."`, so downstream `ragflow-kb-build` can consume it after the handoff directory moves.
-- Use `--strict` when skipped files should fail the run.
-- The MinerU backend uses the Agent parsing API shape: create parse task, upload to signed URL, poll task, then download Markdown.
-- The remote backend expects JSON with `filename` and base64 `content_base64`, and returns `markdown` or `content`.
+## Decision and stop rules
+
+- Prefer `pipeline` for formal KB ingestion and passthrough for already-reviewed Markdown.
+- Stop when the quality gate is `BLOCKED`, required source files are missing, or a remote
+  backend is not explicitly configured.
+- A core finding may open only the matching advanced trigger; do not scan every backend or
+  packaging command for a workaround.
+- Handoff guidance does not authorize MinerU access, network calls, or RAGFlow mutation.
+
+## Advanced triggers
+
+Open [Advanced workflows](references/advanced-workflows.md) only for an explicit backend
+diagnosis, high-quality table path, split/package request, postprocess request, retained
+package comparison, or adaptive-policy investigation. For host configuration and smoke
+setup, use [Host agent setup](references/host-agent-setup.md).
+
+## Security
+
+Keep converter endpoints and API keys in a private config, environment, or host secret
+store. Tracked handoffs and examples must contain no live endpoint, key, source path, raw
+private document content, or temporary run root.

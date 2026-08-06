@@ -2,14 +2,81 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+import hashlib
+import json
+import math
+import mimetypes
 from pathlib import Path
+import re
 import time
 from typing import Any, Mapping
+import uuid
+import zipfile
 
-from .manifests import DocManifest, KbDocumentEntry
-from .profiles import ChunkProfile
+from .manifests import DocManifest, KbDocumentEntry, KbManifest, ManifestError, load_kb_manifest
+from .profiles import (
+    ChunkProfile,
+    ProfileError,
+    READ_ONLY_SERVER_DEFAULT_PARSER_KEYS,
+    SUPPORTED_PARSER_KEYS,
+    load_profile,
+    normalize_profile_language,
+)
+
+BUILD_PAYLOAD_PREVIEW_SCHEMA = "ragflow_kb_build_payload_preview_v1"
+HANDOFF_CONSUMPTION_STATUS_SCHEMA = "ragflow_handoff_consumption_status_v1"
+PARAMETER_MATERIALIZATION_INVENTORY_SCHEMA = "ragflow_parameter_materialization_inventory_v1"
+PARAMETER_READ_BACK_AUDIT_SCHEMA = "ragflow_parameter_read_back_audit_v1"
+PARAMETER_EVIDENCE_DIGEST_ALGORITHM = "sha256"
+PARAMETER_EVIDENCE_CANONICALIZATION = "json_sort_keys_compact_v1"
+RAGFLOW_CONTRACT_IDENTITY_SOURCES = {
+    "server_reported",
+    "openapi",
+    "server_request_model",
+    "operator_supplied",
+}
+RAGFLOW_CONTRACT_VERSION_RE = re.compile(r"^[A-Za-z0-9._+-]{1,128}$")
+KB_ASSET_UPLOAD_PLAN_SCHEMA = "ragflow_kb_asset_upload_plan_v2"
+KB_ASSET_INGESTION_REPORT_SCHEMA = "ragflow_kb_asset_ingestion_report_v1"
+KB_ARTIFACT_CONSISTENCY_REPORT_SCHEMA = "ragflow_kb_artifact_consistency_report_v1"
+KB_REFRESH_REPORT_SCHEMA = "ragflow_kb_refresh_report_v1"
+MULTIMODAL_KB_MANIFEST_SCHEMA = "ragflow_multimodal_kb_manifest_v1"
+RETRIEVAL_HINTS_SCHEMA = "ragflow_retrieval_hints_v1"
+CHUNK_PROFILE_REPORT_SCHEMA = "ragflow_chunk_profile_report_v1"
+MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)]\(([^)]+)\)")
+IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".tif", ".tiff", ".webp"}
+TABLE_SUFFIXES = {".csv", ".html", ".htm", ".json", ".md", ".markdown", ".tsv", ".xlsx"}
+ASSET_UPLOAD_PLAN_IMAGE_CLASSES = (
+    "markdown_referenced",
+    "manifest_listed",
+    "sidecar_referenced",
+    "semantic_alias_reference",
+    "residual_unreferenced",
+    "outside_handoff",
+    "missing",
+)
+HASH_NAMED_IMAGE_RE = re.compile(r"^[0-9a-fA-F]{16,}$")
+RESIDUAL_IMAGE_LARGE_BYTES = 5 * 1024 * 1024
+RESIDUAL_IMAGE_NUMEROUS_THRESHOLD = 5
+DEFAULT_UPLOAD_PLAN_SIDECARS = (
+    ("doc_manifest", "doc_manifest.json"),
+    ("quality_report", "quality_report.json"),
+    ("metadata", "metadata.json"),
+    ("artifact_index", "artifact_index.json"),
+    ("profile_suggestions", "profile_suggestions.json"),
+    ("retrieval_hints", "retrieval_hints.json"),
+    ("assistant_profile", "assistant_profile.json"),
+    ("assistant_test_plan", "assistant_test_plan.json"),
+    ("postprocess_report", "postprocess_report.json"),
+    ("chunk_profile_report", "chunk_profile_report.json"),
+    ("ragflow_ingest_plan", "ragflow_ingest_plan.yaml"),
+    ("ingest_readiness", "ingest_readiness_report.json"),
+    ("ingest_readiness_markdown", "ingest_readiness_report.md"),
+    ("formal_handoff_manifest", "formal_handoff_manifest.json"),
+    ("package_readme", "package_readme.md"),
+)
 
 
 class BuildError(RuntimeError):
@@ -20,6 +87,3082 @@ class BuildError(RuntimeError):
 class BuildDocument:
     path: Path
     manifest_source_path: str | None = None
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _read_json_mapping(path: Path, *, label: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise BuildError(f"{label} not found: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise BuildError(f"{label} is not valid JSON: {path}") from exc
+    if not isinstance(payload, dict):
+        raise BuildError(f"{label} must be a JSON object: {path}")
+    return payload
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _as_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def normalize_embedding_model_expectations(values: list[str] | tuple[str, ...] | None) -> list[str]:
+    """Return de-duplicated expected embedding model labels for report checks."""
+
+    seen: set[str] = set()
+    models: list[str] = []
+    for value in values or []:
+        text = str(value).strip()
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        models.append(text)
+    return models
+
+
+def describe_embedding_model(profile: ChunkProfile | Mapping[str, Any] | None) -> dict[str, Any]:
+    """Describe the embedding model captured by a build profile."""
+
+    value: Any = None
+    if isinstance(profile, ChunkProfile):
+        value = profile.embedding_model
+    elif isinstance(profile, Mapping):
+        value = profile.get("embedding_model")
+
+    if isinstance(value, str) and value.strip():
+        return {
+            "model": value.strip(),
+            "status": "known",
+            "source": "profile.embedding_model",
+            "reason": None,
+        }
+    return {
+        "model": "unknown",
+        "status": "not_configured",
+        "source": "profile.embedding_model",
+        "reason": "profile_embedding_model_missing",
+    }
+
+
+def check_embedding_model_drift(
+    embedding_model: Mapping[str, Any] | str,
+    expected_embedding_models: list[str] | tuple[str, ...] | None,
+) -> dict[str, Any]:
+    """Compare observed embedding model evidence with expected model labels."""
+
+    expected_models = normalize_embedding_model_expectations(expected_embedding_models)
+    if isinstance(embedding_model, Mapping):
+        observed_model = str(embedding_model.get("model") or "unknown").strip() or "unknown"
+        reason = embedding_model.get("reason")
+    else:
+        observed_model = str(embedding_model or "unknown").strip() or "unknown"
+        reason = "profile_embedding_model_missing" if observed_model == "unknown" else None
+
+    if not expected_models:
+        return {
+            "status": "not_configured",
+            "observed_model": observed_model,
+            "expected_models": [],
+            "matches_expected": None,
+            "rebuild_or_reparse_required": False,
+            "reason": reason,
+            "recommendation": (
+                "Pass --expected-embedding-model to compare the selected profile against the deployment embedding model."
+                if observed_model != "unknown"
+                else "Use a model-specific profile template or set profile.embedding_model before checking embedding drift."
+            ),
+        }
+    if observed_model == "unknown":
+        return {
+            "status": "not_configured",
+            "observed_model": observed_model,
+            "expected_models": expected_models,
+            "matches_expected": None,
+            "rebuild_or_reparse_required": False,
+            "reason": reason,
+            "recommendation": "Use a model-specific profile template or set profile.embedding_model before checking embedding drift.",
+        }
+
+    expected_keys = {model.casefold() for model in expected_models}
+    matches = observed_model.casefold() in expected_keys
+    return {
+        "status": "match" if matches else "mismatch",
+        "observed_model": observed_model,
+        "expected_models": expected_models,
+        "matches_expected": matches,
+        "rebuild_or_reparse_required": not matches,
+        "reason": None if matches else "embedding_model_expected_mismatch",
+        "recommendation": None if matches else "Rebuild or re-parse the KB with a profile that uses the expected embedding model.",
+    }
+
+
+def _ingest_plan_language(ragflow_ingest_plan: Mapping[str, Any] | None) -> tuple[str | None, str | None]:
+    if not isinstance(ragflow_ingest_plan, Mapping):
+        return None, None
+    recommended_build = (
+        ragflow_ingest_plan.get("recommended_build")
+        if isinstance(ragflow_ingest_plan.get("recommended_build"), Mapping)
+        else {}
+    )
+    parser_profile = (
+        recommended_build.get("parser_profile")
+        if isinstance(recommended_build.get("parser_profile"), Mapping)
+        else {}
+    )
+    language = normalize_profile_language(parser_profile.get("language"))
+    if language:
+        return language, "ragflow_ingest_plan.recommended_build.parser_profile.language"
+    return None, None
+
+
+def _profile_language(profile: ChunkProfile) -> tuple[str | None, str | None]:
+    if profile.language:
+        internal = normalize_profile_language(profile.parser_config.get("__language__"))
+        if internal and internal == profile.language:
+            return profile.language, "profile.parser_config.__language__"
+        return profile.language, "profile.language"
+    return None, None
+
+
+def select_build_language(
+    profile: ChunkProfile,
+    *,
+    ragflow_ingest_plan: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the language that the build path can materialize, plus source evidence."""
+
+    value, source = _profile_language(profile)
+    if value:
+        return {
+            "value": value,
+            "source": source,
+            "status": "materialized_to_ragflow",
+            "target": "dataset.language",
+        }
+    value, source = _ingest_plan_language(ragflow_ingest_plan)
+    if value:
+        return {
+            "value": value,
+            "source": source,
+            "status": "materialized_to_ragflow",
+            "target": "dataset.language",
+        }
+    return {
+        "value": None,
+        "source": None,
+        "status": "unsupported_or_gated",
+        "target": "dataset.language",
+        "reason": "language_not_configured",
+    }
+
+
+def apply_build_profile_language(
+    profile: ChunkProfile,
+    *,
+    ragflow_ingest_plan: Mapping[str, Any] | None = None,
+) -> ChunkProfile:
+    """Return a profile with top-level language selected from profile or ingest-plan evidence."""
+
+    language = select_build_language(profile, ragflow_ingest_plan=ragflow_ingest_plan)
+    value = language.get("value")
+    if isinstance(value, str) and value.strip() and profile.language != value:
+        return replace(profile, language=value)
+    return profile
+
+
+def _retrieval_hint_count(retrieval_hints: Mapping[str, Any] | None, key: str) -> int:
+    if not isinstance(retrieval_hints, Mapping):
+        return 0
+    value = retrieval_hints.get(key)
+    return len(value) if isinstance(value, list) else 0
+
+
+PARAMETER_MATERIALIZATION_STATUS_VALUES = (
+    "materialized_to_ragflow",
+    "materialized_to_manifest",
+    "local_audit_only",
+    "advisory_after_build",
+    "unsupported_or_gated",
+    "read_only_server_default",
+    "native_parser_only",
+    "unknown_api_mapping",
+)
+KNOWN_RAGFLOW_UI_CONTROLS = (
+    (
+        "ragflow_ui.page_index",
+        "PageIndex",
+        "native_parser_only",
+        "deepdoc_native",
+        "page_index_pages_api_key_null_for_markdown_handoff",
+        "parser_config.pages",
+    ),
+    (
+        "ragflow_ui.image_context_window",
+        "Image context window",
+        "read_only_server_default",
+        "markdown_handoff",
+        "image_context_window_is_read_only_server_default",
+        "parser_config.image_context_size",
+    ),
+    (
+        "ragflow_ui.table_context_window",
+        "Table context window",
+        "read_only_server_default",
+        "markdown_handoff",
+        "table_context_window_is_read_only_server_default",
+        "parser_config.table_context_size",
+    ),
+    (
+        "ragflow_ui.automatic_metadata",
+        "Automatic metadata",
+        "unknown_api_mapping",
+        "unknown",
+        "automatic_metadata_api_mapping_unconfirmed",
+        None,
+    ),
+    (
+        "ragflow_ui.overlap_percent",
+        "Overlapped percent",
+        "unknown_api_mapping",
+        "unknown",
+        "overlap_percent_api_mapping_unconfirmed",
+        None,
+    ),
+    (
+        "ragflow_ui.table_to_html",
+        "Table to HTML",
+        "native_parser_only",
+        "deepdoc_native",
+        "native_pdf_parser_control_not_markdown_handoff",
+        None,
+    ),
+)
+PARAMETER_READ_BACK_AUDIT_STATUS_VALUES = (
+    "observed_match",
+    "observed_missing",
+    "observed_changed",
+    "not_observable",
+    "unknown_api_mapping",
+    "native_parser_only",
+    "not_requested",
+)
+READ_BACK_DETAIL_NESTED_KEYS = ("dataset", "kb", "knowledgebase", "knowledge_base", "detail", "details", "summary")
+READ_BACK_PARSER_CONFIG_KEYS = ("parser_config", "parserConfig")
+def _known_ragflow_ui_control_fields() -> list[dict[str, Any]]:
+    fields: list[dict[str, Any]] = []
+    for field, label, status, scope, reason, api_key in KNOWN_RAGFLOW_UI_CONTROLS:
+        record = {
+            "field": field,
+            "status": status,
+            "source": "ragflow_ui_observation",
+            "target": None,
+            "parser_path_scope": scope,
+            "reason": reason,
+            "required_verification": ["api_ui_read_back_audit"],
+            "ui_label": label,
+        }
+        if api_key:
+            record["api_key"] = api_key
+        fields.append(record)
+    return fields
+
+
+def _field_status_counts(fields: list[Mapping[str, Any]], statuses: tuple[str, ...]) -> dict[str, int]:
+    return {
+        status: sum(1 for item in fields if item.get("status") == status)
+        for status in statuses
+    }
+
+
+def _parser_config_field_status(key: str, value: Any = None) -> tuple[str, str | None, str | None]:
+    if key == "delimiter" and value == "":
+        return "local_audit_only", None, "empty_delimiter_omitted_from_dataset_create"
+    if key in SUPPORTED_PARSER_KEYS:
+        return "materialized_to_ragflow", f"dataset.parser_config.{key}", None
+    if key in READ_ONLY_SERVER_DEFAULT_PARSER_KEYS:
+        return "read_only_server_default", None, "ragflow_api_rejects_dataset_create_for_observed_server_default"
+    return "unsupported_or_gated", None, "unsupported_parser_config_key"
+
+
+def _required_verification_for_parser_status(status: str) -> tuple[str, ...]:
+    if status == "materialized_to_ragflow":
+        return ("fake_client_dataset_payload", "ragflow_read_back_audit")
+    if status == "read_only_server_default":
+        return ("ragflow_live_rejection_evidence",)
+    return ("api_field_mapping_confirmation",)
+
+
+def _read_back_roots(payload: Mapping[str, Any]) -> list[tuple[str, Mapping[str, Any]]]:
+    roots: list[tuple[str, Mapping[str, Any]]] = [("observed_state", payload)]
+    data = payload.get("data")
+    if isinstance(data, Mapping):
+        roots.append(("observed_state.data", data))
+        for nested_key in READ_BACK_DETAIL_NESTED_KEYS:
+            nested = data.get(nested_key)
+            if isinstance(nested, Mapping):
+                roots.append((f"observed_state.data.{nested_key}", nested))
+    for nested_key in READ_BACK_DETAIL_NESTED_KEYS:
+        nested = payload.get(nested_key)
+        if isinstance(nested, Mapping):
+            roots.append((f"observed_state.{nested_key}", nested))
+    return roots
+
+
+def _extract_read_back_parser_config(payload: Mapping[str, Any] | None) -> tuple[dict[str, Any] | None, str | None]:
+    if not isinstance(payload, Mapping):
+        return None, None
+    for prefix, root in _read_back_roots(payload):
+        for key in READ_BACK_PARSER_CONFIG_KEYS:
+            value = root.get(key)
+            if isinstance(value, Mapping):
+                return dict(value), f"{prefix}.{key}"
+        parser = root.get("parser")
+        if isinstance(parser, Mapping):
+            for key in READ_BACK_PARSER_CONFIG_KEYS:
+                value = parser.get(key)
+                if isinstance(value, Mapping):
+                    return dict(value), f"{prefix}.parser.{key}"
+    return None, None
+
+
+def _extract_read_back_language(payload: Mapping[str, Any] | None) -> tuple[Any, str | None]:
+    if not isinstance(payload, Mapping):
+        return None, None
+    for prefix, root in _read_back_roots(payload):
+        for key in ("language", "lang"):
+            if key in root:
+                return root.get(key), f"{prefix}.{key}"
+    return None, None
+
+
+def _audit_status_counts(fields: list[Mapping[str, Any]]) -> dict[str, int]:
+    return {
+        status: sum(1 for item in fields if item.get("audit_status") == status)
+        for status in PARAMETER_READ_BACK_AUDIT_STATUS_VALUES
+    }
+
+
+def _parameter_evidence_digest(payload: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(payload, Mapping):
+        return None
+    canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"{PARAMETER_EVIDENCE_DIGEST_ALGORITHM}:{digest}"
+
+
+def _normalize_evidence_bundle_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        normalized = uuid.UUID(text)
+    except ValueError as exc:
+        raise BuildError("evidence bundle id must be a UUID") from exc
+    if normalized.version != 4:
+        raise BuildError("evidence bundle id must be a UUIDv4")
+    return str(normalized)
+
+
+def _parameter_evidence_binding(
+    *,
+    dry_run_report: Mapping[str, Any],
+    observed_state: Mapping[str, Any] | None,
+    evidence_bundle_id: str | None,
+    ragflow_contract_version: str | None,
+    ragflow_contract_source: str | None,
+) -> dict[str, Any]:
+    bundle_id = _normalize_evidence_bundle_id(evidence_bundle_id)
+    if bundle_id and not isinstance(observed_state, Mapping):
+        raise BuildError("evidence bundle id requires observed-state evidence")
+    version = str(ragflow_contract_version or "").strip() or None
+    source = str(ragflow_contract_source or "").strip() or None
+    if bool(version) != bool(source):
+        raise BuildError("RAGFlow contract version and source must be provided together")
+    if version and not RAGFLOW_CONTRACT_VERSION_RE.fullmatch(version):
+        raise BuildError("RAGFlow contract version must be a short ASCII version label")
+    if source and source not in RAGFLOW_CONTRACT_IDENTITY_SOURCES:
+        raise BuildError(f"unsupported RAGFlow contract identity source: {source}")
+    contract_identity = None
+    if version and source:
+        contract_identity = {
+            "version": version,
+            "source": source,
+            "assertion": "caller_asserted",
+        }
+    return {
+        "binding_status": "caller_asserted" if bundle_id else "unbound",
+        "verification_scope": "caller_asserted_correlation" if bundle_id else "input_integrity_only",
+        "digest_algorithm": PARAMETER_EVIDENCE_DIGEST_ALGORITHM,
+        "canonicalization": PARAMETER_EVIDENCE_CANONICALIZATION,
+        "dry_run_report_digest": _parameter_evidence_digest(dry_run_report),
+        "observed_state_digest": _parameter_evidence_digest(observed_state),
+        "evidence_bundle_id": bundle_id,
+        "ragflow_contract_identity": contract_identity,
+        "tool_verified_same_run": False,
+    }
+
+
+def create_parameter_read_back_audit(
+    *,
+    dry_run_report: Mapping[str, Any],
+    observed_state: Mapping[str, Any] | None = None,
+    evidence_bundle_id: str | None = None,
+    ragflow_contract_version: str | None = None,
+    ragflow_contract_source: str | None = None,
+) -> dict[str, Any]:
+    """Compare dry-run parameter intent with read-back evidence without mutating RAGFlow."""
+
+    preview = dry_run_report.get("build_payload_preview") if isinstance(dry_run_report, Mapping) else None
+    inventory = (
+        dry_run_report.get("parameter_materialization_inventory") if isinstance(dry_run_report, Mapping) else None
+    )
+    preview_fields = preview.get("fields", []) if isinstance(preview, Mapping) else []
+    inventory_fields = inventory.get("fields", []) if isinstance(inventory, Mapping) else []
+    dataset_payload = preview.get("dataset_create_payload", {}) if isinstance(preview, Mapping) else {}
+    dataset_update_payload = preview.get("dataset_update_payload", {}) if isinstance(preview, Mapping) else {}
+    observed_parser_config, parser_config_source = _extract_read_back_parser_config(observed_state)
+    observed_language, language_source = _extract_read_back_language(observed_state)
+    observed_parser_config_available = observed_parser_config is not None
+    observed_parser_config = observed_parser_config or {}
+    evidence_binding = _parameter_evidence_binding(
+        dry_run_report=dry_run_report,
+        observed_state=observed_state,
+        evidence_bundle_id=evidence_bundle_id,
+        ragflow_contract_version=ragflow_contract_version,
+        ragflow_contract_source=ragflow_contract_source,
+    )
+
+    fields: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_field(record: dict[str, Any]) -> None:
+        field = str(record.get("field") or "")
+        if not field or field in seen:
+            return
+        seen.add(field)
+        fields.append(record)
+
+    def compare_value(
+        *,
+        field: str,
+        requested_value: Any,
+        observed_value: Any,
+        observed_available: bool,
+        source: str,
+        requested_source: str | None,
+        materialization_status: str,
+        parser_path_scope: str,
+        target: str | None,
+    ) -> None:
+        if not observed_available:
+            audit_status = "not_observable"
+        elif observed_value is None:
+            audit_status = "observed_missing"
+        elif observed_value == requested_value:
+            audit_status = "observed_match"
+        else:
+            audit_status = "observed_changed"
+        record: dict[str, Any] = {
+            "field": field,
+            "audit_status": audit_status,
+            "materialization_status": materialization_status,
+            "parser_path_scope": parser_path_scope,
+            "target": target,
+            "source": source,
+            "requested_source": requested_source,
+            "observed_source": source if observed_available else None,
+        }
+        if requested_value is not None:
+            record["requested_value"] = requested_value
+        if observed_available and observed_value is not None:
+            record["observed_value"] = observed_value
+        add_field(record)
+
+    if isinstance(preview_fields, list):
+        for item in preview_fields:
+            if not isinstance(item, Mapping) or item.get("status") != "materialized_to_ragflow":
+                continue
+            target = item.get("target")
+            if not isinstance(target, str) or not target:
+                continue
+            if target == "dataset.language":
+                requested_value = item.get("value")
+                comparable_requested = normalize_profile_language(requested_value) or requested_value
+                comparable_observed = normalize_profile_language(observed_language) or observed_language
+                compare_value(
+                    field=target,
+                    requested_value=comparable_requested,
+                    observed_value=comparable_observed,
+                    observed_available=language_source is not None,
+                    source=language_source or "observed_state.language",
+                    requested_source=str(item.get("source") or "build_payload_preview"),
+                    materialization_status="materialized_to_ragflow",
+                    parser_path_scope="markdown_handoff",
+                    target=target,
+                )
+                continue
+            prefix = "dataset.parser_config."
+            if target.startswith(prefix):
+                key = target[len(prefix) :]
+                compare_value(
+                    field=target,
+                    requested_value=item.get("value"),
+                    observed_value=observed_parser_config.get(key),
+                    observed_available=observed_parser_config_available,
+                    source=parser_config_source or "observed_state.parser_config",
+                    requested_source=str(item.get("source") or "build_payload_preview"),
+                    materialization_status="materialized_to_ragflow",
+                    parser_path_scope="markdown_handoff",
+                    target=target,
+                )
+                continue
+            add_field(
+                {
+                    "field": target,
+                    "audit_status": "not_observable",
+                    "materialization_status": "materialized_to_ragflow",
+                    "parser_path_scope": "markdown_handoff",
+                    "target": target,
+                    "source": "build_payload_preview",
+                    "requested_source": str(item.get("source") or "build_payload_preview"),
+                    "requested_value": item.get("value"),
+                    "reason": "read_back_mapping_not_supported_for_this_target",
+                }
+            )
+
+    if isinstance(inventory_fields, list):
+        for item in inventory_fields:
+            if not isinstance(item, Mapping):
+                continue
+            status = str(item.get("status") or "")
+            if status == "materialized_to_ragflow":
+                continue
+            if status == "unknown_api_mapping":
+                audit_status = "unknown_api_mapping"
+            elif status == "native_parser_only":
+                audit_status = "native_parser_only"
+            else:
+                audit_status = "not_requested"
+            record = {
+                "field": str(item.get("field") or ""),
+                "audit_status": audit_status,
+                "materialization_status": status,
+                "parser_path_scope": str(item.get("parser_path_scope") or "unknown"),
+                "target": item.get("target"),
+                "source": item.get("source"),
+                "reason": item.get("reason"),
+            }
+            if "ui_label" in item:
+                record["ui_label"] = item.get("ui_label")
+            api_key = item.get("api_key")
+            if isinstance(api_key, str) and api_key:
+                record["api_key"] = api_key
+                prefix = "parser_config."
+                if api_key.startswith(prefix) and observed_parser_config_available:
+                    key = api_key[len(prefix) :]
+                    record["observed_source"] = parser_config_source or "observed_state.parser_config"
+                    if key in observed_parser_config:
+                        record["observed_value"] = observed_parser_config.get(key)
+            elif status == "read_only_server_default" and observed_parser_config_available:
+                field_name = str(item.get("field") or "")
+                prefix = "profile.parser_config."
+                if field_name.startswith(prefix):
+                    key = field_name[len(prefix) :]
+                    if key in READ_ONLY_SERVER_DEFAULT_PARSER_KEYS:
+                        record["observed_source"] = parser_config_source or "observed_state.parser_config"
+                        if key in observed_parser_config:
+                            record["observed_value"] = observed_parser_config.get(key)
+            if "value" in item:
+                record["requested_value"] = item.get("value")
+            add_field(record)
+
+    observed_extra_parser_config_keys = sorted(
+        str(key)
+        for key in observed_parser_config
+        if f"dataset.parser_config.{key}" not in seen and not str(key).startswith("__")
+    )
+    status_counts = _audit_status_counts(fields)
+    warning_count = (
+        status_counts["observed_missing"]
+        + status_counts["observed_changed"]
+        + status_counts["unknown_api_mapping"]
+        + status_counts["native_parser_only"]
+    )
+    issues: list[dict[str, Any]] = []
+    if status_counts["observed_changed"]:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="parameter_read_back_changed",
+                message="Some requested RAGFlow parameters differ from read-back evidence.",
+                recommendation="Review the changed values before treating this KB as parser-profile parity evidence.",
+            )
+        )
+    if status_counts["observed_missing"]:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="parameter_read_back_missing",
+                message="Some requested RAGFlow parameters were not found in read-back evidence.",
+                recommendation="Confirm whether the RAGFlow API hides default values or ignored the requested fields.",
+            )
+        )
+    if observed_extra_parser_config_keys:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="parameter_read_back_extra_effective_keys",
+                message="Read-back parser_config contains keys that were not requested by the dry-run payload.",
+                recommendation="Treat extra effective keys as server defaults or UI-side settings until mapped explicitly.",
+            )
+        )
+    status = "REVIEW" if warning_count or observed_extra_parser_config_keys else "PASS"
+    return {
+        "ok": True,
+        "schema": PARAMETER_READ_BACK_AUDIT_SCHEMA,
+        "created_at": _now(),
+        "status": status,
+        "advisory_only": True,
+        "mutation": "none",
+        "inputs": {
+            "dry_run_report": "provided_mapping",
+            "observed_state": "provided_mapping" if isinstance(observed_state, Mapping) else "not_provided",
+        },
+        "requested_state": {
+            "build_payload_preview_schema": preview.get("schema") if isinstance(preview, Mapping) else None,
+            "parameter_materialization_inventory_schema": (
+                inventory.get("schema") if isinstance(inventory, Mapping) else None
+            ),
+            "dataset_payload_keys": sorted(str(key) for key in dataset_payload) if isinstance(dataset_payload, Mapping) else [],
+            "dataset_update_payload_keys": (
+                sorted(str(key) for key in dataset_update_payload)
+                if isinstance(dataset_update_payload, Mapping)
+                else []
+            ),
+        },
+        "observed_state": {
+            "available": isinstance(observed_state, Mapping),
+            "parser_config_available": observed_parser_config_available,
+            "parser_config_source": parser_config_source,
+            "language_available": language_source is not None,
+            "language_source": language_source,
+            "extra_parser_config_keys": observed_extra_parser_config_keys,
+        },
+        "evidence_binding": evidence_binding,
+        "summary": {
+            "field_count": len(fields),
+            "status_counts": status_counts,
+            **{f"{status}_count": count for status, count in status_counts.items()},
+            "observed_extra_parser_config_key_count": len(observed_extra_parser_config_keys),
+            "issue_count": len(issues),
+            "warning_count": len(issues),
+            "error_count": 0,
+        },
+        "fields": fields,
+        "issues": issues,
+        "next_steps": [
+            "Use this audit to decide which sidecar recommendations are already materialized, which are merely visible, and which need API mapping before writable support.",
+            "Keep unknown API mappings blocked until fake-client coverage and read-back evidence agree on the RAGFlow payload shape.",
+        ],
+        "safety": {
+            "ragflow_calls": 0,
+            "writes_live_ragflow": False,
+            "script_owned_llm_calls": 0,
+            "raw_chunks_included": False,
+        },
+    }
+
+
+def render_parameter_read_back_audit_markdown(report: Mapping[str, Any]) -> str:
+    """Render a concise Markdown summary for a parameter read-back audit."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    observed_state = report.get("observed_state", {}) if isinstance(report.get("observed_state"), Mapping) else {}
+    evidence_binding = (
+        report.get("evidence_binding", {}) if isinstance(report.get("evidence_binding"), Mapping) else {}
+    )
+    contract_identity = (
+        evidence_binding.get("ragflow_contract_identity", {})
+        if isinstance(evidence_binding.get("ragflow_contract_identity"), Mapping)
+        else {}
+    )
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    notable_statuses = {"observed_changed", "observed_missing", "unknown_api_mapping", "native_parser_only"}
+    notable_fields = [
+        item
+        for item in report.get("fields", [])
+        if isinstance(item, Mapping) and str(item.get("audit_status") or "") in notable_statuses
+    ]
+    lines = [
+        "# RAGFlow Parameter Read-Back Audit",
+        "",
+        f"- schema: `{report.get('schema', PARAMETER_READ_BACK_AUDIT_SCHEMA)}`",
+        f"- status: `{report.get('status', 'unknown')}`",
+        f"- mutation: `{report.get('mutation', 'none')}`",
+        f"- advisory only: `{bool(report.get('advisory_only', True))}`",
+        f"- fields: `{summary.get('field_count', 0)}`",
+        f"- observed matches: `{summary.get('observed_match_count', 0)}`",
+        f"- observed changed: `{summary.get('observed_changed_count', 0)}`",
+        f"- observed missing: `{summary.get('observed_missing_count', 0)}`",
+        f"- unknown API mappings: `{summary.get('unknown_api_mapping_count', 0)}`",
+        f"- native parser only: `{summary.get('native_parser_only_count', 0)}`",
+        f"- parser config source: `{observed_state.get('parser_config_source') or '-'}`",
+        f"- language source: `{observed_state.get('language_source') or '-'}`",
+        "",
+        "## Evidence Binding",
+        "",
+        f"- binding status: `{evidence_binding.get('binding_status') or 'unbound'}`",
+        f"- verification scope: `{evidence_binding.get('verification_scope') or 'input_integrity_only'}`",
+        f"- evidence bundle id: `{evidence_binding.get('evidence_bundle_id') or '-'}`",
+        f"- dry-run digest: `{evidence_binding.get('dry_run_report_digest') or '-'}`",
+        f"- observed-state digest: `{evidence_binding.get('observed_state_digest') or '-'}`",
+        f"- RAGFlow contract version: `{contract_identity.get('version') or '-'}`",
+        f"- RAGFlow contract source: `{contract_identity.get('source') or '-'}`",
+        "- tool verified same run: "
+        f"`{str(bool(evidence_binding.get('tool_verified_same_run', False))).lower()}`",
+        "",
+        "## Field Findings",
+        "",
+    ]
+    if notable_fields:
+        for item in notable_fields[:40]:
+            field = item.get("field", "")
+            status = item.get("audit_status", "")
+            label = f" ({item.get('ui_label')})" if item.get("ui_label") else ""
+            lines.append(f"- `{status}` `{field}`{label}")
+    else:
+        lines.append("- No changed, missing, unknown, or native-only fields found.")
+    lines.extend(["", "## Issues", ""])
+    if issues:
+        for issue in issues[:30]:
+            if isinstance(issue, Mapping):
+                lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    else:
+        lines.append("- No issues found.")
+    next_steps = report.get("next_steps") if isinstance(report.get("next_steps"), list) else []
+    if next_steps:
+        lines.extend(["", "## Next Steps", ""])
+        for step in next_steps[:10]:
+            lines.append(f"- {step}")
+    return "\n".join(lines) + "\n"
+
+
+def _profile_suggestion_parser_keys(profile_suggestions: Mapping[str, Any] | None) -> set[str]:
+    if not isinstance(profile_suggestions, Mapping):
+        return set()
+    suggestions = profile_suggestions.get("suggestions")
+    if not isinstance(suggestions, list):
+        return set()
+    keys: set[str] = set()
+    for suggestion in suggestions:
+        if not isinstance(suggestion, Mapping):
+            continue
+        parser_config = suggestion.get("parser_config")
+        if isinstance(parser_config, Mapping):
+            keys.update(str(key) for key in parser_config)
+        if suggestion.get("language") is not None:
+            keys.add("language")
+    return keys
+
+
+def make_parameter_materialization_inventory(
+    *,
+    profile: ChunkProfile,
+    profile_suggestions: Mapping[str, Any] | None = None,
+    retrieval_hints: Mapping[str, Any] | None = None,
+    ragflow_ingest_plan: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Classify sidecar-derived KB parameters before any live RAGFlow mutation."""
+
+    language = select_build_language(profile, ragflow_ingest_plan=ragflow_ingest_plan)
+    fields: list[dict[str, Any]] = []
+
+    def add_field(
+        field: str,
+        *,
+        status: str,
+        source: str,
+        parser_path_scope: str,
+        target: str | None = None,
+        value: Any = None,
+        reason: str | None = None,
+        required_verification: list[str] | tuple[str, ...] | None = None,
+        ui_label: str | None = None,
+        api_key: str | None = None,
+    ) -> None:
+        record: dict[str, Any] = {
+            "field": field,
+            "status": status,
+            "source": source,
+            "target": target,
+            "parser_path_scope": parser_path_scope,
+        }
+        if value is not None:
+            record["value"] = value
+        if reason:
+            record["reason"] = reason
+        if required_verification:
+            record["required_verification"] = list(required_verification)
+        if ui_label:
+            record["ui_label"] = ui_label
+        if api_key:
+            record["api_key"] = api_key
+        fields.append(record)
+
+    if language.get("value") is not None:
+        source = str(language.get("source") or "profile_or_ingest_plan")
+        add_field(
+            "profile.language" if source.startswith("profile.") else "ragflow_ingest_plan.recommended_build.parser_profile.language",
+            status=str(language["status"]),
+            source=source,
+            target="dataset.language",
+            parser_path_scope="markdown_handoff",
+            value=language.get("value"),
+            reason=language.get("reason") if isinstance(language.get("reason"), str) else None,
+            required_verification=(
+                "fake_client_dataset_create_payload",
+                "fake_client_dataset_update_payload",
+                "ragflow_read_back_audit",
+            ),
+        )
+
+    for key in sorted(profile.parser_config):
+        value = profile.parser_config[key]
+        field = f"profile.parser_config.{key}"
+        if str(key).startswith("__"):
+            add_field(
+                field,
+                status="local_audit_only",
+                source=field,
+                target=None,
+                parser_path_scope="markdown_handoff",
+                value=value,
+                reason="internal_parser_metadata_not_sent_to_ragflow",
+                required_verification=("dry_run_payload_preview",),
+            )
+            continue
+        status, target, reason = _parser_config_field_status(key, value)
+        add_field(
+            field,
+            status=status,
+            source=field,
+            target=target,
+            parser_path_scope="markdown_handoff",
+            value=value,
+            reason=reason,
+            required_verification=_required_verification_for_parser_status(status),
+        )
+
+    add_field(
+        "profile.chunk_overlap",
+        status="local_audit_only",
+        source="profile.chunk_overlap",
+        target=None,
+        parser_path_scope="markdown_handoff",
+        value=profile.chunk_overlap,
+        reason="overlap_percent_api_mapping_not_confirmed",
+        required_verification=("api_field_mapping_confirmation", "fake_client_dataset_payload"),
+    )
+
+    for key in sorted(_profile_suggestion_parser_keys(profile_suggestions)):
+        if key == "language":
+            field = "profile_suggestions.suggestions[].language"
+        else:
+            field = f"profile_suggestions.suggestions[].parser_config.{key}"
+        add_field(
+            field,
+            status="advisory_after_build",
+            source="profile_suggestions.json",
+            target=f"profile.parser_config.{key}" if key != "language" else "profile.language",
+            parser_path_scope="markdown_handoff",
+            reason="profile_suggestions_are_not_materialized_until_a_reviewed_profile_is_selected",
+            required_verification=("profile_review", "dry_run_payload_preview"),
+        )
+
+    if isinstance(retrieval_hints, Mapping):
+        add_field(
+            "retrieval_hints.keyword_candidates",
+            status="advisory_after_build",
+            source="retrieval_hints.json",
+            target=None,
+            parser_path_scope="markdown_handoff",
+            value=_retrieval_hint_count(retrieval_hints, "keyword_candidates"),
+            reason="not_silently_converted_to_auto_keywords",
+            required_verification=("benchmark_evidence", "reviewed_profile_selection"),
+        )
+        add_field(
+            "retrieval_hints.question_candidates",
+            status="advisory_after_build",
+            source="retrieval_hints.json",
+            target=None,
+            parser_path_scope="markdown_handoff",
+            value=_retrieval_hint_count(retrieval_hints, "question_candidates"),
+            reason="not_silently_converted_to_auto_questions",
+            required_verification=("benchmark_evidence", "reviewed_profile_selection"),
+        )
+        add_field(
+            "retrieval_hints.image_artifacts",
+            status="unsupported_or_gated",
+            source="retrieval_hints.json",
+            target=None,
+            parser_path_scope="markdown_handoff",
+            value=_retrieval_hint_count(retrieval_hints, "image_artifacts"),
+            reason="standard_markdown_build_does_not_upload_visual_assets_without_a_gated_visual_ingestion_path",
+            required_verification=("visual_ingestion_gate", "ragflow_read_back_audit"),
+        )
+        add_field(
+            "retrieval_hints.table_artifacts",
+            status="advisory_after_build",
+            source="retrieval_hints.json",
+            target=None,
+            parser_path_scope="markdown_handoff",
+            value=_retrieval_hint_count(retrieval_hints, "table_artifacts"),
+            reason="table_artifacts_support_review_and_sizing_not_native_table_parser_settings",
+            required_verification=("benchmark_evidence", "parser_path_mapping"),
+        )
+
+    parser_profile = {}
+    if isinstance(ragflow_ingest_plan, Mapping):
+        recommended_build = (
+            ragflow_ingest_plan.get("recommended_build")
+            if isinstance(ragflow_ingest_plan.get("recommended_build"), Mapping)
+            else {}
+        )
+        parser_profile = (
+            recommended_build.get("parser_profile")
+            if isinstance(recommended_build.get("parser_profile"), Mapping)
+            else {}
+        )
+    if "language" in parser_profile:
+        ingest_language = normalize_profile_language(parser_profile.get("language"))
+        selected_language = language.get("value")
+        ingest_language_materialized = (
+            isinstance(ingest_language, str)
+            and bool(ingest_language)
+            and (selected_language is None or normalize_profile_language(selected_language) == ingest_language)
+        )
+        already_recorded = any(
+            item["field"] == "ragflow_ingest_plan.recommended_build.parser_profile.language" for item in fields
+        )
+        if not already_recorded:
+            add_field(
+                "ragflow_ingest_plan.recommended_build.parser_profile.language",
+                status="materialized_to_ragflow" if ingest_language_materialized else "advisory_after_build",
+                source="ragflow_ingest_plan.recommended_build.parser_profile.language",
+                target="dataset.language" if ingest_language_materialized else None,
+                parser_path_scope="markdown_handoff",
+                value=ingest_language or parser_profile.get("language"),
+                reason=None if ingest_language_materialized else "profile_language_takes_precedence",
+                required_verification=("fake_client_dataset_payload", "ragflow_read_back_audit"),
+            )
+    for key in ("postprocess_profile", "avoid_children_delimiter"):
+        if key in parser_profile:
+            add_field(
+                f"ragflow_ingest_plan.recommended_build.parser_profile.{key}",
+                status="local_audit_only" if key == "postprocess_profile" else "advisory_after_build",
+                source="ragflow_ingest_plan.yaml",
+                target=None,
+                parser_path_scope="markdown_handoff",
+                value=parser_profile.get(key),
+                reason=(
+                    "postprocess_profile_controls_markdown_generation_not_ragflow_parser_config"
+                    if key == "postprocess_profile"
+                    else "children_delimiter_behavior_requires_api_mapping_confirmation"
+                ),
+                required_verification=("api_field_mapping_confirmation",),
+            )
+
+    if isinstance(metadata, Mapping):
+        add_field(
+            "metadata.json",
+            status="local_audit_only",
+            source="metadata.json",
+            target=None,
+            parser_path_scope="markdown_handoff",
+            reason="metadata_sidecar_is_not_written_as_ragflow_automatic_metadata",
+            required_verification=("api_field_mapping_confirmation", "ragflow_read_back_audit"),
+        )
+
+    for ui_field in _known_ragflow_ui_control_fields():
+        add_field(
+            str(ui_field["field"]),
+            status=str(ui_field["status"]),
+            source=str(ui_field["source"]),
+            target=None,
+            parser_path_scope=str(ui_field["parser_path_scope"]),
+            reason=str(ui_field["reason"]),
+            required_verification=ui_field["required_verification"],
+            ui_label=str(ui_field["ui_label"]),
+            api_key=str(ui_field["api_key"]) if ui_field.get("api_key") else None,
+        )
+
+    status_counts = _field_status_counts(fields, PARAMETER_MATERIALIZATION_STATUS_VALUES)
+    parser_path_scope_counts = {
+        scope: sum(1 for item in fields if item.get("parser_path_scope") == scope)
+        for scope in ("markdown_handoff", "deepdoc_native", "unknown")
+    }
+    return {
+        "schema": PARAMETER_MATERIALIZATION_INVENTORY_SCHEMA,
+        "created_at": _now(),
+        "status_values": list(PARAMETER_MATERIALIZATION_STATUS_VALUES),
+        "parser_path_scope_values": ["markdown_handoff", "deepdoc_native", "unknown"],
+        "source_sidecars": {
+            "profile_suggestions": "loaded" if isinstance(profile_suggestions, Mapping) else "not_loaded",
+            "retrieval_hints": "loaded" if isinstance(retrieval_hints, Mapping) else "not_loaded",
+            "ragflow_ingest_plan": "loaded" if isinstance(ragflow_ingest_plan, Mapping) else "not_loaded",
+            "metadata": "loaded" if isinstance(metadata, Mapping) else "not_loaded",
+        },
+        "summary": {
+            "field_count": len(fields),
+            "status_counts": status_counts,
+            "parser_path_scope_counts": parser_path_scope_counts,
+            "materialized_to_ragflow_count": status_counts["materialized_to_ragflow"],
+            "read_only_server_default_count": status_counts["read_only_server_default"],
+            "unknown_api_mapping_count": status_counts["unknown_api_mapping"],
+            "native_parser_only_count": status_counts["native_parser_only"],
+        },
+        "fields": fields,
+        "safety": {
+            "ragflow_calls": 0,
+            "writes_live_ragflow": False,
+            "script_owned_llm_calls": 0,
+            "raw_chunks_included": False,
+        },
+    }
+
+
+def make_build_payload_preview(
+    *,
+    kb_name: str,
+    profile: ChunkProfile,
+    retrieval_hints: Mapping[str, Any] | None = None,
+    ragflow_ingest_plan: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Preview which build settings are sent to RAGFlow and which remain advisory."""
+
+    effective_profile = apply_build_profile_language(profile, ragflow_ingest_plan=ragflow_ingest_plan)
+    dataset_payload = effective_profile.to_dataset_payload()
+    language = select_build_language(profile, ragflow_ingest_plan=ragflow_ingest_plan)
+    dataset_create_payload = {"name": kb_name, **dataset_payload}
+    dataset_update_payload = {"language": language["value"]} if language.get("value") else {}
+    fields: list[dict[str, Any]] = []
+
+    def add_field(
+        field: str,
+        *,
+        status: str,
+        source: str,
+        target: str | None,
+        value: Any = None,
+        reason: str | None = None,
+        parser_path_scope: str | None = None,
+        required_verification: list[str] | tuple[str, ...] | None = None,
+        ui_label: str | None = None,
+        api_key: str | None = None,
+    ) -> None:
+        record = {
+            "field": field,
+            "status": status,
+            "source": source,
+            "target": target,
+        }
+        if value is not None:
+            record["value"] = value
+        if reason:
+            record["reason"] = reason
+        if parser_path_scope:
+            record["parser_path_scope"] = parser_path_scope
+        if required_verification:
+            record["required_verification"] = list(required_verification)
+        if ui_label:
+            record["ui_label"] = ui_label
+        if api_key:
+            record["api_key"] = api_key
+        fields.append(record)
+
+    add_field(
+        "chunk_method",
+        status="materialized_to_ragflow",
+        source="profile.chunk_method",
+        target="dataset.chunk_method",
+        value=effective_profile.chunk_method,
+    )
+    add_field(
+        "language",
+        status=str(language["status"]),
+        source=str(language.get("source") or "none"),
+        target="dataset.language",
+        value=language.get("value"),
+        reason=language.get("reason") if isinstance(language.get("reason"), str) else None,
+    )
+    for key in sorted(effective_profile.parser_config):
+        value = effective_profile.parser_config[key]
+        field = f"parser_config.{key}"
+        if str(key).startswith("__"):
+            add_field(
+                field,
+                status="local_audit_only",
+                source=field,
+                target=None,
+                value=value,
+                reason="internal_parser_metadata_not_sent",
+            )
+            continue
+        status, target, reason = _parser_config_field_status(key, value)
+        add_field(
+            field,
+            status=status,
+            source=field,
+            target=target,
+            value=value,
+            reason=reason,
+        )
+    add_field(
+        "chunk_overlap",
+        status="local_audit_only",
+        source="profile.chunk_overlap",
+        target=None,
+        value=effective_profile.chunk_overlap,
+        reason="not_part_of_current_dataset_parser_payload",
+    )
+    if isinstance(retrieval_hints, Mapping):
+        add_field(
+            "retrieval_hints.keyword_candidates",
+            status="advisory_after_build",
+            source="retrieval_hints.json",
+            target=None,
+            value=_retrieval_hint_count(retrieval_hints, "keyword_candidates"),
+            reason="not_derived_into_auto_keywords_without_reviewed_profile",
+        )
+        add_field(
+            "retrieval_hints.question_candidates",
+            status="advisory_after_build",
+            source="retrieval_hints.json",
+            target=None,
+            value=_retrieval_hint_count(retrieval_hints, "question_candidates"),
+            reason="not_derived_into_auto_questions_without_reviewed_profile",
+        )
+        add_field(
+            "retrieval_hints.image_artifacts",
+            status="advisory_after_build",
+            source="retrieval_hints.json",
+            target=None,
+            value=_retrieval_hint_count(retrieval_hints, "image_artifacts"),
+            reason="visual_ingestion_remains_separately_gated",
+        )
+        add_field(
+            "retrieval_hints.table_artifacts",
+            status="advisory_after_build",
+            source="retrieval_hints.json",
+            target=None,
+            value=_retrieval_hint_count(retrieval_hints, "table_artifacts"),
+            reason="table_hints_require_profile_or_benchmark_review",
+        )
+
+    for ui_field in _known_ragflow_ui_control_fields():
+        add_field(
+            str(ui_field["field"]),
+            status=str(ui_field["status"]),
+            source=str(ui_field["source"]),
+            target=None,
+            reason=str(ui_field["reason"]),
+            parser_path_scope=str(ui_field["parser_path_scope"]),
+            required_verification=ui_field["required_verification"],
+            ui_label=str(ui_field["ui_label"]),
+            api_key=str(ui_field["api_key"]) if ui_field.get("api_key") else None,
+        )
+
+    status_counts = _field_status_counts(fields, PARAMETER_MATERIALIZATION_STATUS_VALUES)
+    return {
+        "schema": BUILD_PAYLOAD_PREVIEW_SCHEMA,
+        "created_at": _now(),
+        "kb_name": kb_name,
+        "language": language,
+        "dataset_create_payload": dataset_create_payload,
+        "dataset_update_payload": dataset_update_payload,
+        "fields": fields,
+        "source_sidecars": {
+            "retrieval_hints": "loaded" if isinstance(retrieval_hints, Mapping) else "not_loaded",
+            "ragflow_ingest_plan": "loaded" if isinstance(ragflow_ingest_plan, Mapping) else "not_loaded",
+        },
+        "summary": {
+            "field_count": len(fields),
+            "status_counts": status_counts,
+            "ragflow_field_count": status_counts["materialized_to_ragflow"],
+            "local_only_field_count": status_counts["local_audit_only"],
+            "advisory_field_count": status_counts["advisory_after_build"],
+            "unsupported_or_gated_field_count": status_counts["unsupported_or_gated"],
+            "read_only_server_default_field_count": status_counts["read_only_server_default"],
+            "unknown_api_mapping_field_count": status_counts["unknown_api_mapping"],
+            "native_parser_only_field_count": status_counts["native_parser_only"],
+            "retrieval_hint_keyword_candidate_count": _retrieval_hint_count(retrieval_hints, "keyword_candidates"),
+            "retrieval_hint_question_candidate_count": _retrieval_hint_count(retrieval_hints, "question_candidates"),
+        },
+    }
+
+
+def _artifact_label(path: str | Path, *, handoff_root: Path | None) -> str:
+    candidate = Path(path)
+    if handoff_root is not None and _is_relative_to(candidate, handoff_root):
+        return _relative_to_root(candidate, handoff_root)
+    return str(path)
+
+
+def _sidecar_path(
+    *,
+    handoff_root: Path | None,
+    explicit_path: str | Path | None,
+    names: tuple[str, ...],
+) -> Path | None:
+    if explicit_path:
+        return Path(explicit_path)
+    if handoff_root is None:
+        return None
+    for name in names:
+        candidate = handoff_root / name
+        if candidate.exists():
+            return candidate
+    return handoff_root / names[0] if names else None
+
+
+def _resolve_handoff_artifact_path(raw: str, *, handoff_root: Path | None, base: Path | None = None) -> Path:
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return candidate
+    if base is not None:
+        resolved = base / candidate
+        if resolved.exists():
+            return resolved
+    if handoff_root is None:
+        return candidate
+    resolved = handoff_root / candidate
+    if resolved.exists():
+        return resolved
+    documents_relative = handoff_root / "documents" / candidate
+    if documents_relative.exists():
+        return documents_relative
+    return resolved
+
+
+def _artifact_status_record(
+    *,
+    artifact: str,
+    kind: str,
+    status: str,
+    source: str,
+    target: str | None,
+    exists: bool | None = None,
+    reason: str | None = None,
+    path: str | None = None,
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "artifact": artifact,
+        "kind": kind,
+        "status": status,
+        "source": source,
+        "target": target,
+    }
+    if exists is not None:
+        record["exists"] = exists
+    if reason:
+        record["reason"] = reason
+    if path:
+        record["path"] = path
+    return record
+
+
+def _add_artifact_status(
+    artifacts: list[dict[str, Any]],
+    seen: set[tuple[str, str]],
+    *,
+    artifact: str,
+    kind: str,
+    status: str,
+    source: str,
+    target: str | None,
+    exists: bool | None = None,
+    reason: str | None = None,
+    path: str | None = None,
+) -> None:
+    key = (kind, artifact)
+    if key in seen:
+        return
+    seen.add(key)
+    artifacts.append(
+        _artifact_status_record(
+            artifact=artifact,
+            kind=kind,
+            status=status,
+            source=source,
+            target=target,
+            exists=exists,
+            reason=reason,
+            path=path,
+        )
+    )
+
+
+def _iter_markdown_image_paths(path: Path) -> list[str]:
+    if not path.is_file():
+        return []
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return [_image_reference_path(match.group(2)) for match in MARKDOWN_IMAGE_RE.finditer(text)]
+
+
+def _retrieval_hint_paths(payload: Mapping[str, Any] | None, key: str, fields: tuple[str, ...]) -> list[str]:
+    if not isinstance(payload, Mapping):
+        return []
+    values = payload.get(key)
+    if not isinstance(values, list):
+        return []
+    paths: list[str] = []
+    for item in values:
+        if not isinstance(item, Mapping):
+            continue
+        for field in fields:
+            cleaned = _clean_artifact_path(item.get(field))
+            if cleaned:
+                paths.append(cleaned)
+                break
+    return paths
+
+
+def make_handoff_consumption_status(
+    *,
+    doc_manifest_path: str | Path | None,
+    documents: list[BuildDocument] | tuple[BuildDocument, ...],
+    metadata_path: str | Path | None = None,
+    retrieval_hints: Mapping[str, Any] | None = None,
+    retrieval_hints_path: str | Path | None = None,
+    ragflow_ingest_plan: Mapping[str, Any] | None = None,
+    ragflow_ingest_plan_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Classify how handoff artifacts are consumed by the standard KB build path."""
+
+    manifest_path = Path(doc_manifest_path) if doc_manifest_path else None
+    handoff_root = manifest_path.parent if manifest_path else None
+    manifest_payload: Mapping[str, Any] = {}
+    if manifest_path is not None and manifest_path.is_file():
+        try:
+            manifest_payload = _read_json_mapping(manifest_path, label="doc_manifest")
+        except BuildError:
+            manifest_payload = {}
+    artifacts: list[dict[str, Any]] = []
+    parameter_fields: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add_parameter_field(
+        field: str,
+        *,
+        status: str,
+        source: str,
+        target: str | None,
+        parser_path_scope: str,
+        value: Any = None,
+        reason: str | None = None,
+        required_verification: list[str] | tuple[str, ...] | None = None,
+        ui_label: str | None = None,
+        api_key: str | None = None,
+    ) -> None:
+        record: dict[str, Any] = {
+            "field": field,
+            "status": status,
+            "source": source,
+            "target": target,
+            "parser_path_scope": parser_path_scope,
+        }
+        if value is not None:
+            record["value"] = value
+        if reason:
+            record["reason"] = reason
+        if required_verification:
+            record["required_verification"] = list(required_verification)
+        if ui_label:
+            record["ui_label"] = ui_label
+        if api_key:
+            record["api_key"] = api_key
+        parameter_fields.append(record)
+
+    if manifest_path is not None:
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(manifest_path, handoff_root=handoff_root),
+            kind="doc_manifest",
+            status="materialized_to_manifest",
+            source="doc_manifest.json",
+            target="build.document_plan",
+            exists=manifest_path.is_file(),
+            reason="controls_markdown_document_selection_and_kb_manifest_document_records",
+            path=str(manifest_path),
+        )
+
+    for document in documents:
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(document.path, handoff_root=handoff_root),
+            kind="markdown_document",
+            status="materialized_to_ragflow",
+            source="doc_manifest.documents" if document.manifest_source_path else "input_markdown",
+            target="dataset.documents",
+            exists=document.path.is_file(),
+            reason="standard_build_uploads_markdown_documents",
+            path=str(document.path),
+        )
+
+    quality_name = manifest_payload.get("quality_report") if isinstance(manifest_payload.get("quality_report"), str) else None
+    quality_names = (quality_name, "quality_report.json") if quality_name else ("quality_report.json",)
+    quality_path = _sidecar_path(handoff_root=handoff_root, explicit_path=None, names=quality_names)
+    if quality_path is not None and quality_path.exists():
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(quality_path, handoff_root=handoff_root),
+            kind="quality_report",
+            status="local_audit_only",
+            source="quality_report.json",
+            target=None,
+            exists=quality_path.is_file(),
+            reason="quality_gate_is_checked_locally_before_build_not_sent_to_ragflow",
+            path=str(quality_path),
+        )
+
+    profile_suggestions_path = _sidecar_path(
+        handoff_root=handoff_root,
+        explicit_path=None,
+        names=("profile_suggestions.json",),
+    )
+    if profile_suggestions_path is not None and profile_suggestions_path.exists():
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(profile_suggestions_path, handoff_root=handoff_root),
+            kind="profile_suggestions",
+            status="advisory_after_build",
+            source="profile_suggestions.json",
+            target=None,
+            exists=profile_suggestions_path.is_file(),
+            reason="requires_reviewed_profile_materialization_before_parser_settings_change",
+            path=str(profile_suggestions_path),
+        )
+
+    resolved_retrieval_hints_path = _sidecar_path(
+        handoff_root=handoff_root,
+        explicit_path=retrieval_hints_path,
+        names=("retrieval_hints.json",),
+    )
+    if resolved_retrieval_hints_path is not None and (resolved_retrieval_hints_path.exists() or retrieval_hints is not None):
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(resolved_retrieval_hints_path, handoff_root=handoff_root),
+            kind="retrieval_hints",
+            status="advisory_after_build",
+            source="retrieval_hints.json",
+            target=None,
+            exists=resolved_retrieval_hints_path.is_file(),
+            reason="summarized_for_review_not_written_to_parser_or_query_settings",
+            path=str(resolved_retrieval_hints_path),
+        )
+        if isinstance(retrieval_hints, Mapping):
+            add_parameter_field(
+                "retrieval_hints.keyword_candidates",
+                status="advisory_after_build",
+                source="retrieval_hints.json",
+                target=None,
+                parser_path_scope="markdown_handoff",
+                value=_retrieval_hint_count(retrieval_hints, "keyword_candidates"),
+                reason="not_silently_converted_to_auto_keywords",
+                required_verification=("benchmark_evidence", "reviewed_profile_selection"),
+            )
+            add_parameter_field(
+                "retrieval_hints.question_candidates",
+                status="advisory_after_build",
+                source="retrieval_hints.json",
+                target=None,
+                parser_path_scope="markdown_handoff",
+                value=_retrieval_hint_count(retrieval_hints, "question_candidates"),
+                reason="not_silently_converted_to_auto_questions",
+                required_verification=("benchmark_evidence", "reviewed_profile_selection"),
+            )
+            add_parameter_field(
+                "retrieval_hints.image_artifacts",
+                status="unsupported_or_gated",
+                source="retrieval_hints.json",
+                target=None,
+                parser_path_scope="markdown_handoff",
+                value=_retrieval_hint_count(retrieval_hints, "image_artifacts"),
+                reason="standard_markdown_build_does_not_upload_visual_assets_without_a_gated_visual_ingestion_path",
+                required_verification=("visual_ingestion_gate", "ragflow_read_back_audit"),
+            )
+            add_parameter_field(
+                "retrieval_hints.table_artifacts",
+                status="advisory_after_build",
+                source="retrieval_hints.json",
+                target=None,
+                parser_path_scope="markdown_handoff",
+                value=_retrieval_hint_count(retrieval_hints, "table_artifacts"),
+                reason="table_artifacts_support_review_and_sizing_not_native_table_parser_settings",
+                required_verification=("benchmark_evidence", "parser_path_mapping"),
+            )
+
+    metadata_sidecar_path = _sidecar_path(
+        handoff_root=handoff_root,
+        explicit_path=metadata_path,
+        names=("metadata.json",),
+    )
+    if metadata_sidecar_path is not None and metadata_sidecar_path.exists():
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(metadata_sidecar_path, handoff_root=handoff_root),
+            kind="metadata",
+            status="materialized_to_manifest" if metadata_path else "local_audit_only",
+            source="metadata.json" if not metadata_path else "build --metadata",
+            target="kb_manifest.metadata_summary" if metadata_path else None,
+            exists=metadata_sidecar_path.is_file(),
+            reason="metadata_is_linted_and_summarized_locally_not_sent_as_dataset_parser_config",
+            path=str(metadata_sidecar_path),
+        )
+        add_parameter_field(
+            "metadata.json",
+            status="local_audit_only",
+            source="metadata.json" if not metadata_path else "build --metadata",
+            target=None,
+            parser_path_scope="markdown_handoff",
+            reason="metadata_sidecar_is_not_written_as_ragflow_automatic_metadata",
+            required_verification=("api_field_mapping_confirmation", "ragflow_read_back_audit"),
+        )
+
+    assistant_profile_path = _sidecar_path(
+        handoff_root=handoff_root,
+        explicit_path=None,
+        names=("assistant_profile.json",),
+    )
+    if assistant_profile_path is not None and assistant_profile_path.exists():
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(assistant_profile_path, handoff_root=handoff_root),
+            kind="assistant_profile",
+            status="advisory_after_build",
+            source="assistant_profile.json",
+            target=None,
+            exists=assistant_profile_path.is_file(),
+            reason="assistant_and_query_parameters_are_not_written_through_kb_creation_api",
+            path=str(assistant_profile_path),
+        )
+
+    resolved_ingest_plan_path = _sidecar_path(
+        handoff_root=handoff_root,
+        explicit_path=ragflow_ingest_plan_path,
+        names=("ragflow_ingest_plan.yaml", "ragflow_ingest_plan.yml", "ragflow_ingest_plan.json"),
+    )
+    if resolved_ingest_plan_path is not None and (resolved_ingest_plan_path.exists() or ragflow_ingest_plan is not None):
+        language, language_source = _ingest_plan_language(ragflow_ingest_plan)
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(resolved_ingest_plan_path, handoff_root=handoff_root),
+            kind="ragflow_ingest_plan",
+            status="materialized_to_ragflow" if language else "materialized_to_manifest",
+            source=language_source or "ragflow_ingest_plan",
+            target="dataset.language" if language else "build_payload_preview",
+            exists=resolved_ingest_plan_path.is_file(),
+            reason=(
+                "language_recommendation_materialized_to_top_level_dataset_language"
+                if language
+                else "ingest_plan_reviewed_locally_without_supported_dataset_field_materialization"
+            ),
+            path=str(resolved_ingest_plan_path),
+        )
+        parser_profile = {}
+        if isinstance(ragflow_ingest_plan, Mapping):
+            recommended_build = (
+                ragflow_ingest_plan.get("recommended_build")
+                if isinstance(ragflow_ingest_plan.get("recommended_build"), Mapping)
+                else {}
+            )
+            parser_profile = (
+                recommended_build.get("parser_profile")
+                if isinstance(recommended_build.get("parser_profile"), Mapping)
+                else {}
+            )
+        if language:
+            add_parameter_field(
+                "ragflow_ingest_plan.recommended_build.parser_profile.language",
+                status="materialized_to_ragflow",
+                source=language_source or "ragflow_ingest_plan.recommended_build.parser_profile.language",
+                target="dataset.language",
+                parser_path_scope="markdown_handoff",
+                value=language,
+                required_verification=("fake_client_dataset_payload", "ragflow_read_back_audit"),
+            )
+        for key in ("postprocess_profile", "avoid_children_delimiter"):
+            if key in parser_profile:
+                add_parameter_field(
+                    f"ragflow_ingest_plan.recommended_build.parser_profile.{key}",
+                    status="local_audit_only" if key == "postprocess_profile" else "advisory_after_build",
+                    source="ragflow_ingest_plan.yaml",
+                    target=None,
+                    parser_path_scope="markdown_handoff",
+                    value=parser_profile.get(key),
+                    reason=(
+                        "postprocess_profile_controls_markdown_generation_not_ragflow_parser_config"
+                        if key == "postprocess_profile"
+                        else "children_delimiter_behavior_requires_api_mapping_confirmation"
+                    ),
+                    required_verification=("api_field_mapping_confirmation",),
+                )
+
+    image_paths: dict[str, Path] = {}
+    for document in documents:
+        for raw in _iter_markdown_image_paths(document.path):
+            if not raw or _is_remote_asset_reference(raw):
+                continue
+            resolved = _resolve_handoff_artifact_path(raw, handoff_root=handoff_root, base=document.path.parent)
+            image_paths[_image_artifact_key(resolved)] = resolved
+    for raw in _retrieval_hint_paths(
+        retrieval_hints,
+        "image_artifacts",
+        ("path", "source_path", "raw_path", "target", "asset_path", "resolved_path", "package_path"),
+    ):
+        resolved = _resolve_handoff_artifact_path(raw, handoff_root=handoff_root)
+        image_paths.setdefault(_image_artifact_key(resolved), resolved)
+    for resolved in image_paths.values():
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(resolved, handoff_root=handoff_root),
+            kind="image_asset",
+            status="unsupported_or_gated",
+            source="markdown_or_retrieval_hints_image_reference",
+            target=None,
+            exists=resolved.is_file(),
+            reason="standard_markdown_build_does_not_upload_image_files_without_guarded_visual_ingestion",
+            path=str(resolved),
+        )
+
+    table_paths: dict[str, Path] = {}
+    for raw in _retrieval_hint_paths(
+        retrieval_hints,
+        "table_artifacts",
+        ("path", "table_path", "artifact_path", "source_path", "csv_path", "html_path"),
+    ):
+        resolved = _resolve_handoff_artifact_path(raw, handoff_root=handoff_root)
+        table_paths[str(resolved.resolve(strict=False))] = resolved
+    if handoff_root is not None:
+        table_root = handoff_root / "artifacts" / "tables"
+        if table_root.is_dir():
+            for path in table_root.rglob("*"):
+                if path.is_file() and path.suffix.lower() in TABLE_SUFFIXES:
+                    table_paths.setdefault(str(path.resolve(strict=False)), path)
+    for resolved in table_paths.values():
+        _add_artifact_status(
+            artifacts,
+            seen,
+            artifact=_artifact_label(resolved, handoff_root=handoff_root),
+            kind="table_artifact",
+            status="local_audit_only",
+            source="retrieval_hints.table_artifacts_or_artifacts_tables",
+            target=None,
+            exists=resolved.is_file(),
+            reason="table_sidecar_artifacts_support_review_but_are_not_uploaded_as_standard_markdown_documents",
+            path=str(resolved),
+        )
+
+    for ui_field in _known_ragflow_ui_control_fields():
+        add_parameter_field(
+            str(ui_field["field"]),
+            status=str(ui_field["status"]),
+            source=str(ui_field["source"]),
+            target=None,
+            parser_path_scope=str(ui_field["parser_path_scope"]),
+            reason=str(ui_field["reason"]),
+            required_verification=ui_field["required_verification"],
+            ui_label=str(ui_field["ui_label"]),
+            api_key=str(ui_field["api_key"]) if ui_field.get("api_key") else None,
+        )
+
+    status_values = [
+        "materialized_to_ragflow",
+        "materialized_to_manifest",
+        "advisory_after_build",
+        "local_audit_only",
+        "unsupported_or_gated",
+    ]
+    status_counts = {status: sum(1 for item in artifacts if item.get("status") == status) for status in status_values}
+    parameter_status_counts = _field_status_counts(parameter_fields, PARAMETER_MATERIALIZATION_STATUS_VALUES)
+    return {
+        "schema": HANDOFF_CONSUMPTION_STATUS_SCHEMA,
+        "created_at": _now(),
+        "status_values": status_values,
+        "parameter_status_values": list(PARAMETER_MATERIALIZATION_STATUS_VALUES),
+        "doc_manifest": str(doc_manifest_path) if doc_manifest_path else None,
+        "summary": {
+            "artifact_count": len(artifacts),
+            "status_counts": status_counts,
+            "parameter_field_count": len(parameter_fields),
+            "parameter_status_counts": parameter_status_counts,
+            "markdown_document_count": sum(1 for item in artifacts if item.get("kind") == "markdown_document"),
+            "image_asset_count": sum(1 for item in artifacts if item.get("kind") == "image_asset"),
+            "table_artifact_count": sum(1 for item in artifacts if item.get("kind") == "table_artifact"),
+        },
+        "artifacts": artifacts,
+        "parameter_fields": parameter_fields,
+        "safety": {
+            "ragflow_calls": 0,
+            "script_owned_llm_calls": 0,
+            "assistant_or_query_settings_written": False,
+        },
+    }
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.resolve(strict=False).relative_to(root.resolve(strict=False))
+        return True
+    except ValueError:
+        return False
+
+
+def _relative_to_root(path: Path, root: Path) -> str:
+    try:
+        return path.resolve(strict=False).relative_to(root.resolve(strict=False)).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _is_remote_asset_reference(value: str) -> bool:
+    lowered = value.strip().lower()
+    return lowered.startswith(("http://", "https://", "data:", "#", "mailto:"))
+
+
+def _image_reference_path(raw: str) -> str:
+    value = raw.strip().strip("<>")
+    if " " in value and not value.startswith(("./", "../", "/")):
+        value = value.split(" ", 1)[0]
+    return value.split("#", 1)[0].split("?", 1)[0]
+
+
+def _source_root_from_manifest(payload: Mapping[str, Any], *, manifest_path: Path) -> Path:
+    raw = payload.get("source_root") or "."
+    root = Path(str(raw))
+    if not root.is_absolute():
+        root = manifest_path.parent / root
+    return root
+
+
+def _document_asset_paths(document: Mapping[str, Any]) -> list[str]:
+    assets = document.get("assets")
+    if not isinstance(assets, Mapping):
+        return []
+    images = assets.get("images")
+    if not isinstance(images, list):
+        return []
+    paths: list[str] = []
+    for item in images:
+        if not isinstance(item, Mapping):
+            continue
+        raw = item.get("path")
+        if isinstance(raw, str) and raw.strip():
+            paths.append(raw.strip())
+    return paths
+
+
+def _file_record(
+    *,
+    role: str,
+    source_path: Path,
+    handoff_root: Path,
+    package_path: str | None = None,
+    exists: bool | None = None,
+) -> dict[str, Any]:
+    present = source_path.is_file() if exists is None else exists
+    record: dict[str, Any] = {
+        "role": role,
+        "source_path": _relative_to_root(source_path, handoff_root),
+        "package_path": package_path or _relative_to_root(source_path, handoff_root),
+        "exists": present,
+        "inside_handoff": _is_relative_to(source_path, handoff_root),
+    }
+    if present:
+        record["size_bytes"] = source_path.stat().st_size
+        record["sha256"] = _sha256_file(source_path)
+        mime_type, _encoding = mimetypes.guess_type(source_path.name)
+        if mime_type:
+            record["mime_type"] = mime_type
+    return record
+
+
+def _issue(*, severity: str, code: str, message: str, recommendation: str) -> dict[str, str]:
+    return {
+        "severity": severity,
+        "code": code,
+        "message": message,
+        "recommendation": recommendation,
+    }
+
+
+def _clean_artifact_path(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip().strip("<>").replace("\\", "/")
+    if not text or _is_remote_asset_reference(text):
+        return None
+    text = text.split("#", 1)[0].split("?", 1)[0].strip()
+    while text.startswith("./"):
+        text = text[2:]
+    return text or None
+
+
+def _path_basename(value: str) -> str:
+    return Path(value.replace("\\", "/")).name
+
+
+def _path_matches(candidate: str, observed: set[str]) -> bool:
+    if candidate in observed:
+        return True
+    candidate_name = _path_basename(candidate)
+    return any(_path_basename(item) == candidate_name for item in observed)
+
+
+def _record_paths(records: Any, keys: tuple[str, ...]) -> set[str]:
+    paths: set[str] = set()
+    if not isinstance(records, list):
+        return paths
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        for key in keys:
+            cleaned = _clean_artifact_path(record.get(key))
+            if cleaned:
+                paths.add(cleaned)
+    return paths
+
+
+def _hint_image_paths(retrieval_hints: Mapping[str, Any]) -> set[str]:
+    return _record_paths(
+        retrieval_hints.get("image_artifacts"),
+        ("path", "source_path", "raw_path", "target", "asset_path", "resolved_path", "package_path"),
+    )
+
+
+def _hint_semantic_alias_paths(retrieval_hints: Mapping[str, Any]) -> set[str]:
+    paths = _record_paths(retrieval_hints.get("image_artifacts"), ("semantic_alias",))
+    asset_semantics = retrieval_hints.get("asset_semantics")
+    if isinstance(asset_semantics, Mapping):
+        paths.update(_record_paths(asset_semantics.get("images"), ("semantic_alias",)))
+        paths.update(_record_paths(asset_semantics.get("semantic_aliases"), ("alias", "semantic_alias")))
+    return paths
+
+
+def _hint_table_documents(retrieval_hints: Mapping[str, Any]) -> set[str]:
+    return _record_paths(retrieval_hints.get("table_artifacts"), ("document", "markdown_path", "source_path", "path"))
+
+
+def _asset_plan_image_paths(asset_plan: Mapping[str, Any]) -> set[str]:
+    paths: set[str] = set()
+    for key in (
+        "planned_visual_upload_files",
+        "discovered_image_artifacts",
+        "image_references",
+        "manifest_image_assets",
+        "sidecar_image_assets",
+        "residual_images",
+        "orphan_images",
+    ):
+        paths.update(
+            _record_paths(
+                asset_plan.get(key),
+                ("source_path", "package_path", "raw_path", "target", "resolved_path", "path"),
+            )
+        )
+    return paths
+
+
+def _asset_plan_markdown_paths(asset_plan: Mapping[str, Any]) -> set[str]:
+    return _record_paths(asset_plan.get("documents"), ("markdown_path", "package_path", "resolved_markdown_path", "source_path"))
+
+
+def _kb_manifest_document_paths(kb_manifest: Mapping[str, Any]) -> set[str]:
+    return _record_paths(kb_manifest.get("documents"), ("markdown_path", "source_path", "path", "name", "filename"))
+
+
+def _kb_manifest_image_paths(kb_manifest: Mapping[str, Any]) -> set[str]:
+    paths = _record_paths(kb_manifest.get("documents"), ("source_path", "markdown_path", "path", "name", "filename"))
+    return {path for path in paths if Path(path).suffix.lower() in IMAGE_SUFFIXES}
+
+
+def _status_from_missing(missing: list[str]) -> str:
+    return "review" if missing else "ready"
+
+
+def _safe_package_path_for_handoff_file(path: Path, *, handoff_root: Path, fallback_dir: str, index: int) -> str:
+    if _is_relative_to(path, handoff_root):
+        return _relative_to_root(path, handoff_root)
+    name = path.name or f"file-{index}"
+    return f"{fallback_dir}/{index:03d}-{name}"
+
+
+def _add_projected_file(files: list[dict[str, Any]], seen: set[str], record: dict[str, Any]) -> None:
+    package_path = str(record.get("package_path") or "")
+    if not package_path or package_path in seen:
+        return
+    seen.add(package_path)
+    files.append(record)
+
+
+def _image_artifact_key(path: Path) -> str:
+    return str(path.resolve(strict=False))
+
+
+def _is_image_path_value(value: str) -> bool:
+    if _is_remote_asset_reference(value):
+        return False
+    return Path(_image_reference_path(value)).suffix.lower() in IMAGE_SUFFIXES
+
+
+def _is_semantic_alias_key_path(key_path: tuple[str, ...]) -> bool:
+    lowered = tuple(item.lower() for item in key_path)
+    if not lowered:
+        return False
+    if lowered[-1] == "semantic_alias":
+        return True
+    if "semantic_aliases" in lowered and lowered[-1] in {"alias", "semantic_alias"}:
+        return True
+    if "asset_semantics" in lowered and lowered[-1] == "alias":
+        return True
+    return False
+
+
+def _iter_image_path_references(value: Any, *, key_path: tuple[str, ...] = ()) -> list[tuple[str, bool]]:
+    if isinstance(value, str):
+        return [(_image_reference_path(value), _is_semantic_alias_key_path(key_path))] if _is_image_path_value(value) else []
+    if isinstance(value, Mapping):
+        found: list[tuple[str, bool]] = []
+        for key, nested in value.items():
+            found.extend(_iter_image_path_references(nested, key_path=(*key_path, str(key))))
+        return found
+    if isinstance(value, list):
+        found = []
+        for nested in value:
+            found.extend(_iter_image_path_references(nested, key_path=key_path))
+        return found
+    return []
+
+
+def _iter_image_path_values(value: Any) -> list[str]:
+    return [path for path, _is_semantic_alias in _iter_image_path_references(value)]
+
+
+def _image_artifact_record(
+    *,
+    asset_class: str,
+    source: str,
+    raw_path: str,
+    resolved: Path,
+    handoff_root: Path,
+    document_index: int | None = None,
+    document: str | None = None,
+    planned_for_visual_upload: bool = False,
+) -> dict[str, Any]:
+    exists = resolved.is_file()
+    inside_handoff = _is_relative_to(resolved, handoff_root)
+    record: dict[str, Any] = {
+        "asset_class": asset_class,
+        "role": "image_asset",
+        "source": source,
+        "raw_path": raw_path,
+        "source_path": _relative_to_root(resolved, handoff_root),
+        "package_path": _relative_to_root(resolved, handoff_root) if inside_handoff else None,
+        "exists": exists,
+        "inside_handoff": inside_handoff,
+        "planned_for_visual_upload": planned_for_visual_upload,
+        "planned_for_package": planned_for_visual_upload,
+    }
+    if document_index is not None:
+        record["document_index"] = document_index
+    if document:
+        record["document"] = document
+    if exists:
+        record["size_bytes"] = resolved.stat().st_size
+        record["sha256"] = _sha256_file(resolved)
+        mime_type, _encoding = mimetypes.guess_type(resolved.name)
+        if mime_type:
+            record["mime_type"] = mime_type
+    return record
+
+
+def _add_image_artifact(
+    *,
+    artifacts: list[dict[str, Any]],
+    by_key: dict[str, dict[str, Any]],
+    asset_class: str,
+    source: str,
+    raw_path: str,
+    resolved: Path,
+    handoff_root: Path,
+    document_index: int | None = None,
+    document: str | None = None,
+    planned_for_visual_upload: bool = False,
+) -> dict[str, Any]:
+    key = _image_artifact_key(resolved)
+    source_record = {"source": source, "raw_path": raw_path}
+    if document_index is not None:
+        source_record["document_index"] = document_index
+    existing = by_key.get(key)
+    if existing is not None:
+        existing.setdefault("sources", []).append(source_record)
+        existing["planned_for_visual_upload"] = bool(existing.get("planned_for_visual_upload")) or planned_for_visual_upload
+        existing["planned_for_package"] = bool(existing.get("planned_for_package")) or planned_for_visual_upload
+        return existing
+    record = _image_artifact_record(
+        asset_class=asset_class,
+        source=source,
+        raw_path=raw_path,
+        resolved=resolved,
+        handoff_root=handoff_root,
+        document_index=document_index,
+        document=document,
+        planned_for_visual_upload=planned_for_visual_upload,
+    )
+    record["sources"] = [source_record]
+    by_key[key] = record
+    artifacts.append(record)
+    return record
+
+
+def _collect_sidecar_image_references(*, handoff_root: Path) -> list[tuple[str, str, Path, bool]]:
+    references: list[tuple[str, str, Path, bool]] = []
+    for role, sidecar_name in DEFAULT_UPLOAD_PLAN_SIDECARS:
+        if role == "doc_manifest":
+            continue
+        path = handoff_root / sidecar_name
+        if not path.is_file() or path.suffix.lower() not in {".json", ".yaml", ".yml"}:
+            continue
+        if path.suffix.lower() != ".json":
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        seen: dict[str, int] = {}
+        for raw, is_semantic_alias in _iter_image_path_references(payload):
+            if raw in seen:
+                index = seen[raw]
+                if references[index][3] and not is_semantic_alias:
+                    references[index] = (sidecar_name, raw, references[index][2], False)
+                continue
+            candidate = Path(raw)
+            resolved = candidate if candidate.is_absolute() else handoff_root / candidate
+            if not candidate.is_absolute() and not resolved.is_file():
+                documents_relative = handoff_root / "documents" / candidate
+                if documents_relative.is_file():
+                    resolved = documents_relative
+            seen[raw] = len(references)
+            references.append((sidecar_name, raw, resolved, is_semantic_alias))
+    return references
+
+
+def _collect_sidecar_records(
+    *,
+    manifest_payload: Mapping[str, Any],
+    manifest_path: Path,
+    handoff_root: Path,
+) -> list[dict[str, Any]]:
+    sidecar_names: dict[str, str] = {name: path for name, path in DEFAULT_UPLOAD_PLAN_SIDECARS}
+    sidecar_names["doc_manifest"] = manifest_path.name
+    for key in ("quality_report", "postprocess_report", "chunk_profile_report"):
+        value = manifest_payload.get(key)
+        if isinstance(value, str) and value.strip():
+            sidecar_names[key] = value.strip()
+
+    records: list[dict[str, Any]] = []
+    for role, raw_path in sidecar_names.items():
+        path = Path(raw_path)
+        if path.is_absolute():
+            resolved = path
+        else:
+            resolved = handoff_root / path
+        if not resolved.is_file():
+            continue
+        records.append(
+            _file_record(
+                role=f"sidecar:{role}",
+                source_path=resolved,
+                handoff_root=handoff_root,
+                package_path=_safe_package_path_for_handoff_file(
+                    resolved,
+                    handoff_root=handoff_root,
+                    fallback_dir="sidecars",
+                    index=len(records) + 1,
+                ),
+            )
+        )
+    return records
+
+
+def _scan_orphan_images(*, handoff_root: Path, referenced_paths: set[Path]) -> list[dict[str, Any]]:
+    candidates: list[Path] = []
+    for name in ("documents", "artifacts", "images"):
+        root = handoff_root / name
+        if not root.is_dir():
+            continue
+        candidates.extend(path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES)
+    normalized_referenced = {path.resolve(strict=False) for path in referenced_paths}
+    records = []
+    for path in sorted({candidate.resolve(strict=False) for candidate in candidates}):
+        if path in normalized_referenced:
+            continue
+        records.append(
+            _image_artifact_record(
+                asset_class="residual_unreferenced",
+                source="handoff_image_scan",
+                raw_path=_relative_to_root(path, handoff_root),
+                resolved=path,
+                handoff_root=handoff_root,
+            )
+        )
+    return records
+
+
+def create_kb_asset_upload_plan(
+    *,
+    doc_manifest_path: str | Path,
+    include_sidecars: bool = True,
+) -> dict[str, Any]:
+    """Create a non-mutating upload package plan for Markdown and local image assets."""
+
+    manifest_path = Path(doc_manifest_path)
+    handoff_root = manifest_path.parent
+    manifest_payload = _read_json_mapping(manifest_path, label="doc_manifest")
+    raw_documents = manifest_payload.get("documents")
+    if not isinstance(raw_documents, list) or not raw_documents:
+        raise BuildError("doc_manifest.documents must be a non-empty list")
+    source_root = _source_root_from_manifest(manifest_payload, manifest_path=manifest_path)
+
+    issues: list[dict[str, str]] = []
+    documents: list[dict[str, Any]] = []
+    image_references: list[dict[str, Any]] = []
+    manifest_image_assets: list[dict[str, Any]] = []
+    discovered_image_artifacts: list[dict[str, Any]] = []
+    discovered_image_artifacts_by_key: dict[str, dict[str, Any]] = {}
+    projected_files: list[dict[str, Any]] = []
+    seen_projected: set[str] = set()
+    known_handoff_image_paths: set[Path] = set()
+    remote_image_count = 0
+    local_image_reference_count = 0
+
+    for index, item in enumerate(raw_documents, start=1):
+        if not isinstance(item, Mapping):
+            issues.append(
+                _issue(
+                    severity="error",
+                    code="invalid_document_entry",
+                    message=f"doc_manifest.documents[{index}] is not an object",
+                    recommendation="Regenerate doc_manifest.json before planning asset upload.",
+                )
+            )
+            continue
+        raw_markdown = item.get("markdown_path")
+        if not isinstance(raw_markdown, str) or not raw_markdown.strip():
+            issues.append(
+                _issue(
+                    severity="error",
+                    code="missing_markdown_path",
+                    message=f"doc_manifest.documents[{index}] has no markdown_path",
+                    recommendation="Regenerate doc_manifest.json before planning asset upload.",
+                )
+            )
+            continue
+        markdown_path = Path(raw_markdown)
+        if not markdown_path.is_absolute():
+            markdown_path = source_root / markdown_path
+        markdown_package_path = _safe_package_path_for_handoff_file(
+            markdown_path,
+            handoff_root=handoff_root,
+            fallback_dir="documents",
+            index=index,
+        )
+        markdown_exists = markdown_path.is_file()
+        markdown_inside_handoff = _is_relative_to(markdown_path, handoff_root)
+        markdown_record = _file_record(
+            role="markdown",
+            source_path=markdown_path,
+            handoff_root=handoff_root,
+            package_path=markdown_package_path,
+            exists=markdown_exists,
+        )
+        if not markdown_exists:
+            issues.append(
+                _issue(
+                    severity="error",
+                    code="markdown_missing",
+                    message=f"Markdown document is missing: {raw_markdown}",
+                    recommendation="Repair doc_manifest.json or regenerate the handoff before upload.",
+                )
+            )
+        else:
+            _add_projected_file(projected_files, seen_projected, markdown_record)
+        if not markdown_inside_handoff:
+            issues.append(
+                _issue(
+                    severity="warning",
+                    code="markdown_outside_handoff",
+                    message=f"Markdown document is outside the handoff root: {raw_markdown}",
+                    recommendation="Prefer handoff-local Markdown paths before sharing or packaging.",
+                )
+            )
+
+        document_record: dict[str, Any] = {
+            "document_index": index,
+            "source_path": item.get("source_path") if isinstance(item.get("source_path"), str) else None,
+            "markdown_path": raw_markdown,
+            "resolved_markdown_path": _relative_to_root(markdown_path, handoff_root),
+            "package_path": markdown_package_path,
+            "exists": markdown_exists,
+            "inside_handoff": markdown_inside_handoff,
+            "image_reference_count": 0,
+            "manifest_image_asset_count": 0,
+        }
+        if markdown_exists:
+            text = markdown_path.read_text(encoding="utf-8", errors="replace")
+            for match in MARKDOWN_IMAGE_RE.finditer(text):
+                raw_target = _image_reference_path(match.group(2))
+                if not raw_target:
+                    continue
+                if _is_remote_asset_reference(raw_target):
+                    remote_image_count += 1
+                    image_references.append(
+                        {
+                            "source": "markdown_image_reference",
+                            "document_index": index,
+                            "document": raw_markdown,
+                            "target": raw_target,
+                            "remote": True,
+                            "planned_for_package": False,
+                        }
+                    )
+                    continue
+                local_image_reference_count += 1
+                document_record["image_reference_count"] += 1
+                target_path = Path(raw_target)
+                resolved = target_path if target_path.is_absolute() else markdown_path.parent / target_path
+                inside_handoff = _is_relative_to(resolved, handoff_root)
+                exists = resolved.is_file()
+                asset_class = "missing" if not exists else "outside_handoff" if not inside_handoff else "markdown_referenced"
+                planned_for_visual_upload = asset_class == "markdown_referenced"
+                record = {
+                    "source": "markdown_image_reference",
+                    "asset_class": asset_class,
+                    "document_index": index,
+                    "document": raw_markdown,
+                    "target": raw_target,
+                    "resolved_path": _relative_to_root(resolved, handoff_root),
+                    "package_path": _relative_to_root(resolved, handoff_root) if inside_handoff else None,
+                    "exists": exists,
+                    "inside_handoff": inside_handoff,
+                    "remote": False,
+                    "planned_for_visual_upload": planned_for_visual_upload,
+                    "planned_for_package": planned_for_visual_upload,
+                }
+                image_references.append(record)
+                artifact = _add_image_artifact(
+                    artifacts=discovered_image_artifacts,
+                    by_key=discovered_image_artifacts_by_key,
+                    asset_class=asset_class,
+                    source="markdown_image_reference",
+                    raw_path=raw_target,
+                    resolved=resolved,
+                    handoff_root=handoff_root,
+                    document_index=index,
+                    document=raw_markdown,
+                    planned_for_visual_upload=planned_for_visual_upload,
+                )
+                if artifact.get("exists") and artifact.get("inside_handoff"):
+                    known_handoff_image_paths.add(resolved)
+        for raw_asset_path in _document_asset_paths(item):
+            document_record["manifest_image_asset_count"] += 1
+            asset_path = Path(raw_asset_path)
+            resolved = asset_path if asset_path.is_absolute() else handoff_root / asset_path
+            inside_handoff = _is_relative_to(resolved, handoff_root)
+            exists = resolved.is_file()
+            asset_class = "missing" if not exists else "outside_handoff" if not inside_handoff else "manifest_listed"
+            record = {
+                "source": "manifest_image_asset",
+                "asset_class": asset_class,
+                "document_index": index,
+                "document": raw_markdown,
+                "path": raw_asset_path,
+                "resolved_path": _relative_to_root(resolved, handoff_root),
+                "package_path": _relative_to_root(resolved, handoff_root) if inside_handoff else None,
+                "exists": exists,
+                "inside_handoff": inside_handoff,
+                "planned_for_visual_upload": False,
+                "planned_for_package": False,
+            }
+            manifest_image_assets.append(record)
+            artifact = _add_image_artifact(
+                artifacts=discovered_image_artifacts,
+                by_key=discovered_image_artifacts_by_key,
+                asset_class=asset_class,
+                source="manifest_image_asset",
+                raw_path=raw_asset_path,
+                resolved=resolved,
+                handoff_root=handoff_root,
+                document_index=index,
+                document=raw_markdown,
+                planned_for_visual_upload=False,
+            )
+            if artifact.get("exists") and artifact.get("inside_handoff"):
+                known_handoff_image_paths.add(resolved)
+        documents.append(document_record)
+
+    sidecar_image_assets: list[dict[str, Any]] = []
+    for sidecar_name, raw_path, resolved, is_semantic_alias in _collect_sidecar_image_references(handoff_root=handoff_root):
+        inside_handoff = _is_relative_to(resolved, handoff_root)
+        exists = resolved.is_file()
+        asset_class = (
+            "semantic_alias_reference"
+            if is_semantic_alias
+            else "missing"
+            if not exists
+            else "outside_handoff"
+            if not inside_handoff
+            else "sidecar_referenced"
+        )
+        artifact = _add_image_artifact(
+            artifacts=discovered_image_artifacts,
+            by_key=discovered_image_artifacts_by_key,
+            asset_class=asset_class,
+            source=f"sidecar:{sidecar_name}",
+            raw_path=raw_path,
+            resolved=resolved,
+            handoff_root=handoff_root,
+            planned_for_visual_upload=False,
+        )
+        sidecar_image_assets.append(artifact)
+        if artifact.get("exists") and artifact.get("inside_handoff"):
+            known_handoff_image_paths.add(resolved)
+
+    orphan_images = _scan_orphan_images(handoff_root=handoff_root, referenced_paths=known_handoff_image_paths)
+    for orphan in orphan_images:
+        key = _image_artifact_key(handoff_root / str(orphan["source_path"]))
+        if key not in discovered_image_artifacts_by_key:
+            discovered_image_artifacts_by_key[key] = orphan
+            discovered_image_artifacts.append(orphan)
+
+    for artifact in discovered_image_artifacts:
+        asset_class = artifact.get("asset_class")
+        if asset_class == "outside_handoff":
+            issues.append(
+                _issue(
+                    severity="error",
+                    code="image_outside_handoff",
+                    message=f"Local image reference is outside the handoff root: {artifact.get('raw_path')}",
+                    recommendation="Copy image assets into the handoff and update Markdown references before upload.",
+                )
+            )
+        elif asset_class == "missing":
+            issues.append(
+                _issue(
+                    severity="error",
+                    code="image_missing",
+                    message=f"Local image asset is missing: {artifact.get('raw_path')}",
+                    recommendation="Regenerate the handoff with asset landing enabled or repair image paths.",
+                )
+            )
+        elif asset_class == "semantic_alias_reference":
+            issues.append(
+                _issue(
+                    severity="warning",
+                    code="semantic_alias_image_reference",
+                    message=f"Image semantic alias is advisory and not a missing local file: {artifact.get('raw_path')}",
+                    recommendation="Use the paired canonical image path for asset existence checks; keep semantic aliases for human review and retrieval context.",
+                )
+            )
+
+    residual_images = [item for item in discovered_image_artifacts if item.get("asset_class") == "residual_unreferenced"]
+    if residual_images:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="orphan_images_detected",
+                message="One or more handoff-local image files are not referenced by Markdown or doc_manifest assets.",
+                recommendation="Review whether orphan images should be referenced, removed, or kept outside the upload package.",
+            )
+        )
+        issues.append(
+            _issue(
+                severity="warning",
+                code="residual_images_detected",
+                message="One or more handoff-local image files are residual and not part of the default visual upload set.",
+                recommendation="Upload only markdown_referenced images by default; review residual files before broadening the asset policy.",
+            )
+        )
+    if len(residual_images) >= RESIDUAL_IMAGE_NUMEROUS_THRESHOLD:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="residual_images_numerous",
+                message="Residual handoff images are numerous enough to require review before upload.",
+                recommendation="Check whether these files are parser leftovers or intentional visual documents.",
+            )
+        )
+    if any(int(item.get("size_bytes", 0) or 0) >= RESIDUAL_IMAGE_LARGE_BYTES for item in residual_images):
+        issues.append(
+            _issue(
+                severity="warning",
+                code="residual_images_large",
+                message="At least one residual handoff image is large.",
+                recommendation="Avoid uploading large residual images unless they are intentionally selected as visual documents.",
+            )
+        )
+    if any(HASH_NAMED_IMAGE_RE.match(Path(str(item.get("source_path") or "")).stem) for item in residual_images):
+        issues.append(
+            _issue(
+                severity="warning",
+                code="residual_images_likely_hash_named",
+                message="At least one residual image has a hash-like filename.",
+                recommendation="Treat hash-named residual files as parser leftovers unless handoff evidence says otherwise.",
+            )
+        )
+    planned_visual_upload_files = [
+        item
+        for item in discovered_image_artifacts
+        if item.get("asset_class") == "markdown_referenced"
+        and item.get("exists") is True
+        and item.get("inside_handoff") is True
+    ]
+    planned_hashes = {item.get("sha256") for item in planned_visual_upload_files if item.get("sha256")}
+    if planned_hashes and any(item.get("sha256") in planned_hashes for item in residual_images):
+        issues.append(
+            _issue(
+                severity="warning",
+                code="residual_images_likely_duplicates",
+                message="At least one residual image has the same content hash as a planned Markdown-referenced image.",
+                recommendation="Do not upload duplicate residual files as separate visual documents.",
+            )
+        )
+    if remote_image_count:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="remote_images_not_packaged",
+                message="Remote or data URI image references are not included in the local upload package.",
+                recommendation="Land remote images locally before KB upload if RAGFlow must preserve them.",
+            )
+        )
+
+    sidecars: list[dict[str, Any]] = []
+    if include_sidecars:
+        sidecars = _collect_sidecar_records(
+            manifest_payload=manifest_payload,
+            manifest_path=manifest_path,
+            handoff_root=handoff_root,
+        )
+        for record in sidecars:
+            _add_projected_file(projected_files, seen_projected, record)
+
+    for item in planned_visual_upload_files:
+        source_path = item.get("source_path")
+        package_path = item.get("package_path")
+        if not isinstance(source_path, str) or not source_path:
+            continue
+        source = Path(source_path)
+        if not source.is_absolute():
+            source = handoff_root / source
+        _add_projected_file(
+            projected_files,
+            seen_projected,
+            _file_record(
+                role="image_asset",
+                source_path=source,
+                handoff_root=handoff_root,
+                package_path=str(package_path or source_path),
+                exists=item.get("exists") is True,
+            ),
+        )
+
+    asset_class_counts = {
+        asset_class: sum(1 for item in discovered_image_artifacts if item.get("asset_class") == asset_class)
+        for asset_class in ASSET_UPLOAD_PLAN_IMAGE_CLASSES
+    }
+    package_size_bytes = sum(int(item.get("size_bytes", 0) or 0) for item in projected_files if item.get("exists"))
+    error_count = sum(1 for item in issues if item["severity"] == "error")
+    warning_count = sum(1 for item in issues if item["severity"] == "warning")
+    status = "blocked" if error_count else "ready_with_review" if warning_count else "ready"
+    return {
+        "schema": KB_ASSET_UPLOAD_PLAN_SCHEMA,
+        "created_at": _now(),
+        "doc_manifest": manifest_path.name,
+        "handoff_root": str(handoff_root),
+        "offline_only": True,
+        "live_upload_enabled": False,
+        "llm_calls": 0,
+        "ragflow_calls": 0,
+        "status": status,
+        "summary": {
+            "document_count": len(documents),
+            "markdown_file_count": len([item for item in projected_files if item.get("role") == "markdown"]),
+            "local_image_reference_count": local_image_reference_count,
+            "markdown_image_reference_count": local_image_reference_count,
+            "remote_image_reference_count": remote_image_count,
+            "manifest_image_asset_count": len(manifest_image_assets),
+            "markdown_referenced_image_count": asset_class_counts["markdown_referenced"],
+            "manifest_listed_image_count": asset_class_counts["manifest_listed"],
+            "sidecar_referenced_image_count": asset_class_counts["sidecar_referenced"],
+            "semantic_alias_reference_image_count": asset_class_counts["semantic_alias_reference"],
+            "residual_unreferenced_image_count": asset_class_counts["residual_unreferenced"],
+            "discovered_image_artifact_count": len(discovered_image_artifacts),
+            "planned_visual_upload_file_count": len(planned_visual_upload_files),
+            "planned_image_file_count": len(planned_visual_upload_files),
+            "missing_image_count": asset_class_counts["missing"],
+            "missing_image_asset_count": asset_class_counts["missing"],
+            "outside_handoff_image_count": asset_class_counts["outside_handoff"],
+            "orphan_image_count": len(residual_images),
+            "unreferenced_handoff_image_count": len(residual_images),
+            "sidecar_file_count": len(sidecars),
+            "projected_upload_file_count": len(projected_files),
+            "package_size_bytes": package_size_bytes,
+            "issue_count": len(issues),
+            "error_count": error_count,
+            "warning_count": warning_count,
+        },
+        "documents": documents,
+        "image_references": image_references,
+        "manifest_image_assets": manifest_image_assets,
+        "sidecar_image_assets": sidecar_image_assets[:50],
+        "orphan_images": residual_images[:50],
+        "residual_images": residual_images[:50],
+        "discovered_image_artifacts": discovered_image_artifacts[:200],
+        "planned_visual_upload_files": planned_visual_upload_files,
+        "asset_class_counts": asset_class_counts,
+        "sidecars": sidecars,
+        "projected_upload_files": projected_files,
+        "issues": issues,
+        "upload_policy": {
+            "current_live_upload_path": "markdown_only",
+            "default_visual_upload_class": "markdown_referenced",
+            "planned_package_mode": "zip",
+            "live_mutation_requires_existing_build_gate": True,
+            "notes": [
+                "This report does not call RAGFlow.",
+                "Only markdown_referenced image assets enter the default visual upload plan.",
+                "Manifest-listed, sidecar-referenced, and residual images are discovered for review but excluded from the default visual upload set.",
+                "Semantic image aliases are advisory review references; they are not treated as missing local files.",
+                "Only handoff-local existing Markdown, planned image, and sidecar files are projected into the local package.",
+                "Live upload of the package remains disabled until an explicit mutation gate approves it.",
+            ],
+        },
+    }
+
+
+def create_kb_asset_ingestion_readiness_report(
+    *,
+    asset_upload_plan_path: str | Path,
+    profile_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Create a non-mutating readiness report for future gated visual ingestion."""
+
+    plan = _read_json_mapping(Path(asset_upload_plan_path), label="asset_upload_plan")
+    issues: list[dict[str, str]] = []
+    if plan.get("schema") != KB_ASSET_UPLOAD_PLAN_SCHEMA:
+        issues.append(
+            _issue(
+                severity="error",
+                code="asset_upload_plan_schema_mismatch",
+                message=f"asset upload plan schema must be {KB_ASSET_UPLOAD_PLAN_SCHEMA}",
+                recommendation="Regenerate the plan with ragflow-kb-build asset-upload-plan before image ingestion readiness.",
+            )
+        )
+
+    summary = plan.get("summary", {}) if isinstance(plan.get("summary"), Mapping) else {}
+    planned_count = _as_int(summary.get("planned_visual_upload_file_count"))
+    if planned_count is None:
+        planned_count = _as_int(summary.get("planned_image_file_count")) or 0
+    missing_count = _as_int(summary.get("missing_image_asset_count")) or _as_int(summary.get("missing_image_count")) or 0
+    outside_count = _as_int(summary.get("outside_handoff_image_count")) or 0
+    residual_count = _as_int(summary.get("residual_unreferenced_image_count")) or _as_int(summary.get("orphan_image_count")) or 0
+
+    if planned_count <= 0:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="no_planned_visual_assets",
+                message="Asset upload plan has no planned visual upload files.",
+                recommendation="Use Markdown-only build unless visual documents are intentionally needed.",
+            )
+        )
+    if missing_count or outside_count:
+        issues.append(
+            _issue(
+                severity="error",
+                code="visual_assets_missing_or_outside_handoff",
+                message=f"Asset plan has {missing_count} missing and {outside_count} outside-handoff visual asset(s).",
+                recommendation="Repair or regenerate handoff assets before enabling visual document ingestion.",
+            )
+        )
+    if residual_count:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="residual_visual_assets_require_review",
+                message=f"Asset plan has {residual_count} residual image asset(s) outside the default upload set.",
+                recommendation="Keep residual images excluded unless a user explicitly broadens the visual upload policy.",
+            )
+        )
+
+    profile_payload: dict[str, Any] | None = None
+    profile_source = str(profile_path) if profile_path else None
+    if profile_path:
+        try:
+            profile = load_profile(profile_path)
+            profile_payload = profile.to_manifest_dict()
+        except (ProfileError, OSError) as exc:
+            issues.append(
+                _issue(
+                    severity="error",
+                    code="profile_load_failed",
+                    message=str(exc),
+                    recommendation="Provide a valid build profile before image ingestion readiness.",
+                )
+            )
+
+    parser_config = profile_payload.get("parser_config", {}) if isinstance(profile_payload, Mapping) else {}
+    chunk_token_num = _as_int(parser_config.get("chunk_token_num")) if isinstance(parser_config, Mapping) else None
+    visual_profile_hints = [
+        key
+        for key, value in sorted(parser_config.items())
+        if any(part in str(key).lower() for part in ("layout", "visual", "image", "vision", "ocr"))
+        and bool(value)
+    ] if isinstance(parser_config, Mapping) else []
+
+    error_count = sum(1 for issue in issues if issue["severity"] == "error")
+    warning_count = sum(1 for issue in issues if issue["severity"] == "warning")
+    status = "blocked" if error_count else "ready_with_review" if warning_count else "ready"
+    return {
+        "ok": error_count == 0,
+        "schema": KB_ASSET_INGESTION_REPORT_SCHEMA,
+        "created_at": _now(),
+        "mode": "readiness",
+        "advisory_only": True,
+        "offline_only": True,
+        "mutation": "none",
+        "mutation_allowed": False,
+        "live_upload_enabled": False,
+        "execution": {
+            "status": "not_run",
+            "ragflow_calls": 0,
+            "db_calls": 0,
+            "redis_calls": 0,
+            "docker_calls": 0,
+            "system_service_calls": 0,
+        },
+        "inputs": {
+            "asset_upload_plan": str(asset_upload_plan_path),
+            "profile": profile_source,
+        },
+        "status": status,
+        "summary": {
+            "planned_visual_upload_file_count": planned_count,
+            "missing_image_asset_count": missing_count,
+            "outside_handoff_image_count": outside_count,
+            "residual_unreferenced_image_count": residual_count,
+            "issue_count": len(issues),
+            "error_count": error_count,
+            "warning_count": warning_count,
+        },
+        "profile": profile_payload,
+        "profile_review": {
+            "source": profile_source,
+            "chunk_token_num": chunk_token_num,
+            "visual_profile_hint_keys": visual_profile_hints,
+        },
+        "checks": {
+            "asset_plan_schema": {"status": "PASS" if plan.get("schema") == KB_ASSET_UPLOAD_PLAN_SCHEMA else "FAIL"},
+            "planned_visual_upload_set": {"status": "PASS" if planned_count > 0 else "REVIEW", "count": planned_count},
+            "asset_path_readiness": {
+                "status": "PASS" if not missing_count and not outside_count else "FAIL",
+                "missing_image_asset_count": missing_count,
+                "outside_handoff_image_count": outside_count,
+            },
+            "residual_asset_review": {"status": "REVIEW" if residual_count else "PASS", "count": residual_count},
+            "profile_evidence": {"status": "PASS" if profile_payload else "REVIEW", "source": profile_source},
+        },
+        "issues": issues,
+        "next_steps": [
+            "Review planned_visual_upload_files before any live image ingestion execution.",
+            "Require explicit live execution flags and exact confirmation before uploading visual documents.",
+            "Keep residual_unreferenced images excluded unless the user intentionally broadens the policy.",
+        ],
+    }
+
+
+def render_kb_asset_ingestion_readiness_markdown(report: Mapping[str, Any]) -> str:
+    """Render a concise Markdown summary for image-ingestion readiness."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    profile = report.get("profile", {}) if isinstance(report.get("profile"), Mapping) else {}
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    lines = [
+        "# RAGFlow Image Ingestion Readiness",
+        "",
+        f"- schema: `{report.get('schema', KB_ASSET_INGESTION_REPORT_SCHEMA)}`",
+        f"- status: `{report.get('status', 'unknown')}`",
+        f"- mutation: `{report.get('mutation', 'none')}`",
+        f"- planned visual upload files: `{summary.get('planned_visual_upload_file_count', 0)}`",
+        f"- missing image assets: `{summary.get('missing_image_asset_count', 0)}`",
+        f"- outside-handoff images: `{summary.get('outside_handoff_image_count', 0)}`",
+        f"- residual images: `{summary.get('residual_unreferenced_image_count', 0)}`",
+        f"- profile: `{profile.get('id', 'not_supplied')}`",
+        "",
+        "## Issues",
+        "",
+    ]
+    if issues:
+        for issue in issues[:20]:
+            if not isinstance(issue, Mapping):
+                continue
+            lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    else:
+        lines.append("- No issues found.")
+    return "\n".join(lines) + "\n"
+
+
+def create_kb_artifact_consistency_report(
+    *,
+    retrieval_hints_path: str | Path,
+    asset_upload_plan_path: str | Path,
+    chunk_profile_report_path: str | Path,
+    kb_manifest_path: str | Path,
+) -> dict[str, Any]:
+    """Check consistency across handoff, asset, profile, and KB evidence artifacts."""
+
+    retrieval_hints = _read_json_mapping(Path(retrieval_hints_path), label="retrieval_hints")
+    asset_plan = _read_json_mapping(Path(asset_upload_plan_path), label="asset_upload_plan")
+    chunk_profile = _read_json_mapping(Path(chunk_profile_report_path), label="chunk_profile_report")
+    kb_manifest = _read_json_mapping(Path(kb_manifest_path), label="kb_manifest")
+
+    issues: list[dict[str, str]] = []
+    if retrieval_hints.get("schema") != RETRIEVAL_HINTS_SCHEMA:
+        issues.append(
+            _issue(
+                severity="error",
+                code="retrieval_hints_schema_mismatch",
+                message=f"retrieval_hints schema must be {RETRIEVAL_HINTS_SCHEMA}",
+                recommendation="Regenerate retrieval_hints.json from the formal handoff before consistency review.",
+            )
+        )
+    if asset_plan.get("schema") != KB_ASSET_UPLOAD_PLAN_SCHEMA:
+        issues.append(
+            _issue(
+                severity="error",
+                code="asset_upload_plan_schema_mismatch",
+                message=f"asset upload plan schema must be {KB_ASSET_UPLOAD_PLAN_SCHEMA}",
+                recommendation="Regenerate the plan with ragflow-kb-build asset-upload-plan.",
+            )
+        )
+    if chunk_profile.get("schema") != CHUNK_PROFILE_REPORT_SCHEMA:
+        issues.append(
+            _issue(
+                severity="error",
+                code="chunk_profile_report_schema_mismatch",
+                message=f"chunk profile report schema must be {CHUNK_PROFILE_REPORT_SCHEMA}",
+                recommendation="Regenerate chunk_profile_report.json from a chunk-marker postprocess profile.",
+            )
+        )
+    if kb_manifest.get("version") != "0.1":
+        issues.append(
+            _issue(
+                severity="error",
+                code="kb_manifest_version_mismatch",
+                message="kb_manifest version must be 0.1",
+                recommendation="Provide the current kb_manifest.json from ragflow-kb-build.",
+            )
+        )
+
+    hint_images = sorted(_hint_image_paths(retrieval_hints))
+    semantic_alias_image_hints = sorted(_hint_semantic_alias_paths(retrieval_hints))
+    hint_table_documents = sorted(_hint_table_documents(retrieval_hints))
+    asset_images = _asset_plan_image_paths(asset_plan)
+    asset_markdown = _asset_plan_markdown_paths(asset_plan)
+    kb_documents = _kb_manifest_document_paths(kb_manifest)
+    kb_images = _kb_manifest_image_paths(kb_manifest)
+
+    missing_image_hints = sorted(path for path in hint_images if not _path_matches(path, asset_images))
+    missing_table_documents = sorted(path for path in hint_table_documents if not _path_matches(path, asset_markdown))
+    if missing_image_hints:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="retrieval_hint_images_missing_from_asset_plan",
+                message="One or more image hints are not represented in the asset upload plan.",
+                recommendation="Regenerate asset-upload-plan from the same handoff or repair retrieval_hints image paths.",
+            )
+        )
+    if semantic_alias_image_hints:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="retrieval_hint_image_semantic_aliases",
+                message="One or more image hints are semantic aliases rather than required local image files.",
+                recommendation="Review semantic aliases for readability, but use canonical image paths when checking local asset existence.",
+            )
+        )
+    if missing_table_documents:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="retrieval_hint_tables_missing_from_asset_plan",
+                message="One or more table hints reference documents not found in the asset upload plan.",
+                recommendation="Regenerate retrieval hints and asset-upload-plan from the same doc_manifest.json.",
+            )
+        )
+
+    marker_summary = chunk_profile.get("summary") if isinstance(chunk_profile.get("summary"), Mapping) else {}
+    marker_type_counts = marker_summary.get("marker_type_counts") if isinstance(marker_summary.get("marker_type_counts"), Mapping) else {}
+    table_marker_count = _as_int(marker_type_counts.get("table")) or 0
+    table_hint_count = len(retrieval_hints.get("table_artifacts", [])) if isinstance(retrieval_hints.get("table_artifacts"), list) else 0
+    table_marker_gap = table_hint_count > 0 and table_marker_count <= 0
+    if table_marker_gap:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="table_hints_without_chunk_markers",
+                message="retrieval_hints.json has table artifacts but chunk_profile_report.json has no table markers.",
+                recommendation="Review postprocess profile output before relying on table parent chunk retrieval.",
+            )
+        )
+
+    missing_kb_markdown_documents = sorted(path for path in asset_markdown if not _path_matches(path, kb_documents))
+    planned_visual_paths = _record_paths(asset_plan.get("planned_visual_upload_files"), ("source_path", "package_path", "raw_path", "path"))
+    missing_kb_visual_documents = sorted(path for path in planned_visual_paths if not _path_matches(path, kb_images))
+    if missing_kb_markdown_documents:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="asset_plan_markdown_missing_from_kb_manifest",
+                message="One or more asset-plan Markdown documents are not represented in kb_manifest.json.",
+                recommendation="Refresh kb_manifest.json after build or verify the plan and build used the same handoff.",
+            )
+        )
+    if missing_kb_visual_documents:
+        issues.append(
+            _issue(
+                severity="warning",
+                code="planned_visual_assets_missing_from_kb_manifest",
+                message="One or more planned visual assets are not represented in kb_manifest.json.",
+                recommendation="Run the gated image-ingestion flow or keep the KB classified as Markdown-only.",
+            )
+        )
+
+    schema_issue_count = sum(1 for issue in issues if issue["severity"] == "error")
+    warning_count = sum(1 for issue in issues if issue["severity"] == "warning")
+    status = "blocked" if schema_issue_count else "review" if warning_count else "ready"
+    checks = {
+        "schema_compatibility": {
+            "status": "blocked" if schema_issue_count else "ready",
+            "error_count": schema_issue_count,
+        },
+        "retrieval_hints_vs_asset_plan": {
+            "status": "review" if missing_image_hints or semantic_alias_image_hints or missing_table_documents else "ready",
+            "hint_image_count": len(hint_images),
+            "asset_plan_image_path_count": len(asset_images),
+            "missing_image_hints": missing_image_hints,
+            "semantic_alias_image_hint_count": len(semantic_alias_image_hints),
+            "semantic_alias_image_hints": semantic_alias_image_hints,
+            "hint_table_document_count": len(hint_table_documents),
+            "asset_plan_markdown_document_count": len(asset_markdown),
+            "missing_table_documents": missing_table_documents,
+        },
+        "retrieval_hints_vs_chunk_profile": {
+            "status": "review" if table_marker_gap else "ready",
+            "table_hint_count": table_hint_count,
+            "table_marker_count": table_marker_count,
+            "marker_count": _as_int(marker_summary.get("marker_count")) or 0,
+        },
+        "asset_plan_vs_kb_manifest": {
+            "status": "review" if missing_kb_markdown_documents or missing_kb_visual_documents else "ready",
+            "asset_plan_markdown_document_count": len(asset_markdown),
+            "kb_manifest_document_path_count": len(kb_documents),
+            "missing_markdown_documents": missing_kb_markdown_documents,
+            "planned_visual_upload_file_count": len(planned_visual_paths),
+            "kb_manifest_visual_document_count": len(kb_images),
+            "missing_visual_documents": missing_kb_visual_documents,
+        },
+    }
+    return {
+        "ok": schema_issue_count == 0,
+        "schema": KB_ARTIFACT_CONSISTENCY_REPORT_SCHEMA,
+        "created_at": _now(),
+        "advisory_only": True,
+        "offline_only": True,
+        "mutation": "none",
+        "ragflow_calls": 0,
+        "llm_calls": 0,
+        "inputs": {
+            "retrieval_hints": str(retrieval_hints_path),
+            "asset_upload_plan": str(asset_upload_plan_path),
+            "chunk_profile_report": str(chunk_profile_report_path),
+            "kb_manifest": str(kb_manifest_path),
+        },
+        "status": status,
+        "summary": {
+            "check_count": len(checks),
+            "issue_count": len(issues),
+            "error_count": schema_issue_count,
+            "warning_count": warning_count,
+            "hint_image_count": len(hint_images),
+            "semantic_alias_image_hint_count": len(semantic_alias_image_hints),
+            "hint_table_count": table_hint_count,
+            "planned_visual_upload_file_count": len(planned_visual_paths),
+            "kb_manifest_document_count": len(kb_documents),
+        },
+        "checks": checks,
+        "issues": issues,
+        "next_steps": [
+            "Regenerate stale artifacts from the same formal handoff before comparing build quality.",
+            "Use image-ingestion-readiness before live visual ingestion when planned visual assets are missing from kb_manifest.json.",
+            "Use validation-suggestions and benchmark validation after the artifact chain is consistent.",
+        ],
+    }
+
+
+def render_kb_artifact_consistency_markdown(report: Mapping[str, Any]) -> str:
+    """Render a concise Markdown summary for artifact consistency review."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    checks = report.get("checks", {}) if isinstance(report.get("checks"), Mapping) else {}
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    lines = [
+        "# RAGFlow KB Artifact Consistency Report",
+        "",
+        f"- schema: `{report.get('schema', KB_ARTIFACT_CONSISTENCY_REPORT_SCHEMA)}`",
+        f"- status: `{report.get('status', 'unknown')}`",
+        f"- mutation: `{report.get('mutation', 'none')}`",
+        f"- checks: `{summary.get('check_count', 0)}`",
+        f"- warnings: `{summary.get('warning_count', 0)}`",
+        f"- errors: `{summary.get('error_count', 0)}`",
+        "",
+        "## Checks",
+        "",
+    ]
+    for name, check in checks.items():
+        if not isinstance(check, Mapping):
+            continue
+        lines.append(f"- `{name}`: `{check.get('status', 'unknown')}`")
+    lines.extend(["", "## Issues", ""])
+    if issues:
+        for issue in issues[:30]:
+            if not isinstance(issue, Mapping):
+                continue
+            lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    else:
+        lines.append("- No issues found.")
+    return "\n".join(lines) + "\n"
+
+
+def write_kb_asset_upload_zip(report: Mapping[str, Any], *, output_path: str | Path) -> dict[str, Any]:
+    """Materialize the projected package files into a local zip archive."""
+
+    files = report.get("projected_upload_files")
+    if not isinstance(files, list):
+        raise BuildError("asset upload plan has no projected_upload_files list")
+    handoff_root = Path(str(report.get("handoff_root") or "."))
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for item in files:
+            if not isinstance(item, Mapping) or item.get("exists") is not True:
+                continue
+            package_path = item.get("package_path")
+            source_path = item.get("source_path")
+            if not isinstance(package_path, str) or not package_path:
+                continue
+            if not isinstance(source_path, str) or not source_path:
+                continue
+            source = Path(source_path)
+            if not source.is_absolute():
+                source = handoff_root / source
+            if not source.is_file():
+                continue
+            archive.write(source, package_path)
+            written += 1
+    return {
+        "path": str(output),
+        "file_count": written,
+        "size_bytes": output.stat().st_size if output.exists() else 0,
+        "sha256": _sha256_file(output) if output.exists() else None,
+    }
+
+
+def render_kb_asset_upload_plan_markdown(report: Mapping[str, Any]) -> str:
+    """Render a concise Markdown summary for ragflow_kb_asset_upload_plan_v2."""
+
+    summary = report.get("summary") if isinstance(report.get("summary"), Mapping) else {}
+    lines = [
+        "# RAGFlow KB Asset Upload Plan",
+        "",
+        f"- schema: `{report.get('schema', KB_ASSET_UPLOAD_PLAN_SCHEMA)}`",
+        f"- status: `{report.get('status', 'unknown')}`",
+        f"- offline_only: `{str(report.get('offline_only', True)).lower()}`",
+        f"- live_upload_enabled: `{str(report.get('live_upload_enabled', False)).lower()}`",
+        f"- documents: `{summary.get('document_count', 0)}`",
+        f"- projected_upload_files: `{summary.get('projected_upload_file_count', 0)}`",
+        f"- discovered image artifacts: `{summary.get('discovered_image_artifact_count', summary.get('manifest_image_asset_count', 0))}`",
+        f"- Markdown image references: `{summary.get('markdown_image_reference_count', summary.get('local_image_reference_count', 0))}`",
+        f"- markdown_referenced images: `{summary.get('markdown_referenced_image_count', 0)}`",
+        f"- manifest_listed images: `{summary.get('manifest_listed_image_count', 0)}`",
+        f"- sidecar_referenced images: `{summary.get('sidecar_referenced_image_count', 0)}`",
+        f"- semantic alias image references: `{summary.get('semantic_alias_reference_image_count', 0)}`",
+        f"- residual_unreferenced images: `{summary.get('residual_unreferenced_image_count', summary.get('unreferenced_handoff_image_count', 0))}`",
+        f"- planned visual upload files: `{summary.get('planned_visual_upload_file_count', summary.get('planned_image_file_count', 0))}`",
+        f"- missing image assets: `{summary.get('missing_image_asset_count', summary.get('missing_image_count', 0))}`",
+        f"- unreferenced handoff images: `{summary.get('unreferenced_handoff_image_count', summary.get('orphan_image_count', 0))}`",
+        f"- sidecars: `{summary.get('sidecar_file_count', 0)}`",
+    ]
+    package_zip = report.get("package_zip")
+    if isinstance(package_zip, Mapping):
+        lines.extend(
+            [
+                f"- package_zip: `{package_zip.get('path')}`",
+                f"- package_zip_files: `{package_zip.get('file_count', 0)}`",
+            ]
+        )
+    issues = report.get("issues")
+    if isinstance(issues, list) and issues:
+        lines.extend(["", "## Issues", ""])
+        for issue in issues[:20]:
+            if not isinstance(issue, Mapping):
+                continue
+            lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    return "\n".join(lines) + "\n"
 
 
 def discover_markdown_documents(
@@ -61,19 +3204,104 @@ def discover_markdown_documents(
     return docs
 
 
+@dataclass(frozen=True)
+class _DatasetCreateResponseClassification:
+    label: str
+    dataset_id: str | None = None
+
+
+_DATASET_CREATE_KNOWN_PATHS = (
+    "code",
+    "data",
+    "data.id",
+    "data.dataset_id",
+    "id",
+    "dataset_id",
+)
+
+
+def _dataset_create_root_label(response: Any) -> str:
+    if isinstance(response, Mapping):
+        return "mapping"
+    if isinstance(response, list):
+        return "list"
+    return "scalar"
+
+
+def _dataset_create_data_type(response: Any) -> str:
+    if not isinstance(response, Mapping) or "data" not in response:
+        return "absent"
+    data = response.get("data")
+    if isinstance(data, Mapping):
+        return "mapping"
+    if isinstance(data, list):
+        return "list"
+    if data is None:
+        return "null"
+    return "scalar"
+
+
+def _dataset_create_known_paths(response: Any) -> tuple[str, ...]:
+    if not isinstance(response, Mapping):
+        return ()
+    data = response.get("data")
+    present = {
+        key
+        for key in ("code", "data", "id", "dataset_id")
+        if key in response
+    }
+    if isinstance(data, Mapping):
+        present.update(
+            f"data.{key}"
+            for key in ("id", "dataset_id")
+            if key in data
+        )
+    return tuple(path for path in _DATASET_CREATE_KNOWN_PATHS if path in present)
+
+
+def _classify_dataset_create_response(response: Any) -> _DatasetCreateResponseClassification:
+    if isinstance(response, Mapping):
+        if "code" in response:
+            code = response.get("code")
+            if isinstance(code, (int, float)) and not isinstance(code, bool):
+                if isinstance(code, float) and not math.isfinite(code):
+                    return _DatasetCreateResponseClassification("unknown_shape")
+                if code != 0:
+                    return _DatasetCreateResponseClassification("application_failure")
+            else:
+                return _DatasetCreateResponseClassification("unknown_shape")
+
+        data = response.get("data")
+        candidates: list[Any] = []
+        if isinstance(data, Mapping):
+            candidates.extend(data[key] for key in ("id", "dataset_id") if key in data)
+        candidates.extend(response[key] for key in ("id", "dataset_id") if key in response)
+        if not candidates or any(not isinstance(candidate, str) or not candidate for candidate in candidates):
+            return _DatasetCreateResponseClassification("unknown_shape")
+        if len(set(candidates)) != 1:
+            return _DatasetCreateResponseClassification("unknown_shape")
+        return _DatasetCreateResponseClassification("supported", candidates[0])
+    return _DatasetCreateResponseClassification("unknown_shape")
+
+
+def _dataset_create_response_error(response: Any, classification: str) -> str:
+    known_paths = _dataset_create_known_paths(response)
+    return (
+        "could not extract dataset id from RAGFlow response; "
+        f"classification={classification} "
+        f"root={_dataset_create_root_label(response)} "
+        f"data_type={_dataset_create_data_type(response)} "
+        f"known_paths={','.join(known_paths) if known_paths else 'none'}"
+    )
+
+
 def extract_dataset_id(response: Any) -> str:
     """Extract a dataset ID from common RAGFlow response shapes."""
 
-    candidates = []
-    if isinstance(response, Mapping):
-        data = response.get("data", response)
-        if isinstance(data, Mapping):
-            candidates.extend([data.get("id"), data.get("dataset_id")])
-        candidates.extend([response.get("id"), response.get("dataset_id")])
-    for candidate in candidates:
-        if isinstance(candidate, str) and candidate:
-            return candidate
-    raise BuildError("could not extract dataset id from RAGFlow response")
+    classification = _classify_dataset_create_response(response)
+    if classification.label == "supported" and classification.dataset_id is not None:
+        return classification.dataset_id
+    raise BuildError(_dataset_create_response_error(response, classification.label))
 
 
 def extract_uploaded_document_id(response: Any) -> str:
@@ -100,15 +3328,20 @@ def make_kb_manifest_payload(
     dataset_name: str,
     profile: ChunkProfile,
     documents: list[tuple[BuildDocument, str, str | None, int | None]],
+    expected_embedding_models: list[str] | tuple[str, ...] | None = None,
+    build_payload_preview: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create a serializable KB manifest payload."""
 
-    return {
+    embedding_model = describe_embedding_model(profile)
+    payload = {
         "version": "0.1",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "ragflow_base_url": base_url,
         "dataset": {"id": dataset_id, "name": dataset_name},
         "profile": profile.to_manifest_dict(),
+        "embedding_model": embedding_model,
+        "embedding_model_check": check_embedding_model_drift(embedding_model, expected_embedding_models),
         "documents": [
             {
                 "document_id": document_id,
@@ -120,6 +3353,9 @@ def make_kb_manifest_payload(
             for doc, document_id, status, chunk_count in documents
         ],
     }
+    if isinstance(build_payload_preview, Mapping):
+        payload["build_payload_preview"] = dict(build_payload_preview)
+    return payload
 
 
 def document_entries_from_manifest(payload: Mapping[str, Any]) -> list[KbDocumentEntry]:
@@ -143,6 +3379,70 @@ def _extract_document_items(response: Any) -> list[Mapping[str, Any]]:
     if isinstance(data, list):
         return [item for item in data if isinstance(item, Mapping)]
     return []
+
+
+def extract_document_items(response: Any) -> list[Mapping[str, Any]]:
+    """Extract document objects from common RAGFlow list-document response shapes."""
+
+    return _extract_document_items(response)
+
+
+def extract_document_name(document: Mapping[str, Any]) -> str:
+    """Extract a display/document name from common RAGFlow document shapes."""
+
+    for key in ("name", "document_name", "docnm_kwd", "filename", "file_name"):
+        value = document.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def extract_document_id(document: Mapping[str, Any]) -> str:
+    """Extract a document ID from common RAGFlow document shapes."""
+
+    for key in ("id", "document_id"):
+        value = document.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _first_string(document: Mapping[str, Any], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = document.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _document_mime_type(document: Mapping[str, Any], *, name: str) -> str:
+    explicit = _first_string(document, ("mime_type", "content_type", "type", "file_type"))
+    if explicit:
+        return explicit
+    guessed, _encoding = mimetypes.guess_type(name)
+    return guessed or ""
+
+
+def _document_kind(*, name: str, mime_type: str) -> str:
+    suffix = Path(name).suffix.lower()
+    lowered_mime = mime_type.lower()
+    if lowered_mime.startswith("image/") or suffix in IMAGE_SUFFIXES:
+        return "image"
+    if suffix in {".md", ".markdown"} or lowered_mime in {"text/markdown", "text/x-markdown"}:
+        return "markdown"
+    if lowered_mime.startswith("text/"):
+        return "text"
+    return "other"
+
+
+def _document_thumbnail(document: Mapping[str, Any]) -> dict[str, Any]:
+    url = _first_string(document, ("thumbnail_url", "thumb_url", "thumbnail", "thumbnail_path"))
+    return {"url": url or None, "observed": bool(url)}
+
+
+def _document_vlm_status(document: Mapping[str, Any]) -> str | None:
+    value = _first_string(document, ("vlm_status", "vision_status", "image_parse_status", "vlm_run", "image_status"))
+    return value or None
 
 
 def _as_float(value: Any) -> float | None:
@@ -169,6 +3469,10 @@ def normalize_document_state(document: Mapping[str, Any], *, document_id: str = 
     """Normalize one live document status entry returned by RAGFlow."""
 
     doc_id = str(document.get("id") or document.get("document_id") or document_id)
+    name = extract_document_name(document)
+    mime_type = _document_mime_type(document, name=name)
+    thumbnail = _document_thumbnail(document)
+    vlm_status = _document_vlm_status(document)
     run = _normalize_parse_status(document.get("run"))
     status = _normalize_parse_status(document.get("status"))
     progress = _as_float(document.get("progress"))
@@ -194,12 +3498,17 @@ def normalize_document_state(document: Mapping[str, Any], *, document_id: str = 
 
     return {
         "document_id": doc_id,
+        "name": name,
+        "mime_type": mime_type,
+        "document_kind": _document_kind(name=name, mime_type=mime_type),
         "status": effective_status,
         "chunk_count": chunk_count,
         "progress": progress,
         "progress_msg": message,
         "raw_status": status,
         "run": run,
+        "thumbnail": thumbnail,
+        "vlm_status": vlm_status,
     }
 
 
@@ -240,6 +3549,559 @@ def parse_state_failed(state: Mapping[str, Any]) -> bool:
         or (isinstance(progress, (int, float)) and progress < 0)
         or _message_indicates_failure(str(state.get("progress_msg", "")))
     )
+
+
+def _refresh_match_keys(document: KbDocumentEntry) -> list[str]:
+    keys: list[str] = []
+    for value in (document.document_id, document.markdown_path, document.source_path):
+        if not value:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        keys.append(text)
+        name = Path(text).name
+        if name and name != text:
+            keys.append(name)
+    return [key.casefold() for key in keys if key]
+
+
+def _observed_state_lookup(states: Mapping[str, Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
+    lookup: dict[str, Mapping[str, Any]] = {}
+    for document_id, state in states.items():
+        for value in (document_id, state.get("document_id"), state.get("name")):
+            if not isinstance(value, str) or not value.strip():
+                continue
+            lookup.setdefault(value.strip().casefold(), state)
+            name = Path(value.strip()).name
+            if name:
+                lookup.setdefault(name.casefold(), state)
+    return lookup
+
+
+def _refresh_state_label(state: Mapping[str, Any]) -> str:
+    if parse_state_failed(state):
+        return "failed"
+    if parse_state_succeeded(state):
+        return "succeeded"
+    status = str(state.get("status") or "").strip()
+    return "in_progress" if status else "unknown"
+
+
+def _refresh_next_steps(issues: list[Mapping[str, Any]]) -> list[str]:
+    codes = {str(issue.get("code") or "") for issue in issues}
+    steps: list[str] = []
+    if "document_list_api_zero_documents" in codes:
+        steps.append(
+            "Treat the zero-document document-list response as a version-specific read-only API limitation when build, parse, or chunk evidence exists elsewhere."
+        )
+    if "manifest_document_missing_observed_state" in codes:
+        steps.append("Export a fresh refresh report before using the manifest for parse, health, or benchmark decisions.")
+    if "document_chunk_count_mismatch" in codes:
+        steps.append("Treat manifest chunk counts as stale until a refreshed manifest or parse report agrees with server-observed counts.")
+    if {"observed_document_parse_failed", "observed_document_in_progress"} & codes:
+        steps.append("Review failed or still-running documents before marking this KB production-ready.")
+    if "observed_document_not_in_manifest" in codes:
+        steps.append("Decide whether unlinked observed documents should be added to the manifest chain or cleaned up.")
+    if not steps:
+        steps.append("Keep this read-only refresh report with the KB evidence chain for later parse, health, and benchmark checks.")
+    return steps
+
+
+def load_kb_refresh_report(path: str | Path) -> dict[str, Any]:
+    """Load and validate a read-only KB refresh report sidecar."""
+
+    source = Path(path)
+    payload = _read_json_mapping(source, label="KB refresh report")
+    if payload.get("schema") != KB_REFRESH_REPORT_SCHEMA:
+        raise BuildError(f"KB refresh report schema must be {KB_REFRESH_REPORT_SCHEMA}: {source}")
+    payload["_source_path"] = str(source)
+    return payload
+
+
+def kb_refresh_report_document_status_payload(report: Mapping[str, Any]) -> dict[str, Any]:
+    """Convert a refresh report into a document-list shape parse-report can consume."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    observed_documents = [
+        dict(item)
+        for item in report.get("observed_documents", [])
+        if isinstance(item, Mapping)
+    ]
+    return {
+        "schema": KB_REFRESH_REPORT_SCHEMA,
+        "dataset": dict(report.get("dataset", {})) if isinstance(report.get("dataset"), Mapping) else {},
+        "data": {
+            "docs": observed_documents,
+            "doc_count": _as_int(summary.get("observed_document_count")),
+            "chunk_count": _as_int(summary.get("observed_chunk_total")),
+        },
+    }
+
+
+def summarize_kb_refresh_observed_state(
+    report: Mapping[str, Any],
+    *,
+    dataset_id: str | None = None,
+) -> dict[str, Any]:
+    """Return a compact common observed-state block for downstream reports."""
+
+    dataset = dict(report.get("dataset", {})) if isinstance(report.get("dataset"), Mapping) else {}
+    observed_dataset_id = str(dataset.get("id") or "")
+    dataset_matches = None if not dataset_id else observed_dataset_id == str(dataset_id)
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    issues = [dict(item) for item in report.get("issues", []) if isinstance(item, Mapping)]
+    compact_summary = {
+        "observed_document_count": _as_int(summary.get("observed_document_count")) or 0,
+        "matched_document_count": _as_int(summary.get("matched_document_count")) or 0,
+        "missing_manifest_document_count": _as_int(summary.get("missing_manifest_document_count")) or 0,
+        "extra_observed_document_count": _as_int(summary.get("extra_observed_document_count")) or 0,
+        "observed_chunk_total": _as_int(summary.get("observed_chunk_total")),
+        "observed_chunk_document_count": _as_int(summary.get("observed_chunk_document_count")) or 0,
+        "chunk_mismatch_count": _as_int(summary.get("chunk_mismatch_count")) or 0,
+        "failed_document_count": _as_int(summary.get("failed_document_count")) or 0,
+        "in_progress_document_count": _as_int(summary.get("in_progress_document_count")) or 0,
+        "warning_count": _as_int(summary.get("warning_count")) or 0,
+        "error_count": _as_int(summary.get("error_count")) or 0,
+    }
+    return {
+        "available": True,
+        "schema": KB_REFRESH_REPORT_SCHEMA,
+        "source": str(report.get("_source_path") or ""),
+        "status": report.get("status", "UNKNOWN"),
+        "ok": bool(report.get("ok", True)),
+        "dataset": dataset,
+        "dataset_matches": dataset_matches,
+        "summary": compact_summary,
+        "issue_codes": sorted({str(issue.get("code") or "") for issue in issues if issue.get("code")}),
+    }
+
+
+def create_kb_refresh_report(
+    *,
+    kb_manifest_path: str | Path,
+    document_list_response: Any,
+    page: int = 1,
+    page_size: int = 200,
+) -> dict[str, Any]:
+    """Create a read-only report of current RAGFlow document and chunk state."""
+
+    try:
+        kb_manifest = load_kb_manifest(kb_manifest_path)
+    except ManifestError as exc:
+        raise BuildError(str(exc)) from exc
+
+    observed_states = extract_document_states(document_list_response)
+    observed_lookup = _observed_state_lookup(observed_states)
+    matched_observed_ids: set[str] = set()
+    manifest_documents: list[dict[str, Any]] = []
+    issues: list[dict[str, str]] = []
+    manifest_chunk_total = 0
+    manifest_parse_evidence_document_count = 0
+    observed_chunk_total = 0
+    observed_chunk_document_count = 0
+    chunk_mismatch_count = 0
+    matched_document_count = 0
+
+    for document in kb_manifest.documents:
+        manifest_chunks = _as_int(document.chunk_count)
+        if manifest_chunks is not None:
+            manifest_chunk_total += manifest_chunks
+        if (manifest_chunks is not None and manifest_chunks > 0) or parse_state_succeeded({"status": document.status or ""}):
+            manifest_parse_evidence_document_count += 1
+        observed: Mapping[str, Any] | None = None
+        for key in _refresh_match_keys(document):
+            candidate = observed_lookup.get(key)
+            if candidate:
+                observed = candidate
+                break
+        if observed:
+            matched_document_count += 1
+            observed_id = observed.get("document_id")
+            if isinstance(observed_id, str) and observed_id:
+                matched_observed_ids.add(observed_id)
+        observed_chunks = _as_int(observed.get("chunk_count")) if observed else None
+        document_issue_codes: list[str] = []
+        if not observed:
+            document_issue_codes.append("manifest_document_missing_observed_state")
+            issues.append(
+                _issue(
+                    severity="warning",
+                    code="manifest_document_missing_observed_state",
+                    message=f"Manifest document {document.document_id} was not found in the read-only RAGFlow document list.",
+                    recommendation="Run refresh-report again after confirming the dataset ID, or regenerate the manifest from current server state.",
+                )
+            )
+        elif manifest_chunks is not None and observed_chunks is not None and manifest_chunks != observed_chunks:
+            chunk_mismatch_count += 1
+            document_issue_codes.append("document_chunk_count_mismatch")
+            issues.append(
+                _issue(
+                    severity="warning",
+                    code="document_chunk_count_mismatch",
+                    message=(
+                        f"Manifest document {document.document_id} chunk_count={manifest_chunks} differs "
+                        f"from observed chunk_count={observed_chunks}."
+                    ),
+                    recommendation="Refresh downstream parse, health, and benchmark sidecars before trusting chunk totals.",
+                )
+            )
+
+        manifest_documents.append(
+            {
+                "document_id": document.document_id,
+                "source_path": document.source_path,
+                "markdown_path": document.markdown_path,
+                "manifest_status": document.status,
+                "manifest_chunk_count": manifest_chunks,
+                "observed_status": observed.get("status") if observed else None,
+                "observed_chunk_count": observed_chunks,
+                "observed_state": _compact_observed_state(observed) if observed else None,
+                "issues": document_issue_codes,
+            }
+        )
+
+    observed_documents = list(observed_states.values())
+    status_counts: dict[str, int] = {}
+    refresh_state_counts = {"succeeded": 0, "failed": 0, "in_progress": 0, "unknown": 0}
+    extra_observed_documents: list[dict[str, Any]] = []
+    for state in observed_documents:
+        status = str(state.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        refresh_label = _refresh_state_label(state)
+        refresh_state_counts[refresh_label] = refresh_state_counts.get(refresh_label, 0) + 1
+        chunks = _as_int(state.get("chunk_count"))
+        if chunks is not None:
+            observed_chunk_document_count += 1
+            observed_chunk_total += chunks
+        document_id = str(state.get("document_id") or "")
+        if document_id and document_id not in matched_observed_ids:
+            extra_observed_documents.append(_compact_observed_state(state) or dict(state))
+            issues.append(
+                _issue(
+                    severity="warning",
+                    code="observed_document_not_in_manifest",
+                    message=f"Observed document {document_id} is not linked from the KB manifest.",
+                    recommendation="Review whether this document is an intentional visual/manual upload or stale server-side residue.",
+                )
+            )
+        if refresh_label == "failed":
+            issues.append(
+                _issue(
+                    severity="warning",
+                    code="observed_document_parse_failed",
+                    message=f"Observed document {document_id or state.get('name') or 'unknown'} is in a failed parse state.",
+                    recommendation="Inspect RAGFlow progress details before retrying parse or refreshing the manifest.",
+                )
+            )
+        elif refresh_label in {"in_progress", "unknown"}:
+            issues.append(
+                _issue(
+                    severity="warning",
+                    code="observed_document_in_progress",
+                    message=f"Observed document {document_id or state.get('name') or 'unknown'} is not completed yet.",
+                    recommendation="Wait for parse completion or rerun refresh-report before production activation.",
+                )
+            )
+
+    compatibility_warning_count = 0
+    document_list_zero_with_manifest_evidence = bool(not observed_documents and manifest_parse_evidence_document_count)
+    if document_list_zero_with_manifest_evidence:
+        compatibility_warning_count += 1
+        issues.append(
+            _issue(
+                severity="warning",
+                code="document_list_api_zero_documents",
+                message=(
+                    "RAGFlow document-list returned zero documents even though the KB manifest has parsed/chunk evidence."
+                ),
+                recommendation=(
+                    "Classify this as a version-specific read-only API limitation when build, parse, smoke, or chunk evidence "
+                    "proves the KB lifecycle; rerun against a compatible document-list endpoint before using refresh counts as authoritative."
+                ),
+            )
+        )
+
+    missing_manifest_count = len(kb_manifest.documents) - matched_document_count
+    warning_count = sum(1 for issue in issues if issue["severity"] == "warning")
+    error_count = sum(1 for issue in issues if issue["severity"] == "error")
+    status = "FAIL" if error_count else "REVIEW" if warning_count else "PASS"
+
+    return {
+        "ok": error_count == 0,
+        "schema": KB_REFRESH_REPORT_SCHEMA,
+        "created_at": _now(),
+        "status": status,
+        "advisory_only": True,
+        "mutation": "none",
+        "execution": {
+            "status": "completed",
+            "ragflow_calls": 1,
+            "list_documents_call_count": 1,
+            "document_list_page": page,
+            "document_list_page_size": page_size,
+            "db_calls": 0,
+            "redis_calls": 0,
+            "docker_calls": 0,
+            "system_service_calls": 0,
+        },
+        "inputs": {
+            "kb_manifest": str(kb_manifest_path),
+            "document_list_source": "ragflow_client.list_documents",
+            "page": page,
+            "page_size": page_size,
+        },
+        "dataset": {
+            "id": kb_manifest.dataset.id,
+            "name": kb_manifest.dataset.name,
+            "ragflow_base_url": kb_manifest.ragflow_base_url,
+        },
+        "summary": {
+            "manifest_document_count": len(kb_manifest.documents),
+            "observed_document_count": len(observed_documents),
+            "matched_document_count": matched_document_count,
+            "missing_manifest_document_count": missing_manifest_count,
+            "extra_observed_document_count": len(extra_observed_documents),
+            "manifest_chunk_total": manifest_chunk_total,
+            "manifest_parse_evidence_document_count": manifest_parse_evidence_document_count,
+            "observed_chunk_total": observed_chunk_total if observed_chunk_document_count or observed_documents else None,
+            "observed_chunk_document_count": observed_chunk_document_count,
+            "chunk_mismatch_count": chunk_mismatch_count,
+            "compatibility_warning_count": compatibility_warning_count,
+            "succeeded_document_count": refresh_state_counts.get("succeeded", 0),
+            "failed_document_count": refresh_state_counts.get("failed", 0),
+            "in_progress_document_count": refresh_state_counts.get("in_progress", 0) + refresh_state_counts.get("unknown", 0),
+            "status_counts": dict(sorted(status_counts.items())),
+            "issue_count": len(issues),
+            "warning_count": warning_count,
+            "error_count": error_count,
+        },
+        "compatibility": {
+            "document_list_zero_documents_with_manifest_parse_evidence": document_list_zero_with_manifest_evidence,
+            "classification": (
+                "compatibility_warning:document_list_api_zero_documents"
+                if document_list_zero_with_manifest_evidence
+                else "none"
+            ),
+        },
+        "manifest_documents": manifest_documents,
+        "observed_documents": [_compact_observed_state(state) or dict(state) for state in observed_documents],
+        "extra_observed_documents": extra_observed_documents,
+        "issues": issues,
+        "next_steps": _refresh_next_steps(issues),
+    }
+
+
+def render_kb_refresh_report_markdown(report: Mapping[str, Any]) -> str:
+    """Render a concise Markdown summary for a read-only KB refresh report."""
+
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), Mapping) else {}
+    dataset = report.get("dataset", {}) if isinstance(report.get("dataset"), Mapping) else {}
+    issues = report.get("issues", []) if isinstance(report.get("issues"), list) else []
+    missing = [
+        item
+        for item in report.get("manifest_documents", [])
+        if isinstance(item, Mapping) and "manifest_document_missing_observed_state" in (item.get("issues") or [])
+    ]
+    lines = [
+        "# RAGFlow KB Refresh Report",
+        "",
+        f"- schema: `{report.get('schema', KB_REFRESH_REPORT_SCHEMA)}`",
+        f"- status: `{report.get('status', 'unknown')}`",
+        f"- mutation: `{report.get('mutation', 'none')}`",
+        f"- dataset: `{dataset.get('name', '')}` (`{dataset.get('id', '')}`)",
+        f"- manifest documents: `{summary.get('manifest_document_count', 0)}`",
+        f"- observed documents: `{summary.get('observed_document_count', 0)}`",
+        f"- matched documents: `{summary.get('matched_document_count', 0)}`",
+        f"- missing manifest documents: `{summary.get('missing_manifest_document_count', 0)}`",
+        f"- extra observed documents: `{summary.get('extra_observed_document_count', 0)}`",
+        f"- chunk mismatches: `{summary.get('chunk_mismatch_count', 0)}`",
+        f"- failed documents: `{summary.get('failed_document_count', 0)}`",
+        f"- in-progress documents: `{summary.get('in_progress_document_count', 0)}`",
+        "",
+        "## Missing manifest documents",
+        "",
+    ]
+    if missing:
+        for item in missing[:20]:
+            lines.append(f"- `{item.get('document_id', '')}` `{item.get('markdown_path', '')}`")
+    else:
+        lines.append("- None.")
+    lines.extend(["", "## Issues", ""])
+    if issues:
+        for issue in issues[:30]:
+            if isinstance(issue, Mapping):
+                lines.append(f"- `{issue.get('severity')}` `{issue.get('code')}`: {issue.get('message')}")
+    else:
+        lines.append("- No issues found.")
+    next_steps = report.get("next_steps") if isinstance(report.get("next_steps"), list) else []
+    if next_steps:
+        lines.extend(["", "## Next Steps", ""])
+        for step in next_steps:
+            lines.append(f"- {step}")
+    return "\n".join(lines) + "\n"
+
+
+def _profile_manifest_dict(profile: ChunkProfile | Mapping[str, Any]) -> dict[str, Any]:
+    if isinstance(profile, ChunkProfile):
+        return profile.to_manifest_dict()
+    return dict(profile)
+
+
+def _visual_assets_from_upload_plan(asset_upload_plan: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(asset_upload_plan, Mapping):
+        return []
+    raw_files = asset_upload_plan.get("planned_visual_upload_files")
+    if not isinstance(raw_files, list):
+        return []
+    assets: list[dict[str, Any]] = []
+    for item in raw_files:
+        if not isinstance(item, Mapping):
+            continue
+        source_path = item.get("source_path")
+        package_path = item.get("package_path")
+        if not isinstance(source_path, str) or not source_path:
+            continue
+        assets.append(
+            {
+                "source_path": source_path,
+                "package_path": package_path if isinstance(package_path, str) and package_path else source_path,
+                "asset_class": item.get("asset_class") if isinstance(item.get("asset_class"), str) else None,
+                "sha256": item.get("sha256") if isinstance(item.get("sha256"), str) else None,
+                "mime_type": item.get("mime_type") if isinstance(item.get("mime_type"), str) else None,
+                "name": Path(source_path).name,
+            }
+        )
+    return assets
+
+
+def _state_by_name(states: Mapping[str, Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
+    by_name: dict[str, Mapping[str, Any]] = {}
+    for state in states.values():
+        name = state.get("name")
+        if isinstance(name, str) and name:
+            by_name.setdefault(Path(name).name, state)
+    return by_name
+
+
+def _compact_observed_state(state: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not state:
+        return None
+    return {
+        "document_id": state.get("document_id"),
+        "name": state.get("name"),
+        "document_kind": state.get("document_kind"),
+        "status": state.get("status"),
+        "chunk_count": state.get("chunk_count"),
+        "progress": state.get("progress"),
+        "progress_msg": state.get("progress_msg"),
+        "mime_type": state.get("mime_type"),
+        "thumbnail": state.get("thumbnail"),
+        "vlm_status": state.get("vlm_status"),
+    }
+
+
+def make_multimodal_kb_manifest_payload(
+    *,
+    base_url: str | None,
+    dataset_id: str,
+    dataset_name: str,
+    profile: ChunkProfile | Mapping[str, Any],
+    markdown_documents: list[tuple[BuildDocument, str, str | None, int | None]],
+    asset_upload_plan: Mapping[str, Any] | None = None,
+    document_list_response: Any | None = None,
+) -> dict[str, Any]:
+    """Create a multimodal KB manifest from build inputs and read-only document state."""
+
+    observed_states = extract_document_states(document_list_response) if document_list_response is not None else {}
+    observed_by_name = _state_by_name(observed_states)
+
+    markdown_records: list[dict[str, Any]] = []
+    matched_observed_ids: set[str] = set()
+    for doc, document_id, status, chunk_count in markdown_documents:
+        observed = observed_states.get(document_id)
+        if observed:
+            matched_observed_ids.add(document_id)
+        record = {
+            "document_id": document_id,
+            "source_path": doc.manifest_source_path,
+            "markdown_path": str(doc.path),
+            "status": str(observed.get("status") if observed else status or "").lower(),
+            "chunk_count": observed.get("chunk_count") if observed else chunk_count,
+            "observed_state": _compact_observed_state(observed),
+        }
+        markdown_records.append(record)
+
+    visual_records: list[dict[str, Any]] = []
+    for asset in _visual_assets_from_upload_plan(asset_upload_plan):
+        observed = observed_by_name.get(Path(str(asset["source_path"])).name)
+        if observed and isinstance(observed.get("document_id"), str):
+            matched_observed_ids.add(str(observed["document_id"]))
+        thumbnail = observed.get("thumbnail") if isinstance(observed, Mapping) else None
+        record = {
+            "document_id": observed.get("document_id") if observed else None,
+            "name": observed.get("name") if observed else asset["name"],
+            "source_path": asset["source_path"],
+            "package_path": asset["package_path"],
+            "asset_class": asset["asset_class"],
+            "sha256": asset["sha256"],
+            "mime_type": observed.get("mime_type") if observed and observed.get("mime_type") else asset["mime_type"],
+            "status": observed.get("status") if observed else "not_observed",
+            "chunk_count": observed.get("chunk_count") if observed else None,
+            "thumbnail": thumbnail if isinstance(thumbnail, Mapping) else {"url": None, "observed": False},
+            "vlm_status": observed.get("vlm_status") if observed else None,
+            "observed_state": _compact_observed_state(observed),
+        }
+        visual_records.append(record)
+
+    for document_id, state in observed_states.items():
+        if document_id in matched_observed_ids or state.get("document_kind") != "image":
+            continue
+        visual_records.append(
+            {
+                "document_id": document_id,
+                "name": state.get("name"),
+                "source_path": None,
+                "package_path": None,
+                "asset_class": "observed_unlinked",
+                "sha256": None,
+                "mime_type": state.get("mime_type"),
+                "status": state.get("status"),
+                "chunk_count": state.get("chunk_count"),
+                "thumbnail": state.get("thumbnail"),
+                "vlm_status": state.get("vlm_status"),
+                "observed_state": _compact_observed_state(state),
+            }
+        )
+
+    manifest_documents = [*markdown_records, *visual_records]
+    parsed_count = sum(1 for item in manifest_documents if parse_state_succeeded(item))
+    failed_count = sum(1 for item in manifest_documents if parse_state_failed(item))
+    chunk_total = sum(int(item.get("chunk_count") or 0) for item in manifest_documents)
+    thumbnail_count = sum(1 for item in visual_records if isinstance(item.get("thumbnail"), Mapping) and item["thumbnail"].get("url"))
+    vlm_count = sum(1 for item in visual_records if item.get("vlm_status"))
+
+    return {
+        "schema": MULTIMODAL_KB_MANIFEST_SCHEMA,
+        "created_at": _now(),
+        "ragflow_base_url": base_url,
+        "dataset": {"id": dataset_id, "name": dataset_name},
+        "profile": _profile_manifest_dict(profile),
+        "summary": {
+            "document_count": len(manifest_documents),
+            "markdown_document_count": len(markdown_records),
+            "visual_document_count": len(visual_records),
+            "observed_document_count": len(observed_states),
+            "parsed_document_count": parsed_count,
+            "failed_document_count": failed_count,
+            "chunk_count": chunk_total,
+            "thumbnail_document_count": thumbnail_count,
+            "vlm_observed_document_count": vlm_count,
+        },
+        "markdown_documents": markdown_records,
+        "visual_documents": visual_records,
+        "observed_documents": list(observed_states.values()),
+    }
 
 
 def wait_for_document_states(

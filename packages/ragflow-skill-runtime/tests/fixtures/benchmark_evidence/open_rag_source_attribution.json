@@ -1,0 +1,19 @@
+{
+  "schema": "ragflow_benchmark_source_attribution_v1",
+  "dataset_name": "open-rag-synthetic",
+  "upstream_projects": [
+    "public-open-rag-label"
+  ],
+  "license": "CC-BY-NC-4.0",
+  "selected_source_ids": [
+    "paper-a.md",
+    "paper-b.md",
+    "paper-c.md"
+  ],
+  "source_hashes": [
+    "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  ],
+  "authorship": "human"
+}

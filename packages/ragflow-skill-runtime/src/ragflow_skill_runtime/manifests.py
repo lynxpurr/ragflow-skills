@@ -3,13 +3,376 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
+
+
+DOC_MANIFEST_JSON_SCHEMA_ID = "https://github.com/lynxpurr/ragflow-skills/schemas/doc_manifest-0.1.schema.json"
+KB_MANIFEST_JSON_SCHEMA_ID = "https://github.com/lynxpurr/ragflow-skills/schemas/kb_manifest-0.1.schema.json"
+FORMAL_HANDOFF_MANIFEST_JSON_SCHEMA_ID = (
+    "https://github.com/lynxpurr/ragflow-skills/schemas/formal_handoff_manifest-v1.schema.json"
+)
+
+DOC_MANIFEST_JSON_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": DOC_MANIFEST_JSON_SCHEMA_ID,
+    "title": "RAGFlow document handoff manifest",
+    "type": "object",
+    "required": ["version", "documents"],
+    "additionalProperties": True,
+    "properties": {
+        "version": {"type": "string", "const": "0.1"},
+        "created_at": {"type": ["string", "null"]},
+        "source_root": {"type": ["string", "null"]},
+        "handoff_mode": {"type": ["string", "null"], "enum": ["thin_preview", "formal_ingest", None]},
+        "handoff_advisory": {
+            "type": ["array", "null"],
+            "items": {"type": "object", "additionalProperties": True},
+        },
+        "formal_ingest": {"type": ["object", "null"], "additionalProperties": True},
+        "quality_report": {"type": ["string", "null"]},
+        "quality_gate": {"type": ["object", "null"], "additionalProperties": True},
+        "documents": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "required": ["source_path", "markdown_path"],
+                "additionalProperties": True,
+                "properties": {
+                    "source_path": {"type": "string", "minLength": 1},
+                    "markdown_path": {"type": "string", "minLength": 1},
+                    "sha256": {"type": ["string", "null"]},
+                    "title": {"type": ["string", "null"]},
+                    "language": {"type": ["string", "null"]},
+                    "warnings": {"type": "array", "items": {"type": "string"}},
+                    "assets": {
+                        "type": ["object", "null"],
+                        "additionalProperties": True,
+                        "properties": {
+                            "images": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "required": ["path"],
+                                    "additionalProperties": True,
+                                    "properties": {
+                                        "path": {"type": "string", "minLength": 1},
+                                        "sha256": {"type": ["string", "null"]},
+                                        "bytes": {"type": ["integer", "null"], "minimum": 0},
+                                    },
+                                },
+                            }
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
+KB_MANIFEST_JSON_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": KB_MANIFEST_JSON_SCHEMA_ID,
+    "title": "RAGFlow KB handoff manifest",
+    "type": "object",
+    "required": ["version", "dataset", "documents"],
+    "additionalProperties": True,
+    "properties": {
+        "version": {"type": "string", "const": "0.1"},
+        "created_at": {"type": ["string", "null"]},
+        "ragflow_base_url": {"type": ["string", "null"]},
+        "dataset": {
+            "type": "object",
+            "required": ["id", "name"],
+            "additionalProperties": True,
+            "properties": {
+                "id": {"type": "string", "minLength": 1},
+                "name": {"type": "string", "minLength": 1},
+            },
+        },
+        "profile": {"type": "object", "additionalProperties": True},
+        "embedding_model": {
+            "type": ["object", "null"],
+            "additionalProperties": True,
+            "properties": {
+                "model": {"type": "string"},
+                "status": {"type": "string", "enum": ["known", "unknown"]},
+                "source": {"type": ["string", "null"]},
+                "reason": {"type": ["string", "null"]},
+            },
+        },
+        "embedding_model_check": {
+            "type": ["object", "null"],
+            "additionalProperties": True,
+            "properties": {
+                "status": {"type": "string", "enum": ["not_configured", "unknown", "match", "mismatch"]},
+                "observed_model": {"type": "string"},
+                "expected_models": {"type": "array", "items": {"type": "string"}},
+                "matches_expected": {"type": ["boolean", "null"]},
+                "rebuild_or_reparse_required": {"type": "boolean"},
+                "reason": {"type": ["string", "null"]},
+            },
+        },
+        "batching": {
+            "type": ["object", "null"],
+            "additionalProperties": True,
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "requested_batch_size": {"type": ["integer", "null"], "minimum": 1},
+                "effective_batch_size": {"type": ["integer", "null"], "minimum": 1},
+                "planned_document_count": {"type": "integer", "minimum": 0},
+                "planned_batch_count": {"type": "integer", "minimum": 0},
+                "uploaded_document_count": {"type": "integer", "minimum": 0},
+                "parse_batch_count": {"type": "integer", "minimum": 0},
+                "parse_batch_attempt_count": {"type": "integer", "minimum": 0},
+                "parse_document_count": {"type": "integer", "minimum": 0},
+                "failed_batch_count": {"type": "integer", "minimum": 0},
+                "retryable_failure_count": {"type": "integer", "minimum": 0},
+                "batches": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {
+                            "batch_index": {"type": "integer", "minimum": 1},
+                            "planned_document_count": {"type": "integer", "minimum": 0},
+                            "uploaded_document_count": {"type": "integer", "minimum": 0},
+                            "failed_document_count": {"type": "integer", "minimum": 0},
+                            "uploaded_document_ids": {"type": "array", "items": {"type": "string"}},
+                            "document_names": {"type": "array", "items": {"type": "string"}},
+                            "upload_status": {"type": "string"},
+                            "parse_trigger_status": {"type": "string"},
+                            "parse_triggered": {"type": "boolean"},
+                            "parse_response_observed": {"type": "boolean"},
+                            "retryable": {"type": "boolean"},
+                            "retryable_failure_count": {"type": "integer", "minimum": 0},
+                            "retryable_failures": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": True,
+                                    "properties": {
+                                        "stage": {"type": "string"},
+                                        "message": {"type": "string"},
+                                        "retryable": {"type": "boolean"},
+                                        "document_ids": {"type": "array", "items": {"type": "string"}},
+                                        "document_names": {"type": "array", "items": {"type": "string"}},
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        "checkpoint": {
+            "type": ["object", "null"],
+            "additionalProperties": True,
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "path": {"type": ["string", "null"]},
+                "resume": {"type": "boolean"},
+                "force_reupload_confirmed": {"type": "boolean"},
+                "skipped_upload_count": {"type": "integer", "minimum": 0},
+                "new_upload_count": {"type": "integer", "minimum": 0},
+                "total_confirmed_upload_count": {"type": "integer", "minimum": 0},
+            },
+        },
+        "documents": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["document_id"],
+                "additionalProperties": True,
+                "properties": {
+                    "document_id": {"type": "string", "minLength": 1},
+                    "source_path": {"type": ["string", "null"]},
+                    "markdown_path": {"type": ["string", "null"]},
+                    "status": {"type": ["string", "null"]},
+                    "chunk_count": {"type": ["integer", "null"], "minimum": 0},
+                },
+            },
+        },
+    },
+}
+
+FORMAL_HANDOFF_MANIFEST_JSON_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": FORMAL_HANDOFF_MANIFEST_JSON_SCHEMA_ID,
+    "title": "RAGFlow formal handoff package manifest",
+    "type": "object",
+    "required": [
+        "schema",
+        "handoff_mode",
+        "doc_manifest",
+        "source_document_count",
+        "sidecars",
+        "package_hash",
+        "downstream_command_suggestions",
+        "safety",
+    ],
+    "additionalProperties": True,
+    "properties": {
+        "schema": {"type": "string", "const": "ragflow_formal_handoff_manifest_v1"},
+        "created_at": {"type": ["string", "null"]},
+        "handoff_mode": {"type": ["string", "null"], "enum": ["thin_preview", "formal_ingest", None]},
+        "doc_manifest": {"type": "string", "minLength": 1},
+        "formal_handoff_manifest": {"type": ["string", "null"]},
+        "source_document_count": {"type": "integer", "minimum": 0},
+        "generated_sidecar_count": {"type": "integer", "minimum": 0},
+        "missing_sidecars": {"type": "array", "items": {"type": "string"}},
+        "sidecars": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["name", "path", "category", "exists", "safe_relative_path"],
+                "additionalProperties": True,
+                "properties": {
+                    "name": {"type": "string", "minLength": 1},
+                    "path": {"type": ["string", "null"]},
+                    "category": {"type": "string", "minLength": 1},
+                    "exists": {"type": "boolean"},
+                    "safe_relative_path": {"type": "boolean"},
+                    "size_bytes": {"type": ["integer", "null"], "minimum": 0},
+                    "sha256": {"type": ["string", "null"]},
+                    "schema_identity": {"type": ["string", "null"]},
+                },
+            },
+        },
+        "markdown_files": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["document_index", "path", "exists", "safe_relative_path"],
+                "additionalProperties": True,
+                "properties": {
+                    "document_index": {"type": "integer", "minimum": 1},
+                    "path": {"type": ["string", "null"]},
+                    "exists": {"type": "boolean"},
+                    "safe_relative_path": {"type": "boolean"},
+                    "size_bytes": {"type": ["integer", "null"], "minimum": 0},
+                    "sha256": {"type": ["string", "null"]},
+                },
+            },
+        },
+        "image_assets": {
+            "type": "array",
+            "items": {"type": "object", "additionalProperties": True},
+        },
+        "report_hashes": {
+            "type": "array",
+            "items": {"type": "object", "additionalProperties": True},
+        },
+        "schema_versions": {"type": "object", "additionalProperties": True},
+        "package_hash": {"type": "string", "minLength": 1},
+        "package_hash_algorithm": {"type": "string", "minLength": 1},
+        "package_hash_inputs": {
+            "type": "array",
+            "items": {"type": "object", "additionalProperties": True},
+        },
+        "downstream_command_suggestions": {
+            "type": "array",
+            "items": {"type": "object", "additionalProperties": True},
+        },
+        "safety": {"type": "object", "additionalProperties": True},
+        "notes": {"type": "array", "items": {"type": "string"}},
+    },
+}
 
 
 class ManifestError(RuntimeError):
     """Raised when a handoff manifest is missing required fields."""
+
+
+def manifest_json_schemas() -> dict[str, dict[str, Any]]:
+    """Return the public JSON Schema contracts for primary handoff manifests."""
+
+    return {
+        "doc_manifest": deepcopy(DOC_MANIFEST_JSON_SCHEMA),
+        "kb_manifest": deepcopy(KB_MANIFEST_JSON_SCHEMA),
+        "formal_handoff_manifest": deepcopy(FORMAL_HANDOFF_MANIFEST_JSON_SCHEMA),
+    }
+
+
+def _json_type_matches(value: Any, expected_type: str) -> bool:
+    if expected_type == "object":
+        return isinstance(value, dict)
+    if expected_type == "array":
+        return isinstance(value, list)
+    if expected_type == "string":
+        return isinstance(value, str)
+    if expected_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected_type == "boolean":
+        return isinstance(value, bool)
+    if expected_type == "null":
+        return value is None
+    return False
+
+
+def validate_payload_with_json_schema(
+    payload: Any,
+    schema: Mapping[str, Any],
+    *,
+    path: str = "$",
+) -> None:
+    """Validate payloads against the JSON Schema subset used by public manifests."""
+
+    expected = schema.get("type")
+    expected_types: list[str]
+    if isinstance(expected, str):
+        expected_types = [expected]
+    elif isinstance(expected, list) and all(isinstance(item, str) for item in expected):
+        expected_types = list(expected)
+    else:
+        expected_types = []
+    if expected_types and not any(_json_type_matches(payload, item) for item in expected_types):
+        raise ManifestError(f"{path} must be one of: {', '.join(expected_types)}")
+
+    if "const" in schema and payload != schema["const"]:
+        raise ManifestError(f"{path} must equal {schema['const']!r}")
+
+    if isinstance(payload, str) and "minLength" in schema and len(payload) < int(schema["minLength"]):
+        raise ManifestError(f"{path} must contain at least {schema['minLength']} characters")
+
+    if isinstance(payload, int) and not isinstance(payload, bool) and "minimum" in schema:
+        if payload < int(schema["minimum"]):
+            raise ManifestError(f"{path} must be greater than or equal to {schema['minimum']}")
+
+    if isinstance(payload, dict):
+        required = schema.get("required", [])
+        if not isinstance(required, list):
+            raise ManifestError(f"{path}.required must be a list")
+        for key in required:
+            if not isinstance(key, str):
+                raise ManifestError(f"{path}.required entries must be strings")
+            if key not in payload:
+                raise ManifestError(f"{path}.{key} is required")
+        properties = schema.get("properties", {})
+        if not isinstance(properties, dict):
+            raise ManifestError(f"{path}.properties must be an object")
+        additional_properties = schema.get("additionalProperties", True)
+        for key, value in payload.items():
+            if key in properties:
+                child_schema = properties[key]
+                if not isinstance(child_schema, Mapping):
+                    raise ManifestError(f"{path}.{key} schema must be an object")
+                validate_payload_with_json_schema(value, child_schema, path=f"{path}.{key}")
+            elif additional_properties is False:
+                raise ManifestError(f"{path}.{key} is not allowed")
+
+    if isinstance(payload, list):
+        if "minItems" in schema and len(payload) < int(schema["minItems"]):
+            raise ManifestError(f"{path} must contain at least {schema['minItems']} item(s)")
+        item_schema = schema.get("items")
+        if isinstance(item_schema, Mapping):
+            for index, item in enumerate(payload):
+                validate_payload_with_json_schema(item, item_schema, path=f"{path}[{index}]")
 
 
 def _require_mapping(data: Any, name: str) -> dict[str, Any]:
@@ -67,6 +430,8 @@ class DocManifest:
     created_at: str | None
     source_root: str | None
     documents: list[DocumentEntry]
+    quality_report: str | None = None
+    quality_gate: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DocManifest":
@@ -74,11 +439,21 @@ class DocManifest:
         raw_documents = data.get("documents")
         if not isinstance(raw_documents, list) or not raw_documents:
             raise ManifestError("doc_manifest.documents must be a non-empty list")
+        quality_gate = data.get("quality_gate", {})
+        if quality_gate is None:
+            quality_gate = {}
+        if not isinstance(quality_gate, dict):
+            raise ManifestError("doc_manifest.quality_gate must be an object when provided")
+        quality_report = data.get("quality_report")
+        if quality_report is not None and not isinstance(quality_report, str):
+            raise ManifestError("doc_manifest.quality_report must be a string when provided")
         return cls(
             version=_require_str(data, "version"),
             created_at=data.get("created_at"),
             source_root=data.get("source_root"),
             documents=[DocumentEntry.from_dict(item) for item in raw_documents],
+            quality_report=quality_report,
+            quality_gate=quality_gate,
         )
 
 
@@ -124,6 +499,7 @@ class KbManifest:
     dataset: KbDataset
     documents: list[KbDocumentEntry]
     profile: dict[str, Any] = field(default_factory=dict)
+    embedding_model_evidence: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "KbManifest":
@@ -134,6 +510,17 @@ class KbManifest:
         profile = data.get("profile", {})
         if not isinstance(profile, dict):
             raise ManifestError("kb_manifest.profile must be an object when provided")
+        embedding_model_evidence: dict[str, Any] = {}
+        raw_embedding_model = data.get("embedding_model")
+        if isinstance(raw_embedding_model, dict):
+            embedding_model_evidence = dict(raw_embedding_model)
+        elif isinstance(raw_embedding_model, str) and raw_embedding_model.strip():
+            embedding_model_evidence = {
+                "model": raw_embedding_model.strip(),
+                "status": "known",
+                "source": "kb_manifest.embedding_model",
+                "reason": None,
+            }
         return cls(
             version=_require_str(data, "version"),
             created_at=data.get("created_at"),
@@ -141,6 +528,45 @@ class KbManifest:
             dataset=KbDataset.from_dict(data.get("dataset", {})),
             documents=[KbDocumentEntry.from_dict(item) for item in raw_documents],
             profile=profile,
+            embedding_model_evidence=embedding_model_evidence,
+        )
+
+
+@dataclass(frozen=True)
+class FormalHandoffManifest:
+    schema: str
+    handoff_mode: str | None
+    doc_manifest: str
+    source_document_count: int
+    sidecars: list[dict[str, Any]]
+    package_hash: str
+    downstream_command_suggestions: list[dict[str, Any]]
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "FormalHandoffManifest":
+        _require_mapping(data, "formal_handoff_manifest")
+        if _require_str(data, "schema") != "ragflow_formal_handoff_manifest_v1":
+            raise ManifestError("formal_handoff_manifest.schema must be ragflow_formal_handoff_manifest_v1")
+        handoff_mode = data.get("handoff_mode")
+        if handoff_mode is not None and handoff_mode not in {"thin_preview", "formal_ingest"}:
+            raise ManifestError("formal_handoff_manifest.handoff_mode must be thin_preview or formal_ingest")
+        source_document_count = data.get("source_document_count")
+        if not isinstance(source_document_count, int) or isinstance(source_document_count, bool) or source_document_count < 0:
+            raise ManifestError("formal_handoff_manifest.source_document_count must be a non-negative integer")
+        sidecars = data.get("sidecars")
+        if not isinstance(sidecars, list) or not all(isinstance(item, dict) for item in sidecars):
+            raise ManifestError("formal_handoff_manifest.sidecars must be a list of objects")
+        commands = data.get("downstream_command_suggestions")
+        if not isinstance(commands, list) or not all(isinstance(item, dict) for item in commands):
+            raise ManifestError("formal_handoff_manifest.downstream_command_suggestions must be a list of objects")
+        return cls(
+            schema="ragflow_formal_handoff_manifest_v1",
+            handoff_mode=handoff_mode,
+            doc_manifest=_require_str(data, "doc_manifest"),
+            source_document_count=source_document_count,
+            sidecars=sidecars,
+            package_hash=_require_str(data, "package_hash"),
+            downstream_command_suggestions=commands,
         )
 
 

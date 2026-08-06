@@ -1,0 +1,33 @@
+{
+  "schema": "ragflow_benchmark_portfolio_config_v1",
+  "portfolio_id": "open-rag-finance-synthetic-v1",
+  "subsets": [
+    {
+      "id": "open-rag-synthetic-v1",
+      "dataset": "open-rag-synthetic",
+      "license": "CC-BY-NC-4.0",
+      "decision_tier": "exploratory",
+      "sample_types": [
+        "extractable_pdf",
+        "complex_table"
+      ],
+      "manifest": "open-rag/manifest.json",
+      "source_attribution": "open-rag/source_attribution.json",
+      "selection_report": "open-rag/selection_report.json",
+      "preflight_report": "open-rag-preflight.json"
+    },
+    {
+      "id": "finance-synthetic-v1",
+      "dataset": "finance-table-synthetic",
+      "license": "CC-BY-NC-4.0",
+      "decision_tier": "exploratory",
+      "sample_types": [
+        "complex_table"
+      ],
+      "manifest": "finance/manifest.json",
+      "source_attribution": "finance/source_attribution.json",
+      "selection_report": "finance/selection_report.json",
+      "preflight_report": "finance-preflight.json"
+    }
+  ]
+}

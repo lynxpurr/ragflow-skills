@@ -4,8 +4,11 @@ import unittest
 
 from ragflow_skill_runtime.manifests import KbDataset, KbManifest
 from ragflow_skill_runtime.retrieval import (
+    RETRIEVAL_STATUS_VALUES,
+    NormalizedChunk,
     RetrievalError,
     normalize_retrieval_response,
+    normalize_retrieval_status,
     resolve_dataset_ids,
 )
 
@@ -57,6 +60,42 @@ class RetrievalTests(unittest.TestCase):
     def test_resolve_dataset_ids_requires_input(self) -> None:
         with self.assertRaises(RetrievalError):
             resolve_dataset_ids()
+
+    def test_normalize_retrieval_status_values(self) -> None:
+        self.assertEqual(
+            set(RETRIEVAL_STATUS_VALUES),
+            {
+                "success",
+                "empty",
+                "low_quality",
+                "needs_refinement",
+                "clarification",
+                "rejected",
+                "error",
+                "timeout",
+                "partial",
+            },
+        )
+        chunk = NormalizedChunk(content="runtime evidence", similarity=0.9)
+
+        self.assertEqual(
+            normalize_retrieval_status(chunks=[chunk], evidence=[{"score": 0.8}])["status"],
+            "success",
+        )
+        self.assertEqual(normalize_retrieval_status(chunks=[])["status"], "empty")
+        self.assertEqual(
+            normalize_retrieval_status(chunks=[NormalizedChunk(content="weak", similarity=0.01)])["status"],
+            "low_quality",
+        )
+        self.assertEqual(
+            normalize_retrieval_status(chunks=[chunk], evidence=[{"score": 0.01}])["status"],
+            "needs_refinement",
+        )
+        self.assertEqual(normalize_retrieval_status(intent_status="clarification_needed")["status"], "clarification")
+        self.assertEqual(normalize_retrieval_status(intent_status="out_of_scope")["status"], "rejected")
+        self.assertEqual(normalize_retrieval_status(error=RuntimeError("boom"))["status"], "error")
+        self.assertEqual(normalize_retrieval_status(error=TimeoutError("timed out"))["status"], "timeout")
+        self.assertEqual(normalize_retrieval_status(partial=True, chunks=[chunk])["status"], "partial")
 
 
 if __name__ == "__main__":
