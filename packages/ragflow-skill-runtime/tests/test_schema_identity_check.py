@@ -46,6 +46,8 @@ class SchemaIdentityCheckTests(unittest.TestCase):
         self.assertIn("kb_refresh_report", keys)
         self.assertIn("parameter_read_back_audit", keys)
         self.assertIn("parameter_contract_audit", keys)
+        self.assertIn("metadata_suggestion_request", keys)
+        self.assertIn("metadata_suggestion_review_report", keys)
         self.assertIn("benchmark_source_attribution", keys)
         self.assertIn("benchmark_selection_report", keys)
         self.assertIn("benchmark_portfolio_config", keys)
