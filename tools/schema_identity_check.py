@@ -386,6 +386,34 @@ EXPECTED_IDENTITIES = (
         description="Offline helper report for turning profile_suggestions.json into a reviewed build profile.",
     ),
     SchemaIdentity(
+        key="metadata_suggestion_request",
+        group="kb_build",
+        identity="ragflow_metadata_suggestion_request_v1",
+        source_patterns=(
+            "ragflow_metadata_suggestion_request_v1",
+            "METADATA_SUGGESTION_REQUEST_SCHEMA",
+        ),
+        coverage_patterns=(
+            "ragflow_metadata_suggestion_request_v1",
+            "METADATA_SUGGESTION_REQUEST_SCHEMA",
+        ),
+        description="No-LLM request artifact for external metadata suggestions.",
+    ),
+    SchemaIdentity(
+        key="metadata_suggestion_review_report",
+        group="kb_build",
+        identity="ragflow_metadata_suggestion_review_report_v1",
+        source_patterns=(
+            "ragflow_metadata_suggestion_review_report_v1",
+            "METADATA_SUGGESTION_REVIEW_REPORT_SCHEMA",
+        ),
+        coverage_patterns=(
+            "ragflow_metadata_suggestion_review_report_v1",
+            "METADATA_SUGGESTION_REVIEW_REPORT_SCHEMA",
+        ),
+        description="Deterministic review report for external metadata suggestion candidates.",
+    ),
+    SchemaIdentity(
         key="grounded_qa_generate_report",
         group="benchmark",
         identity="ragflow_grounded_qa_generate_report_v1",
