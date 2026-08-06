@@ -304,3 +304,19 @@ For this repository, future agent-session handoffs should follow these defaults:
 The quality of a handoff is measured by how quickly the next session can safely produce
 a useful result, not by the number of manifests, reviews, or archived intermediate files
 created around it.
+
+## 2026-08-06 Fresh-Context Review And Ref-Cleanup Lessons
+
+The skill-surface review and compatibility closeout added several reusable boundaries:
+
+- A reviewer-harness failure is its own result. Missing native reviewers, unavailable
+  terminal payloads, or fallback context contamination must not be scored as a guidance
+  failure or converted into passing evidence.
+- When one logical review batch spans sessions, preserve its baseline identities, batch
+  identifier, first-attempt payloads, and immutable row results. Split collection does not
+  authorize reusing, rewriting, or silently completing missing rows.
+- Functional supersession is different from Git ancestry. Before merging or cherry-picking
+  a stale branch, compare behavior, tests, and retained value; a stronger merged fix may
+  make an unmerged commit redundant even when its patch is not equivalent.
+- Merge, push, and local or remote ref deletion are separate authorization objects. A
+  successful code push does not authorize destructive branch cleanup.

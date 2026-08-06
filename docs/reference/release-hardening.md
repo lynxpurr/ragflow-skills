@@ -3,7 +3,7 @@ doc_type: reference
 topic: release-hardening
 status: reference
 created: 2026-06-23
-updated: 2026-08-05
+updated: 2026-08-06
 canonical: true
 implementation_authority: false
 owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
@@ -44,6 +44,19 @@ For a bounded runtime correction:
 4. Run the full runtime and release hygiene suites before public release.
 
 If the full suite or release hygiene check fails outside the changed surface, reproduce the same command on a clean `HEAD` worktree before attributing the failure. Record a clean-HEAD reproduction as existing baseline debt; do not claim it passed, hide it, or mix an unrelated repair into the bounded fix.
+
+### Validation Environment Recovery Lesson (2026-08-06)
+
+An isolated or linked worktree may not contain ignored release products such as
+`release-artifacts/release-manifest.json`. If a baseline check fails because that
+generated prerequisite is absent, classify the result as a validation-environment failure
+until the environment is restored; do not infer an implementation defect from the
+cascading failures.
+
+When the exporter itself depends on the hygiene result encoded in that manifest, use a
+bounded bootstrap export only to restore the prerequisite, then run the normal certified
+export and require `hygiene.ok=true` with zero findings. After a feature merge, repeat the
+release-facing chain on the merged target before pushing it.
 
 Edit shared behavior in `packages/ragflow-skill-runtime/src` and public skill guidance under `skills/`. Do not edit or commit generated `dist/`, release archives, or an installed host copy as though they were source. Rebuild and validate generated artifacts, then update host installations through the normal deployment flow.
 
