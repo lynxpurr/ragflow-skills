@@ -30,6 +30,13 @@ def _clean_literal_values(values: Sequence[str | None] | None) -> list[str]:
     return sorted(unique, key=len, reverse=True)
 
 
+def _default_home_path() -> str | None:
+    try:
+        return str(Path.home())
+    except (OSError, RuntimeError):
+        return None
+
+
 def _private_host_from_url(url: str | None) -> str | None:
     if not url:
         return None
@@ -88,7 +95,7 @@ def sanitize_report_payload(
 
     secrets = _clean_literal_values(explicit_secrets)
     hosts = _clean_literal_values(private_hosts)
-    home_targets = _clean_literal_values([*(home_paths or []), str(Path.home())])
+    home_targets = _clean_literal_values([*(home_paths or []), _default_home_path()])
     config_targets = _clean_literal_values(config_paths)
     rule_counts = {
         "explicit_secret": 0,

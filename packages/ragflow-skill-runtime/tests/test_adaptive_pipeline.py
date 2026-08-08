@@ -53,6 +53,7 @@ def _env() -> dict[str, str]:
     for name in DOC_TO_MD_ENV_VARS:
         env.pop(name, None)
     env["RAGFLOW_SKILL_RUNTIME_PATH"] = str(RUNTIME_SRC)
+    env["PYTHONIOENCODING"] = "utf-8"
     return env
 
 

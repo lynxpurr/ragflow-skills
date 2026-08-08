@@ -14,7 +14,12 @@ from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = "ragflow_version_date_drift_check_v1"
-PUBLIC_SKILLS = ("ragflow-doc-to-md", "ragflow-kb-build", "ragflow-query")
+PUBLIC_SKILLS = (
+    "ragflow-doc-to-md",
+    "ragflow-canonical-review",
+    "ragflow-kb-build",
+    "ragflow-query",
+)
 DOC_VERSION_PATHS = (
     Path("docs/03-development-plan.md"),
     Path("docs/reference/release-hardening.md"),
@@ -49,7 +54,7 @@ class Finding:
 
 def _relative(path: Path, root: Path) -> str:
     try:
-        return str(path.resolve().relative_to(root.resolve()))
+        return path.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         return str(path)
 

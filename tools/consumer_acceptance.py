@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACTS_DIR = ROOT / "release-artifacts"
 REQUIRED_ASSETS = (
     "ragflow-doc-to-md.tar.gz",
+    "ragflow-canonical-review.tar.gz",
     "ragflow-kb-build.tar.gz",
     "ragflow-query.tar.gz",
     "release-manifest.json",
@@ -51,6 +52,18 @@ def _minimal_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "PYTHONNOUSERSITE": "1",
     }
+    for key in (
+        "SYSTEMROOT",
+        "WINDIR",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+    ):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
     if extra:
         env.update({key: value for key, value in extra.items() if value})
     return env
@@ -295,7 +308,8 @@ def _write_sample_input(work_root: Path) -> Path:
 
 
 def _write_fake_mineru_cli(path: Path) -> Path:
-    path.write_text(
+    script_path = path.with_suffix(".py") if os.name == "nt" else path
+    script_path.write_text(
         "#!/usr/bin/env python3\n"
         "import sys\n"
         "from pathlib import Path\n"
@@ -312,8 +326,18 @@ def _write_fake_mineru_cli(path: Path) -> Path:
         ")\n",
         encoding="utf-8",
     )
-    path.chmod(0o755)
-    return path
+    script_path.chmod(0o755)
+    if os.name != "nt":
+        return script_path
+
+    # A space forces subprocess to quote the command path. Without quoting,
+    # cmd.exe treats the secret-shaped ``token=value`` fixture name as syntax.
+    launcher_path = path.with_name(f"{path.name} launcher.cmd")
+    launcher_path.write_text(
+        f'@echo off\n"{sys.executable}" "{script_path}" %*\n',
+        encoding="utf-8",
+    )
+    return launcher_path
 
 
 class _ModelProviderHandler(BaseHTTPRequestHandler):
@@ -876,6 +900,41 @@ def _run_no_network_checks(
         checks,
         "vendored runtime present",
         _skill_path(extract_dir, "ragflow-query", "scripts", "_vendor", "ragflow_skill_runtime", "__init__.py"),
+    )
+
+    canonical_markdown_script = _skill_path(
+        extract_dir,
+        "ragflow-canonical-review",
+        "scripts",
+        "audit_markdown_structure.py",
+    )
+    canonical_asset_script = _skill_path(
+        extract_dir,
+        "ragflow-canonical-review",
+        "scripts",
+        "audit_canonical_assets.py",
+    )
+    canonical_markdown_help = _run_command(
+        [python_executable, str(canonical_markdown_script), "--help"],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "canonical-review markdown audit help",
+        canonical_markdown_help,
+        required_output="Read-only structural audit",
+    )
+    canonical_asset_help = _run_command(
+        [python_executable, str(canonical_asset_script), "--help"],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "canonical-review asset audit help",
+        canonical_asset_help,
+        required_output="Read-only audit of canonical Markdown",
     )
 
     input_dir = _write_sample_input(work_root)

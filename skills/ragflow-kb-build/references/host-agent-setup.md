@@ -92,8 +92,9 @@ Use the equivalent stable path for non-Hermes hosts.
 
 Before live E2E:
 
-1. Confirm the three public skill folders are available in the same workspace:
+1. Confirm the four public skill folders are available in the same workspace:
    - `ragflow-doc-to-md`
+   - `ragflow-canonical-review`
    - `ragflow-kb-build`
    - `ragflow-query`
 2. Confirm `RAGFLOW_CONFIG` points to a readable config file, or choose the host config path above.
@@ -124,6 +125,11 @@ python ragflow-doc-to-md/scripts/convert.py \
   --mode passthrough \
   --json
 
+python ragflow-canonical-review/scripts/audit_markdown_structure.py \
+  --markdown /tmp/ragflow-skills-smoke/handoff/documents/sample.md \
+  --image-root /tmp/ragflow-skills-smoke/handoff/documents \
+  --json-out /tmp/ragflow-skills-smoke/canonical-audit.json
+
 python ragflow-kb-build/scripts/build.py \
   --doc-manifest /tmp/ragflow-skills-smoke/handoff/doc_manifest.json \
   --kb-name kb:ragflow-skills-smoke \
@@ -134,7 +140,9 @@ python ragflow-kb-build/scripts/build.py \
 python ragflow-query/scripts/query.py ask --help
 ```
 
-Expected result: `doc_manifest.json` is produced, `build.py --dry-run` succeeds, and `query.py ask --help` shows `--mode` and `--host-assisted`.
+Expected result: `doc_manifest.json` is produced, canonical review reports structural-only
+status without claiming source fidelity, `build.py --dry-run` succeeds, and
+`query.py ask --help` shows `--mode` and `--host-assisted`.
 
 ## Formal Pre-Ingest Handoff
 

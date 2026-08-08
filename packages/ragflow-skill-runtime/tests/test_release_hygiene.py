@@ -25,7 +25,12 @@ from release_hygiene_check import (  # noqa: E402
 )
 
 
-PUBLIC_SKILLS = ("ragflow-doc-to-md", "ragflow-kb-build", "ragflow-query")
+PUBLIC_SKILLS = (
+    "ragflow-doc-to-md",
+    "ragflow-canonical-review",
+    "ragflow-kb-build",
+    "ragflow-query",
+)
 
 
 def _write_skill_fixture(
@@ -179,7 +184,7 @@ class ReleaseHygieneTests(unittest.TestCase):
 
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["schema"], "ragflow_skill_suite_review_v1")
-        self.assertEqual(payload["summary"]["skill_count"], 3)
+        self.assertEqual(payload["summary"]["skill_count"], 4)
         self.assertEqual(payload["findings"], [])
 
     def test_primary_guidance_contract_passes_for_public_suite(self) -> None:
@@ -189,8 +194,8 @@ class ReleaseHygieneTests(unittest.TestCase):
         self.assertLessEqual(summary["nonblank_lines"]["SKILL.md"], 90)
         for skill_name in PUBLIC_SKILLS:
             self.assertLessEqual(summary["nonblank_lines"][f"skills/{skill_name}/SKILL.md"], 120)
-        self.assertEqual(summary["canonical_workflow_count"], 10)
-        self.assertEqual(summary["core_example_block_count"], 10)
+        self.assertEqual(summary["canonical_workflow_count"], 12)
+        self.assertEqual(summary["core_example_block_count"], 12)
         self.assertEqual(
             summary["workflow_example_counts"],
             {workflow: [1] for workflow in CANONICAL_WORKFLOW_OWNERS},
@@ -244,8 +249,8 @@ class ReleaseHygieneTests(unittest.TestCase):
             ) as command:
                 payload = run_suite_review(skills_root=skills_root)
 
-        primary.assert_called_once_with(root=root)
-        command.assert_called_once_with(root=root)
+        primary.assert_called_once_with(root=root.resolve())
+        command.assert_called_once_with(root=root.resolve())
         self.assertEqual(payload["summary"]["primary_guidance"], {"source": "fixture"})
         self.assertEqual(payload["summary"]["command_guidance"], {"source": "fixture"})
 
@@ -253,15 +258,20 @@ class ReleaseHygieneTests(unittest.TestCase):
         findings, summary = validate_command_guidance_classification()
 
         self.assertEqual(findings, [])
-        self.assertEqual(summary["discovered_command_count"], 104)
-        self.assertEqual(summary["classified_command_count"], 104)
+        self.assertEqual(summary["discovered_command_count"], 106)
+        self.assertEqual(summary["classified_command_count"], 106)
         self.assertEqual(
             summary["owner_counts"],
-            {"ragflow-doc-to-md": 12, "ragflow-kb-build": 58, "ragflow-query": 34},
+            {
+                "ragflow-doc-to-md": 12,
+                "ragflow-canonical-review": 2,
+                "ragflow-kb-build": 58,
+                "ragflow-query": 34,
+            },
         )
         self.assertEqual(
             summary["tier_counts"],
-            {"advanced": 87, "core": 10, "deprecated_candidate": 0, "internal_candidate": 7},
+            {"advanced": 87, "core": 12, "deprecated_candidate": 0, "internal_candidate": 7},
         )
 
     def test_release_shape_requires_advanced_workflow_indexes(self) -> None:

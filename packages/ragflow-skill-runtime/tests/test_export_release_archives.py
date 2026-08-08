@@ -40,7 +40,7 @@ class ExportReleaseArchivesTests(unittest.TestCase):
             manifest_path = Path(payload["manifest"])
             self.assertTrue(manifest_path.exists())
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(len(manifest["archives"]), 3)
+            self.assertEqual(len(manifest["archives"]), 4)
             self.assertEqual(manifest["dist"], "dist")
             self.assertEqual(manifest["output_dir"], "artifacts")
             for item in manifest["archives"]:

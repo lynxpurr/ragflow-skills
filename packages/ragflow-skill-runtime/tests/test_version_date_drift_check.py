@@ -15,7 +15,12 @@ if str(TOOLS_DIR) not in sys.path:
 from version_date_drift_check import DOC_VERSION_PATHS, SCHEMA, run_version_date_drift_check  # noqa: E402
 
 
-PUBLIC_SKILLS = ("ragflow-doc-to-md", "ragflow-kb-build", "ragflow-query")
+PUBLIC_SKILLS = (
+    "ragflow-doc-to-md",
+    "ragflow-canonical-review",
+    "ragflow-kb-build",
+    "ragflow-query",
+)
 
 
 def _write_minimal_repo(root: Path) -> None:

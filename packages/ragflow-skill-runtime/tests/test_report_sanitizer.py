@@ -2,11 +2,25 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest.mock import patch
 
 from ragflow_skill_runtime import configured_private_hosts_from_urls, sanitize_report_payload
 
 
 class ReportSanitizerTests(unittest.TestCase):
+    def test_sanitize_report_payload_allows_missing_home_directory(self) -> None:
+        with patch(
+            "ragflow_skill_runtime.report_sanitizer.Path.home",
+            side_effect=RuntimeError("home unavailable"),
+        ):
+            sanitized, report = sanitize_report_payload(
+                {"path": "/workspace/report.json"},
+                home_paths=["/workspace"],
+            )
+
+        self.assertEqual(sanitized["path"], "<redacted:home-path>/report.json")
+        self.assertEqual(report["schema"], "ragflow_report_redaction_report_v1")
+
     def test_sanitize_report_payload_redacts_shared_sensitive_shapes(self) -> None:
         payload = {
             "headers": "Authorization: Bearer bearer-token-value",

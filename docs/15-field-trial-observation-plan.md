@@ -425,7 +425,7 @@ Gated trigger:
   track is opened by this run.
 
 Decision:
-- Keep follow-up work focused on the current three public skills. Use retired-skill
+- Keep follow-up work focused on the current four public skills. Use retired-skill
   failures only as migration evidence; do not spend this roadmap repairing
   `ragflow-kb-ops`. The next useful work is current-suite observation, sample-matrix
   validation, release-path health, and current `ragflow-kb-build` visibility for

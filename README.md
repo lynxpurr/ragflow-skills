@@ -1,12 +1,13 @@
 # RAGFlow Skills
 
-Portable public skills for document-to-Markdown conversion, RAGFlow knowledge-base builds, and direct or host-assisted agentic RAGFlow querying.
+Portable public skills for document conversion, source-faithful canonical review, RAGFlow knowledge-base builds, and direct or host-assisted agentic RAGFlow querying.
 
 ## Layout
 
 ```text
 packages/ragflow-skill-runtime/   # shared portable runtime
 skills/ragflow-doc-to-md/         # raw documents -> Markdown handoff
+skills/ragflow-canonical-review/  # extracted Markdown -> reviewed canonical source
 skills/ragflow-kb-build/          # Markdown -> RAGFlow KB + validation
 skills/ragflow-query/             # direct and host-assisted agentic query CLI
 tools/build_release.py            # self-contained release artifact builder
@@ -60,11 +61,20 @@ The prompt is duplicated intentionally so each skill archive is self-contained. 
 
 ```text
 skills/ragflow-doc-to-md/references/user-onboarding-prompt.md
+skills/ragflow-canonical-review/references/user-onboarding-prompt.md
 skills/ragflow-kb-build/references/user-onboarding-prompt.md
 skills/ragflow-query/references/user-onboarding-prompt.md
 ```
 
 Keep secrets out of the skill folders, repository, release artifacts, and reports. Use host-agent secret stores, environment variables, or private config files such as `~/.hermes/ragflow/config.local.yaml` or `~/.config/ragflow-skills/config.local.yaml`.
+
+## Canonical Review
+
+Use `ragflow-canonical-review` after raw conversion and before formal passthrough packaging.
+It compares Markdown with an exact source when available, audits structure and assets when
+the source is unavailable, enforces positive canonical selection, and records which prior
+handoffs or benchmark artifacts became pre-change evidence. Its two scripts are read-only;
+static success does not claim parser, retrieval, answer-grounding, or release quality.
 
 ## Quality and Segmentation
 

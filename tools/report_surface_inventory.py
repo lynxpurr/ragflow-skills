@@ -193,6 +193,10 @@ KB_NOT_APPLICABLE_COMMANDS = (
     "ragflow-kb-build tagset export",
     "ragflow-kb-build tagset generate-template",
 )
+CANONICAL_REVIEW_NOT_APPLICABLE_COMMANDS = (
+    "ragflow-canonical-review asset-audit",
+    "ragflow-canonical-review markdown-audit",
+)
 
 
 def _classification_map() -> dict[str, Classification]:
@@ -226,6 +230,11 @@ def _classification_map() -> dict[str, Classification]:
         rationale="Writes canonical user-owned artifacts such as manifests, templates, exports, or benchmark subsets rather than shareable diagnostic reports.",
         next_action="No Phase 36 redaction sidecar required unless the command later gains a generated report output.",
     )
+    canonical_review_not_applicable = Classification(
+        status="not_applicable",
+        rationale="Writes a user-owned offline canonical audit artifact and does not access a live service or produce a shareable runtime diagnostic.",
+        next_action="Keep the report in the governed review workspace; add redaction only if the command later targets external sharing.",
+    )
     mapping: dict[str, Classification] = {}
     for command in QUERY_COVERED_COMMANDS:
         mapping[command] = covered
@@ -241,6 +250,8 @@ def _classification_map() -> dict[str, Classification]:
         mapping[command] = kb_needs
     for command in KB_NOT_APPLICABLE_COMMANDS:
         mapping[command] = kb_not_applicable
+    for command in CANONICAL_REVIEW_NOT_APPLICABLE_COMMANDS:
+        mapping[command] = canonical_review_not_applicable
     return mapping
 
 
@@ -314,6 +325,14 @@ def discover_public_commands(root: Path = ROOT) -> list[DiscoveredCommand]:
     inspect_kb = _load_module("ragflow_kb_inspect_public_cli", root / "skills/ragflow-kb-build/scripts/inspect_kb.py")
     probe = _load_module("ragflow_kb_probe_public_cli", root / "skills/ragflow-kb-build/scripts/probe.py")
     query = _load_module("ragflow_query_public_cli", root / "skills/ragflow-query/scripts/query.py")
+    canonical_markdown = _load_module(
+        "ragflow_canonical_markdown_audit_public_cli",
+        root / "skills/ragflow-canonical-review/scripts/audit_markdown_structure.py",
+    )
+    canonical_assets = _load_module(
+        "ragflow_canonical_asset_audit_public_cli",
+        root / "skills/ragflow-canonical-review/scripts/audit_canonical_assets.py",
+    )
 
     commands: list[DiscoveredCommand] = []
     _record_parsers(
@@ -322,6 +341,20 @@ def discover_public_commands(root: Path = ROOT) -> list[DiscoveredCommand]:
         script="skills/ragflow-doc-to-md/scripts/convert.py",
         prefix=("ragflow-doc-to-md",),
         parser=doc.build_parser(),
+    )
+    _record_parsers(
+        commands=commands,
+        skill="ragflow-canonical-review",
+        script="skills/ragflow-canonical-review/scripts/audit_markdown_structure.py",
+        prefix=("ragflow-canonical-review", "markdown-audit"),
+        parser=canonical_markdown.build_parser(),
+    )
+    _record_parsers(
+        commands=commands,
+        skill="ragflow-canonical-review",
+        script="skills/ragflow-canonical-review/scripts/audit_canonical_assets.py",
+        prefix=("ragflow-canonical-review", "asset-audit"),
+        parser=canonical_assets.build_parser(),
     )
     for prefix, builder in (
         (("ragflow-doc-to-md", "inspect-source"), doc.build_inspect_source_parser),

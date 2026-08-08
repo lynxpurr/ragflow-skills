@@ -57,7 +57,7 @@ current CLI/archive path, collect sanitized field-trial records, and keep valida
 
 The concentrated development round completed the following capability bands:
 
-- Foundation and packaging: repository structure, three public skills, shared runtime,
+- Foundation and packaging: repository structure, four public skills, shared runtime,
   vendored release archives, cross-platform smoke, release hygiene, archive export, and
   host-agent setup guidance.
 - Document pipeline: document conversion, Markdown handoff, manifest contracts, quality

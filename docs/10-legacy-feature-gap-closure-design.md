@@ -1008,7 +1008,7 @@ tools/release_hygiene_check.py --suite-review
 Checks:
 
 - frontmatter validity for every `SKILL.md`;
-- trigger and description overlap across the three public skills;
+- trigger and description overlap across the four public skills;
 - stale references to removed or private skills;
 - shared reference/template hash consistency;
 - public paths in examples are placeholders or environment-variable based;

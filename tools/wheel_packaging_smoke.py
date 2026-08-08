@@ -34,24 +34,45 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _windows_runtime_env() -> dict[str, str]:
+    env: dict[str, str] = {}
+    for key in (
+        "SYSTEMROOT",
+        "WINDIR",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+    ):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    return env
+
+
 def _pip_env() -> dict[str, str]:
-    return {
+    env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "LANG": os.environ.get("LANG", "C.UTF-8"),
         "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
         "PIP_DISABLE_PIP_VERSION_CHECK": "1",
         "PIP_NO_INDEX": "1",
     }
+    env.update(_windows_runtime_env())
+    return env
 
 
 def _isolated_python_env() -> dict[str, str]:
-    return {
+    env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "PYTHONNOUSERSITE": "1",
         "LANG": os.environ.get("LANG", "C.UTF-8"),
         "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
         "PYTHONPATH": "",
     }
+    env.update(_windows_runtime_env())
+    return env
 
 
 def _preview(text: str, *, limit: int = 400) -> str:

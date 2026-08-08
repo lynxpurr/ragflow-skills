@@ -99,6 +99,18 @@ def _minimal_env(profile: PlatformProfile) -> dict[str, str]:
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "PYTHONNOUSERSITE": "1",
     }
+    for key in (
+        "SYSTEMROOT",
+        "WINDIR",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+    ):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
     if profile.runtime_mode == "source-pythonpath":
         env["PYTHONPATH"] = str(RUNTIME_SRC)
     if profile.config_mode == "env":
@@ -292,7 +304,8 @@ def _run_doc_split_resume_check(
 
 
 def _write_fake_mineru_cli(path: Path) -> Path:
-    path.write_text(
+    script_path = path.with_suffix(".py") if os.name == "nt" else path
+    script_path.write_text(
         "#!/usr/bin/env python3\n"
         "import sys\n"
         "from pathlib import Path\n"
@@ -309,8 +322,16 @@ def _write_fake_mineru_cli(path: Path) -> Path:
         ")\n",
         encoding="utf-8",
     )
-    path.chmod(0o755)
-    return path
+    script_path.chmod(0o755)
+    if os.name != "nt":
+        return script_path
+
+    launcher_path = path.with_name(f"{path.name} launcher.cmd")
+    launcher_path.write_text(
+        f'@echo off\n"{sys.executable}" "{script_path}" %*\n',
+        encoding="utf-8",
+    )
+    return launcher_path
 
 
 def _run_mineru_env_check(

@@ -108,6 +108,7 @@ GUIDANCE_TIERS = {"core", "advanced", "internal_candidate", "deprecated_candidat
 PRIMARY_GUIDANCE_NONBLANK_LIMITS = {
     "SKILL.md": 90,
     "skills/ragflow-doc-to-md/SKILL.md": 120,
+    "skills/ragflow-canonical-review/SKILL.md": 120,
     "skills/ragflow-kb-build/SKILL.md": 120,
     "skills/ragflow-query/SKILL.md": 120,
 }
@@ -122,6 +123,8 @@ REQUIRED_CHILD_SECTIONS = (
 CANONICAL_WORKFLOW_OWNERS = {
     "convert ordinary documents": "ragflow-doc-to-md",
     "inspect and decide deterministically": "ragflow-doc-to-md",
+    "review canonical source": "ragflow-canonical-review",
+    "audit canonical boundaries": "ragflow-canonical-review",
     "inspect a handoff": "ragflow-kb-build",
     "validate build readiness without mutation": "ragflow-kb-build",
     "build one reviewed kb": "ragflow-kb-build",
@@ -133,6 +136,7 @@ CANONICAL_WORKFLOW_OWNERS = {
 }
 CORE_EXAMPLE_BLOCK_COUNTS = {
     "ragflow-doc-to-md": 2,
+    "ragflow-canonical-review": 2,
     "ragflow-kb-build": 6,
     "ragflow-query": 2,
 }
@@ -178,6 +182,13 @@ COMMAND_GUIDANCE_GROUPS: dict[tuple[str, str], tuple[str, ...]] = {
     ),
     ("ragflow-doc-to-md", "internal_candidate"): (),
     ("ragflow-doc-to-md", "deprecated_candidate"): (),
+    ("ragflow-canonical-review", "core"): (
+        "ragflow-canonical-review asset-audit",
+        "ragflow-canonical-review markdown-audit",
+    ),
+    ("ragflow-canonical-review", "advanced"): (),
+    ("ragflow-canonical-review", "internal_candidate"): (),
+    ("ragflow-canonical-review", "deprecated_candidate"): (),
     ("ragflow-kb-build", "core"): (
         "ragflow-kb-build",
         "ragflow-kb-build cleanup",
@@ -1031,7 +1042,7 @@ def validate_primary_guidance(*, root: Path = ROOT) -> tuple[list[Finding], dict
             Finding(
                 "skill_surface_workflow_contract",
                 "skills",
-                "canonical workflow names and owners do not match the approved ten-family contract",
+                "canonical workflow names and owners do not match the approved twelve-family contract",
             )
         )
 

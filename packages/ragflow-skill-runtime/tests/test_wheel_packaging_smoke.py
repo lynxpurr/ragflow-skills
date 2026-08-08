@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -15,11 +17,32 @@ if str(TOOLS_DIR) not in sys.path:
 from wheel_packaging_smoke import (  # noqa: E402
     SCHEMA,
     WheelPackagingSmokeError,
+    _isolated_python_env,
+    _pip_env,
     run_wheel_packaging_smoke,
 )
 
 
 class WheelPackagingSmokeTests(unittest.TestCase):
+    def test_minimal_environments_preserve_windows_runtime_context(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "PATH": "/bin",
+                "SYSTEMROOT": "C:\\Windows",
+                "USERPROFILE": "C:\\Users\\test-user",
+                "TEMP": "C:\\Temp",
+            },
+            clear=True,
+        ):
+            pip_env = _pip_env()
+            isolated_env = _isolated_python_env()
+
+        for env in (pip_env, isolated_env):
+            self.assertEqual(env["SYSTEMROOT"], "C:\\Windows")
+            self.assertEqual(env["USERPROFILE"], "C:\\Users\\test-user")
+            self.assertEqual(env["TEMP"], "C:\\Temp")
+
     def test_wheel_packaging_smoke_builds_installs_and_imports_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

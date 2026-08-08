@@ -50,6 +50,7 @@ class SchemaIdentity:
 DEFAULT_SOURCE_ROOTS = (
     Path("packages/ragflow-skill-runtime/src"),
     Path("skills/ragflow-doc-to-md/scripts"),
+    Path("skills/ragflow-canonical-review/scripts"),
     Path("skills/ragflow-kb-build/scripts"),
     Path("skills/ragflow-query/scripts"),
 )
@@ -188,6 +189,22 @@ EXPECTED_IDENTITIES = (
         source_patterns=("ragflow_adaptive_summary_comparison_v1", "ADAPTIVE_SUMMARY_COMPARISON_SCHEMA"),
         coverage_patterns=("ragflow_adaptive_summary_comparison_v1", "ADAPTIVE_SUMMARY_COMPARISON_SCHEMA"),
         description="Offline comparison report for adaptive pipeline run-summary drift.",
+    ),
+    SchemaIdentity(
+        key="canonical_markdown_audit",
+        group="canonical_review",
+        identity="ragflow_canonical_markdown_audit_v1",
+        source_patterns=("ragflow_canonical_markdown_audit_v1", "SCHEMA"),
+        coverage_patterns=("ragflow_canonical_markdown_audit_v1", "test_markdown_audit"),
+        description="Read-only structural audit for canonical Markdown, chunks, tables, and image references.",
+    ),
+    SchemaIdentity(
+        key="canonical_asset_audit",
+        group="canonical_review",
+        identity="ragflow_canonical_asset_audit_v1",
+        source_patterns=("ragflow_canonical_asset_audit_v1", "SCHEMA"),
+        coverage_patterns=("ragflow_canonical_asset_audit_v1", "test_asset_audit"),
+        description="Read-only audit of canonical allowlists, control files, assets, references, and directories.",
     ),
     SchemaIdentity(
         key="doc_quality_report",

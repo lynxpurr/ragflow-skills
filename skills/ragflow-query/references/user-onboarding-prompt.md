@@ -60,11 +60,12 @@ mineru:
 请帮我配置并验证这一组 RAGFlow skills：
 
 - ragflow-doc-to-md
+- ragflow-canonical-review
 - ragflow-kb-build
 - ragflow-query
 
 你的目标：
-1. 自动识别当前 workspace 中这三个 skill 的位置。
+1. 自动识别当前 workspace 中这四个 skill 的位置。
 2. 读取每个 skill 的 SKILL.md。
 3. 优先读取 references/host-agent-setup.md，按其中的约定完成配置和测试。
 4. 引导我提供缺失的 RAGFlow / MinerU 服务信息。
@@ -89,7 +90,7 @@ mineru:
 - 只询问缺失的信息，不要让我手动拼接每一条命令。
 
 请先检查并报告：
-- 当前目录结构中是否能找到三个 skill。
+- 当前目录结构中是否能找到四个 skill。
 - 是否存在 templates/ragflow-config.example.yaml。
 - 是否存在 references/host-agent-setup.md。
 - 当前是否已有 RAGFLOW_CONFIG、RAGFLOW_BASE_URL、RAGFLOW_API_KEY。

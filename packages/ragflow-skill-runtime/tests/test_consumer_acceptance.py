@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -14,11 +15,54 @@ TOOLS_DIR = ROOT / "tools"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from consumer_acceptance import _github_env, run_consumer_acceptance  # noqa: E402
+from consumer_acceptance import (  # noqa: E402
+    _github_env,
+    _minimal_env,
+    _write_fake_mineru_cli,
+    run_consumer_acceptance,
+)
 from export_release_archives import export_release_archives  # noqa: E402
 
 
 class ConsumerAcceptanceTests(unittest.TestCase):
+    def test_fake_mineru_cli_executes_with_secret_shaped_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "sample.pdf"
+            source.write_bytes(b"%PDF fake")
+            output = root / "output"
+            cli_path = _write_fake_mineru_cli(root / "mineru-token=runtime-secret")
+
+            result = subprocess.run(
+                [str(cli_path), "-b", "pipeline", "-p", str(source), "-o", str(output)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((output / "sample.md").exists())
+            self.assertTrue((output / "images" / "chart.jpg").exists())
+
+    def test_minimal_env_preserves_windows_runtime_context(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "PATH": "/bin",
+                "SYSTEMROOT": "C:\\Windows",
+                "USERPROFILE": "C:\\Users\\test-user",
+                "TEMP": "C:\\Temp",
+            },
+            clear=True,
+        ):
+            env = _minimal_env()
+
+        self.assertEqual(env["PATH"], "/bin")
+        self.assertEqual(env["SYSTEMROOT"], "C:\\Windows")
+        self.assertEqual(env["USERPROFILE"], "C:\\Users\\test-user")
+        self.assertEqual(env["TEMP"], "C:\\Temp")
+        self.assertEqual(env["PYTHONNOUSERSITE"], "1")
+
     def test_github_env_preserves_auth_context(self) -> None:
         with patch.dict(
             os.environ,
@@ -74,6 +118,8 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertTrue(payload["ok"], payload)
         check_names = [check["name"] for check in payload["checks"]]
         self.assertIn("vendored runtime present", check_names)
+        self.assertIn("canonical-review markdown audit help", check_names)
+        self.assertIn("canonical-review asset audit help", check_names)
         self.assertIn("generated report redaction fixture", check_names)
         self.assertIn("doc-to-md passthrough", check_names)
         self.assertIn("quality_report produced", check_names)

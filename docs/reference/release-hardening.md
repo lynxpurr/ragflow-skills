@@ -88,7 +88,7 @@ If no MinerU CLI is available on the test host, `consumer_acceptance.py` still v
 
 The hygiene check rebuilds `dist/` and verifies:
 
-- only the three public skills are present in the release artifact;
+- only the four public skills are present in the release artifact;
 - each skill has `SKILL.md` with only `name` and `description` frontmatter;
 - each skill vendors `scripts/_vendor/ragflow_skill_runtime`;
 - unused optional resource directories such as empty `agents/` and `references/` are omitted from release artifacts;

@@ -17,7 +17,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILLS_DIR = ROOT / "skills"
 DIST_DIR = ROOT / "dist"
 RUNTIME_SRC = ROOT / "packages" / "ragflow-skill-runtime" / "src" / "ragflow_skill_runtime"
-PUBLIC_SKILLS = ["ragflow-doc-to-md", "ragflow-kb-build", "ragflow-query"]
+PUBLIC_SKILLS = [
+    "ragflow-doc-to-md",
+    "ragflow-canonical-review",
+    "ragflow-kb-build",
+    "ragflow-query",
+]
 
 EXCLUDE_NAMES = {
     ".git",
@@ -228,6 +233,8 @@ def run_release_check(dist_dir: Path = DIST_DIR) -> int:
         [sys.executable, str(dist_dir / "ragflow-doc-to-md" / "scripts" / "convert.py"), "inspect-source", "--help"],
         [sys.executable, str(dist_dir / "ragflow-doc-to-md" / "scripts" / "convert.py"), "package", "--help"],
         [sys.executable, str(dist_dir / "ragflow-doc-to-md" / "scripts" / "convert.py"), "postprocess", "--help"],
+        [sys.executable, str(dist_dir / "ragflow-canonical-review" / "scripts" / "audit_markdown_structure.py"), "--help"],
+        [sys.executable, str(dist_dir / "ragflow-canonical-review" / "scripts" / "audit_canonical_assets.py"), "--help"],
         [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "build.py"), "--help"],
         [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "build.py"), "inspect-handoff", "--help"],
         [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "inspect_kb.py"), "--help"],

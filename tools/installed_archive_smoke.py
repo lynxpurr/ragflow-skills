@@ -246,6 +246,19 @@ def _smoke_commands(skill_name: str, skill_root: Path, python_executable: str) -
                 "Convert documents into a Markdown handoff bundle",
             )
         ]
+    if skill_name == "ragflow-canonical-review":
+        return [
+            (
+                "canonical-review markdown audit help",
+                [python_executable, str(skill_root / "scripts" / "audit_markdown_structure.py"), "--help"],
+                "Read-only structural audit",
+            ),
+            (
+                "canonical-review asset audit help",
+                [python_executable, str(skill_root / "scripts" / "audit_canonical_assets.py"), "--help"],
+                "Read-only audit of canonical Markdown",
+            ),
+        ]
     if skill_name == "ragflow-kb-build":
         return [
             (

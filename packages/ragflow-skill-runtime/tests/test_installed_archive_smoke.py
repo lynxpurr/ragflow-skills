@@ -41,6 +41,12 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
                 for archive in report["archives"]
             }
             self.assertTrue(checks_by_skill["ragflow-doc-to-md"]["doc-to-md convert help"]["ok"])
+            self.assertTrue(
+                checks_by_skill["ragflow-canonical-review"]["canonical-review markdown audit help"]["ok"]
+            )
+            self.assertTrue(
+                checks_by_skill["ragflow-canonical-review"]["canonical-review asset audit help"]["ok"]
+            )
             self.assertTrue(checks_by_skill["ragflow-kb-build"]["kb-build build help"]["ok"])
             self.assertTrue(checks_by_skill["ragflow-query"]["query bootstrap smoke"]["ok"])
             self.assertTrue(checks_by_skill["ragflow-query"]["query CLI help"]["ok"])
@@ -76,6 +82,7 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
             self.assertEqual(report["summary"]["archive_count"], len(PUBLIC_SKILLS))
             failed = report["summary"]["failed_checks"]
             self.assertIn("ragflow-doc-to-md: archive exists", failed)
+            self.assertIn("ragflow-canonical-review: archive exists", failed)
             self.assertIn("ragflow-kb-build: archive exists", failed)
             self.assertIn("ragflow-query: archive exists", failed)
 

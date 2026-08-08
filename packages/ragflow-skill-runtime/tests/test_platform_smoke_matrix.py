@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -11,10 +13,28 @@ TOOLS_DIR = ROOT / "tools"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from platform_smoke_matrix import run_smoke_matrix, selected_profiles  # noqa: E402
+from platform_smoke_matrix import _minimal_env, run_smoke_matrix, selected_profiles  # noqa: E402
 
 
 class PlatformSmokeMatrixTests(unittest.TestCase):
+    def test_minimal_env_preserves_windows_runtime_context(self) -> None:
+        profile = selected_profiles(["strict-vendor-env"])[0]
+        with patch.dict(
+            os.environ,
+            {
+                "PATH": "/bin",
+                "SYSTEMROOT": "C:\\Windows",
+                "USERPROFILE": "C:\\Users\\test-user",
+                "TEMP": "C:\\Temp",
+            },
+            clear=True,
+        ):
+            env = _minimal_env(profile)
+
+        self.assertEqual(env["SYSTEMROOT"], "C:\\Windows")
+        self.assertEqual(env["USERPROFILE"], "C:\\Users\\test-user")
+        self.assertEqual(env["TEMP"], "C:\\Temp")
+
     def test_selected_profiles_rejects_unknown_id(self) -> None:
         with self.assertRaises(SystemExit):
             selected_profiles(["missing-profile"])
@@ -28,7 +48,10 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
             )
 
         self.assertTrue(payload["ok"], payload)
-        self.assertEqual(payload["built_skills"], ["ragflow-doc-to-md", "ragflow-kb-build", "ragflow-query"])
+        self.assertEqual(
+            payload["built_skills"],
+            ["ragflow-doc-to-md", "ragflow-canonical-review", "ragflow-kb-build", "ragflow-query"],
+        )
         self.assertEqual(len(payload["profiles"]), 1)
         profile = payload["profiles"][0]
         self.assertEqual(profile["id"], "hermes-local-source")
@@ -128,24 +151,25 @@ class PlatformSmokeMatrixTests(unittest.TestCase):
         self.assertIn("query endpoint-report partial failure", check_names)
         self.assertIn("query fallback-test", check_names)
         self.assertIn("query fallback-test partial failure", check_names)
+        artifact_paths = [Path(path).as_posix() for path in profile["artifacts"]]
         self.assertTrue(
-            any(path.endswith("mineru-handoff/doc_manifest.json") for path in profile["artifacts"]),
+            any(path.endswith("mineru-handoff/doc_manifest.json") for path in artifact_paths),
             profile["artifacts"],
         )
         self.assertTrue(
-            any(path.endswith("mineru-cli-handoff/doc_manifest.json") for path in profile["artifacts"]),
+            any(path.endswith("mineru-cli-handoff/doc_manifest.json") for path in artifact_paths),
             profile["artifacts"],
         )
         self.assertTrue(
-            any(path.endswith("mineru-cli-handoff/runtime_report.json") for path in profile["artifacts"]),
+            any(path.endswith("mineru-cli-handoff/runtime_report.json") for path in artifact_paths),
             profile["artifacts"],
         )
         self.assertTrue(
-            any(path.endswith("image-fallback-handoff/quality_report.json") for path in profile["artifacts"]),
+            any(path.endswith("image-fallback-handoff/quality_report.json") for path in artifact_paths),
             profile["artifacts"],
         )
         self.assertTrue(
-            any("/image-fallback-handoff/documents/images/diagram-" in path for path in profile["artifacts"]),
+            any("/image-fallback-handoff/documents/images/diagram-" in path for path in artifact_paths),
             profile["artifacts"],
         )
         self.assertTrue(
