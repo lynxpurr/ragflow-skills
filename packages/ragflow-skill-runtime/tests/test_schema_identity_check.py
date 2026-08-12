@@ -54,6 +54,15 @@ class SchemaIdentityCheckTests(unittest.TestCase):
         self.assertIn("benchmark_portfolio", keys)
         self.assertIn("canonical_markdown_audit", keys)
         self.assertIn("canonical_asset_audit", keys)
+        self.assertIn("runtime_install_baseline", keys)
+        self.assertIn("runtime_count_only_drift", keys)
+        self.assertIn("runtime_raw_delta_metadata", keys)
+        self.assertIn("runtime_sanitized_candidate", keys)
+        self.assertIn("runtime_switch_result", keys)
+        self.assertIn("runtime_rollback_result", keys)
+        self.assertIn("runtime_archive_inventory", keys)
+        self.assertIn("runtime_contracts_check", keys)
+        self.assertIn("public_hygiene_candidate_check", keys)
 
     def test_retirement_observation_matrix_coverage_matches_schema_literal(self) -> None:
         report = run_schema_identity_check()
