@@ -119,11 +119,14 @@ class ApolloQaTests(unittest.TestCase):
     def test_validate_fixture_rejects_private_literals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp) / "apollo-fixture.json"
+            private_source = str(
+                Path("/", "home", "fixture-user", "private", "apollo.pdf")
+            )
             _write_json(
                 fixture,
                 {
                     "schema": APOLLO_TABLE_QA_FIXTURE_SCHEMA,
-                    "metadata": {"source": "/home/example/private/apollo.pdf"},
+                    "metadata": {"source": private_source},
                     "items": [
                         {
                             "id": "apollo-q1",

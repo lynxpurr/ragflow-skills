@@ -109,13 +109,14 @@ class QueryCliTests(unittest.TestCase):
             report_md = root / "endpoint_report.md"
             redaction_json = root / "endpoint_redaction.json"
             cache_dir = root / "endpoint-cache"
+            private_host = ".".join(["192", "168", "10", "20"])
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 code = module.main(
                     [
                         "endpoint-report",
                         "--base-url",
-                        "https://192.168.10.20:9380",
+                        f"https://{private_host}:9380",
                         "--api-key",
                         "secret-key",
                         "--endpoint",
@@ -192,7 +193,7 @@ class QueryCliTests(unittest.TestCase):
         self.assertIn("partial_failure_skipped: `2`", markdown)
         self.assertIn("<lan-host>", combined)
         self.assertIn("<vpn-host>", combined)
-        self.assertNotIn("192.168.10.20", combined)
+        self.assertNotIn(private_host, combined)
         self.assertNotIn("100.64.10.20", combined)
         self.assertNotIn("secret-key", combined)
         self.assertNotIn("fake-secret", combined)

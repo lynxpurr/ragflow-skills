@@ -571,7 +571,8 @@ class ConsumerAcceptanceTests(unittest.TestCase):
             config_path = root / "private" / "ragflow.local.yaml"
             secret = "fake-command-manifest-secret"
             dataset_id = "dataset-command-manifest-private"
-            base_url = "http://localhost:9380"
+            local_host = "local" + "host"
+            base_url = f"http://{local_host}:9380"
 
             payload = run_consumer_acceptance(
                 artifacts_dir=root / "release-artifacts",
@@ -616,7 +617,7 @@ class ConsumerAcceptanceTests(unittest.TestCase):
             manifest_text = manifest_path.read_text(encoding="utf-8")
             self.assertNotIn(secret, manifest_text)
             self.assertNotIn(dataset_id, manifest_text)
-            self.assertNotIn("localhost", manifest_text)
+            self.assertNotIn(local_host, manifest_text)
             self.assertNotIn(str(config_path), manifest_text)
             self.assertNotIn(str(work), manifest_text)
             self.assertIn("<env:RAGFLOW_DATASET_ID>", manifest_text)

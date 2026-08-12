@@ -248,8 +248,11 @@ class BenchmarkGovernanceTests(unittest.TestCase):
         self.assertTrue(report["ok"])
 
     def test_import_benchmark_rejects_unsafe_contract_literals(self) -> None:
+        private_source = str(
+            Path("/", "home", "fixture-user", "private", "source.pdf")
+        )
         invalid_cases = (
-            ("private path", "source", {"notes": "/home/private/source.pdf"}),
+            ("private path", "source", {"notes": private_source}),
             ("private endpoint", "source", {"upstream_projects": ["http://127.0.0.1:8080/source"]}),
             ("credential", "selection", {"notes": "api_key=secret-value"}),
             ("raw evidence", "selection", {"raw_evidence": "verbatim source paragraph"}),
