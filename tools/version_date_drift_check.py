@@ -106,6 +106,17 @@ def _export_created_at(root: Path) -> str:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
 
 
+def _release_manifest_is_applicable(root: Path) -> bool:
+    path = root / "release-artifacts" / "release-manifest.json"
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
 def _release_manifest(root: Path) -> dict[str, Any]:
     path = root / "release-artifacts" / "release-manifest.json"
     try:
@@ -176,17 +187,21 @@ def _check_equal(
     expected: Any,
     observed: Any,
     message: str,
+    applicable: bool | None = None,
 ) -> dict[str, Any]:
-    ok = observed == expected
+    ok = applicable is False or observed == expected
     if not ok:
         findings.append(Finding(check=check, path=path, message=message, expected=expected, observed=observed))
-    return {
+    payload = {
         "name": check,
         "ok": ok,
         "path": path,
         "expected": expected,
         "observed": observed,
     }
+    if applicable is not None:
+        payload["applicable"] = applicable
+    return payload
 
 
 def run_version_date_drift_check(
@@ -207,6 +222,7 @@ def run_version_date_drift_check(
     build_release_version = _tool_manifest_version(root / "tools" / "build_release.py")
     export_release_version = _tool_manifest_version(root / "tools" / "export_release_archives.py")
     export_created_at = _export_created_at(root)
+    manifest_applicable = _release_manifest_is_applicable(root)
     manifest = _release_manifest(root)
     manifest_version = str(manifest.get("version") or "")
     manifest_created_at = str(manifest.get("created_at") or "")
@@ -224,10 +240,25 @@ def run_version_date_drift_check(
             message="runtime __version__ must match package pyproject version",
         )
     )
-    for check, path, observed in (
-        ("build_release_version_matches_package_major_minor", "tools/build_release.py", build_release_version),
-        ("export_release_version_matches_package_major_minor", "tools/export_release_archives.py", export_release_version),
-        ("release_manifest_version_matches_package_major_minor", "release-artifacts/release-manifest.json", manifest_version),
+    for check, path, observed, applicable in (
+        (
+            "build_release_version_matches_package_major_minor",
+            "tools/build_release.py",
+            build_release_version,
+            None,
+        ),
+        (
+            "export_release_version_matches_package_major_minor",
+            "tools/export_release_archives.py",
+            export_release_version,
+            None,
+        ),
+        (
+            "release_manifest_version_matches_package_major_minor",
+            "release-artifacts/release-manifest.json",
+            manifest_version,
+            manifest_applicable,
+        ),
     ):
         checks.append(
             _check_equal(
@@ -237,6 +268,7 @@ def run_version_date_drift_check(
                 expected=expected_release_version,
                 observed=observed,
                 message="release manifest version must match package major.minor version",
+                applicable=applicable,
             )
         )
 
@@ -248,6 +280,7 @@ def run_version_date_drift_check(
             expected=export_created_at,
             observed=manifest_created_at,
             message="release manifest created_at must match deterministic archive mtime",
+            applicable=manifest_applicable,
         )
     )
     checks.append(

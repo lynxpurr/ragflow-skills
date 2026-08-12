@@ -21,6 +21,25 @@ PUBLIC_SKILLS = (
     "ragflow-kb-build",
     "ragflow-query",
 )
+MANIFEST_CHECK_NAMES = {
+    "release_manifest_version_matches_package_major_minor",
+    "release_manifest_created_at_matches_export_default",
+}
+
+
+def _checks_by_name(report: dict) -> dict[str, dict]:
+    return {str(item["name"]): item for item in report["checks"]}
+
+
+def _finding_names(report: dict) -> set[str]:
+    return {str(item["check"]) for item in report["findings"]}
+
+
+def _remove_manifest_entry(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        path.rmdir()
+    elif path.exists() or path.is_symlink():
+        path.unlink()
 
 
 def _write_minimal_repo(root: Path) -> None:
@@ -84,12 +103,21 @@ class VersionDateDriftCheckTests(unittest.TestCase):
 
     def test_version_date_drift_check_passes_for_public_repo(self) -> None:
         report = run_version_date_drift_check()
+        checks = _checks_by_name(report)
 
         self.assertTrue(report["ok"], report)
         self.assertEqual(report["schema"], SCHEMA)
         self.assertEqual(report["expected"]["package_version"], "0.1.0")
         self.assertEqual(report["expected"]["release_version"], "0.1")
+        self.assertEqual(report["observed"]["release_manifest_version"], "")
+        self.assertEqual(report["observed"]["release_manifest_created_at"], "")
+        self.assertEqual(report["summary"]["check_count"], 7)
         self.assertEqual(report["summary"]["finding_count"], 0)
+        self.assertNotIn("applicable", checks["runtime_version_matches_package"])
+        for check_name in MANIFEST_CHECK_NAMES:
+            self.assertIs(checks[check_name].get("applicable"), False)
+            self.assertTrue(checks[check_name]["ok"])
+        self.assertTrue(MANIFEST_CHECK_NAMES.isdisjoint(_finding_names(report)))
 
     def test_version_date_drift_check_reports_static_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -112,15 +140,93 @@ class VersionDateDriftCheckTests(unittest.TestCase):
 
             report = run_version_date_drift_check(root=root, public_skills=PUBLIC_SKILLS)
 
-        checks = {finding["check"] for finding in report["findings"]}
+        finding_names = _finding_names(report)
+        checks = _checks_by_name(report)
         self.assertFalse(report["ok"], report)
-        self.assertIn("runtime_version_matches_package", checks)
-        self.assertIn("build_release_version_matches_package_major_minor", checks)
-        self.assertIn("release_manifest_version_matches_package_major_minor", checks)
-        self.assertIn("release_manifest_created_at_matches_export_default", checks)
-        self.assertIn("docs_stable_versions_match_package", checks)
-        self.assertIn("skill_metadata_version_matches_package", checks)
-        self.assertIn("skill_metadata_date_matches_release_manifest", checks)
+        self.assertIn("runtime_version_matches_package", finding_names)
+        self.assertIn("build_release_version_matches_package_major_minor", finding_names)
+        self.assertIn("release_manifest_version_matches_package_major_minor", finding_names)
+        self.assertIn("release_manifest_created_at_matches_export_default", finding_names)
+        self.assertIn("docs_stable_versions_match_package", finding_names)
+        self.assertIn("skill_metadata_version_matches_package", finding_names)
+        self.assertIn("skill_metadata_date_matches_release_manifest", finding_names)
+        for check_name in MANIFEST_CHECK_NAMES:
+            self.assertIs(checks[check_name].get("applicable"), True)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_minimal_repo(root)
+            manifest_path = root / "release-artifacts" / "release-manifest.json"
+            cases = (
+                (
+                    "valid",
+                    json.dumps({"version": "0.1", "created_at": "2026-01-01T00:00:00+00:00"}),
+                    True,
+                    set(),
+                ),
+                ("malformed", "{", False, set(MANIFEST_CHECK_NAMES)),
+                ("non_object", json.dumps(["not", "an", "object"]), False, set(MANIFEST_CHECK_NAMES)),
+                ("missing_fields", json.dumps({}), False, set(MANIFEST_CHECK_NAMES)),
+                (
+                    "version_drift",
+                    json.dumps({"version": "0.2", "created_at": "2026-01-01T00:00:00+00:00"}),
+                    False,
+                    {"release_manifest_version_matches_package_major_minor"},
+                ),
+                (
+                    "date_drift",
+                    json.dumps({"version": "0.1", "created_at": "2026-01-02T00:00:00+00:00"}),
+                    False,
+                    {"release_manifest_created_at_matches_export_default"},
+                ),
+            )
+            for name, content, expected_ok, expected_findings in cases:
+                with self.subTest(manifest_state=name):
+                    _remove_manifest_entry(manifest_path)
+                    manifest_path.write_text(content, encoding="utf-8")
+                    report = run_version_date_drift_check(root=root, public_skills=PUBLIC_SKILLS)
+                    checks = _checks_by_name(report)
+                    manifest_findings = _finding_names(report) & MANIFEST_CHECK_NAMES
+
+                    self.assertEqual(report["ok"], expected_ok, report)
+                    self.assertEqual(manifest_findings, expected_findings)
+                    for check_name in MANIFEST_CHECK_NAMES:
+                        self.assertIs(checks[check_name].get("applicable"), True)
+                        self.assertEqual(checks[check_name]["ok"], check_name not in expected_findings)
+
+            for name in ("directory", "broken_symlink"):
+                with self.subTest(manifest_state=name):
+                    _remove_manifest_entry(manifest_path)
+                    if name == "directory":
+                        manifest_path.mkdir()
+                    else:
+                        manifest_path.symlink_to("missing-release-manifest.json")
+                    report = run_version_date_drift_check(root=root, public_skills=PUBLIC_SKILLS)
+                    checks = _checks_by_name(report)
+
+                    self.assertFalse(report["ok"], report)
+                    self.assertEqual(
+                        _finding_names(report) & MANIFEST_CHECK_NAMES,
+                        MANIFEST_CHECK_NAMES,
+                    )
+                    for check_name in MANIFEST_CHECK_NAMES:
+                        self.assertIs(checks[check_name].get("applicable"), True)
+
+            _remove_manifest_entry(manifest_path)
+            (root / "packages" / "ragflow-skill-runtime" / "src" / "ragflow_skill_runtime" / "__init__.py").write_text(
+                '__version__ = "0.2.0"\n',
+                encoding="utf-8",
+            )
+            report = run_version_date_drift_check(root=root, public_skills=PUBLIC_SKILLS)
+
+        checks = _checks_by_name(report)
+        finding_names = _finding_names(report)
+        self.assertFalse(report["ok"], report)
+        self.assertIn("runtime_version_matches_package", finding_names)
+        self.assertTrue(MANIFEST_CHECK_NAMES.isdisjoint(finding_names))
+        for check_name in MANIFEST_CHECK_NAMES:
+            self.assertIs(checks[check_name].get("applicable"), False)
+            self.assertTrue(checks[check_name]["ok"])
 
     def test_external_product_version_does_not_count_as_stable_release(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
