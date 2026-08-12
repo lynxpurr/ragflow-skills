@@ -102,8 +102,8 @@ Partially completed and still active:
     expansion is future adapter scope.
 Deferred or outside the active public-suite completion path:
 
-- Private dedao bridging stays out of public skills. A private bridge checkpoint now
-  records that current dedao flows can use the public Markdown `doc_manifest.json`
+- Private source-specific bridging stays out of public skills. A private bridge checkpoint now
+  records that current private source-specific flows can use the public Markdown `doc_manifest.json`
   passthrough handoff, so no private adapter is needed unless that path proves
   insufficient.
 - Optional LLM-assisted grounded-QA generation, script-owned agentic answers, reflection, and
@@ -138,7 +138,7 @@ Progress assessment:
   checks are all closed.
 - The 15 remaining open checklist items are intentionally gated items: optional
   script-owned LLM/backend work, Phase 37 post-CLI adapter
-  decisions/implementation, or private dedao bridge work outside the public release
+  decisions/implementation, or private source-specific bridge work outside the public release
   boundary.
 - The next stage is field-trial observation: use real workflows to collect sanitized
   evidence before implementing any remaining gated task.
@@ -156,7 +156,7 @@ MinerU v4 wording follow-up is closed.
 | Local service / post-CLI host wrapper | 2 | Phase 3 optional `serve`, Backlog post-CLI service adapters | A real host workflow confirms that one-shot CLI commands are insufficient | Use the completed Phase 37.2 design gate and host-workflow intake checklist before any optional `serve` implementation. |
 | Other post-CLI product adapters | 4 | Remote conversion client, provider abstraction, reranker abstraction, web/API wrapper | Known endpoint/provider/product requirements plus fake fixtures and acceptance gates | Use the Phase 37.3 intake gate; keep deferred until one concrete contract has fixtures and acceptance criteria. |
 | Optional script-owned LLM/backend execution | 7 | Grounded-QA LLM adapter, agentic-answer execution, reflection, evidence-only synthesis, LLM/RAGAS evaluator, related Phase 30 synthesis backlog | Explicit LLM config, deterministic fixtures, advisory-output marking, citation-audit compatibility, and redaction gates | Use the Phase 38 planning gate; keep request/review boundaries as the default before any script-owned model call. |
-| Private dedao bridge | 2 | Optional private adapter and verified private handoff output | A private adapter is explicitly needed because the Markdown passthrough handoff is insufficient, and the adapter remains outside public release artifacts | Keep outside public `skills/`; consume public handoff contracts only. |
+| Private source-specific bridge | 2 | Optional private adapter and verified private handoff output | A private adapter is explicitly needed because the Markdown passthrough handoff is insufficient, and the adapter remains outside public release artifacts | Keep outside public `skills/`; consume public handoff contracts only. |
 Observation source: use `docs/15-field-trial-observation-plan.md` to record sanitized
 run evidence and trigger thresholds before starting any of these gated tracks.
 
@@ -170,7 +170,7 @@ Checkpoint date: 2026-07-02
 
 The concentrated development round is complete for the portable public CLI/archive
 release path. This checkpoint does not add command behavior, start `ragflow-query serve`,
-enable script-owned LLM/RAGAS execution, mutate RAGFlow, or add private dedao adapter
+enable script-owned LLM/RAGAS execution, mutate RAGFlow, or add private source-specific adapter
 code.
 
 Closeout decision:
@@ -189,7 +189,7 @@ Checkpoint date: 2026-07-01
 
 The release path remains green after the Phase 37.2 serve design gate. This checkpoint did
 not start live disposable mutation, script-owned LLM/RAGAS execution, `ragflow-query serve`
-implementation, or private dedao bridge work.
+implementation, or private source-specific bridge work.
 
 Validated commands:
 
@@ -283,7 +283,7 @@ remain in their owning phases below.
 | Optional LLM-assisted adapters | Phase 26 grounded QA, Phase 30 agentic answer synthesis, Phase 30 LLM/RAGAS-style evaluator | Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries complete; script-owned LLM/RAGAS backends remain deferred | Must preserve deterministic defaults, mark generated outputs advisory, and pass the same lint/validation gates as hand-authored artifacts. |
 | Contract and manifest schema gates | Phase 33 release governance | Complete for primary handoff manifests and current release reports | Keep `tools/manifest_schema_check.py`, schema identity, rename governance, release hygiene, installed archive smoke, consumer acceptance, and platform smoke green whenever public contracts change. |
 | Packaging and platform adapters | Phase 37 plus backlog wheel path, `serve`, remote conversion service client, provider abstractions, reranker abstraction, web/API wrapper | Runtime wheel smoke implemented and priority validated against controlled CLI-agent handoff; other adapters deferred | Rank adapters by host workflow, release impact, testability, and risk before implementation; keep archive CLI release green. |
-| Private dedao bridge | Deferred private adapter tasks | Outside public release scope; private checkpoint recorded that current flows can use Markdown passthrough into `doc_manifest.json` and public `skills/` remains dedao-free | Keep private examples and adapter logic outside public `skills/`; consume only public handoff shapes. |
+| Private source-specific bridge | Deferred private adapter tasks | Outside public release scope; private checkpoint recorded that current private source-specific flows can use Markdown passthrough into `doc_manifest.json` and public `skills/` remains free of private-source references | Keep private examples and adapter logic outside public `skills/`; consume only public handoff shapes. |
 
 Recommended completion queue:
 
@@ -297,7 +297,7 @@ Recommended completion queue:
    in `docs/14-optional-llm-backend-planning.md` before code starts. Grounded-QA LLM
    generation is the first candidate only after fake-provider fixtures, advisory-output
    marking, citation/evidence compatibility, and redaction gates are recorded.
-4. If a private dedao bridge is needed, first prove that the current Markdown passthrough
+4. If a private source-specific bridge is needed, first prove that the current Markdown passthrough
    handoff is insufficient, then implement any adapter outside public release artifacts
    and make it emit the public `doc_manifest.json` handoff shape.
 5. Otherwise, keep the public CLI/archive/wheel release path green with periodic release
@@ -321,7 +321,7 @@ Exit criteria:
 
 - Folder skeleton exists.
 - Architecture decisions are captured in docs.
-- Existing dedao skills are untouched.
+- Existing private source-specific skills are untouched.
 
 ## Phase 1: `ragflow-skill-runtime` Foundation
 
@@ -345,7 +345,7 @@ Tasks:
 Constraints:
 
 - No hardcoded personal home-directory defaults.
-- No dedao imports.
+- No private source-specific imports.
 - No OPC references.
 - No real credentials.
 - No dependency on `pip install -e` for release-mode tests.
@@ -365,7 +365,7 @@ Tasks:
 - [x] Implement `tools/build_release.py`.
 - [x] Copy each public skill into `dist/`.
 - [x] Vendor `ragflow_skill_runtime` into each skill's `scripts/_vendor/ragflow_skill_runtime`.
-- [x] Exclude caches, virtualenvs, private config, `.git`, and dedao folders.
+- [x] Exclude caches, virtualenvs, private config, `.git`, and private source-specific folders.
 - [x] Add `--check` mode that verifies every public script can bootstrap core.
 - [x] Add release smoke test using a clean temp directory.
 
@@ -566,24 +566,24 @@ Exit criteria:
 - [x] Public examples and artifacts are sufficient for first external users.
 - [x] Archive creation is fully automated.
 
-## Deferred: Private Dedao Bridge
+## Deferred: Private Source-Specific Bridge
 
-Goal: let private dedao workflows feed public skills without making public skills depend on dedao.
+Goal: let private source-specific workflows feed public skills without making public skills depend on private source-specific dependencies.
 
 Tasks:
 
-- [x] Leave current dedao skills in place.
+- [x] Leave current private source-specific skills in place.
 - [ ] Add private adapter only if needed.
-- [ ] Make dedao private output match `doc_manifest.json` handoff shape.
-- [x] Do not add dedao references to public SKILL.md files.
+- [ ] Make private source-specific output match `doc_manifest.json` handoff shape.
+- [x] Do not add private source-specific references to public SKILL.md files.
 
 Exit criteria:
 
-- Dedao workflows remain private.
-- Public skills can consume dedao-produced handoff bundles as ordinary Markdown handoffs.
+- Private source-specific workflows remain private.
+- Public skills can consume private-source handoff bundles as ordinary Markdown handoffs.
 
-Status note: The 2026-07-02 private bridge checkpoint verified that existing dedao skills
-remain in the private skill tree and that public `skills/` files contain no dedao
+Status note: The 2026-07-02 private bridge checkpoint verified that existing private source-specific skills
+remain in the private skill tree and that public `skills/` files contain no private-source
 references. The current bridge path is Markdown materialization followed by public
 `ragflow-doc-to-md --mode passthrough` to produce `doc_manifest.json`; no private adapter
 code has been added. The remaining work is gated on a real need for a private exporter or
@@ -2099,7 +2099,7 @@ The public suite is ready for first external use when:
 - [x] Strict vendor/env simulation works without daemon or editable install.
 - [x] Release hygiene check blocks private paths, private workflow references, and missing vendored runtime.
 - [x] Release archive export produces deterministic per-skill archives and checksum manifest.
-- [x] Dedao integration remains private and outside public release artifacts.
+- [x] Private-source integration remains private and outside public release artifacts.
 
 ## 2026-07-03 Ingest Quality Optimization Closeout
 

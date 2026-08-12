@@ -89,7 +89,7 @@ OpenClaw 对同一份 PDF 执行了 RAGFlux 与 `ragflow-doc-to-md` 对比测试
 `retrieval_hints.json`。但是 hints 的生成职责属于 `ragflow-doc-to-md package --rich`，不是
 `ragflow-kb-build`。
 
-如果转换阶段没有生成 rich handoff，后续 KB 拓扑建议只能依赖 Markdown 和 metadata，不能得到完整的
+如果转换阶段没有生成 rich handoff，后续 KB 拓扑建议只能依赖 Markdown 和 metadata，无法获得完整的
 section boundary、keyword、question、preferred boundary 等信号。
 
 ### 1.4 问题分级

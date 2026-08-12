@@ -32,7 +32,7 @@ explicitly gated product or private-adapter tracks:
 - local service and post-CLI host wrappers;
 - remote conversion, provider, reranker, and web/API adapters;
 - optional script-owned LLM/RAGAS backend execution;
-- private dedao bridge work outside public release artifacts.
+- private source-specific bridge work outside public release artifacts.
 
 Until a gate is satisfied with real evidence, the default action is to keep using the
 current CLI/archive path, collect sanitized field-trial records, and keep validation green.
@@ -50,7 +50,7 @@ current CLI/archive path, collect sanitized field-trial records, and keep valida
 | Release packaging and platform acceptance | Keep archives self-contained and prove installed-artifact behavior. | Release hygiene, manifest schema checks, schema identity, build checks, archive export, installed archive smoke, consumer acceptance, strict-vendor platform smoke, and optional runtime wheel smoke/export are available. | Closed for current release path; run periodically and before public changes. |
 | Post-CLI product adapters | Add service, remote conversion, provider, reranker, or web/API adapters only when one-shot CLI is insufficient or a concrete product contract exists. | `docs/13-post-cli-adapter-planning.md` and Phase 37 intake gates define the required evidence and fake-fixture path. | Deferred; observation must prove need before implementation. |
 | Optional LLM/RAGAS backend execution | Keep deterministic defaults and request/review boundaries before any script-owned model call. | Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries exist. `docs/14-optional-llm-backend-planning.md` defines the future backend gate. | Deferred; no model calls should be enabled without explicit config and fake-provider gates. |
-| Private dedao bridge | Keep private ingestion outside public release artifacts while consuming public handoff contracts. | Public docs and release hygiene preserve the boundary; current private checkpoint found Markdown passthrough into `doc_manifest.json` sufficient until proven otherwise. | Deferred and private-only. |
+| Private source-specific bridge | Keep private ingestion outside public release artifacts while consuming public handoff contracts. | Public docs and release hygiene preserve the boundary; current private checkpoint found Markdown passthrough into `doc_manifest.json` sufficient until proven otherwise. | Deferred and private-only. |
 | Field-trial observation | Collect sanitized evidence before opening gated work. | `docs/15-field-trial-observation-plan.md` defines signals and trigger rules; `tools/field_trial_metrics.py` aggregates explicit run roots without network calls or background telemetry, emits a multi-sample retirement observation matrix for replacement-path evidence review, and keeps both observation report schema identities under release hygiene. | Active operating loop. |
 
 ## Completed Work Summary
@@ -91,7 +91,7 @@ items out of 601 tracked items. The 15 open items below remain intentionally gat
 | Local service / post-CLI host wrapper | 2 | One-shot CLI remains the canonical path. | Three host-agent runs show CLI shape is wrong, or one critical workflow requires health/lifecycle/request correlation. |
 | Other post-CLI product adapters | 4 | No concrete endpoint, provider, reranker, or product contract is currently recorded. | A named contract with fake fixtures, error model, config/auth shape, and acceptance criteria. |
 | Optional script-owned LLM/backend execution | 7 | Request/review boundaries cover the safe default; script-owned generation needs stronger gates. | Explicit LLM config, fake-provider fixtures, advisory marking, citation compatibility, and redaction tests. |
-| Private dedao bridge | 2 | Current private path can use Markdown passthrough into public `doc_manifest.json`. | A private workflow proves passthrough is insufficient, and adapter work stays outside public `skills/`. |
+| Private source-specific bridge | 2 | Current private path can use Markdown passthrough into public `doc_manifest.json`. | A private workflow proves passthrough is insufficient, and adapter work stays outside public `skills/`. |
 
 These tasks should not be closed by wording changes alone. They should close only when a
 gated implementation is built and verified, or when field-trial evidence records that a
@@ -108,7 +108,7 @@ track is intentionally rejected or superseded.
 | Remote conversion | Current builtin, MinerU, generic remote, or local CLI paths do not match a real converter. | Sanitized endpoint protocol, auth shape, fake request/response, error model, and fixture plan. | Fake-server client behind explicit config, with no default private endpoint. |
 | Provider abstraction | A named provider cannot fit current OpenAI-compatible or request/review paths. | Provider label, API shape, config keys, auth, timeout/error cases, and fake-provider tests. | Minimal provider adapter contract with deterministic failure fixtures. |
 | Optional LLM backend | Manual external model use becomes repetitive or error-prone despite request/review artifacts. | Request/review counts, failure classes, candidate artifact quality, citation-audit compatibility, and redaction needs. | Grounded-QA LLM generation with fake provider, advisory output marking, citation checks, and redaction sidecar. |
-| Private dedao bridge | Private content cannot reliably become ordinary Markdown handoff material. | Private-only evidence outside public release artifacts; public summary records only sanitized handoff shape. | Private adapter outside public `skills/` that emits public `doc_manifest.json` handoff bundles. |
+| Private source-specific bridge | Private content cannot reliably become ordinary Markdown handoff material. | Private-only evidence outside public release artifacts; public summary records only sanitized handoff shape. | Private adapter outside public `skills/` that emits public `doc_manifest.json` handoff bundles. |
 | Release health | Archive, runtime wheel, platform smoke, report safety, or schema gates drift. | Periodic release validation and release hygiene reports. | Fix the failing gate before opening new product surface. |
 
 ## Operating Rules After Closeout

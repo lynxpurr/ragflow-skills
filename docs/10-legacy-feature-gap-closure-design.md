@@ -1700,7 +1700,7 @@ Finish the remaining gated work in this order:
    Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries
    are complete; script-owned LLM/RAGAS backend execution remains deferred behind the
    Phase 38 planning gate in `docs/14-optional-llm-backend-planning.md`.
-4. Keep private dedao bridging outside public release artifacts. The current private
+4. Keep private source-specific bridging outside public release artifacts. The current private
    checkpoint uses Markdown materialization plus the public `doc_manifest.json` handoff;
    implement a private adapter only if that passthrough path proves insufficient.
 
@@ -1709,7 +1709,7 @@ Current calibration:
 - The portable public CLI suite is complete for the release path, and the approved live
   disposable validation track is closed. The remaining roadmap checkboxes are
   intentionally outside that default path: optional script-owned LLM/RAGAS backends,
-  post-CLI deployment adapters, and private dedao bridging.
+  post-CLI deployment adapters, and private source-specific bridging.
 - The post-closeout KB parameter Stage 8B audit is complete for deployed/upstream
   RAGFlow `v0.25.5`. Overlap remains runtime-only and not API-writable; automatic
   metadata remains a contract conflict with model, cost, asynchronous execution, and
@@ -1717,7 +1717,7 @@ Current calibration:
   to the local RAGFlow deployment.
 - The current open task list has 15 items across four gated categories: 2 local service or
   post-CLI host-wrapper items, 4 other post-CLI product-adapter items, 7 optional
-  script-owned LLM/backend items, and 2 private dedao bridge items.
+  script-owned LLM/backend items, and 2 private source-specific bridge items.
 - `docs/16-system-closeout-report.md` is the system-level checkpoint for the completed
   concentrated build round. It compares design intent with the current implementation,
   preserves the remaining gated items as evidence-led future tracks, and defines the
@@ -1727,7 +1727,7 @@ Current calibration:
   migration tooling should be added only when compatibility pressure appears.
 - The next development decision should choose one explicit gate: a concrete host workflow
   for `ragflow-query serve` implementation, the Phase 38 script-owned LLM/backend plan, or
-  a private dedao bridge request that proves Markdown passthrough is insufficient. Without
+  a private source-specific bridge request that proves Markdown passthrough is insufficient. Without
   one of those gates, maintenance should focus on keeping the archive and optional
   runtime-wheel release path green.
 - `docs/15-field-trial-observation-plan.md` is now the evidence collection gate for these
@@ -1746,7 +1746,7 @@ Current calibration:
   Phase 38 now documents the optional LLM backend execution gate; model calls remain
   disabled until explicit config, deterministic fake-provider fixtures, advisory-output
   marking, citation/evidence compatibility, redaction, and release gates are satisfied.
-  The private dedao bridge checkpoint closed the preservation and no-public-reference
+  The private source-specific bridge checkpoint closed the preservation and no-public-reference
   chores while leaving adapter/export code gated behind an actual private handoff need.
 
 ## Implementation Notes And Pitfalls
@@ -1788,7 +1788,7 @@ Current calibration:
 Do not migrate these old-skill behaviors into public defaults:
 
 - direct MySQL or Elasticsearch repair;
-- private dedao ingestion and routing examples;
+- private source-specific ingestion and routing examples;
 - personal vault paths or hostnames;
 - long-lived HTTP services as required runtime;
 - systemd unit generation;
@@ -1828,7 +1828,7 @@ LLM-assisted behavior, then closed release governance, post-ingest operational g
 generated-report safety, post-CLI adapter intake, and optional LLM backend planning.
 Remaining completion work should now start only from an explicit gate: a host workflow
 that needs `serve`, a concrete product adapter contract, an approved script-owned LLM
-backend slice with fake fixtures, or a private dedao handoff need that cannot be solved by
+backend slice with fake fixtures, or a private source-specific handoff need that cannot be solved by
 Markdown passthrough into `doc_manifest.json`. Field-trial observation should be collected
 first through `docs/15-field-trial-observation-plan.md`; if the trigger rules are not met,
 the correct action is to keep using the current CLI/archive path and run periodic release

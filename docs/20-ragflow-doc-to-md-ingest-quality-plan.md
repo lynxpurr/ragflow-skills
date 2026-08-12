@@ -73,7 +73,7 @@ validation 和 query 阶段继续提升知识库质量。
 
 | 模式 | 目标 | 推荐命令 | 产物形态 |
 | --- | --- | --- | --- |
-| 快速预览 | 快速得到 Markdown 文本 | `convert` | thin handoff |
+| 快速预览 | 快速获得 Markdown 文本 | `convert` | thin handoff |
 | 正式入库准备 | 为 RAGFlow KB 构建准备高质量 handoff | `pipeline` | rich formal handoff |
 
 正式模式应在 summary、runtime report、README 和 host-agent prompt 中明确显示：
@@ -465,7 +465,7 @@ python3 tools/platform_smoke_matrix.py --profile strict-vendor-env --work-dir <f
 
 ### 5.2 Live 门禁
 
-Live RAGFlow mutation 仍由 `ragflow-kb-build` 执行，并必须逐次得到用户明确批准。`ragflow-doc-to-md`
+Live RAGFlow mutation 仍由 `ragflow-kb-build` 执行，并必须逐次获得用户明确批准。`ragflow-doc-to-md`
 新增能力的默认验收应以离线 fixture、fake client、dry-run 和 sanitized field-trial summary 为主。
 
 若需要 live E2E：
