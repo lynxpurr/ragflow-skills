@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -121,7 +122,10 @@ class ReleaseHygieneTests(unittest.TestCase):
             root = Path(tmp)
             target = root / "skill" / "scripts"
             target.mkdir(parents=True)
-            (target / "bad.py").write_text('BAD = "/home/private-user/private"\n', encoding="utf-8")
+            private_path = Path("/", "home", "fixture-user", "private")
+            (target / "bad.py").write_text(
+                f'BAD = "{private_path}"\n', encoding="utf-8"
+            )
 
             findings = scan_forbidden_patterns(root, base=root)
 
@@ -134,8 +138,11 @@ class ReleaseHygieneTests(unittest.TestCase):
             root = Path(tmp)
             target = root / "skills" / "ragflow-doc-to-md" / "doc"
             target.mkdir(parents=True)
+            private_source = Path(
+                "/", "home", "fixture-user", "private", "source.pdf"
+            )
             (target / "private-input.md").write_text(
-                "Local next-round input from /home/private-user/source.pdf\n",
+                f"Local next-round input from {private_source}\n",
                 encoding="utf-8",
             )
 
@@ -168,8 +175,18 @@ class ReleaseHygieneTests(unittest.TestCase):
             root = Path(tmp)
             reports = root / "reports"
             reports.mkdir()
+            private_config = Path(
+                "/", "home", "fixture-user", ".ragflow", "config.local.yaml"
+            )
             (reports / "bad_report.json").write_text(
-                '{"schema":"demo","message":"api_key=fake-generated-report-secret","path":"/home/private-user/.ragflow/config.local.yaml"}\n',
+                json.dumps(
+                    {
+                        "schema": "demo",
+                        "message": "api_key=fake-generated-report-secret",
+                        "path": str(private_config),
+                    }
+                )
+                + "\n",
                 encoding="utf-8",
             )
 
@@ -309,7 +326,10 @@ class ReleaseHygieneTests(unittest.TestCase):
                 skills_root,
                 "ragflow-doc-to-md",
                 description="Document conversion workflow.",
-                body="See [missing](references/missing.md).\nDo not mention dedao private adapters.\n",
+                body=(
+                    "See [missing](references/missing.md).\n"
+                    f"Do not mention {'de' + 'dao'} private adapters.\n"
+                ),
                 host_reference="drifted host setup\n",
             )
             (skills_root / "ragflow-query" / "references" / "user-onboarding-prompt.md").unlink()

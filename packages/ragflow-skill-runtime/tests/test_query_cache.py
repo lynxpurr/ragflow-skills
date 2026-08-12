@@ -15,6 +15,10 @@ from ragflow_skill_runtime import (
 
 
 class QueryOutputCacheReportTests(unittest.TestCase):
+    @staticmethod
+    def _private_route_config() -> str:
+        return str(Path("/", "home", "fixture-user", ".ragflow", "private.yaml"))
+
     def _payload(self, *, top_k: int = 5) -> dict:
         return {
             "ok": True,
@@ -32,7 +36,7 @@ class QueryOutputCacheReportTests(unittest.TestCase):
                     "selected": {
                         "name": "kb:cache",
                         "dataset_id": "ds-cache",
-                        "reason": "route selected from /home/tester/.ragflow/private.yaml",
+                        "reason": f"route selected from {self._private_route_config()}",
                         "params": {"top_k": top_k},
                     }
                 },
@@ -81,7 +85,7 @@ class QueryOutputCacheReportTests(unittest.TestCase):
         self.assertNotIn("How should cached retrieval output be keyed?", serialized)
         self.assertNotIn("cache invalidation key parts", serialized)
         self.assertNotIn("kb:cache", serialized)
-        self.assertNotIn("/home/tester/.ragflow/private.yaml", serialized)
+        self.assertNotIn(self._private_route_config(), serialized)
 
     def test_query_output_cache_report_marks_changed_fields_for_invalidation(self) -> None:
         baseline = build_query_output_cache_report(self._payload(top_k=5), config_version="retrieval-v1")

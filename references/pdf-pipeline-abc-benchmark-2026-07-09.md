@@ -152,7 +152,7 @@ python3 scripts/build.py \
   --doc-manifest /tmp/handoff/doc_manifest.json \
   --kb-name "kb:test-pdf-C-skill-palantir" \
   --profile /tmp/profile-zh-768.json \
-  --base-url http://localhost:9380 \
+  --base-url http://ragflow.example.invalid:9380 \
   --api-key <KEY> \
   --output /tmp/kb_manifest.json
 
@@ -174,20 +174,20 @@ python3 scripts/build.py image-ingestion-execute \
 ```bash
 # RAGFlow chunk_token_num max=2048, language must be top-level (not in parser_config)
 # build.py fails on duplicate KB names — create manually first
-curl -s -X POST "http://localhost:9380/api/v1/datasets" \
+curl -s -X POST "http://ragflow.example.invalid:9380/api/v1/datasets" \
   -H "Authorization: Bearer $RAGFLOW_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"name":"kb:test-pdf-D","embedding_model":"text-embedding-v4@Tongyi-Qianwen","parser_config":{"chunk_token_num":1024,"delimiter":"`<!-- chunk -->`","auto_keywords":0}}'
 
-curl -s -X PUT "http://localhost:9380/api/v1/datasets/$KB_D" \
+curl -s -X PUT "http://ragflow.example.invalid:9380/api/v1/datasets/$KB_D" \
   -H "Authorization: Bearer $RAGFLOW_API_KEY" -H "Content-Type: application/json" \
   -d '{"language":"Chinese"}'
 
-curl -s -X POST "http://localhost:9380/api/v1/datasets/$KB_D/documents" \
+curl -s -X POST "http://ragflow.example.invalid:9380/api/v1/datasets/$KB_D/documents" \
   -H "Authorization: Bearer $RAGFLOW_API_KEY" \
   -F "file=@$MD;type=text/markdown"
 
-curl -s -X POST "http://localhost:9380/api/v1/datasets/$KB_D/chunks" \
+curl -s -X POST "http://ragflow.example.invalid:9380/api/v1/datasets/$KB_D/chunks" \
   -H "Authorization: Bearer $RAGFLOW_API_KEY" -H "Content-Type: application/json" \
   -d "{\"document_ids\":[\"$DOC_ID\"]}"
 ```

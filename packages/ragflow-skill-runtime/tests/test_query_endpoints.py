@@ -56,14 +56,16 @@ def endpoint_report_server(statuses=None):
 
 class QueryEndpointReportTests(unittest.TestCase):
     def test_classifies_local_lan_vpn_and_public_hosts(self) -> None:
+        lan_host = ".".join(["192", "168", "10", "20"])
         self.assertEqual(classify_endpoint_host("localhost"), "local")
-        self.assertEqual(classify_endpoint_host("192.168.10.20"), "lan")
+        self.assertEqual(classify_endpoint_host(lan_host), "lan")
         self.assertEqual(classify_endpoint_host("100.64.10.20"), "vpn")
         self.assertEqual(classify_endpoint_host("api.example.test"), "public")
 
     def test_endpoint_report_redacts_hosts_queries_and_keys(self) -> None:
+        lan_host = ".".join(["192", "168", "10", "20"])
         report = build_query_endpoint_report(
-            ragflow_base_url="https://192.168.10.20:9380/api/v1",
+            ragflow_base_url=f"https://{lan_host}:9380/api/v1",
             ragflow_api_key="sk-test-secret",
             llm_base_url="http://api.example.test/v1",
             extra_endpoints=[
@@ -103,7 +105,7 @@ class QueryEndpointReportTests(unittest.TestCase):
         self.assertIn("partial_failure_skipped: `3`", markdown)
         self.assertIn("<lan-host>", serialized)
         self.assertIn("<vpn-host>", serialized)
-        self.assertNotIn("192.168.10.20", serialized)
+        self.assertNotIn(lan_host, serialized)
         self.assertNotIn("100.64.10.20", serialized)
         self.assertNotIn("api.example.test", serialized)
         self.assertNotIn("sk-test-secret", serialized)

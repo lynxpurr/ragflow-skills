@@ -569,7 +569,7 @@ class DocConvertCliTests(unittest.TestCase):
             (image_dir / "chart.png").write_bytes(b"fake chart")
             input_dir.mkdir(exist_ok=True)
             (input_dir / "alpha.md").write_text(
-                "# Alpha\n\nDedao-style chart.\n\n![Chart](images/chart.png)\n",
+                "# Alpha\n\nSynthetic chart.\n\n![Chart](images/chart.png)\n",
                 encoding="utf-8",
             )
 

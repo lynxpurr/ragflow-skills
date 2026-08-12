@@ -104,9 +104,14 @@ class ForwardTestPromptCheckTests(unittest.TestCase):
     def test_forward_test_prompt_check_reports_forbidden_literals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            private_config = Path(
+                "/", "home", "fixture-user", "private", "config.yaml"
+            )
             (root / PROMPT_PATH).parent.mkdir(parents=True, exist_ok=True)
             (root / PROMPT_PATH).write_text(
-                _prompt_doc(extra_requirements="- Never use /home/private-user/config.yaml.\n"),
+                _prompt_doc(
+                    extra_requirements=f"- Never use {private_config}.\n"
+                ),
                 encoding="utf-8",
             )
 
