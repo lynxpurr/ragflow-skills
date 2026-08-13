@@ -3,7 +3,7 @@ doc_type: reference
 topic: release-hardening
 status: reference
 created: 2026-06-23
-updated: 2026-08-06
+updated: 2026-08-13
 canonical: true
 implementation_authority: false
 owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
@@ -95,6 +95,39 @@ The hygiene check rebuilds `dist/` and verifies:
 - no local config, cache, bytecode, secret-like, private-workflow, OPC, personal path, or localhost-only RAGFlow defaults are present in release artifacts;
 - public source directories under `skills/`, `packages/ragflow-skill-runtime/src/`, and `tools/` do not contain private or non-portable references;
 - schema identity, rename governance, and Hermes/OpenClaw release-archive forward-test prompt templates remain covered by static subreports.
+
+### Public Documentation And Candidate Hygiene Boundaries
+
+Treat `docs/` as a tracked public documentation surface. New or relocated public
+documents must follow the repository taxonomy, carry lifecycle metadata, be registered
+in `docs/document-registry.json`, pass link and lifecycle validation, and contain only
+sanitized, durable information. Local private requirement and review trees such as the
+ignored `reqs/` directory are not public documentation sources and must not be moved or
+copied into `docs/` as a batch.
+
+When a private record contains a conclusion that public maintainers need, write a new,
+focused public summary instead of publishing the private record. The summary needs a
+public owner and consumer, must omit machine paths, credentials, private endpoints,
+live identifiers, raw logs, and temporary evidence locations, and must not preserve
+private authorization or operational instructions. Public documents must not link to an
+ignored private record as their authority.
+
+The two hygiene commands answer different questions:
+
+- `python3 tools/release_hygiene_check.py` is the required release gate. It validates
+  generated artifacts, intended public source roots, document lifecycle, schemas, and
+  other release inventories. A passing result supports the public release path; it is
+  not a claim that every Git candidate is clean.
+- `python3 tools/public_hygiene_surface_check.py` is a standalone, fail-closed Git
+  candidate audit. It inspects tracked, staged, and non-ignored untracked candidates and
+  also classifies unsafe file types and credential-context entropy. It excludes declared
+  private and generated roots, including `reqs/`, `dist/`, `release-artifacts/`, and
+  `output/`.
+
+Do not weaken either checker to make their results agree. Classify a standalone finding
+against its actual surface: correct current public source when authorized, preserve
+immutable history when explicitly accepted, and keep private material outside the public
+documentation and release boundaries.
 
 ## Artifact Export
 
