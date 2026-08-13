@@ -199,7 +199,7 @@ python3 tools/live_integration_check.py
 
 ## Scope
 
-This repository contains only the public, portable RAGFlow skill suite. Private dedao-specific workflows are intentionally excluded.
+This repository contains only the public, portable RAGFlow skill suite. The public scope excludes private source-specific workflows.
 
 Commercial SaaS agent sandboxes are not a v1 target. The intended public targets are programming-agent CLI environments the user controls or can configure, especially Hermes, OpenClaw, Claude Code, and opencode. A first-party SaaS platform should integrate document parsing, RAGFlow, and retrieval as native backend tools rather than by running these portable skill scripts inside a sandbox.
 
