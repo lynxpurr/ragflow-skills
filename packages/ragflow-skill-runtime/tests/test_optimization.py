@@ -1517,7 +1517,7 @@ class OptimizationTests(unittest.TestCase):
             report = create_optimization_live_readiness_report(
                 plan_path=plan_path,
                 cleanup_plan_path=cleanup_path,
-                credential_error="config file not found: ragflow.yaml",
+                credential_error="fixture config error",
                 confirm_live_build=False,
                 confirm_kb_name="kb:wrong",
                 confirm_run_id="wrong",
