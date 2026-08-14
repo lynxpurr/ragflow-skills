@@ -21,6 +21,7 @@ operations, mutation, staging, commit, push, L3, Stage 8C, or L4.
 ## Current Roadmap
 
 - [Development roadmap](03-development-plan.md) - current priorities and gated backlog.
+- [Canonical multimodal ingest quality improvement plan](44-canonical-multimodal-ingest-quality-improvement-plan.md) - proposed cross-skill response to the retained field-trial canonical, table, and image ingestion gaps; no implementation or live authority.
 
 ## Controlling Governance Work
 
@@ -39,7 +40,7 @@ operations, mutation, staging, commit, push, L3, Stage 8C, or L4.
 
 ## Active, Approved, And Gated Owners
 
-The registry records 13 active, approved, or gated owners at stable paths. Load an owner
+The registry records 14 active, approved, gated, or proposed owners at stable paths. Load an owner
 only when the current task names its topic. Unchecked evidence or adapter rows do not
 create live or implementation authority.
 
