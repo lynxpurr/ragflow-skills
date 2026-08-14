@@ -275,20 +275,20 @@ class ReleaseHygieneTests(unittest.TestCase):
         findings, summary = validate_command_guidance_classification()
 
         self.assertEqual(findings, [])
-        self.assertEqual(summary["discovered_command_count"], 106)
-        self.assertEqual(summary["classified_command_count"], 106)
+        self.assertEqual(summary["discovered_command_count"], 109)
+        self.assertEqual(summary["classified_command_count"], 109)
         self.assertEqual(
             summary["owner_counts"],
             {
                 "ragflow-doc-to-md": 12,
                 "ragflow-canonical-review": 2,
-                "ragflow-kb-build": 58,
+                "ragflow-kb-build": 61,
                 "ragflow-query": 34,
             },
         )
         self.assertEqual(
             summary["tier_counts"],
-            {"advanced": 87, "core": 12, "deprecated_candidate": 0, "internal_candidate": 7},
+            {"advanced": 90, "core": 12, "deprecated_candidate": 0, "internal_candidate": 7},
         )
 
     def test_release_shape_requires_advanced_workflow_indexes(self) -> None:

@@ -83,6 +83,116 @@ class BuildError(RuntimeError):
     """Raised when build inputs are invalid."""
 
 
+def _canonical_sha256(payload: Any) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def dataset_construction_fingerprint(
+    *,
+    dataset_name: str,
+    create_payload: Mapping[str, Any],
+    source_hashes: list[str] | tuple[str, ...],
+) -> str:
+    """Bind a dataset construction request to normalized payload and source content."""
+
+    name = str(dataset_name).strip()
+    if not name:
+        raise BuildError("dataset construction fingerprint requires dataset_name")
+    normalized_hashes = [str(value).strip().lower() for value in source_hashes]
+    if not normalized_hashes or any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in normalized_hashes):
+        raise BuildError("dataset construction fingerprint requires SHA-256 source hashes")
+    return _canonical_sha256(
+        {
+            "schema": "ragflow_dataset_construction_fingerprint_v1",
+            "dataset_name": name,
+            "create_payload": dict(create_payload),
+            "source_sha256": normalized_hashes,
+        }
+    )
+
+
+def review_dataset_create_recovery(
+    *,
+    dataset_name: str,
+    construction_fingerprint: str,
+    candidates: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Recover a missing create ID only from one exact name and fingerprint match."""
+
+    exact = [item for item in candidates if str(item.get("name") or "") == dataset_name]
+    matched = [
+        item
+        for item in exact
+        if str(
+            item.get("construction_fingerprint")
+            or (item.get("metadata", {}).get("construction_fingerprint") if isinstance(item.get("metadata"), Mapping) else "")
+        )
+        == construction_fingerprint
+    ]
+    if len(exact) > 1:
+        raise BuildError("dataset create recovery is ambiguous: multiple exact-name datasets were observed")
+    if not exact:
+        raise BuildError("dataset create recovery found no exact-name dataset")
+    if not matched:
+        raise BuildError("dataset create recovery fingerprint does not match the exact-name dataset")
+    dataset_id = matched[0].get("id") or matched[0].get("dataset_id")
+    if not isinstance(dataset_id, str) or not dataset_id:
+        raise BuildError("dataset create recovery candidate has no dataset identifier")
+    return {
+        "ok": True,
+        "schema": "ragflow_dataset_create_recovery_v1",
+        "decision": "recovered_unique_exact_name_and_fingerprint",
+        "dataset_id": dataset_id,
+        "dataset_name": dataset_name,
+        "construction_fingerprint": construction_fingerprint,
+        "exact_name_candidate_count": len(exact),
+        "matching_candidate_count": len(matched),
+    }
+
+
+def verify_image_transport_capability(
+    evidence: Mapping[str, Any],
+    *,
+    operation: str,
+    transport: str,
+    endpoint_class: str,
+) -> dict[str, Any]:
+    """Require explicit read-only evidence for the planned image operation."""
+
+    if evidence.get("schema") != "ragflow_transport_capability_v1":
+        raise BuildError("image transport capability schema must be ragflow_transport_capability_v1")
+    source = evidence.get("source")
+    if source not in {"openapi", "server_version", "operator"}:
+        raise BuildError("image transport capability source is unknown")
+    operations = evidence.get("operations")
+    if not isinstance(operations, list):
+        raise BuildError("image transport capability operations must be a list")
+    matches = [
+        item
+        for item in operations
+        if isinstance(item, Mapping)
+        and item.get("operation") == operation
+        and item.get("transport") == transport
+        and item.get("endpoint_class") == endpoint_class
+        and item.get("supported") is True
+    ]
+    if len(matches) != 1:
+        raise BuildError(
+            f"image transport operation is not supported by explicit capability evidence: {operation}/{transport}/{endpoint_class}"
+        )
+    return {
+        "ok": True,
+        "schema": "ragflow_image_transport_gate_v1",
+        "source": source,
+        "server_version": evidence.get("server_version"),
+        "operation": operation,
+        "transport": transport,
+        "endpoint_class": endpoint_class,
+        "evidence_sha256": _canonical_sha256(dict(evidence)),
+    }
+
+
 @dataclass(frozen=True)
 class BuildDocument:
     path: Path
@@ -3304,6 +3414,38 @@ def extract_dataset_id(response: Any) -> str:
     raise BuildError(_dataset_create_response_error(response, classification.label))
 
 
+def dataset_create_response_diagnostics(response: Any) -> dict[str, Any]:
+    """Describe a create response without retaining response values or unknown fields."""
+
+    classification = _classify_dataset_create_response(response)
+    application_code = response.get("code") if isinstance(response, Mapping) else None
+    if not isinstance(application_code, (int, float)) or isinstance(application_code, bool) or (
+        isinstance(application_code, float) and not math.isfinite(application_code)
+    ):
+        application_code = None
+    application_status = (
+        "failure" if classification.label == "application_failure" else
+        "success" if classification.label == "supported" else "unknown"
+    )
+    sanitized_message = {
+        "application_failure": "dataset create application status indicates failure",
+        "supported": "dataset create response contains one supported identifier",
+        "unknown_shape": "dataset create response shape is not recognized",
+    }[classification.label]
+    return {
+        "schema": "ragflow_dataset_create_response_diagnostics_v1",
+        "transport_status": "response_received",
+        "application_status": application_status,
+        "application_code": application_code,
+        "sanitized_message": sanitized_message,
+        "classification": classification.label,
+        "dataset_id_present": classification.dataset_id is not None,
+        "response_root": _dataset_create_root_label(response),
+        "response_data_type": _dataset_create_data_type(response),
+        "known_field_paths": list(_dataset_create_known_paths(response)),
+    }
+
+
 def extract_uploaded_document_id(response: Any) -> str:
     """Extract an uploaded document ID from common RAGFlow response shapes."""
 
@@ -4010,6 +4152,10 @@ def make_multimodal_kb_manifest_payload(
     markdown_documents: list[tuple[BuildDocument, str, str | None, int | None]],
     asset_upload_plan: Mapping[str, Any] | None = None,
     document_list_response: Any | None = None,
+    visual_execution_records: list[Mapping[str, Any]] | None = None,
+    transport_evidence: Mapping[str, Any] | None = None,
+    plan_hash: str | None = None,
+    checkpoint: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create a multimodal KB manifest from build inputs and read-only document state."""
 
@@ -4032,25 +4178,62 @@ def make_multimodal_kb_manifest_payload(
         }
         markdown_records.append(record)
 
+    execution_by_source = {
+        str(item.get("source_path")): item
+        for item in (visual_execution_records or [])
+        if isinstance(item, Mapping) and isinstance(item.get("source_path"), str)
+    }
+    execution_by_name = {
+        str(item.get("name")): item
+        for item in (visual_execution_records or [])
+        if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+    }
     visual_records: list[dict[str, Any]] = []
     for asset in _visual_assets_from_upload_plan(asset_upload_plan):
         observed = observed_by_name.get(Path(str(asset["source_path"])).name)
+        execution = execution_by_source.get(str(asset["source_path"])) or execution_by_name.get(asset["name"])
         if observed and isinstance(observed.get("document_id"), str):
             matched_observed_ids.add(str(observed["document_id"]))
         thumbnail = observed.get("thumbnail") if isinstance(observed, Mapping) else None
         record = {
-            "document_id": observed.get("document_id") if observed else None,
+            "document_id": observed.get("document_id") if observed else execution.get("document_id") if execution else None,
             "name": observed.get("name") if observed else asset["name"],
             "source_path": asset["source_path"],
             "package_path": asset["package_path"],
             "asset_class": asset["asset_class"],
-            "sha256": asset["sha256"],
+            "sha256": execution.get("sha256") if execution and execution.get("sha256") else asset["sha256"],
             "mime_type": observed.get("mime_type") if observed and observed.get("mime_type") else asset["mime_type"],
-            "status": observed.get("status") if observed else "not_observed",
-            "chunk_count": observed.get("chunk_count") if observed else None,
+            "status": observed.get("status") if observed else execution.get("status") if execution else "not_observed",
+            "chunk_count": observed.get("chunk_count") if observed else execution.get("chunk_count") if execution else None,
             "thumbnail": thumbnail if isinstance(thumbnail, Mapping) else {"url": None, "observed": False},
             "vlm_status": observed.get("vlm_status") if observed else None,
             "observed_state": _compact_observed_state(observed),
+            "mutation_lineage": {
+                "upload": {
+                    "status": execution.get("upload_status") if execution else "not_observed",
+                    "transport": "multipart_post",
+                    "endpoint_class": "dataset_documents",
+                },
+                "parse": {
+                    "status": execution.get("parse_trigger_status") if execution else "not_observed",
+                    "transport": "json_post",
+                    "endpoint_class": "dataset_chunks",
+                },
+                "update": {
+                    "status": "not_planned",
+                    "transport": "json_put",
+                    "endpoint_class": "document_detail",
+                },
+                "deletion": {
+                    "status": "not_planned",
+                    "transport": "json_delete",
+                    "endpoint_class": "dataset_documents",
+                },
+                "read_back": {
+                    "status": "observed" if observed else "not_performed",
+                    "document_id_matched": bool(observed and execution and observed.get("document_id") == execution.get("document_id")),
+                },
+            },
         }
         visual_records.append(record)
 
@@ -4081,7 +4264,7 @@ def make_multimodal_kb_manifest_payload(
     thumbnail_count = sum(1 for item in visual_records if isinstance(item.get("thumbnail"), Mapping) and item["thumbnail"].get("url"))
     vlm_count = sum(1 for item in visual_records if item.get("vlm_status"))
 
-    return {
+    payload = {
         "schema": MULTIMODAL_KB_MANIFEST_SCHEMA,
         "created_at": _now(),
         "ragflow_base_url": base_url,
@@ -4102,6 +4285,17 @@ def make_multimodal_kb_manifest_payload(
         "visual_documents": visual_records,
         "observed_documents": list(observed_states.values()),
     }
+    payload["lineage"] = {
+        "plan_hash": plan_hash,
+        "transport_evidence": dict(transport_evidence or {}),
+        "checkpoint": dict(checkpoint or {}),
+        "read_back": {
+            "performed": document_list_response is not None,
+            "observed_document_count": len(observed_states),
+            "status": "observed" if document_list_response is not None else "not_performed",
+        },
+    }
+    return payload
 
 
 def wait_for_document_states(

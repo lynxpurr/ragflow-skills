@@ -13,6 +13,11 @@ if str(RUNTIME_SRC) not in sys.path:
     sys.path.insert(0, str(RUNTIME_SRC))
 
 from ragflow_skill_runtime.kb_build import BuildDocument  # noqa: E402
+from ragflow_skill_runtime.retrieval_hint_governance import (  # noqa: E402
+    candidate_artifact_sha256,
+    create_reviewed_retrieval_hints,
+    decorate_candidate_hints,
+)
 from ragflow_skill_runtime.topology import (  # noqa: E402
     KB_ACTIVATION_PLAN_SCHEMA,
     KB_SPLIT_PLAN_SCHEMA,
@@ -230,6 +235,7 @@ class TopologyAdviceTests(unittest.TestCase):
             snapshot = root / "chunk_snapshot.json"
             routing = root / "routing.json"
             hints = root / "retrieval_hints.json"
+            reviewed_hints = root / "reviewed_hints.json"
             route_tests = root / "route_tests.json"
             ingest_plan = root / "ragflow_ingest_plan.json"
             profile = root / "profile.json"
@@ -303,14 +309,30 @@ class TopologyAdviceTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            hints.write_text(
-                json.dumps(
-                    {
-                        "schema": "ragflow_retrieval_hints_v1",
-                        "keyword_candidates": [{"term": "activation smoke"}],
-                        "question_candidates": [{"question": "How does activation smoke routing work?"}],
-                    }
-                ),
+            hint_payload = decorate_candidate_hints(
+                {
+                    "schema": "ragflow_retrieval_hints_v1",
+                    "keyword_candidates": [{"term": "activation smoke", "source_document": "documents/source.md"}],
+                    "question_candidates": [
+                        {"question": "How does activation smoke routing work?", "source_document": "documents/source.md"}
+                    ],
+                    "table_term_alias_candidates": [],
+                },
+                document_hashes={"documents/source.md": "a" * 64},
+            )
+            hints.write_text(json.dumps(hint_payload), encoding="utf-8")
+            decisions = {
+                "schema": "ragflow_retrieval_hint_review_decisions_v1",
+                "input_sha256": candidate_artifact_sha256(hint_payload),
+                "reviewer": "test-reviewer",
+                "decisions": [
+                    {"candidate_id": item["candidate_id"], "decision": "accept", "reason": "fixture evidence reviewed"}
+                    for group in ("keyword_candidates", "question_candidates", "table_term_alias_candidates")
+                    for item in hint_payload[group]
+                ],
+            }
+            reviewed_hints.write_text(
+                json.dumps(create_reviewed_retrieval_hints(hint_payload, decisions)),
                 encoding="utf-8",
             )
             route_tests.write_text(
@@ -363,6 +385,7 @@ class TopologyAdviceTests(unittest.TestCase):
                 doc_manifest_path=doc_manifest,
                 route_config_path=routing,
                 retrieval_hints_path=hints,
+                reviewed_hints_path=reviewed_hints,
                 ingest_plan_path=ingest_plan,
                 profile_path=profile,
                 chunk_snapshot_path=snapshot,
@@ -375,6 +398,7 @@ class TopologyAdviceTests(unittest.TestCase):
         self.assertEqual(report["mutation"], "none")
         self.assertEqual(report["recommendation"]["action"], "ready_for_activation_review")
         self.assertEqual(report["checks"]["route_config_registration"]["status"], "ready")
+        self.assertEqual(report["checks"]["hint_review"]["status"], "ready")
         self.assertEqual(report["checks"]["ingest_plan_consistency"]["status"], "ready")
         self.assertTrue(report["checks"]["ingest_plan_consistency"]["doc_manifest_matches"])
         self.assertTrue(report["checks"]["ingest_plan_consistency"]["retrieval_hints_matches"])

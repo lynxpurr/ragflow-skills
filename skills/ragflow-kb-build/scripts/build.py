@@ -40,10 +40,14 @@ from ragflow_skill_runtime import (  # noqa: E402
     build_runtime_partial_failure_report,
     throughput_summary,
     create_grounded_qa_suggestion_request,
+    create_benchmark_split_freeze,
+    create_reviewed_retrieval_hints,
     create_apollo_table_qa_judge_request,
     create_kb_asset_ingestion_readiness_report,
     create_kb_artifact_consistency_report,
     create_kb_asset_upload_plan,
+    dataset_create_response_diagnostics,
+    dataset_construction_fingerprint,
     create_parameter_read_back_audit,
     create_metadata_suggestion_request,
     create_optimization_cleanup_plan,
@@ -68,6 +72,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     make_kb_manifest_payload,
     make_build_payload_preview,
     make_handoff_consumption_status,
+    make_multimodal_kb_manifest_payload,
     make_parameter_materialization_inventory,
     make_doc_ingest_readiness_payload,
     make_metadata_template_payload,
@@ -103,6 +108,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     render_optimization_live_readiness_markdown,
     render_suppression_report_markdown,
     review_kb_name_collision,
+    review_dataset_create_recovery,
     sample_benchmark_dataset,
     segment_metadata_report_file,
     render_activation_plan_markdown,
@@ -132,6 +138,8 @@ from ragflow_skill_runtime import (  # noqa: E402
     review_apollo_table_qa_judge_candidate,
     validate_apollo_table_qa_fixture,
     validate_grounded_qa,
+    verify_benchmark_split_freeze,
+    verify_image_transport_capability,
     wait_for_document_states,
     write_kb_asset_upload_zip,
     run_retrieval_validation,
@@ -508,8 +516,9 @@ def _checkpoint_report(
     skipped_upload_count: int,
     new_upload_count: int,
     total_confirmed_upload_count: int,
+    bindings: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    report = {
         "enabled": bool(checkpoint_path),
         "path": str(checkpoint_path) if checkpoint_path else None,
         "resume": bool(resume),
@@ -518,6 +527,9 @@ def _checkpoint_report(
         "new_upload_count": new_upload_count,
         "total_confirmed_upload_count": total_confirmed_upload_count,
     }
+    if bindings is not None:
+        report["bindings"] = dict(bindings)
+    return report
 
 
 def _dataset_update_state(
@@ -546,9 +558,17 @@ def _write_ingestion_checkpoint(
     records: Mapping[str, Mapping[str, Any]],
     created_at: str | None = None,
     dataset_update: Mapping[str, Any] | None = None,
+    bindings: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not checkpoint_path:
         return None
+    if bindings is None and Path(checkpoint_path).is_file():
+        try:
+            previous = _read_json_file(checkpoint_path, label="prior ingestion checkpoint")
+        except (BuildError, OSError, ProfileError):
+            previous = None
+        if isinstance(previous, Mapping) and isinstance(previous.get("bindings"), Mapping):
+            bindings = dict(previous["bindings"])
     uploaded_documents = [dict(record) for _key, record in sorted(records.items())]
     now = _utc_now()
     payload = {
@@ -574,8 +594,25 @@ def _write_ingestion_checkpoint(
     }
     if dataset_update is not None:
         payload["dataset_update"] = dict(dataset_update)
+    if bindings is not None:
+        payload["bindings"] = dict(bindings)
     _write_json_file(checkpoint_path, payload)
     return payload
+
+
+def _validate_ingestion_checkpoint_bindings(
+    checkpoint: Mapping[str, Any],
+    *,
+    expected: Mapping[str, Any],
+) -> None:
+    bindings = checkpoint.get("bindings")
+    if not isinstance(bindings, Mapping):
+        raise BuildError(
+            "ingestion checkpoint lacks construction fingerprint and plan hash; regenerate it before mutation resume"
+        )
+    for field, expected_value in expected.items():
+        if bindings.get(field) != expected_value:
+            raise BuildError(f"ingestion checkpoint {field} does not match current inputs")
 
 
 def _mark_batch_parse_skipped(batch: dict[str, Any]) -> None:
@@ -688,6 +725,78 @@ def _source_hash_map(paths: list[str | None]) -> dict[str, str]:
         elif source.exists() and source.is_dir():
             hashes[str(source)] = _sha256_directory(source)
     return hashes
+
+
+def _markdown_build_bindings(
+    *,
+    args: argparse.Namespace,
+    profile: ChunkProfile,
+    docs: list[Any],
+    dataset_update_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    source_hashes = [
+        {"source_key": _checkpoint_source_key(doc.path), "sha256": _sha256_file(Path(doc.path))}
+        for doc in docs
+    ]
+    create_payload = profile.to_dataset_payload()
+    construction_fingerprint = dataset_construction_fingerprint(
+        dataset_name=args.kb_name,
+        create_payload=create_payload,
+        source_hashes=[str(item["sha256"]) for item in source_hashes],
+    )
+    plan_hash = _stable_digest(
+        {
+            "schema": "ragflow_markdown_build_plan_binding_v1",
+            "dataset_name": args.kb_name,
+            "construction_fingerprint": construction_fingerprint,
+            "source_hashes": source_hashes,
+            "dataset_update": dict(dataset_update_payload),
+        }
+    )
+    return {
+        "construction_fingerprint": construction_fingerprint,
+        "plan_hash": plan_hash,
+        "source_hashes": source_hashes,
+        "create_payload": create_payload,
+    }
+
+
+def _image_ingestion_bindings(
+    *,
+    args: argparse.Namespace,
+    asset_plan: Mapping[str, Any],
+    resolved_assets: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    source_hashes = [
+        {
+            "source_path": str(asset["source_path"]),
+            "sha256": _sha256_file(Path(asset["resolved_path"])),
+        }
+        for asset in resolved_assets
+    ]
+    plan_hash = _stable_digest(dict(asset_plan))
+    target_fingerprint = _stable_digest(
+        {
+            "schema": "ragflow_image_ingestion_target_fingerprint_v1",
+            "dataset_id": args.dataset_id,
+            "source_hashes": source_hashes,
+        }
+    )
+    return {
+        "target_fingerprint": target_fingerprint,
+        "plan_hash": plan_hash,
+        "source_hashes": source_hashes,
+    }
+
+
+def _load_transport_capability(path: str | Path | None, asset_plan: Mapping[str, Any]) -> dict[str, Any]:
+    if path:
+        payload = _read_json_file(path, label="transport capability")
+    else:
+        payload = asset_plan.get("transport_capability")
+    if not isinstance(payload, Mapping):
+        raise BuildError("image ingestion requires explicit --transport-capability evidence or plan.transport_capability")
+    return dict(payload)
 
 
 def _resolve_retrieval_hints_path(args: argparse.Namespace) -> Path | None:
@@ -1501,6 +1610,12 @@ def _run(args: argparse.Namespace) -> int:
             dataset_update_payload,
             status="pending" if dataset_update_payload else "not_required",
         )
+        bindings = _markdown_build_bindings(
+            args=args,
+            profile=profile,
+            docs=docs,
+            dataset_update_payload=dataset_update_payload,
+        )
         update_failure_error: str | None = None
         if args.resume:
             checkpoint_payload = _read_ingestion_checkpoint(args.checkpoint, operation="markdown_build")
@@ -1509,6 +1624,23 @@ def _run(args: argparse.Namespace) -> int:
             checkpoint_kb_name = checkpoint_dataset.get("name") if isinstance(checkpoint_dataset, Mapping) else None
             if checkpoint_kb_name and checkpoint_kb_name != args.kb_name:
                 raise BuildError("ingestion checkpoint dataset.name does not match --kb-name")
+            prior_bindings = checkpoint_payload.get("bindings")
+            if not isinstance(prior_bindings, Mapping):
+                raise BuildError(
+                    "ingestion checkpoint lacks construction fingerprint and plan hash; regenerate it before mutation resume"
+                )
+            current_source_hashes = [
+                {"source_key": _checkpoint_source_key(doc.path), "sha256": _sha256_file(Path(doc.path))}
+                for doc in docs
+            ]
+            baseline_hashes = prior_bindings.get("source_hashes")
+            if not isinstance(baseline_hashes, list):
+                raise BuildError("ingestion checkpoint source_hashes must be a list")
+            if any(not isinstance(item, Mapping) for item in baseline_hashes):
+                raise BuildError("ingestion checkpoint source_hashes do not match current inputs")
+            if [dict(item) for item in baseline_hashes] != current_source_hashes:
+                raise BuildError("ingestion checkpoint source_hashes do not match current inputs")
+            _validate_ingestion_checkpoint_bindings(checkpoint_payload, expected=bindings)
             dataset_id = _checkpoint_dataset_id(checkpoint_payload)
             confirmed_uploads = _checkpoint_uploaded_map(checkpoint_payload)
             checkpoint_records = {key: dict(record) for key, record in confirmed_uploads.items()}
@@ -1571,10 +1703,11 @@ def _run(args: argparse.Namespace) -> int:
                     records=checkpoint_records,
                     created_at=checkpoint_created_at,
                     dataset_update=dataset_update,
+                    bindings=bindings,
                 )
         else:
             stage_start = datetime.now(timezone.utc)
-            dataset_response = client.create_dataset(args.kb_name, profile=profile.to_dataset_payload())
+            dataset_response = client.create_dataset(args.kb_name, profile=bindings["create_payload"])
             elapsed_ms = (datetime.now(timezone.utc) - stage_start).total_seconds() * 1000
             stage_latency_ms.append(elapsed_ms)
             stage_timings.append(
@@ -1583,9 +1716,29 @@ def _run(args: argparse.Namespace) -> int:
                     "operation": "create_dataset",
                     "status": "success",
                     "duration_ms": elapsed_ms,
+                    "response_diagnostics": dataset_create_response_diagnostics(dataset_response),
                 }
             )
-            dataset_id = extract_dataset_id(dataset_response)
+            create_diagnostics = dataset_create_response_diagnostics(dataset_response)
+            try:
+                dataset_id = extract_dataset_id(dataset_response)
+            except BuildError as exc:
+                if create_diagnostics.get("classification") == "application_failure":
+                    raise
+                try:
+                    recovery_response = client.list_datasets(page=1, page_size=50, name=args.kb_name)
+                    recovery = review_dataset_create_recovery(
+                        dataset_name=args.kb_name,
+                        construction_fingerprint=str(bindings["construction_fingerprint"]),
+                        candidates=_dataset_items_from_response(recovery_response),
+                    )
+                except Exception as recovery_exc:
+                    raise BuildError(
+                        f"dataset create response had no usable identifier ({exc}); exact-name recovery stopped: {recovery_exc}"
+                    ) from recovery_exc
+                dataset_id = str(recovery["dataset_id"])
+                stage_timings[-1]["recovery"] = recovery
+                stage_results.append({"label": "create_dataset_recovery", "status": "success"})
             stage_results.append({"label": "create_dataset", "status": "success"})
             _write_ingestion_checkpoint(
                 args.checkpoint,
@@ -1594,6 +1747,7 @@ def _run(args: argparse.Namespace) -> int:
                 dataset_name=args.kb_name,
                 records=checkpoint_records,
                 dataset_update=dataset_update,
+                bindings=bindings,
             )
             if dataset_update_payload:
                 update_start = datetime.now(timezone.utc)
@@ -1629,6 +1783,7 @@ def _run(args: argparse.Namespace) -> int:
                     dataset_name=args.kb_name,
                     records=checkpoint_records,
                     dataset_update=dataset_update,
+                    bindings=bindings,
                 )
             _write_ingestion_checkpoint(
                 args.checkpoint,
@@ -1637,6 +1792,7 @@ def _run(args: argparse.Namespace) -> int:
                 dataset_name=args.kb_name,
                 records=checkpoint_records,
                 dataset_update=dataset_update,
+                bindings=bindings,
             )
 
         if update_failure_error:
@@ -1702,6 +1858,7 @@ def _run(args: argparse.Namespace) -> int:
                     "document_id": document_id,
                     "upload_status": "uploaded",
                     "checkpoint_resumed": True,
+                    "source_sha256": _sha256_file(Path(doc.path)),
                 }
                 checkpoint_skipped_upload_count += 1
                 parse_trigger_status = str(confirmed.get("parse_trigger_status") or "")
@@ -1762,6 +1919,7 @@ def _run(args: argparse.Namespace) -> int:
                 "parse_trigger_status": "skipped" if args.no_parse else "pending",
                 "parse_triggered": False,
                 "parse_wait_status": "skipped" if args.no_parse or args.no_wait else "pending",
+                "source_sha256": _sha256_file(Path(doc.path)),
             }
             checkpoint_new_upload_count += 1
             stage_results.append({"label": f"upload:{doc.path.name}", "status": "success"})
@@ -1773,6 +1931,7 @@ def _run(args: argparse.Namespace) -> int:
                 records=checkpoint_records,
                 created_at=checkpoint_created_at,
                 dataset_update=dataset_update,
+                bindings=bindings,
             )
 
         parse_response = None
@@ -1822,6 +1981,7 @@ def _run(args: argparse.Namespace) -> int:
                         records=checkpoint_records,
                         created_at=checkpoint_created_at,
                         dataset_update=dataset_update,
+                        bindings=bindings,
                     )
                     break
                 finally:
@@ -1845,6 +2005,7 @@ def _run(args: argparse.Namespace) -> int:
                         records=checkpoint_records,
                         created_at=checkpoint_created_at,
                         dataset_update=dataset_update,
+                        bindings=bindings,
                     )
             parse_response = parse_responses[0] if len(parse_responses) == 1 else parse_responses
             if not args.no_wait and parse_success_document_ids:
@@ -1923,6 +2084,7 @@ def _run(args: argparse.Namespace) -> int:
             records=checkpoint_records,
             created_at=checkpoint_created_at,
             dataset_update=dataset_update,
+            bindings=bindings,
         )
 
         runtime_partial_failure = build_runtime_partial_failure_report(
@@ -2263,10 +2425,32 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
             )
             if not resolved_path.exists() or not resolved_path.is_file():
                 raise BuildError(f"planned visual asset not found: {asset['source_path']}")
-            resolved_assets.append({**asset, "resolved_path": resolved_path})
+            actual_sha256 = _sha256_file(resolved_path)
+            planned_sha256 = asset.get("sha256")
+            if planned_sha256 is not None and planned_sha256 != actual_sha256:
+                raise BuildError(f"planned visual asset SHA-256 does not match current file: {asset['source_path']}")
+            resolved_assets.append({**asset, "sha256": actual_sha256, "resolved_path": resolved_path})
 
         config = _load_config(args)
+        transport_capability = _load_transport_capability(args.transport_capability, asset_plan)
+        transport_gate = verify_image_transport_capability(
+            transport_capability,
+            operation="visual_document_upload",
+            transport="multipart_post",
+            endpoint_class="dataset_documents",
+        )
+        transport_gates = [transport_gate]
+        if not args.no_parse:
+            transport_gates.append(
+                verify_image_transport_capability(
+                    transport_capability,
+                    operation="visual_document_parse",
+                    transport="json_post",
+                    endpoint_class="dataset_chunks",
+                )
+            )
         client = RAGFlowClient(config)
+        bindings = _image_ingestion_bindings(args=args, asset_plan=asset_plan, resolved_assets=resolved_assets)
         checkpoint_payload: dict[str, Any] | None = None
         checkpoint_created_at: str | None = None
         checkpoint_records: dict[str, dict[str, Any]] = {}
@@ -2279,6 +2463,7 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
             checkpoint_dataset_id = _checkpoint_dataset_id(checkpoint_payload)
             if checkpoint_dataset_id != args.dataset_id:
                 raise BuildError("ingestion checkpoint dataset.id does not match --dataset-id")
+            _validate_ingestion_checkpoint_bindings(checkpoint_payload, expected=bindings)
             confirmed_uploads = _checkpoint_uploaded_map(checkpoint_payload)
         ragflow_calls = 0
         upload_call_count = 0
@@ -2372,6 +2557,7 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
                     dataset_name=None,
                     records=checkpoint_records,
                     created_at=checkpoint_created_at,
+                    bindings=bindings,
                 )
             except Exception as exc:  # pragma: no cover - covered through CLI behavior with fake clients as needed
                 elapsed_ms = (datetime.now(timezone.utc) - stage_start).total_seconds() * 1000
@@ -2408,6 +2594,7 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
                     dataset_name=None,
                     records=checkpoint_records,
                     created_at=checkpoint_created_at,
+                    bindings=bindings,
                 )
 
         parse_response: Any = None
@@ -2456,6 +2643,7 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
                         dataset_name=None,
                         records=checkpoint_records,
                         created_at=checkpoint_created_at,
+                        bindings=bindings,
                     )
                     break
                 finally:
@@ -2478,6 +2666,7 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
                         dataset_name=None,
                         records=checkpoint_records,
                         created_at=checkpoint_created_at,
+                        bindings=bindings,
                     )
             parse_response = parse_responses[0] if len(parse_responses) == 1 else parse_responses
         else:
@@ -2590,6 +2779,7 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
             dataset_name=None,
             records=checkpoint_records,
             created_at=checkpoint_created_at,
+            bindings=bindings,
         )
 
         runtime_partial_failure = build_runtime_partial_failure_report(
@@ -2607,6 +2797,11 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
         )
         parsed_count = int(status_counts.get("parsed", 0) or 0)
         ok = failed_count == 0
+        image_enhancement_status = (
+            "parsed_visual_only"
+            if ok and not args.no_parse and parsed_count == planned_count
+            else "not_completed"
+        )
         batching = _batching_summary(
             requested_batch_size=args.batch_size,
             planned_document_count=planned_count,
@@ -2658,6 +2853,27 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
                     if parse_wait_image_count
                     else {}
                 ),
+            },
+        )
+        multimodal_manifest = make_multimodal_kb_manifest_payload(
+            base_url=getattr(config, "base_url", None),
+            dataset_id=args.dataset_id,
+            dataset_name=str(asset_plan.get("dataset_name") or ""),
+            profile={},
+            markdown_documents=[],
+            asset_upload_plan=asset_plan,
+            document_list_response=document_list_response,
+            visual_execution_records=upload_records,
+            transport_evidence={
+                "schema": "ragflow_transport_capability_bundle_v1",
+                "gates": transport_gates,
+                "capability_evidence_sha256": transport_gate.get("evidence_sha256"),
+            },
+            plan_hash=str(bindings.get("plan_hash") or ""),
+            checkpoint={
+                "schema": "ragflow_kb_ingestion_checkpoint_v1",
+                "bindings": bindings,
+                "resume": bool(args.resume),
             },
         )
         performance_warnings = performance_warning_report(
@@ -2729,6 +2945,8 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
                 "missing_visual_document_count": int(status_counts.get("missing", 0) or 0),
                 "runtime_partial_failure_status": runtime_partial_failure["summary"]["status"],
                 "performance_warning_count": performance_warnings["summary"]["warning_count"],
+                "image_enhancement_status": image_enhancement_status,
+                "enhanced_image_production_ready": False,
             },
             "uploaded_visual_documents": upload_records,
             "observed_visual_documents": observed_documents,
@@ -2746,7 +2964,18 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
                 skipped_upload_count=checkpoint_skipped_upload_count,
                 new_upload_count=checkpoint_new_upload_count,
                 total_confirmed_upload_count=len(uploaded_document_ids),
+                bindings=bindings,
             ),
+            "transport_gate": transport_gate,
+            "transport_gates": transport_gates,
+            "transport_capability": transport_capability,
+            "multimodal_manifest": multimodal_manifest,
+            "image_enhancement": {
+                "status": image_enhancement_status,
+                "staging_only": image_enhancement_status == "parsed_visual_only",
+                "enhanced_image_production_ready": False,
+                "reason": "visual documents were uploaded and parsed without curated image enhancement",
+            },
             "runtime_partial_failure": runtime_partial_failure,
             "cleanup_readiness": {
                 "required": bool(upload_records),
@@ -3183,6 +3412,61 @@ def _run_benchmark_import(args: argparse.Namespace) -> int:
         _dump_json(report)
         return 0
     except (BenchmarkGovernanceError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
+def _run_benchmark_freeze(args: argparse.Namespace) -> int:
+    try:
+        report = create_benchmark_split_freeze(
+            split_name=args.split_name,
+            role=args.role,
+            queries_path=args.queries,
+            qrels_path=args.qrels,
+            participated_in_tuning=args.participated_in_tuning,
+            evaluator_independent=args.evaluator_independent,
+            evaluator_id=args.evaluator_id,
+            freeze_time=args.freeze_time,
+        )
+        _write_json_file(args.output, report)
+        _dump_json(report)
+        return 0
+    except (BenchmarkGovernanceError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
+def _run_benchmark_verify_freeze(args: argparse.Namespace) -> int:
+    try:
+        report = verify_benchmark_split_freeze(
+            freeze_path=args.freeze,
+            queries_path=args.queries,
+            qrels_path=args.qrels,
+        )
+        _write_json_file(args.report_json, report)
+        _dump_json(report)
+        return 0
+    except (BenchmarkGovernanceError, OSError, RuntimeError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
+def _run_hints_review(args: argparse.Namespace) -> int:
+    try:
+        candidates = _read_json_file(args.candidates, label="candidate retrieval hints")
+        decisions = _read_json_file(args.decisions, label="retrieval hint review decisions")
+        if not isinstance(candidates, Mapping) or not isinstance(decisions, Mapping):
+            raise BuildError("candidate hints and review decisions must be JSON objects")
+        report = create_reviewed_retrieval_hints(candidates, decisions)
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[args.candidates, args.decisions],
+                output_paths=[args.output],
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.output, report)
+        _dump_json(report)
+        return 0
+    except (BuildError, OSError, RuntimeError) as exc:
         return _error(str(exc), json_output=args.json)
 
 
@@ -4308,6 +4592,7 @@ def _run_activation_plan(args: argparse.Namespace) -> int:
             doc_manifest_path=args.doc_manifest,
             route_config_path=args.route_config,
             retrieval_hints_path=args.retrieval_hints,
+            reviewed_hints_path=args.reviewed_hints,
             ingest_plan_path=args.ingest_plan,
             profile_path=args.profile,
             chunk_snapshot_path=args.chunk_snapshot,
@@ -4325,6 +4610,7 @@ def _run_activation_plan(args: argparse.Namespace) -> int:
                     args.doc_manifest,
                     args.route_config,
                     args.retrieval_hints,
+                    args.reviewed_hints,
                     args.ingest_plan,
                     args.profile,
                     args.chunk_snapshot,
@@ -4462,6 +4748,7 @@ def _sanitize_health_report(report: dict[str, Any], args: argparse.Namespace) ->
             *args.observed_state,
             *args.activation_plan,
             *args.model_provider_probe,
+            *args.retrieval_evidence,
             args.report_json,
             args.report_md,
             args.redaction_report,
@@ -4478,6 +4765,7 @@ def _run_health_report(args: argparse.Namespace) -> int:
             observed_state_paths=args.observed_state,
             activation_plan_paths=args.activation_plan,
             model_provider_probe_paths=args.model_provider_probe,
+            retrieval_evidence_paths=args.retrieval_evidence,
             min_documents=args.min_documents,
             min_chunks=args.min_chunks,
             expected_embedding_models=args.expected_embedding_model,
@@ -4589,6 +4877,10 @@ def build_image_ingestion_execute_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Execute gated visual-document ingestion against an existing RAGFlow dataset")
     parser.add_argument("--execute", action="store_true", help="Allow live visual-document upload after readiness review")
     parser.add_argument("--asset-upload-plan", required=True, help="ragflow_kb_asset_upload_plan_v2 JSON")
+    parser.add_argument(
+        "--transport-capability",
+        help="Read-only ragflow_transport_capability_v1 evidence; may be embedded in the asset plan",
+    )
     parser.add_argument("--dataset-id", required=True, help="Existing RAGFlow dataset ID to mutate")
     parser.add_argument("--confirm-dataset-id", required=True, help="Must exactly match --dataset-id")
     parser.add_argument("--confirm-planned-count", required=True, type=int, help="Must equal planned_visual_upload_files count")
@@ -4797,6 +5089,27 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     import_cmd.add_argument("--redaction-report", help="Optional redaction sidecar for generated reports")
     import_cmd.add_argument("--json", action="store_true", help="Emit JSON errors")
     import_cmd.set_defaults(func=_run_benchmark_import)
+
+    freeze = subparsers.add_parser("freeze", help="Freeze benchmark split provenance and input hashes")
+    freeze.add_argument("--split-name", required=True, help="Stable split name")
+    freeze.add_argument("--role", choices=("development", "regression", "sealed_holdout"), required=True)
+    freeze.add_argument("--queries", required=True, help="Benchmark queries JSON")
+    freeze.add_argument("--qrels", required=True, help="Benchmark qrels JSON")
+    freeze.add_argument("--participated-in-tuning", action="store_true", help="Record that this split participated in tuning")
+    freeze.add_argument("--evaluator-independent", action="store_true", help="Record independent evaluator isolation")
+    freeze.add_argument("--evaluator-id", help="Public-safe evaluator label")
+    freeze.add_argument("--freeze-time", help="Optional reviewed ISO-8601 freeze time")
+    freeze.add_argument("--output", required=True, help="Output ragflow_benchmark_split_freeze_v1 JSON")
+    freeze.add_argument("--json", action="store_true", help="Emit JSON errors")
+    freeze.set_defaults(func=_run_benchmark_freeze)
+
+    verify_freeze = subparsers.add_parser("verify-freeze", help="Verify benchmark split bytes against a freeze artifact")
+    verify_freeze.add_argument("--freeze", required=True, help="ragflow_benchmark_split_freeze_v1 JSON")
+    verify_freeze.add_argument("--queries", required=True, help="Current benchmark queries JSON")
+    verify_freeze.add_argument("--qrels", required=True, help="Current benchmark qrels JSON")
+    verify_freeze.add_argument("--report-json", help="Optional verification report JSON")
+    verify_freeze.add_argument("--json", action="store_true", help="Emit JSON errors")
+    verify_freeze.set_defaults(func=_run_benchmark_verify_freeze)
 
     preflight = subparsers.add_parser("preflight", help="Check benchmark artifacts before live validation")
     preflight.add_argument("--manifest", help="Benchmark manifest.json")
@@ -5262,7 +5575,8 @@ def build_activation_plan_parser() -> argparse.ArgumentParser:
     parser.add_argument("--kb-manifest", required=True, help="Local kb_manifest.json for the built KB")
     parser.add_argument("--doc-manifest", help="Optional source doc_manifest.json for content quality checks")
     parser.add_argument("--route-config", help="Optional user-owned routing config")
-    parser.add_argument("--retrieval-hints", help="Optional rich handoff retrieval_hints.json")
+    parser.add_argument("--retrieval-hints", help="Optional candidate retrieval_hints.json used only to verify review binding")
+    parser.add_argument("--reviewed-hints", help="Reviewed ragflow_reviewed_retrieval_hints_v1 activation input")
     parser.add_argument("--ingest-plan", help="Optional ragflow_ingest_plan.yaml from ragflow-doc-to-md pipeline")
     parser.add_argument("--profile", help="Optional reviewed kb-build profile used for ingestion")
     parser.add_argument("--chunk-snapshot", help="Optional ragflow_chunk_snapshot_v1 JSON")
@@ -5275,6 +5589,19 @@ def build_activation_plan_parser() -> argparse.ArgumentParser:
     parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
     parser.add_argument("--json", action="store_true", help="Emit JSON errors")
     parser.set_defaults(func=_run_activation_plan)
+    return parser
+
+
+def build_hints_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Review candidate retrieval hints for activation")
+    subparsers = parser.add_subparsers(dest="hints_command", required=True)
+    review = subparsers.add_parser("review", help="Create a hash-bound reviewed hint artifact")
+    review.add_argument("--candidates", required=True, help="ragflow_retrieval_hints_v1 candidate JSON")
+    review.add_argument("--decisions", required=True, help="ragflow_retrieval_hint_review_decisions_v1 JSON")
+    review.add_argument("--output", required=True, help="Output ragflow_reviewed_retrieval_hints_v1 JSON")
+    review.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    review.add_argument("--json", action="store_true", help="Emit JSON errors")
+    review.set_defaults(func=_run_hints_review)
     return parser
 
 
@@ -5383,6 +5710,12 @@ def build_health_report_parser() -> argparse.ArgumentParser:
         default=[],
         help="Optional ragflow_model_provider_probe_report_v1 JSON; may be repeated",
     )
+    parser.add_argument(
+        "--retrieval-evidence",
+        action="append",
+        default=[],
+        help="Optional local retrieval evidence JSON; may be repeated",
+    )
     parser.add_argument("--min-documents", type=int, default=1, help="Minimum documents before a KB is considered non-empty")
     parser.add_argument("--min-chunks", type=int, default=1, help="Minimum declared chunks before a KB is considered non-empty")
     parser.add_argument(
@@ -5477,6 +5810,9 @@ def main(argv: list[str] | None = None) -> int:
         if command == "benchmark":
             benchmark_args = build_benchmark_parser().parse_args(command_args)
             return benchmark_args.func(benchmark_args)
+        if command == "hints":
+            hints_args = build_hints_parser().parse_args(command_args)
+            return hints_args.func(hints_args)
         if command == "suppression-report":
             suppression_args = build_suppression_report_parser().parse_args(command_args)
             return suppression_args.func(suppression_args)

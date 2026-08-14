@@ -16,6 +16,12 @@ from .kb_build import BuildDocument
 from .manifests import KbManifest, ManifestError, load_doc_manifest, load_kb_manifest
 from .metadata_governance import MetadataGovernanceError, load_metadata
 from .profiles import ChunkProfile, ProfileError, load_profile
+from .retrieval_hint_governance import (
+    REVIEWED_RETRIEVAL_HINTS_SCHEMA,
+    RetrievalHintGovernanceError,
+    candidate_artifact_sha256,
+    load_reviewed_retrieval_hints,
+)
 from .routing import (
     RoutingConfig,
     RoutingError,
@@ -223,6 +229,66 @@ def _load_retrieval_hints(path: str | Path | None) -> dict[str, Any]:
     if payload.get("schema") != "ragflow_retrieval_hints_v1":
         raise TopologyError("retrieval hints schema must be ragflow_retrieval_hints_v1")
     return payload
+
+
+def _load_reviewed_hints(path: str | Path | None) -> dict[str, Any]:
+    if not path:
+        return {}
+    try:
+        return load_reviewed_retrieval_hints(path)
+    except RetrievalHintGovernanceError as exc:
+        raise TopologyError(str(exc)) from exc
+
+
+def _hint_review_check(
+    *,
+    candidate_path: str | Path | None,
+    candidates: Mapping[str, Any],
+    reviewed_path: str | Path | None,
+    reviewed: Mapping[str, Any],
+) -> dict[str, Any]:
+    issues: list[dict[str, str]] = []
+    if candidate_path and not reviewed_path:
+        issues.append(
+            _activation_issue(
+                "error",
+                "candidate_hints_not_reviewed",
+                "candidate retrieval hints cannot be consumed by activation planning",
+                path="retrieval_hints",
+                recommendation="Run ragflow-kb-build hints review and pass --reviewed-hints.",
+            )
+        )
+    if candidate_path and reviewed_path and reviewed:
+        current_hash = candidate_artifact_sha256(candidates)
+        if reviewed.get("input_sha256") != current_hash:
+            issues.append(
+                _activation_issue(
+                    "error",
+                    "reviewed_hint_input_drift",
+                    "reviewed hints do not bind to the supplied candidate artifact",
+                    path="reviewed_hints.input_sha256",
+                    recommendation="Review the current candidate artifact again before activation.",
+                )
+            )
+    rejected = reviewed.get("rejected_candidates", []) if isinstance(reviewed.get("rejected_candidates"), list) else []
+    return {
+        "status": _activation_status(issues),
+        "optional": not candidate_path and not reviewed_path,
+        "candidate_schema": candidates.get("schema") if candidates else None,
+        "reviewed_schema": reviewed.get("schema") if reviewed else None,
+        "candidate_path": str(candidate_path) if candidate_path else None,
+        "reviewed_path": str(reviewed_path) if reviewed_path else None,
+        "candidate_input_sha256": candidate_artifact_sha256(candidates) if candidates else None,
+        "reviewed_input_sha256": reviewed.get("input_sha256") if reviewed else None,
+        "accepted_count": int(reviewed.get("summary", {}).get("accepted_count", 0))
+        if isinstance(reviewed.get("summary"), Mapping)
+        else 0,
+        "rejected_count": len(rejected),
+        "rejected_candidate_ids": [
+            str(item.get("candidate_id")) for item in rejected if isinstance(item, Mapping) and item.get("candidate_id")
+        ],
+        "issues": issues,
+    }
 
 
 def _list_count(payload: Mapping[str, Any], key: str) -> int:
@@ -1344,6 +1410,8 @@ def _activation_recommendation(checks: Mapping[str, Any]) -> dict[str, Any]:
             "action": "complete_activation_prerequisites",
             "confidence": "high",
             "reasons": [f"blocked checks: {', '.join(blocking)}"],
+            "blocked_checks": blocking,
+            "review_checks": review,
             "advisory_only": True,
         }
     if review:
@@ -1351,12 +1419,16 @@ def _activation_recommendation(checks: Mapping[str, Any]) -> dict[str, Any]:
             "action": "review_before_activation",
             "confidence": "medium",
             "reasons": [f"checks need review: {', '.join(review)}"],
+            "blocked_checks": [],
+            "review_checks": review,
             "advisory_only": True,
         }
     return {
         "action": "ready_for_activation_review",
         "confidence": "high",
         "reasons": ["all required offline activation checks are ready"],
+        "blocked_checks": [],
+        "review_checks": [],
         "advisory_only": True,
     }
 
@@ -1594,6 +1666,7 @@ def create_kb_activation_plan(
     doc_manifest_path: str | Path | None = None,
     route_config_path: str | Path | None = None,
     retrieval_hints_path: str | Path | None = None,
+    reviewed_hints_path: str | Path | None = None,
     ingest_plan_path: str | Path | None = None,
     profile_path: str | Path | None = None,
     chunk_snapshot_path: str | Path | None = None,
@@ -1611,6 +1684,12 @@ def create_kb_activation_plan(
     kb_manifest = _load_activation_kb_manifest(kb_manifest_path)
     doc_manifest = _load_activation_doc_manifest(doc_manifest_path)
     retrieval_hints = _load_retrieval_hints(retrieval_hints_path)
+    reviewed_hints = _load_reviewed_hints(reviewed_hints_path)
+    activation_hints = (
+        dict(reviewed_hints.get("activation_hints"))
+        if isinstance(reviewed_hints.get("activation_hints"), Mapping)
+        else {}
+    )
     ingest_plan = _load_activation_ingest_plan(ingest_plan_path)
     profile = _load_activation_profile(profile_path)
     chunk_snapshot = _load_activation_chunk_snapshot(chunk_snapshot_path)
@@ -1636,7 +1715,13 @@ def create_kb_activation_plan(
         ),
         "hint_coverage": _hint_coverage_check(
             registered_kb=registered,
-            retrieval_hints=retrieval_hints,
+            retrieval_hints=activation_hints,
+        ),
+        "hint_review": _hint_review_check(
+            candidate_path=retrieval_hints_path,
+            candidates=retrieval_hints,
+            reviewed_path=reviewed_hints_path,
+            reviewed=reviewed_hints,
         ),
         "ingest_plan_consistency": _ingest_plan_consistency_check(
             ingest_plan=ingest_plan,
@@ -1676,6 +1761,7 @@ def create_kb_activation_plan(
             "doc_manifest": str(doc_manifest_path) if doc_manifest_path else None,
             "route_config": str(route_config_path) if route_config_path else None,
             "retrieval_hints": str(retrieval_hints_path) if retrieval_hints_path else None,
+            "reviewed_hints": str(reviewed_hints_path) if reviewed_hints_path else None,
             "ingest_plan": str(ingest_plan_path) if ingest_plan_path else None,
             "profile": str(profile_path) if profile_path else None,
             "chunk_snapshot": str(chunk_snapshot_path) if chunk_snapshot_path else None,
@@ -1689,7 +1775,8 @@ def create_kb_activation_plan(
             "declared_chunk_count": checks["chunk_readiness"]["declared_chunk_count"],
             "effective_chunk_count": checks["chunk_readiness"]["effective_chunk_count"],
             "retrieval_hints_provided": bool(retrieval_hints_path),
-            "retrieval_hints_empty": _retrieval_hints_summary(retrieval_hints_path, retrieval_hints)["empty"],
+            "retrieval_hints_empty": _retrieval_hints_summary(reviewed_hints_path, activation_hints)["empty"],
+            "reviewed_hints_provided": bool(reviewed_hints_path),
             "ingest_plan_provided": bool(ingest_plan_path),
             "required_check_count": len(required_checks),
             "blocked_check_count": len(blocked),
@@ -1699,7 +1786,7 @@ def create_kb_activation_plan(
         },
         "recommendation": recommendation,
         "checks": checks,
-        "route_entry_suggestion": _route_entry_suggestion(kb_manifest, retrieval_hints),
+        "route_entry_suggestion": _route_entry_suggestion(kb_manifest, activation_hints),
         "next_steps": [
             "Review this activation plan before editing any user-owned routing config.",
             "Add or update route config entries explicitly outside this command when ready.",

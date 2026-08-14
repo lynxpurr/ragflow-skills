@@ -141,6 +141,7 @@ KB_COVERED_COMMANDS = (
     "ragflow-kb-build benchmark suggest",
     "ragflow-kb-build benchmark summarize",
     "ragflow-kb-build benchmark trend",
+    "ragflow-kb-build hints review",
     "ragflow-kb-build cleanup",
     "ragflow-kb-build consistency-check",
     "ragflow-kb-build diagnose",
@@ -189,6 +190,8 @@ KB_COVERED_COMMANDS = (
 KB_NEEDS_REDACTION_COMMANDS: tuple[str, ...] = ()
 KB_NOT_APPLICABLE_COMMANDS = (
     "ragflow-kb-build",
+    "ragflow-kb-build benchmark freeze",
+    "ragflow-kb-build benchmark verify-freeze",
     "ragflow-kb-build metadata generate-template",
     "ragflow-kb-build tagset export",
     "ragflow-kb-build tagset generate-template",
@@ -390,6 +393,7 @@ def discover_public_commands(root: Path = ROOT) -> list[DiscoveredCommand]:
         (("ragflow-kb-build", "tagset"), kb.build_tagset_parser),
         (("ragflow-kb-build", "snapshot-chunks"), kb.build_snapshot_chunks_parser),
         (("ragflow-kb-build", "benchmark"), kb.build_benchmark_parser),
+        (("ragflow-kb-build", "hints"), kb.build_hints_parser),
         (("ragflow-kb-build", "suppression-report"), kb.build_suppression_report_parser),
         (("ragflow-kb-build", "qa"), kb.build_qa_parser),
         (("ragflow-kb-build", "segment-metadata"), kb.build_segment_metadata_parser),

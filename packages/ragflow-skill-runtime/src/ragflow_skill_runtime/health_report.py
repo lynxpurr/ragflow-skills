@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -95,6 +96,10 @@ def _load_schema_sidecars(paths: Iterable[str | Path], *, expected_schema: str, 
         if payload.get("schema") != expected_schema:
             raise HealthReportError(f"{label} schema must be {expected_schema}: {path}")
         payload["_source_path"] = str(path)
+        try:
+            payload["_source_sha256"] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        except OSError as exc:
+            raise HealthReportError(f"{label} could not be hashed: {path}") from exc
         payloads.append(payload)
     return payloads
 
@@ -272,6 +277,118 @@ def _activation_summary(activation_plan: Mapping[str, Any] | None) -> dict[str, 
         "review_check_count": review,
         "recommendation": summary.get("recommendation") or "review_activation_plan",
         "source": activation_plan.get("_source_path"),
+    }
+
+
+def _compatibility_dimension(
+    payload: Mapping[str, Any] | None,
+    *,
+    kind: str,
+    content_sha256: str | None = None,
+) -> dict[str, Any]:
+    source = dict(payload or {})
+    raw_status = str(source.get("status") or "not_available").lower()
+    unknown_statuses = {"not_available", "unknown", "not_configured", ""}
+    blocked_statuses = {"fail", "failed", "error", "blocked", "timeout"}
+    review_statuses = {
+        "review", "warning", "partial_failure", "pass_with_review", "partial", "empty",
+        "low_quality", "needs_refinement", "completed_with_warnings",
+    }
+    ready_statuses = {"pass", "passed", "ready", "success", "completed", "ok"}
+    if raw_status in unknown_statuses:
+        status = "unknown"
+    elif raw_status in blocked_statuses:
+        status = "blocked"
+    elif raw_status in review_statuses:
+        status = "review"
+    elif raw_status in ready_statuses:
+        status = "ready"
+    else:
+        status = "unknown"
+    # `_source_path` is a display label; it must not change evidence identity.
+    source.pop("_source_path", None)
+    source.pop("_source_sha256", None)
+    encoded = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {
+        "status": status,
+        "source_status": raw_status,
+        "source_schema": source.get("schema"),
+        "source_sha256": content_sha256 or hashlib.sha256(encoded).hexdigest(),
+    }
+
+
+def create_compatibility_readiness(
+    *,
+    provider: Mapping[str, Any] | None,
+    parse: Mapping[str, Any] | None,
+    retrieval: Mapping[str, Any] | None,
+    activation: Mapping[str, Any] | None,
+    run_identity: str | None,
+    evidence_hashes: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Report provider, parse, retrieval, and activation evidence independently."""
+
+    sources = {
+        "provider": provider,
+        "parse": parse,
+        "retrieval": retrieval,
+        "activation": activation,
+    }
+    embedded_run_identities = {
+        str(payload.get("run_identity"))
+        for payload in sources.values()
+        if isinstance(payload, Mapping) and payload.get("run_identity")
+    }
+    if len(embedded_run_identities) > 1:
+        raise HealthReportError("compatibility readiness evidence has conflicting run identity values")
+    effective_run_identity = str(run_identity or "").strip()
+    if embedded_run_identities:
+        embedded_run_identity = next(iter(embedded_run_identities))
+        if effective_run_identity and effective_run_identity != embedded_run_identity:
+            raise HealthReportError("compatibility readiness run identity does not match evidence")
+        effective_run_identity = embedded_run_identity
+    if not effective_run_identity:
+        raise HealthReportError("compatibility readiness requires run identity")
+    for kind, content_sha256 in (evidence_hashes or {}).items():
+        if content_sha256 and (
+            not isinstance(content_sha256, str)
+            or len(content_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in content_sha256.lower())
+        ):
+            raise HealthReportError(f"compatibility readiness {kind} evidence hash must be SHA-256")
+
+    dimensions = {
+        "provider_observability": _compatibility_dimension(
+            provider, kind="provider", content_sha256=(evidence_hashes or {}).get("provider")
+        ),
+        "parse_readiness": _compatibility_dimension(
+            parse, kind="parse", content_sha256=(evidence_hashes or {}).get("parse")
+        ),
+        "retrieval_evidence": _compatibility_dimension(
+            retrieval, kind="retrieval", content_sha256=(evidence_hashes or {}).get("retrieval")
+        ),
+        "activation_readiness": _compatibility_dimension(
+            activation, kind="activation", content_sha256=(evidence_hashes or {}).get("activation")
+        ),
+    }
+    decision_dimensions = [dimensions[key] for key in ("parse_readiness", "retrieval_evidence", "activation_readiness")]
+    provider_dimension = dimensions["provider_observability"]
+    overall = (
+        "blocked"
+        if provider_dimension["status"] == "blocked"
+        or any(item["status"] == "blocked" for item in decision_dimensions)
+        else "review"
+        if provider_dimension["status"] == "review"
+        or any(item["status"] in {"review", "unknown"} for item in decision_dimensions)
+        else "ready"
+    )
+    return {
+        "schema": "ragflow_compatibility_readiness_v1",
+        "run_identity": effective_run_identity,
+        "overall_status": overall,
+        "ok": overall != "blocked",
+        "provider_unknown_is_non_blocking": dimensions["provider_observability"]["status"] == "unknown",
+        "dimensions": dimensions,
     }
 
 
@@ -606,6 +723,7 @@ def create_kb_health_report(
     observed_state_paths: Iterable[str | Path] | None = None,
     activation_plan_paths: Iterable[str | Path] | None = None,
     model_provider_probe_paths: Iterable[str | Path] | None = None,
+    retrieval_evidence_paths: Iterable[str | Path] | None = None,
     min_documents: int = 1,
     min_chunks: int = 1,
     expected_embedding_models: Iterable[str] | None = None,
@@ -636,10 +754,58 @@ def create_kb_health_report(
         expected_schema=MODEL_PROVIDER_PROBE_REPORT_SCHEMA,
         label="model-provider probe",
     )
+    retrieval_evidence: list[dict[str, Any]] = []
+    for path in retrieval_evidence_paths or []:
+        source = Path(path)
+        try:
+            payload = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise HealthReportError(f"retrieval evidence is not valid JSON: {source}") from exc
+        if not isinstance(payload, Mapping):
+            raise HealthReportError(f"retrieval evidence must be a JSON object: {source}")
+        item = dict(payload)
+        item["_source_path"] = str(source)
+        try:
+            item["_source_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise HealthReportError(f"retrieval evidence could not be hashed: {source}") from exc
+        retrieval_evidence.append(item)
     parse_by_dataset = _index_by_dataset_id(parse_reports)
     observed_by_dataset = _index_by_dataset_id(observed_states)
     activation_by_dataset = _index_by_dataset_id(activation_plans)
     model_provider_probe, model_provider_issues = _model_provider_probe_summary(model_provider_probes)
+    provider_source_hash = next(
+        (str(item.get("_source_sha256")) for item in model_provider_probes if item.get("_source_sha256")),
+        None,
+    )
+    provider_evidence: Mapping[str, Any] = model_provider_probe
+    parse_evidence: Mapping[str, Any] = parse_reports[0] if parse_reports else (
+        observed_states[0] if observed_states else {}
+    )
+    retrieval_evidence_item: Mapping[str, Any] = retrieval_evidence[0] if retrieval_evidence else {}
+    activation_evidence: Mapping[str, Any] = activation_plans[0] if activation_plans else {}
+    evidence_hashes = {
+        "provider": provider_source_hash or "",
+        "parse": str(parse_evidence.get("_source_sha256") or "") if isinstance(parse_evidence, Mapping) else "",
+        "retrieval": str(retrieval_evidence_item.get("_source_sha256") or "") if isinstance(retrieval_evidence_item, Mapping) else "",
+        "activation": str(activation_evidence.get("_source_sha256") or "") if isinstance(activation_evidence, Mapping) else "",
+    }
+    readiness_sources = (provider_evidence, parse_evidence, retrieval_evidence_item, activation_evidence)
+    has_embedded_run_identity = any(
+        isinstance(source, Mapping) and bool(source.get("run_identity"))
+        for source in readiness_sources
+    )
+    derived_run_identity = "health-" + hashlib.sha256(
+        json.dumps(evidence_hashes, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:20]
+    compatibility_readiness = create_compatibility_readiness(
+        provider=provider_evidence,
+        parse=parse_evidence,
+        retrieval=retrieval_evidence_item,
+        activation=activation_evidence,
+        run_identity=None if has_embedded_run_identity else derived_run_identity,
+        evidence_hashes=evidence_hashes,
+    )
 
     kb_items: list[dict[str, Any]] = []
     issues: list[dict[str, Any]] = [*model_provider_issues]
@@ -694,6 +860,7 @@ def create_kb_health_report(
             "observed_states": [str(path) for path in (observed_state_paths or [])],
             "activation_plans": [str(path) for path in (activation_plan_paths or [])],
             "model_provider_probes": [str(path) for path in (model_provider_probe_paths or [])],
+            "retrieval_evidence": [str(path) for path in (retrieval_evidence_paths or [])],
             "min_documents": min_documents,
             "min_chunks": min_chunks,
             "expected_embedding_models": expected_models,
@@ -735,6 +902,7 @@ def create_kb_health_report(
         },
         "embedding_model_distribution": embedding_distribution,
         "model_provider_probe": model_provider_probe,
+        "compatibility_readiness": compatibility_readiness,
         "knowledge_bases": kb_items,
         "issues": issues,
         "recommendations": _global_recommendations(issues),

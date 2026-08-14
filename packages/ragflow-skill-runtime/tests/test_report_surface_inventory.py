@@ -20,14 +20,14 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_report_surface_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 106)
+        self.assertEqual(report["summary"]["command_count"], 109)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
             {
-                "covered": 95,
+                "covered": 96,
                 "needs_redaction": 0,
-                "not_applicable": 11,
+                "not_applicable": 13,
             },
         )
 
@@ -102,6 +102,13 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
         self.assertEqual(image_ingestion_execute["status"], "covered")
         self.assertIn("json_report", image_ingestion_execute["output_categories"])
         self.assertIn("redaction_sidecar", image_ingestion_execute["output_categories"])
+
+        hints_review = by_command["ragflow-kb-build hints review"]
+        self.assertEqual(hints_review["status"], "covered")
+        self.assertIn("artifact_json", hints_review["output_categories"])
+        self.assertIn("redaction_sidecar", hints_review["output_categories"])
+        self.assertEqual(by_command["ragflow-kb-build benchmark freeze"]["status"], "not_applicable")
+        self.assertEqual(by_command["ragflow-kb-build benchmark verify-freeze"]["status"], "not_applicable")
 
         consistency_check = by_command["ragflow-kb-build consistency-check"]
         self.assertEqual(consistency_check["status"], "covered")

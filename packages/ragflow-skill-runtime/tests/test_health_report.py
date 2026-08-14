@@ -251,6 +251,8 @@ class HealthReportTests(unittest.TestCase):
         self.assertIn("model_provider_rerank_model_not_registered", issue_codes)
         self.assertIn("Model Provider Probe", markdown)
         self.assertIn("missing expected models: 1", markdown)
+        self.assertIn("compatibility_readiness", report)
+        self.assertIn("provider_observability", report["compatibility_readiness"]["dimensions"])
 
     def test_health_report_rejects_wrong_parse_report_schema(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

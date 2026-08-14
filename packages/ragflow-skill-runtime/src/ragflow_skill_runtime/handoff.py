@@ -16,6 +16,7 @@ from typing import Any, Mapping
 from .doc_convert import sha256_file
 from .doc_quality import DocQualityError, load_doc_manifest_payload
 from .html_tables import parse_html_tables
+from .retrieval_hint_governance import decorate_candidate_hints
 
 
 HANDOFF_PACKAGE_SCHEMA = "ragflow_handoff_package_v1"
@@ -1591,16 +1592,28 @@ def _section_boundaries(*, markdown_rel: str, text: str) -> list[dict[str, Any]]
     return headings
 
 
-def _add_keyword_candidate(candidates: dict[str, dict[str, Any]], *, term: str, source: str, weight: float) -> None:
+def _add_keyword_candidate(
+    candidates: dict[tuple[str, str], dict[str, Any]],
+    *,
+    term: str,
+    source: str,
+    source_document: str,
+    weight: float,
+) -> None:
     normalized = " ".join(term.strip(" #`*_:-").split())
     if not normalized:
         return
-    key = normalized.lower()
+    key = (normalized.lower(), source_document)
     has_cjk = any("\u4e00" <= char <= "\u9fff" for char in normalized)
-    if (len(key) < 3 and not has_cjk) or key in STOPWORDS:
+    if (len(key[0]) < 3 and not has_cjk) or key[0] in STOPWORDS:
         return
     if key not in candidates:
-        candidates[key] = {"term": normalized, "source": source, "weight": weight}
+        candidates[key] = {
+            "term": normalized,
+            "source": source,
+            "source_document": source_document,
+            "weight": weight,
+        }
 
 
 def _has_cjk(text: str) -> bool:
@@ -1698,7 +1711,7 @@ def _document_type_signal(*, markdown_rel: str, text: str, sections: list[Mappin
 
 
 def _apply_template_keywords(
-    candidates: dict[str, dict[str, Any]],
+    candidates: dict[tuple[str, str], dict[str, Any]],
     *,
     document_type_signals: list[Mapping[str, Any]],
 ) -> None:
@@ -1707,9 +1720,18 @@ def _apply_template_keywords(
         template = DOC_TYPE_TEMPLATES.get(str(doc_type))
         if not template:
             continue
+        source_document = signal.get("document")
+        if not isinstance(source_document, str) or not source_document:
+            continue
         for term in template.get("keywords", []):
             if isinstance(term, str):
-                _add_keyword_candidate(candidates, term=term, source=f"deterministic_template:{doc_type}", weight=0.65)
+                _add_keyword_candidate(
+                    candidates,
+                    term=term,
+                    source=f"deterministic_template:{doc_type}",
+                    source_document=source_document,
+                    weight=0.65,
+                )
 
 
 def _keyword_candidates(
@@ -1721,31 +1743,64 @@ def _keyword_candidates(
     table_artifacts: list[Mapping[str, Any]] | None = None,
     layout_signals: list[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    candidates: dict[str, dict[str, Any]] = {}
+    candidates: dict[tuple[str, str], dict[str, Any]] = {}
     for document in documents:
         title = document.get("title")
-        if isinstance(title, str):
-            _add_keyword_candidate(candidates, term=title, source="document_title", weight=1.0)
+        markdown = document.get("markdown") if isinstance(document.get("markdown"), Mapping) else {}
+        source_document = markdown.get("path") or document.get("markdown_path")
+        if isinstance(title, str) and isinstance(source_document, str) and source_document:
+            _add_keyword_candidate(
+                candidates,
+                term=title,
+                source="document_title",
+                source_document=source_document,
+                weight=1.0,
+            )
     for section in sections:
         title = section.get("title")
-        if not isinstance(title, str):
+        source_document = section.get("document")
+        if not isinstance(title, str) or not isinstance(source_document, str) or not source_document:
             continue
-        _add_keyword_candidate(candidates, term=title, source="heading", weight=0.9)
+        _add_keyword_candidate(
+            candidates, term=title, source="heading", source_document=source_document, weight=0.9
+        )
         for word in WORD_RE.findall(title):
-            _add_keyword_candidate(candidates, term=word, source="heading_word", weight=0.5)
+            _add_keyword_candidate(
+                candidates, term=word, source="heading_word", source_document=source_document, weight=0.5
+            )
         for phrase in CJK_PHRASE_RE.findall(title):
-            _add_keyword_candidate(candidates, term=phrase, source="heading_phrase", weight=0.7)
+            _add_keyword_candidate(
+                candidates, term=phrase, source="heading_phrase", source_document=source_document, weight=0.7
+            )
     _apply_template_keywords(candidates, document_type_signals=list(document_type_signals or []))
     for artifact in list(image_artifacts or []) + list(table_artifacts or []):
+        source_document = artifact.get("document")
+        if not isinstance(source_document, str) or not source_document:
+            continue
         for key in ("caption", "alt_text", "source_heading"):
             value = artifact.get(key)
             if isinstance(value, str):
-                _add_keyword_candidate(candidates, term=value, source=f"{artifact.get('kind', 'artifact')}_{key}", weight=0.45)
+                _add_keyword_candidate(
+                    candidates,
+                    term=value,
+                    source=f"{artifact.get('kind', 'artifact')}_{key}",
+                    source_document=source_document,
+                    weight=0.45,
+                )
     for signal in list(layout_signals or []):
+        source_document = signal.get("document")
+        if not isinstance(source_document, str) or not source_document:
+            continue
         text = signal.get("text") or signal.get("caption")
         if isinstance(text, str):
             for phrase in CJK_PHRASE_RE.findall(text[:120]):
-                _add_keyword_candidate(candidates, term=phrase, source="layout_signal_phrase", weight=0.35)
+                _add_keyword_candidate(
+                    candidates,
+                    term=phrase,
+                    source="layout_signal_phrase",
+                    source_document=source_document,
+                    weight=0.35,
+                )
     return sorted(candidates.values(), key=lambda item: (-float(item.get("weight", 0)), str(item.get("term", ""))))[:60]
 
 
@@ -1821,7 +1876,15 @@ def _question_candidates(
                 "page": candidate.get("page"),
             }
         )
-    return questions[:30]
+    deduplicated: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for question in questions:
+        identity = json.dumps(question, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        deduplicated.append(question)
+    return deduplicated[:30]
 
 
 def _numeric_candidates(*, markdown_rel: str, text: str, sections: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -2244,7 +2307,7 @@ def make_retrieval_hints_payload(
         document_type_signals=document_type_signals,
     )
 
-    return {
+    payload = {
         "schema": RETRIEVAL_HINTS_SCHEMA,
         "created_at": _now(),
         "document_count": len(document_summaries),
@@ -2273,6 +2336,24 @@ def make_retrieval_hints_payload(
             list_markers=list_markers,
         ),
     }
+    document_hashes: dict[str, str] = {}
+    document_types = {
+        str(item.get("document")): str(item.get("document_type") or "unknown")
+        for item in document_type_signals
+        if isinstance(item.get("document"), str)
+    }
+    for item in document_summaries:
+        markdown_path = item.get("markdown_path")
+        if not isinstance(markdown_path, str):
+            continue
+        source = root / markdown_path
+        if source.is_file():
+            document_hashes[markdown_path] = sha256_file(source)
+    return decorate_candidate_hints(
+        payload,
+        document_hashes=document_hashes,
+        document_types=document_types,
+    )
 
 
 def make_assistant_profile_payload(

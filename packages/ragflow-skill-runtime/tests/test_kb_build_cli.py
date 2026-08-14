@@ -30,6 +30,28 @@ VALIDATE_SCRIPT = ROOT / "skills" / "ragflow-kb-build" / "scripts" / "validate.p
 PROFILE_PATH = ROOT / "skills" / "ragflow-kb-build" / "templates" / "default-en-768.json"
 
 
+def _transport_capability() -> dict[str, object]:
+    return {
+        "schema": "ragflow_transport_capability_v1",
+        "source": "operator",
+        "server_version": "fake-fixture",
+        "operations": [
+            {
+                "operation": "visual_document_upload",
+                "transport": "multipart_post",
+                "endpoint_class": "dataset_documents",
+                "supported": True,
+            },
+            {
+                "operation": "visual_document_parse",
+                "transport": "json_post",
+                "endpoint_class": "dataset_chunks",
+                "supported": True,
+            },
+        ],
+    }
+
+
 def _env() -> dict[str, str]:
     env = os.environ.copy()
     env["RAGFLOW_SKILL_RUNTIME_PATH"] = str(RUNTIME_SRC)
@@ -1567,7 +1589,6 @@ class KbBuildCliTests(unittest.TestCase):
             first_payload = json.loads(first_stdout.getvalue())
             first_checkpoint = json.loads(checkpoint.read_text(encoding="utf-8"))
 
-            (input_dir / "c.md").write_text("# c.md\n\nKnown answer\n", encoding="utf-8")
             second_output = root / "kb_manifest.second.json"
             second_stdout = io.StringIO()
             with contextlib.redirect_stdout(second_stdout):
@@ -1631,30 +1652,192 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(len(first_checkpoint["uploaded_documents"]), 2)
         self.assertEqual(second_code, 0, second_stdout.getvalue())
         self.assertEqual(FakeCheckpointBuildClient.instances[1].created, [])
-        self.assertEqual(
-            [(dataset_id, Path(path).name) for dataset_id, path in FakeCheckpointBuildClient.instances[1].uploads],
-            [("ds-checkpoint-1", "c.md")],
-        )
-        self.assertEqual(FakeCheckpointBuildClient.instances[1].parsed, [("ds-checkpoint-1", ["doc-checkpoint-3"])])
+        self.assertEqual(FakeCheckpointBuildClient.instances[1].uploads, [])
+        self.assertEqual(FakeCheckpointBuildClient.instances[1].parsed, [])
         self.assertEqual(second_payload["dataset_id"], "ds-checkpoint-1")
         self.assertEqual(second_payload["checkpoint"]["resume"], True)
         self.assertEqual(second_payload["checkpoint"]["skipped_upload_count"], 2)
-        self.assertEqual(second_payload["checkpoint"]["new_upload_count"], 1)
+        self.assertEqual(second_payload["checkpoint"]["new_upload_count"], 0)
         self.assertIn("update_dataset", second_payload["runtime_partial_failure"]["skipped_labels"])
         update_timing = next(
             item for item in second_payload["runtime_metrics"]["stage_timings"]
             if item["stage"] == "update_dataset"
         )
         self.assertEqual(update_timing["reason"], "resume_reuses_existing_dataset")
-        self.assertEqual([Path(item["markdown_path"]).name for item in second_manifest["documents"]], ["a.md", "b.md", "c.md"])
-        self.assertEqual(second_checkpoint["summary"]["uploaded_document_count"], 3)
+        self.assertEqual([Path(item["markdown_path"]).name for item in second_manifest["documents"]], ["a.md", "b.md"])
+        self.assertEqual(second_checkpoint["summary"]["uploaded_document_count"], 2)
         self.assertEqual(second_checkpoint["dataset_update"]["status"], "success")
+        self.assertTrue(all(item.get("source_sha256") for item in second_checkpoint["uploaded_documents"]))
         self.assertEqual(force_code, 0, force_stdout.getvalue())
         self.assertEqual(force_payload["checkpoint"]["force_reupload_confirmed"], True)
         self.assertEqual(
             [Path(path).name for _dataset_id, path in FakeCheckpointBuildClient.instances[2].uploads],
-            ["a.md", "b.md", "c.md"],
+            ["a.md", "b.md"],
         )
+
+    def test_build_live_path_checkpoint_resume_rejects_added_markdown_source(self) -> None:
+        module = load_build_module()
+        FakeCheckpointBuildClient.instances = []
+        FakeCheckpointBuildClient.dataset_counter = 0
+        FakeCheckpointBuildClient.upload_counter = 0
+        module.RAGFlowClient = FakeCheckpointBuildClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "docs"
+            input_dir.mkdir()
+            for name in ("a.md", "b.md"):
+                (input_dir / name).write_text(f"# {name}\n\nKnown answer\n", encoding="utf-8")
+            checkpoint = root / "kb_build.checkpoint.json"
+            first_stdout = io.StringIO()
+            with contextlib.redirect_stdout(first_stdout):
+                first_code = module.main(
+                    [
+                        "--input", str(input_dir),
+                        "--kb-name", "kb:test",
+                        "--profile", str(PROFILE_PATH),
+                        "--base-url", "https://ragflow.example.test",
+                        "--api-key", "test-key",
+                        "--output", str(root / "kb_manifest.first.json"),
+                        "--checkpoint", str(checkpoint),
+                        "--no-wait",
+                        "--json",
+                    ]
+                )
+            baseline_checkpoint = checkpoint.read_bytes()
+
+            (input_dir / "c.md").write_text("# c.md\n\nKnown answer\n", encoding="utf-8")
+            second_stdout = io.StringIO()
+            with contextlib.redirect_stdout(second_stdout):
+                second_code = module.main(
+                    [
+                        "--input", str(input_dir),
+                        "--kb-name", "kb:test",
+                        "--profile", str(PROFILE_PATH),
+                        "--base-url", "https://ragflow.example.test",
+                        "--api-key", "test-key",
+                        "--output", str(root / "kb_manifest.second.json"),
+                        "--checkpoint", str(checkpoint),
+                        "--resume",
+                        "--no-wait",
+                        "--json",
+                    ]
+                )
+            final_checkpoint = checkpoint.read_bytes()
+
+        self.assertEqual(first_code, 0, first_stdout.getvalue())
+        self.assertEqual(second_code, 2, second_stdout.getvalue())
+        self.assertIn("source_hashes do not match current inputs", second_stdout.getvalue())
+        self.assertEqual(FakeCheckpointBuildClient.instances[1].created, [])
+        self.assertEqual(FakeCheckpointBuildClient.instances[1].uploads, [])
+        self.assertEqual(FakeCheckpointBuildClient.instances[1].parsed, [])
+        self.assertEqual(final_checkpoint, baseline_checkpoint)
+
+    def test_build_live_path_recovers_missing_create_id_only_from_unique_fingerprint(self) -> None:
+        module = load_build_module()
+
+        class MissingIdBuildClient(FakeCheckpointBuildClient):
+            candidates: list[dict[str, object]] = []
+
+            def create_dataset(self, name, *, profile=None):
+                self.created.append((str(name), dict(profile or {})))
+                self.documents["ds-recovered"] = []
+                return {"code": 0, "data": {}}
+
+            def list_datasets(self, *, page=1, page_size=200, name=None):
+                return {"data": {"datasets": list(self.candidates)}}
+
+        FakeCheckpointBuildClient.instances = []
+        FakeCheckpointBuildClient.upload_counter = 0
+        module.RAGFlowClient = MissingIdBuildClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "sample.md"
+            source.write_text("# Sample\n\nKnown answer\n", encoding="utf-8")
+            fingerprint = module.dataset_construction_fingerprint(
+                dataset_name="kb:test",
+                create_payload=module.load_profile(PROFILE_PATH).to_dataset_payload(),
+                source_hashes=[hashlib.sha256(source.read_bytes()).hexdigest()],
+            )
+            MissingIdBuildClient.candidates = [
+                {
+                    "id": "ds-recovered",
+                    "name": "kb:test",
+                    "metadata": {"construction_fingerprint": fingerprint},
+                }
+            ]
+            checkpoint = root / "checkpoint.json"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--input", str(source),
+                        "--kb-name", "kb:test",
+                        "--profile", str(PROFILE_PATH),
+                        "--base-url", "https://ragflow.example.test",
+                        "--api-key", "test-key",
+                        "--output", str(root / "kb_manifest.json"),
+                        "--checkpoint", str(checkpoint),
+                        "--no-wait",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(payload["dataset_id"], "ds-recovered")
+        self.assertEqual(FakeCheckpointBuildClient.instances[0].created[0][0], "kb:test")
+        self.assertEqual(FakeCheckpointBuildClient.instances[0].uploads[0][0], "ds-recovered")
+
+    def test_build_live_path_rejects_ambiguous_missing_id_recovery_before_upload(self) -> None:
+        module = load_build_module()
+
+        class AmbiguousMissingIdBuildClient(FakeCheckpointBuildClient):
+            candidates: list[dict[str, object]] = []
+
+            def create_dataset(self, name, *, profile=None):
+                self.created.append((str(name), dict(profile or {})))
+                return {"code": 0, "data": {}}
+
+            def list_datasets(self, *, page=1, page_size=200, name=None):
+                return {"data": {"datasets": list(self.candidates)}}
+
+        FakeCheckpointBuildClient.instances = []
+        FakeCheckpointBuildClient.upload_counter = 0
+        module.RAGFlowClient = AmbiguousMissingIdBuildClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "sample.md"
+            source.write_text("# Sample\n\nKnown answer\n", encoding="utf-8")
+            fingerprint = module.dataset_construction_fingerprint(
+                dataset_name="kb:test",
+                create_payload=module.load_profile(PROFILE_PATH).to_dataset_payload(),
+                source_hashes=[hashlib.sha256(source.read_bytes()).hexdigest()],
+            )
+            AmbiguousMissingIdBuildClient.candidates = [
+                {"id": f"ds-{index}", "name": "kb:test", "construction_fingerprint": fingerprint}
+                for index in (1, 2)
+            ]
+            checkpoint = root / "checkpoint.json"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "--input", str(source),
+                        "--kb-name", "kb:test",
+                        "--profile", str(PROFILE_PATH),
+                        "--base-url", "https://ragflow.example.test",
+                        "--api-key", "test-key",
+                        "--output", str(root / "kb_manifest.json"),
+                        "--checkpoint", str(checkpoint),
+                        "--no-wait",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(code, 2, stdout.getvalue())
+        self.assertIn("ambiguous", stdout.getvalue())
+        self.assertEqual(FakeCheckpointBuildClient.instances[0].uploads, [])
+        self.assertFalse(checkpoint.exists())
 
     def test_build_update_failure_persists_dataset_id_checkpoint(self) -> None:
         module = load_build_module()
@@ -3177,6 +3360,66 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("--confirm-planned-count", error)
         self.assertFalse(output.exists())
 
+    def test_image_ingestion_execute_requires_transport_capability_before_mutation(self) -> None:
+        module = load_build_module()
+        FakeVisualIngestionClient.instances = []
+        module.RAGFlowClient = FakeVisualIngestionClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "one.png").write_bytes(b"one")
+            plan = root / "plan.json"
+            output = root / "output.json"
+            plan.write_text(json.dumps({"schema": "ragflow_kb_asset_upload_plan_v2", "handoff_root": str(root), "summary": {"planned_visual_upload_file_count": 1}, "planned_visual_upload_files": [{"source_path": "one.png"}]}), encoding="utf-8")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(["image-ingestion-execute", "--execute", "--asset-upload-plan", str(plan), "--dataset-id", "ds", "--confirm-dataset-id", "ds", "--confirm-planned-count", "1", "--base-url", "https://ragflow.example.test", "--api-key", "fake-key", "--report-json", str(output), "--json"])
+        self.assertEqual(code, 2)
+        self.assertIn("transport-capability", stdout.getvalue())
+        self.assertEqual(FakeVisualIngestionClient.instances, [])
+        self.assertFalse(output.exists())
+
+    def test_image_ingestion_execute_rejects_asset_hash_drift_before_client_creation(self) -> None:
+        module = load_build_module()
+        FakeVisualIngestionClient.instances = []
+        module.RAGFlowClient = FakeVisualIngestionClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "one.png").write_bytes(b"one")
+            plan = root / "plan.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_kb_asset_upload_plan_v2",
+                        "handoff_root": str(root),
+                        "transport_capability": _transport_capability(),
+                        "summary": {"planned_visual_upload_file_count": 1},
+                        "planned_visual_upload_files": [
+                            {"source_path": "one.png", "sha256": "0" * 64}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "image-ingestion-execute",
+                        "--execute",
+                        "--asset-upload-plan", str(plan),
+                        "--dataset-id", "ds",
+                        "--confirm-dataset-id", "ds",
+                        "--confirm-planned-count", "1",
+                        "--base-url", "https://ragflow.example.test",
+                        "--api-key", "fake-key",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(code, 2, stdout.getvalue())
+        self.assertIn("SHA-256 does not match", stdout.getvalue())
+        self.assertEqual(FakeVisualIngestionClient.instances, [])
+
     def test_image_ingestion_execute_uses_fake_client_and_reports_partial_failure(self) -> None:
         module = load_build_module()
         FakeVisualIngestionClient.instances = []
@@ -3193,6 +3436,7 @@ class KbBuildCliTests(unittest.TestCase):
                     {
                         "schema": "ragflow_kb_asset_upload_plan_v2",
                         "handoff_root": str(root),
+                        "transport_capability": _transport_capability(),
                         "summary": {
                             "planned_visual_upload_file_count": 2,
                             "missing_image_asset_count": 0,
@@ -3259,6 +3503,24 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(parse_wait["item_count"], 2)
         self.assertTrue(payload["cleanup_readiness"]["required"])
         self.assertEqual(payload["cleanup_readiness"]["dataset_id"], "ds-visual")
+        self.assertEqual(
+            {gate["operation"] for gate in payload["transport_gates"]},
+            {"visual_document_upload", "visual_document_parse"},
+        )
+        self.assertEqual(
+            payload["multimodal_manifest"]["lineage"]["transport_evidence"]["schema"],
+            "ragflow_transport_capability_bundle_v1",
+        )
+        visual_lineage = payload["multimodal_manifest"]["visual_documents"][0]["mutation_lineage"]
+        self.assertEqual(visual_lineage["update"]["transport"], "json_put")
+        self.assertEqual(visual_lineage["deletion"]["transport"], "json_delete")
+        self.assertEqual(
+            payload["multimodal_manifest"]["visual_documents"][0]["sha256"],
+            hashlib.sha256(b"ok").hexdigest(),
+        )
+        self.assertEqual(payload["image_enhancement"]["status"], "not_completed")
+        self.assertFalse(payload["image_enhancement"]["staging_only"])
+        self.assertFalse(payload["summary"]["enhanced_image_production_ready"])
         self.assertEqual(len(FakeVisualIngestionClient.instances[0].uploads), 2)
         self.assertEqual(len(FakeVisualIngestionClient.instances[0].parsed), 1)
         self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
@@ -3280,6 +3542,7 @@ class KbBuildCliTests(unittest.TestCase):
                     {
                         "schema": "ragflow_kb_asset_upload_plan_v2",
                         "handoff_root": str(root),
+                        "transport_capability": _transport_capability(),
                         "summary": {
                             "planned_visual_upload_file_count": 1,
                             "missing_image_asset_count": 0,
@@ -3343,6 +3606,7 @@ class KbBuildCliTests(unittest.TestCase):
                     {
                         "schema": "ragflow_kb_asset_upload_plan_v2",
                         "handoff_root": str(root),
+                        "transport_capability": _transport_capability(),
                         "summary": {
                             "planned_visual_upload_file_count": 3,
                             "missing_image_asset_count": 0,
@@ -3403,6 +3667,9 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(payload["batching"]["batches"][1]["uploaded_document_ids"], ["visual-3"])
         self.assertEqual(payload["batching"]["batches"][1]["parse_trigger_status"], "success")
         self.assertEqual(payload["execution"]["parse_trigger_count"], 2)
+        self.assertEqual(payload["image_enhancement"]["status"], "parsed_visual_only")
+        self.assertTrue(payload["image_enhancement"]["staging_only"])
+        self.assertFalse(payload["image_enhancement"]["enhanced_image_production_ready"])
 
     def test_image_ingestion_execute_records_retryable_batch_failure(self) -> None:
         module = load_build_module()
@@ -3420,6 +3687,7 @@ class KbBuildCliTests(unittest.TestCase):
                     {
                         "schema": "ragflow_kb_asset_upload_plan_v2",
                         "handoff_root": str(root),
+                        "transport_capability": _transport_capability(),
                         "summary": {
                             "planned_visual_upload_file_count": 3,
                             "missing_image_asset_count": 0,
@@ -3499,6 +3767,7 @@ class KbBuildCliTests(unittest.TestCase):
                     {
                         "schema": "ragflow_kb_asset_upload_plan_v2",
                         "handoff_root": str(root),
+                        "transport_capability": _transport_capability(),
                         "summary": {
                             "planned_visual_upload_file_count": 2,
                             "missing_image_asset_count": 0,
@@ -3511,6 +3780,16 @@ class KbBuildCliTests(unittest.TestCase):
                     }
                 ),
                 encoding="utf-8",
+            )
+            asset_plan_payload = json.loads(asset_plan.read_text(encoding="utf-8"))
+            binding_args = type("BindingArgs", (), {"dataset_id": "ds-visual"})()
+            bindings = module._image_ingestion_bindings(
+                args=binding_args,
+                asset_plan=asset_plan_payload,
+                resolved_assets=[
+                    {"source_path": name, "resolved_path": root / name}
+                    for name in ("one.png", "two.png")
+                ],
             )
             checkpoint.write_text(
                 json.dumps(
@@ -3531,6 +3810,7 @@ class KbBuildCliTests(unittest.TestCase):
                             }
                         ],
                         "summary": {"uploaded_document_count": 1},
+                        "bindings": bindings,
                     }
                 ),
                 encoding="utf-8",
@@ -5245,6 +5525,114 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("benchmark_artifact_suggestion_count", suggest_result.stdout)
         self.assertIn("RAGFlow Benchmark Retrieval Suggestions", suggest_md_text)
         self.assertIn("Benchmark Artifact Suggestions", suggest_md_text)
+
+    def test_benchmark_freeze_and_verify_cli_detect_input_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queries = root / "queries.json"
+            qrels = root / "qrels.json"
+            freeze = root / "freeze.json"
+            verification = root / "verification.json"
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "Q?"}]}), encoding="utf-8")
+            qrels.write_text(json.dumps({"q1": {"doc.md": 1}}), encoding="utf-8")
+            freeze_result = subprocess.run(
+                [sys.executable, str(BUILD_SCRIPT), "benchmark", "freeze", "--split-name", "holdout", "--role", "sealed_holdout", "--queries", str(queries), "--qrels", str(qrels), "--evaluator-independent", "--output", str(freeze), "--json"],
+                text=True, capture_output=True, check=False, env=_env(),
+            )
+            verify_result = subprocess.run(
+                [sys.executable, str(BUILD_SCRIPT), "benchmark", "verify-freeze", "--freeze", str(freeze), "--queries", str(queries), "--qrels", str(qrels), "--report-json", str(verification), "--json"],
+                text=True, capture_output=True, check=False, env=_env(),
+            )
+            verification_payload = json.loads(verification.read_text(encoding="utf-8"))
+            queries.write_text(json.dumps({"queries": [{"id": "q1", "question": "changed"}]}), encoding="utf-8")
+            drift_result = subprocess.run(
+                [sys.executable, str(BUILD_SCRIPT), "benchmark", "verify-freeze", "--freeze", str(freeze), "--queries", str(queries), "--qrels", str(qrels), "--json"],
+                text=True, capture_output=True, check=False, env=_env(),
+            )
+        self.assertEqual(freeze_result.returncode, 0, freeze_result.stdout + freeze_result.stderr)
+        self.assertEqual(verify_result.returncode, 0, verify_result.stdout + verify_result.stderr)
+        self.assertTrue(verification_payload["ok"])
+        self.assertEqual(drift_result.returncode, 2)
+        self.assertIn("query hash", drift_result.stdout)
+
+    def test_hints_review_cli_emits_hash_bound_review_and_redaction_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidates = root / "candidates.json"
+            decisions = root / "decisions.json"
+            output = root / "reviewed.json"
+            redaction = root / "reviewed.redaction.json"
+            candidate_payload = {
+                "schema": "ragflow_retrieval_hints_v1",
+                "keyword_candidates": [
+                    {
+                        "candidate_id": "hint-keyword-1",
+                        "kind": "keyword",
+                        "value": "maintenance procedure",
+                        "term": "maintenance procedure",
+                        "source_document": "manual.md",
+                        "source_document_type": "en_manual",
+                        "source_constraint": "document:manual.md",
+                        "content_sha256": "a" * 64,
+                    }
+                ],
+                "question_candidates": [],
+                "table_term_alias_candidates": [],
+            }
+            candidates.write_text(json.dumps(candidate_payload), encoding="utf-8")
+            decisions.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_retrieval_hint_review_decisions_v1",
+                        "input_sha256": hashlib.sha256(
+                            json.dumps(
+                                candidate_payload,
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ).encode("utf-8")
+                        ).hexdigest(),
+                        "reviewer": "reviewer",
+                        "decisions": [
+                            {
+                                "candidate_id": "hint-keyword-1",
+                                "decision": "reject",
+                                "reason": "operational instruction is not catalog evidence",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILD_SCRIPT),
+                    "hints",
+                    "review",
+                    "--candidates",
+                    str(candidates),
+                    "--decisions",
+                    str(decisions),
+                    "--output",
+                    str(output),
+                    "--redaction-report",
+                    str(redaction),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=_env(),
+            )
+            reviewed_payload = json.loads(output.read_text(encoding="utf-8"))
+            redaction_payload = json.loads(redaction.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(reviewed_payload["schema"], "ragflow_reviewed_retrieval_hints_v1")
+        self.assertEqual(reviewed_payload["summary"]["rejected_count"], 1)
+        self.assertEqual(reviewed_payload["activation_hints"]["keyword_candidates"], [])
+        self.assertEqual(redaction_payload["schema"], "ragflow_report_redaction_report_v1")
 
     def test_benchmark_import_and_sample_contract_inputs_via_build_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
