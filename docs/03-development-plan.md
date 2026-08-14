@@ -3,7 +3,7 @@ doc_type: roadmap
 topic: current-development
 status: active
 created: 2026-07-02
-updated: 2026-08-04
+updated: 2026-08-14
 canonical: true
 implementation_authority: false
 owner_spec: null
@@ -74,6 +74,12 @@ Completed or closed for the current public command surface:
   v4 local-file batch upload, signed object upload, batch polling, `full_zip_url`
   extraction, safe asset materialization, redacted runtime telemetry, backend probe, and
   release-path fake-server validation without making live MinerU calls by default.
+- The 2026-08-13 generic runtime compatibility checkpoint implements the approved
+  RCKB-001 through RCKB-005 offline contracts: fingerprint-bound create recovery,
+  explicit multimodal transport gates and lineage, reviewed retrieval-hint lifecycle,
+  benchmark split freeze/verification, and independent provider/parse/retrieval/
+  activation readiness evidence. The new `hints review`, `benchmark freeze`, and
+  `benchmark verify-freeze` command surfaces are covered by schema/report inventories.
 
 Partially completed and still active:
 
@@ -142,6 +148,29 @@ Progress assessment:
   boundary.
 - The next stage is field-trial observation: use real workflows to collect sanitized
   evidence before implementing any remaining gated task.
+
+## 2026-08-14 Generic Runtime Compatibility Closeout
+
+The S0-S3 implementation slice from the generic runtime compatibility specification is
+implemented in source and protected by focused fake-client, CLI, schema, report-surface,
+and runtime-resilience tests. The complete runtime suite passed 874 tests; document
+lifecycle covered 72 documents with no findings; schema identity, manifest schema,
+release hygiene, release build, archive export, clean consumer acceptance, and
+strict-vendor platform smoke all passed on the final public offline bytes. Consumer
+acceptance recorded 268 checks with no failures and strict-vendor smoke recorded 154
+checks with no failures.
+
+The implementation source is committed as `57026c3`. The consumer report publishes
+verified release-manifest/archive hashes and one installed-copy runtime tree hash shared
+by all four skills. The implementation plan is closed with `status=implemented`; the
+canonical specification remains active only as the compatibility contract and has
+`implementation_authority=false`.
+
+The roadmap checkbox totals remain 586 checked and 15 intentionally gated items. No live
+RAGFlow/MinerU operation, credential use, production routing, or publication was
+performed. Repository commit and branch push are version-control closure only; they do
+not authorize live compatibility work, which remains a separately authorized field-trial
+boundary rather than an unfinished public offline feature.
 
 ## Open Task Review
 

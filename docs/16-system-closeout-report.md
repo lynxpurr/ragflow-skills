@@ -285,6 +285,36 @@ is ready for sustained real use through the portable CLI/archive path. Future wo
 be evidence-led: observe, measure, decide, then implement the smallest gated slice that a
 real workflow proves necessary.
 
+## Generic Runtime Compatibility Closeout
+
+On 2026-08-13 the owner-approved generic runtime compatibility slice was implemented
+offline. The shared runtime now binds dataset construction and resume checkpoints to
+content fingerprints and plan hashes, fails closed on ambiguous create recovery and
+unsupported image transport, preserves one multimodal manifest lineage, requires
+reviewed retrieval hints at activation, freezes benchmark split provenance, and reports
+provider, parse, retrieval, and activation readiness independently. The public command
+surface gained only `ragflow-kb-build hints review`, `benchmark freeze`, and
+`benchmark verify-freeze`, with deterministic local fixtures and inventory coverage.
+
+The public offline acceptance chain closed on 2026-08-14. The complete runtime suite
+passed 874 tests; document lifecycle covered 72 documents with no findings; schema
+identity covered 125 identities with no failures; manifest schema and release hygiene
+reported no findings; release build and archive export passed. Clean consumer acceptance
+reported 268 checks with no failures, and strict-vendor platform smoke reported 154
+checks with no failures.
+
+The implementation source is committed as `57026c3`. `ragflow_consumer_acceptance_v1`
+records and independently verifies the release manifest hash, every archive hash, runtime
+version, and a deterministic installed-copy tree hash across all four vendored runtime
+copies. The implementation plan is closed and non-authoritative. The specification
+remains the active canonical compatibility contract with
+`implementation_authority=false`.
+
+This work did not access credentials, call live RAGFlow/MinerU, mutate production state,
+publish, or change the 586/601 roadmap gate. Repository commit and branch push are
+version-control closure only and do not authorize live service compatibility or
+production activation; those remain separately authorized field-trial concerns.
+
 ## Skill Surface Simplification Calibration
 
 The Phase 1/2 skill-surface round is complete as a compatibility-preserving guidance
