@@ -224,6 +224,7 @@ class ConsumerAcceptanceTests(unittest.TestCase):
         self.assertRegex(payload["installed_runtime"]["sha256"], r"^[0-9a-f]{64}$")
         self.assertIn("canonical-review markdown audit help", check_names)
         self.assertIn("canonical-review asset audit help", check_names)
+        self.assertIn("canonical-review finalize help", check_names)
         self.assertIn("generated report redaction fixture", check_names)
         self.assertIn("doc-to-md passthrough", check_names)
         self.assertIn("quality_report produced", check_names)

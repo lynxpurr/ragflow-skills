@@ -20,9 +20,9 @@ Inputs are one candidate Markdown document, its local assets, the exact source w
 available, the intended canonical path, a positive ingestion allowlist when applicable,
 and any prior handoffs or benchmark evidence affected by a change.
 
-Outputs are a reviewed canonical document, source-coverage and decision notes, JSON audit
-reports, unresolved verification items, and an explicit list of downstream artifacts that
-became pre-change evidence. This skill does not build or query a live KB.
+Outputs are a reviewed canonical document, source-coverage and table-decision inputs, JSON
+audit reports, one `ragflow_canonical_review_v1` record, and an explicit list of downstream
+artifacts that became pre-change evidence. This skill does not build or query a live KB.
 
 ## Canonical workflows
 
@@ -41,6 +41,17 @@ Repair meaning and provenance before headings, tables, images, filenames, or chu
 python scripts/audit_canonical_assets.py ./canonical --allowlist ./active-paths.yaml --project-root . --json-out ./run/asset-audit.json
 ```
 
+### Canonical workflow: finalize canonical acceptance
+
+```bash
+python scripts/finalize_review.py --source ./source/document.pdf --candidate-markdown ./extraction-handoff/documents/document.md --reviewed-markdown ./review/document.md --markdown-audit ./run/markdown-audit.json --asset-audit ./run/asset-audit.json --source-coverage ./run/source-coverage.json --table-decisions ./run/table-decisions.json --asset-root ./review --output ./accepted-review --json
+```
+
+For canonical mode, do not skip or reorder: MinerU handoff -> structural and exact-source
+review -> table decisions and asset audit -> accepted record -> new passthrough handoff ->
+`inspect-handoff` and `asset-upload-plan` -> image readiness and build dry-run -> separately
+approved live text/image operations. See [Canonical review record](references/canonical-review-record.md).
+
 Use positive selection for ingestible Markdown. Treat control files, missing references,
 unreferenced assets, duplicate hashes, basename collisions, and empty directories as audit
 evidence, not automatic move or deletion instructions.
@@ -57,6 +68,10 @@ evidence, not automatic move or deletion instructions.
   uncertain wording or assets for later verification.
 - Stop meaning-changing edits on unresolved source identity, uncovered source units,
   ambiguous tables or images, conflicting sources, or unclear sensitive-content authority.
+- Treat `PASS_WITH_REVIEW`, `ready_with_review`, and conversion success as pre-review
+  evidence only; none is a canonical acceptance or multimodal-ingestion result.
+- Never overwrite the extraction candidate or original handoff. Finalization writes the
+  accepted Markdown, selected assets, and review record under a new output root.
 - After canonical content changes, preserve old handoffs, snapshots, qrels, benchmarks, and
   staging reports unchanged while classifying them as pre-change evidence.
 - Generate a new passthrough handoff only after canonical acceptance. Validate parser and

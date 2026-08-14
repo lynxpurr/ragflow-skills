@@ -258,6 +258,11 @@ def _smoke_commands(skill_name: str, skill_root: Path, python_executable: str) -
                 [python_executable, str(skill_root / "scripts" / "audit_canonical_assets.py"), "--help"],
                 "Read-only audit of canonical Markdown",
             ),
+            (
+                "canonical-review finalize help",
+                [python_executable, str(skill_root / "scripts" / "finalize_review.py"), "--help"],
+                "Finalize a hash-bound canonical review",
+            ),
         ]
     if skill_name == "ragflow-kb-build":
         return [

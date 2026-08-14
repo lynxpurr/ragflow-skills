@@ -1086,6 +1086,12 @@ def _run_no_network_checks(
         "scripts",
         "audit_canonical_assets.py",
     )
+    canonical_finalize_script = _skill_path(
+        extract_dir,
+        "ragflow-canonical-review",
+        "scripts",
+        "finalize_review.py",
+    )
     canonical_markdown_help = _run_command(
         [python_executable, str(canonical_markdown_script), "--help"],
         cwd=work_root,
@@ -1107,6 +1113,17 @@ def _run_no_network_checks(
         "canonical-review asset audit help",
         canonical_asset_help,
         required_output="Read-only audit of canonical Markdown",
+    )
+    canonical_finalize_help = _run_command(
+        [python_executable, str(canonical_finalize_script), "--help"],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "canonical-review finalize help",
+        canonical_finalize_help,
+        required_output="Finalize a hash-bound canonical review",
     )
 
     input_dir = _write_sample_input(work_root)

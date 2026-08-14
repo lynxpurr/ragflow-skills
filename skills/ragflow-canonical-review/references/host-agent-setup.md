@@ -196,6 +196,30 @@ If stdout or `doc_manifest.json` says `handoff_mode: thin_preview`, do not treat
 output as a formal KB pre-ingest package. Re-run with `ragflow-doc-to-md pipeline`
 before comparing it with a legacy thick package or sending it to a live build.
 
+## Required Canonical Multimodal Order
+
+When the user selects canonical mode, the host must enforce this non-skippable order:
+
+1. Retain the MinerU extraction handoff unchanged as candidate evidence.
+2. Copy editable content into a separate review workspace; run the structural audit with
+   the exact source and complete a source-coverage map.
+3. Record one source-backed decision for every candidate HTML table, then run the positive
+   asset audit over the reviewed Markdown and local images.
+4. Run `finalize_review.py`; continue only for `ragflow_canonical_review_v1.status:
+   accepted`. Write all accepted files under the command's new output root.
+5. Create a new passthrough handoff from the accepted output. Do not repurpose or overwrite
+   the extraction handoff.
+6. Run `inspect-handoff`, `asset-upload-plan`, `image-ingestion-readiness`, and build
+   `--dry-run` against the new handoff.
+7. Run live text build or `image-ingestion-execute` only after a separate approval naming
+   the target and mutation types. Provider and model choices must come from the user or
+   deployment configuration.
+
+Until the build-side canonical record gate is implemented, this is a host workflow gate;
+generic non-canonical builds remain compatible. Conversion success, `PASS_WITH_REVIEW`,
+`ready_with_review`, table fingerprint preservation, and local image presence do not by
+themselves prove canonical acceptance or completed multimodal ingestion.
+
 When a user asks for retained-package comparison, keep it static and explicit:
 
 ```bash
@@ -227,6 +251,12 @@ python ragflow-kb-build/scripts/build.py asset-upload-plan \
   --report-json /tmp/ragflow-skills-handoff/asset_upload_plan.json \
   --report-md /tmp/ragflow-skills-handoff/asset_upload_plan.md \
   --package-zip /tmp/ragflow-skills-handoff/asset_upload_package.zip \
+  --json
+
+python ragflow-kb-build/scripts/build.py image-ingestion-readiness \
+  --asset-upload-plan /tmp/ragflow-skills-handoff/asset_upload_plan.json \
+  --profile ragflow-kb-build/templates/default-en-768.json \
+  --report-json /tmp/ragflow-skills-handoff/image_ingestion_readiness.json \
   --json
 
 python ragflow-kb-build/scripts/build.py \
@@ -263,6 +293,8 @@ approves live RAGFlow mutation:
   `--mineru-asset-mode markdown_assets`, and `--postprocess-profile chunk-markers-dense`.
 - Review `retrieval_hints.json` for `table_artifacts`, `table_term_alias_candidates`,
   `semantic_risks`, and `estimated_parent_chunk_tokens`.
+- In canonical mode, finish exact-source review, table decisions, positive asset audit,
+  and `ragflow_canonical_review_v1` acceptance before creating the new passthrough handoff.
 - Run `inspect-handoff` and require no BLOCKED quality or missing-image errors.
 - Run `asset-upload-plan`; require `missing_image_asset_count=0` before any live build,
   and review unreferenced handoff images instead of silently uploading them. Sidecar

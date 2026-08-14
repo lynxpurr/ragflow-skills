@@ -403,6 +403,18 @@ from .report_sanitizer import (
     configured_private_hosts_from_urls,
     sanitize_report_payload,
 )
+from .canonical_review import (
+    CANONICAL_ASSET_AUDIT_SCHEMA,
+    CANONICAL_MARKDOWN_AUDIT_SCHEMA,
+    CANONICAL_REVIEW_SCHEMA,
+    CANONICAL_REVIEW_STATUSES,
+    TABLE_ACTIONS,
+    CanonicalReviewError,
+    canonical_file_sha256,
+    finalize_canonical_review,
+    materialize_canonical_review_output,
+    validate_canonical_review_record,
+)
 from .runtime_cache import (
     RUNTIME_CACHE_REPORT_SCHEMA,
     RuntimeCache,
@@ -673,6 +685,16 @@ from .validation import (
 )
 
 __all__ = [
+    "CANONICAL_ASSET_AUDIT_SCHEMA",
+    "CANONICAL_MARKDOWN_AUDIT_SCHEMA",
+    "CANONICAL_REVIEW_SCHEMA",
+    "CANONICAL_REVIEW_STATUSES",
+    "TABLE_ACTIONS",
+    "CanonicalReviewError",
+    "canonical_file_sha256",
+    "finalize_canonical_review",
+    "materialize_canonical_review_output",
+    "validate_canonical_review_record",
     "AuthError",
     "ADAPTIVE_PIPELINE_SUMMARY_SCHEMA",
     "ADAPTIVE_SUMMARY_COMPARISON_SCHEMA",

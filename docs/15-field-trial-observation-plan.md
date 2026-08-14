@@ -3,7 +3,7 @@ doc_type: plan
 topic: field-trial-observation
 status: active
 created: 2026-07-02
-updated: 2026-08-04
+updated: 2026-08-14
 canonical: true
 implementation_authority: false
 owner_spec: null
@@ -332,8 +332,9 @@ Artifacts:
 - Private artifact location retained outside public repo.
 
 Results:
-- Pass/fail: passed for the full representative PDF with the high-accuracy FastAPI
-  backend; no fallback was used.
+- Pass/fail: conversion and offline build preparation passed for the full representative
+  PDF with the high-accuracy FastAPI backend; no fallback was used. Canonical acceptance
+  and multimodal live ingestion were not part of this result.
 - Quality gate: `PASS_WITH_REVIEW`; review warnings are table-structure warnings for
   complex HTML tables, not missing assets or blocked conversion.
 - Handoff summary: one Markdown document, 6 HTML tables, 6 table artifacts, 24 image
@@ -341,14 +342,15 @@ Results:
   `ragflow_ingest_plan.yaml`.
 - Table safety: postprocess preserved all 6 HTML table fingerprints, inserted 6 table
   boundary markers through the dense profile, and inserted 0 markers inside table blocks.
+  This proves conversion integrity only; it does not prove exact-source table review.
 - Runtime summary: the conversion reused a persistent MinerU FastAPI service, selected a
   high-accuracy backend, completed one remote attempt successfully, and reported no
   resource failure, timeout, or degraded table-quality fallback.
 - Handoff inspection: `ingestion_readiness.status: ready_with_review`, rich and pipeline
   sidecars complete, 0 missing image assets, and quality table count aligned with table
-  artifact count.
+  artifact count. `ready_with_review` is pre-canonical readiness, not an acceptance status.
 - Dry-run: passed with the reviewed table-atomic parser profile.
-- Live mutation: not run.
+- Live mutation: not run; neither live text build nor image ingestion was demonstrated.
 
 Friction:
 - Complex-table warnings remain intentionally conservative. They should drive human review
@@ -358,13 +360,16 @@ Friction:
   separate mutation-gated design question.
 
 Gated trigger:
-- none for new product surface. The current CLI pipeline is sufficient for high-quality
-  table handoff generation and dry-run review.
+- The conversion path is sufficient to produce a review candidate and preserve table
+  structure for dry-run. It is not sufficient by itself for a canonical or multimodal
+  completion claim.
 
 Decision:
-- Treat `--table-quality high` plus `chunk-markers-dense` as the recommended formal path
-  for complex-table PDFs when a compatible MinerU FastAPI service is available. Keep live
-  RAGFlow KB creation gated by explicit user approval.
+- Treat `--table-quality high` plus `chunk-markers-dense` as a candidate-generation path
+  for complex-table PDFs when a compatible MinerU FastAPI service is available. Before a
+  canonical build, require exact-source coverage, one decision per HTML table, positive
+  asset audit, an accepted canonical review record, and a new passthrough handoff. Keep
+  every live RAGFlow text or image operation gated by separate explicit approval.
 
 ### 2026-07-05 run-004
 
@@ -403,9 +408,11 @@ Results:
 - Adaptive decision: recommended `table-atomic-zh-4096` and preserved the explicitly
   requested `pipeline` backend.
 - Pipeline: completed with `PASS_WITH_REVIEW`, 32 chunk markers, 6 HTML tables, no marker
-  inside table blocks, 21 image artifacts, and 15 Markdown image references.
+  inside table blocks, 21 image artifacts, and 15 Markdown image references. This is a
+  conversion result, not canonical acceptance or completed image ingestion.
 - Handoff inspection: `ingestion_readiness.status: ready_with_review`, rich and pipeline
-  sidecars complete, and missing image count zero.
+  sidecars complete, and missing image count zero. The status did not prove exact-source
+  review or execution of the live image-ingestion workflow.
 - Retired-consumer comparison: the old consumer could create a chunk snapshot, but its
   run summary showed requested 4096-token table-atomic profile settings were not fully
   applied by that old path. This proves structural consumption, not profile parity.
@@ -438,6 +445,13 @@ field-trial shows the current CLI pipeline is sufficient for the RAGFlux replace
 workflow when GPU capacity is available and credentials are current. The remaining
 post-CLI, private-bridge, provider, reranker, and optional LLM/backend work should stay
 gated until this plan produces concrete evidence that one of them is needed.
+
+For canonical multimodal claims, interpret the historical records more narrowly: they
+demonstrate conversion, table-block integrity, local asset presence, handoff inspection,
+and selected text build/query paths only where explicitly listed. They do not demonstrate
+an accepted exact-source canonical review or completed live image ingestion. Canonical
+mode must use the non-skippable review/acceptance/new-handoff sequence, and each live text
+or image mutation still requires separate target-specific approval.
 
 The MinerU v4 platform backend is implemented and release-validated through fake-server
 tests, consumer acceptance, and strict-vendor platform smoke. A real MinerU v4 platform

@@ -238,19 +238,19 @@ rollback review.
 
 ### P0 - Workflow and documentation
 
-- [ ] Update canonical-review and KB-build host guidance with the ordered, non-skippable
+- [x] Update canonical-review and KB-build host guidance with the ordered, non-skippable
   canonical stage and existing image commands.
-- [ ] Reconcile field-trial observation and closeout wording so conversion success is not
+- [x] Reconcile field-trial observation and closeout wording so conversion success is not
   presented as canonical or multimodal completion.
-- [ ] Define the one `ragflow_canonical_review_v1` schema and stop conditions.
+- [x] Define the one `ragflow_canonical_review_v1` schema and stop conditions.
 
 ### P1 - Acceptance implementation
 
-- [ ] Add focused tests for accepted, blocked, missing-source, incomplete-coverage,
+- [x] Add focused tests for accepted, blocked, missing-source, incomplete-coverage,
   missing-asset, stale-hash,
   unreviewed-HTML, and retained-HTML decisions.
-- [ ] Implement shared hash/decision validation and `finalize_review.py`.
-- [ ] Preserve candidate and pre-change handoff bytes; write accepted outputs separately.
+- [x] Implement shared hash/decision validation and `finalize_review.py`.
+- [x] Preserve candidate and pre-change handoff bytes; write accepted outputs separately.
 
 ### P2 - Build binding
 
@@ -286,12 +286,21 @@ rollback review.
 
 ## Current Development Progress
 
-The field-trial diagnosis is complete. This second review reduced the plan from a broad
-multi-report redesign to one acceptance record, one build gate, existing image commands,
-and focused evidence. No implementation checklist item is complete.
+P0 and P1 are implemented and verified for the public offline surface. Canonical-review
+and KB-build host guidance now enforces the ordered review/new-handoff/readiness sequence;
+field-trial and closeout wording distinguishes conversion evidence from canonical or
+multimodal completion; and `ragflow_canonical_review_v1` is the single public acceptance
+record. The shared runtime and thin `finalize_review.py` CLI validate exact-byte hashes,
+source coverage, table decisions, selected assets, and accepted-output isolation. Focused
+runtime/CLI and schema/report/inventory tests cover the required success and stop cases.
 
-The intended order is P0 -> P1 -> P2 -> P3. P4 is a separate live authority gate. Deferred
-items must not be pulled into P1-P3 without their stated evidence trigger.
+P2, P3, and P4 are not implemented. KB-build does not yet accept or bind the review record,
+the representative six-table offline chain has not been replayed into a new canonical
+handoff, and no live correction has been attempted. P4 still requires a new, target-specific
+authorization that names the exact live text/image mutations; no earlier field-trial or
+repository-maintenance approval can be reused. Deferred automatic table conversion and
+curated image-text update work remain closed until their documented evidence triggers are
+met.
 
 ## Validation Evidence / Residual Gated Work
 
@@ -300,8 +309,9 @@ items must not be pulled into P1-P3 without their stated evidence trigger.
 For the implementation slice, run focused canonical-review, HTML-table, handoff, and KB-build
 tests, then the full runtime suite and the repository's document lifecycle, schema identity,
 release hygiene, build-release, consumer acceptance, and strict-vendor platform smoke checks.
-The new acceptance schema, if implemented, must be registered in the existing schema and
-report inventories; no new report family is created for table normalization.
+The `ragflow_canonical_review_v1` acceptance schema is registered in the existing schema,
+report, sanitization, and runtime-resilience inventories; no new report family is created
+for table normalization.
 
 ### Live acceptance evidence
 

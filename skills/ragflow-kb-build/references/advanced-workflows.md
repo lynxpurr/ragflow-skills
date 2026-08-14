@@ -10,6 +10,11 @@ image ingestion. Use `image-ingestion-readiness`, then `image-ingestion-execute`
 the readiness artifact is acceptable and exact execution authority exists. A blocker is a
 stop, not a reason to bypass the standard path.
 
+For canonical mode, the input must be the new passthrough handoff created after an accepted
+`ragflow_canonical_review_v1` record. Never use the original extraction handoff as a
+shortcut. `asset-upload-plan` precedes readiness; live text and image operations require
+separate explicit approval and deployment-supplied provider/model configuration.
+
 ## Append, refresh, parse, health, and diagnostics
 
 Trigger: an existing KB needs an append preview, read-only state refresh, parse review, or

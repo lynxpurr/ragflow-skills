@@ -328,3 +328,27 @@ Phase 3 remains a separate evidence-based deprecation gate. Document governance 
 adopted, `docs/43-agent-session-handoff-lessons.md` remains tracked at its current path
 with registry `status=reference`, and Wave 2D, Stage 8C, both L4 decisions, closed L3, and
 the 15 gated roadmap items are unchanged.
+
+## Canonical Multimodal Claim Calibration
+
+Calibration date: 2026-08-14
+
+Historical conversion, `PASS_WITH_REVIEW`, `ready_with_review`, HTML table fingerprint,
+local image, and dry-run evidence must not be read as exact-source canonical acceptance or
+completed multimodal ingestion. Those signals prove candidate conversion, structural
+integrity, local asset presence, or pre-build readiness only. The representative
+complex-table observations did not produce an accepted canonical review record and did
+not execute the existing live image-ingestion workflow.
+
+The P0/P1 correction adds one public `ragflow_canonical_review_v1` record plus a local
+`finalize-review` command. It hash-binds exact source bytes, candidate and accepted
+Markdown, source coverage, structural and asset audits, reviewed table actions, and
+selected images; accepted files are materialized under a new output root while the
+candidate and original handoff remain unchanged. Canonical review performs no network
+`PUT` and does not select a provider or model.
+
+This correction does not implement the P2 KB-build boundary gate, the P3 representative
+sample offline replay, or P4 live correction. Generic non-canonical builds remain
+compatible. The earlier retained KB remains untouched. P4 still requires a new,
+target-specific authorization covering the exact live text/image mutations; no earlier
+field-trial or repository-maintenance approval can be reused for it.

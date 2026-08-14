@@ -200,6 +200,9 @@ CANONICAL_REVIEW_NOT_APPLICABLE_COMMANDS = (
     "ragflow-canonical-review asset-audit",
     "ragflow-canonical-review markdown-audit",
 )
+CANONICAL_REVIEW_COVERED_COMMANDS = (
+    "ragflow-canonical-review finalize-review",
+)
 
 
 def _classification_map() -> dict[str, Classification]:
@@ -255,6 +258,8 @@ def _classification_map() -> dict[str, Classification]:
         mapping[command] = kb_not_applicable
     for command in CANONICAL_REVIEW_NOT_APPLICABLE_COMMANDS:
         mapping[command] = canonical_review_not_applicable
+    for command in CANONICAL_REVIEW_COVERED_COMMANDS:
+        mapping[command] = covered
     return mapping
 
 
@@ -336,6 +341,10 @@ def discover_public_commands(root: Path = ROOT) -> list[DiscoveredCommand]:
         "ragflow_canonical_asset_audit_public_cli",
         root / "skills/ragflow-canonical-review/scripts/audit_canonical_assets.py",
     )
+    canonical_finalize = _load_module(
+        "ragflow_canonical_finalize_public_cli",
+        root / "skills/ragflow-canonical-review/scripts/finalize_review.py",
+    )
 
     commands: list[DiscoveredCommand] = []
     _record_parsers(
@@ -358,6 +367,13 @@ def discover_public_commands(root: Path = ROOT) -> list[DiscoveredCommand]:
         script="skills/ragflow-canonical-review/scripts/audit_canonical_assets.py",
         prefix=("ragflow-canonical-review", "asset-audit"),
         parser=canonical_assets.build_parser(),
+    )
+    _record_parsers(
+        commands=commands,
+        skill="ragflow-canonical-review",
+        script="skills/ragflow-canonical-review/scripts/finalize_review.py",
+        prefix=("ragflow-canonical-review", "finalize-review"),
+        parser=canonical_finalize.build_parser(),
     )
     for prefix, builder in (
         (("ragflow-doc-to-md", "inspect-source"), doc.build_inspect_source_parser),

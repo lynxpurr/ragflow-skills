@@ -207,6 +207,14 @@ EXPECTED_IDENTITIES = (
         description="Read-only audit of canonical allowlists, control files, assets, references, and directories.",
     ),
     SchemaIdentity(
+        key="canonical_review",
+        group="canonical_review",
+        identity="ragflow_canonical_review_v1",
+        source_patterns=("ragflow_canonical_review_v1", "CANONICAL_REVIEW_SCHEMA"),
+        coverage_patterns=("ragflow_canonical_review_v1", "test_accepted_review"),
+        description="Hash-bound canonical acceptance record for exact source, reviewed Markdown, table decisions, and selected assets.",
+    ),
+    SchemaIdentity(
         key="doc_quality_report",
         group="quality",
         identity="doc_quality_report_v1",
