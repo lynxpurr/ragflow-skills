@@ -13,7 +13,6 @@ related:
   - docs/03-development-plan.md
   - docs/15-field-trial-observation-plan.md
   - docs/16-system-closeout-report.md
-  - docs/specs/2026-08-13-generic-runtime-compatibility-design.md
 ---
 
 # Canonical Multimodal Ingest Quality Improvement Plan
