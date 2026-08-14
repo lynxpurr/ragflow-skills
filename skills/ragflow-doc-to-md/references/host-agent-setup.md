@@ -215,10 +215,12 @@ When the user selects canonical mode, the host must enforce this non-skippable o
    the target and mutation types. Provider and model choices must come from the user or
    deployment configuration.
 
-Until the build-side canonical record gate is implemented, this is a host workflow gate;
-generic non-canonical builds remain compatible. Conversion success, `PASS_WITH_REVIEW`,
-`ready_with_review`, table fingerprint preservation, and local image presence do not by
-themselves prove canonical acceptance or completed multimodal ingestion.
+The host order and build-side canonical gate are both required. The build gate rehashes
+the accepted record's exact source, Markdown, audits, and selected assets before client
+creation; generic non-canonical builds remain compatible. Conversion success,
+`PASS_WITH_REVIEW`, `ready_with_review`, table fingerprint preservation, and local image
+presence do not by themselves prove canonical acceptance or completed multimodal
+ingestion.
 
 When a user asks for retained-package comparison, keep it static and explicit:
 
@@ -264,9 +266,17 @@ python ragflow-kb-build/scripts/build.py \
   --kb-name kb:reviewed-name \
   --profile ragflow-kb-build/templates/default-en-768.json \
   --ingest-plan /tmp/ragflow-skills-handoff/ragflow_ingest_plan.yaml \
+  --canonical-review ./accepted-review/ragflow_canonical_review.json \
+  --canonical-source ./source/document.pdf \
+  --canonical-markdown-audit ./run/markdown-audit.json \
+  --canonical-asset-audit ./run/asset-audit.json \
   --dry-run \
   --json
 ```
+
+Repeat the same four canonical evidence options for an approved live text build. The
+checkpoint and `kb_manifest.json` bind only the review-record SHA-256; they do not copy
+the review record or private evidence paths.
 
 Review dry-run `build_payload_preview` and `handoff_consumption_status` before live
 mutation. The preview shows the actual RAGFlow dataset payload versus local-only or

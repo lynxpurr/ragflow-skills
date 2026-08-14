@@ -254,10 +254,10 @@ rollback review.
 
 ### P2 - Build binding
 
-- [ ] Add optional canonical-review input and canonical-mode fail-closed validation to
+- [x] Add optional canonical-review input and canonical-mode fail-closed validation to
   `ragflow-kb-build` dry-run/live paths.
-- [ ] Bind only the review-record hash into the build checkpoint and KB manifest.
-- [ ] Add fake-client tests for missing, stale, blocked, and accepted review records.
+- [x] Bind only the review-record hash into the build checkpoint and KB manifest.
+- [x] Add fake-client tests for missing, stale, blocked, and accepted review records.
 
 ### P3 - Offline evidence
 
@@ -286,21 +286,24 @@ rollback review.
 
 ## Current Development Progress
 
-P0 and P1 are implemented and verified for the public offline surface. Canonical-review
+P0, P1, and P2 are implemented and verified for the public offline surface. Canonical-review
 and KB-build host guidance now enforces the ordered review/new-handoff/readiness sequence;
 field-trial and closeout wording distinguishes conversion evidence from canonical or
 multimodal completion; and `ragflow_canonical_review_v1` is the single public acceptance
 record. The shared runtime and thin `finalize_review.py` CLI validate exact-byte hashes,
 source coverage, table decisions, selected assets, and accepted-output isolation. Focused
 runtime/CLI and schema/report/inventory tests cover the required success and stop cases.
+KB-build now accepts the review record plus its exact source and audit evidence on dry-run
+and live paths, rehashes the new handoff Markdown and selected assets before client
+creation, and binds only `canonical_review_sha256` into the live checkpoint and
+`kb_manifest.json`. Generic builds remain compatible when canonical options are absent.
 
-P2, P3, and P4 are not implemented. KB-build does not yet accept or bind the review record,
-the representative six-table offline chain has not been replayed into a new canonical
-handoff, and no live correction has been attempted. P4 still requires a new, target-specific
-authorization that names the exact live text/image mutations; no earlier field-trial or
-repository-maintenance approval can be reused. Deferred automatic table conversion and
-curated image-text update work remain closed until their documented evidence triggers are
-met.
+P3 and P4 are not implemented. The representative six-table offline chain has not been
+replayed into a new canonical handoff, and no live correction has been attempted. P4 still
+requires a new, target-specific authorization that names the exact live text/image
+mutations; no earlier field-trial or repository-maintenance approval can be reused.
+Deferred automatic table conversion and curated image-text update work remain closed until
+their documented evidence triggers are met.
 
 ## Validation Evidence / Residual Gated Work
 

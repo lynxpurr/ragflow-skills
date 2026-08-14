@@ -56,6 +56,7 @@ class ManifestTests(unittest.TestCase):
                 json.dumps(
                     {
                         "version": "0.1",
+                        "canonical_review_sha256": "a" * 64,
                         "dataset": {"id": "dataset-id", "name": "kb:project"},
                         "profile": {"id": "default"},
                         "documents": [
@@ -73,6 +74,7 @@ class ManifestTests(unittest.TestCase):
             )
             manifest = load_kb_manifest(path)
         self.assertEqual(manifest.dataset.id, "dataset-id")
+        self.assertEqual(manifest.canonical_review_sha256, "a" * 64)
         self.assertEqual(manifest.documents[0].source_path, "source.pdf")
         self.assertEqual(manifest.documents[0].chunk_count, 3)
 
@@ -81,6 +83,23 @@ class ManifestTests(unittest.TestCase):
             path = Path(tmp) / "kb_manifest.json"
             path.write_text(json.dumps({"version": "0.1", "documents": []}), encoding="utf-8")
             with self.assertRaises(ManifestError):
+                load_kb_manifest(path)
+
+    def test_kb_manifest_rejects_invalid_canonical_review_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "kb_manifest.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "canonical_review_sha256": "not-a-sha256",
+                        "dataset": {"id": "dataset-id", "name": "kb:project"},
+                        "documents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ManifestError, "canonical_review_sha256"):
                 load_kb_manifest(path)
 
     def test_manifest_json_schemas_are_defensive_copies(self) -> None:

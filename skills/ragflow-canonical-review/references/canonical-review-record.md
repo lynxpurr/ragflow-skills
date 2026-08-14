@@ -66,6 +66,31 @@ and writes `ragflow_canonical_review.json`. A blocked or source-unverified revie
 only the record. The extraction candidate and any original handoff stay byte-for-byte
 unchanged.
 
+## Build binding
+
+After creating a new passthrough handoff from the accepted output, supply the record and
+the exact private evidence files to both KB-build dry-run and an independently approved
+live build:
+
+```bash
+python ragflow-kb-build/scripts/build.py \
+  --doc-manifest ./handoff/doc_manifest.json \
+  --kb-name kb-reviewed \
+  --profile ./ragflow-kb-build/templates/default-en-768.json \
+  --canonical-review ./accepted-review/ragflow_canonical_review.json \
+  --canonical-source ./source/document.pdf \
+  --canonical-markdown-audit ./run/markdown-audit.json \
+  --canonical-asset-audit ./run/asset-audit.json \
+  --dry-run \
+  --json
+```
+
+The build gate rehashes the supplied source, the one Markdown build input, both audits,
+and every selected asset in the new handoff before any client is created. A live
+checkpoint and `kb_manifest.json` store only the exact review-record SHA-256, not the
+record, evidence paths, or private evidence contents. Omitting `--canonical-review`
+preserves the generic non-canonical build path.
+
 ## Status and stop rules
 
 - `accepted` requires exact source bytes, complete source coverage, zero uncovered units,

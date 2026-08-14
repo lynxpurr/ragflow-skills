@@ -12,8 +12,11 @@ stop, not a reason to bypass the standard path.
 
 For canonical mode, the input must be the new passthrough handoff created after an accepted
 `ragflow_canonical_review_v1` record. Never use the original extraction handoff as a
-shortcut. `asset-upload-plan` precedes readiness; live text and image operations require
-separate explicit approval and deployment-supplied provider/model configuration.
+shortcut. Supply the accepted record plus its exact source, Markdown audit, and asset
+audit to both dry-run and live build; the gate rehashes the new handoff Markdown and
+selected assets before client creation. `asset-upload-plan` precedes readiness; live text
+and image operations require separate explicit approval and deployment-supplied
+provider/model configuration.
 
 ## Append, refresh, parse, health, and diagnostics
 

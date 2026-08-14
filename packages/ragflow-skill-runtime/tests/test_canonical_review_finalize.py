@@ -13,6 +13,7 @@ from types import ModuleType
 from ragflow_skill_runtime.canonical_review import (
     CANONICAL_REVIEW_SCHEMA,
     finalize_canonical_review,
+    validate_canonical_review_build_binding,
 )
 
 
@@ -227,6 +228,24 @@ class CanonicalReviewFixture:
 
 
 class CanonicalReviewRuntimeTests(unittest.TestCase):
+    def test_finalized_record_is_valid_build_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = CanonicalReviewFixture(Path(tmp))
+            record = fixture.finalize()
+            record_path = fixture.root / "ragflow_canonical_review.json"
+            record_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+            expected_hash = _sha_file(record_path)
+
+            record_hash = validate_canonical_review_build_binding(
+                review_record_path=record_path,
+                source_path=fixture.source,
+                accepted_markdown_path=fixture.reviewed,
+                markdown_audit_path=fixture.markdown_audit,
+                asset_audit_path=fixture.asset_audit,
+            )
+
+        self.assertEqual(record_hash, expected_hash)
+
     def test_accepted_review_binds_hashes_decisions_and_assets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             fixture = CanonicalReviewFixture(Path(tmp))

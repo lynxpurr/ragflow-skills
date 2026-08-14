@@ -413,6 +413,7 @@ from .canonical_review import (
     canonical_file_sha256,
     finalize_canonical_review,
     materialize_canonical_review_output,
+    validate_canonical_review_build_binding,
     validate_canonical_review_record,
 )
 from .runtime_cache import (
@@ -694,6 +695,7 @@ __all__ = [
     "canonical_file_sha256",
     "finalize_canonical_review",
     "materialize_canonical_review_output",
+    "validate_canonical_review_build_binding",
     "validate_canonical_review_record",
     "AuthError",
     "ADAPTIVE_PIPELINE_SUMMARY_SCHEMA",

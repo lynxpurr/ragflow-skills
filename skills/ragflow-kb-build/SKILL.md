@@ -13,14 +13,17 @@ readiness, one explicitly approved KB build, validation, health review, and exac
 When the host selects canonical mode, do not consume the MinerU extraction handoff
 directly. Require structural and exact-source review, table decisions, positive asset
 audit, an accepted `ragflow_canonical_review_v1` record, and a new passthrough handoff
-before `inspect-handoff`, `asset-upload-plan`, image readiness, and build dry-run. The
-current host guidance enforces this order; build-side record binding remains separate work.
+before `inspect-handoff`, `asset-upload-plan`, image readiness, and build dry-run. Pass the
+accepted record and its exact source and audit files to the build-side canonical gate.
 
 ## Inputs and outputs
 
 Inputs are `doc_manifest.json` or reviewed Markdown, a KB name, a chunk profile, and a
 private RAGFlow config only when a live or read-only call is approved. Outputs include
 dry-run JSON, `kb_manifest.json`, validation and health reports, and cleanup previews.
+Canonical builds additionally require `--canonical-review`, `--canonical-source`,
+`--canonical-markdown-audit`, and `--canonical-asset-audit`; generic builds require none
+of these options.
 
 ## Canonical workflows
 

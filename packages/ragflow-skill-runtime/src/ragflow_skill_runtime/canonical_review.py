@@ -524,6 +524,190 @@ def validate_canonical_review_record(payload: Mapping[str, Any]) -> None:
             raise CanonicalReviewError(f"canonical review {label} Markdown hash is invalid")
 
 
+def _require_record_mapping(payload: Mapping[str, Any], field: str) -> Mapping[str, Any]:
+    value = payload.get(field)
+    if not isinstance(value, Mapping):
+        raise CanonicalReviewError(f"canonical review {field} is missing")
+    return value
+
+
+def _require_record_sha256(payload: Mapping[str, Any], field: str) -> str:
+    value = _normalize_sha256(payload.get(field))
+    if value is None:
+        raise CanonicalReviewError(f"canonical review {field} hash is invalid")
+    return value
+
+
+def _validate_bound_audit(
+    record: Mapping[str, Any],
+    *,
+    record_key: str,
+    path: Path,
+    label: str,
+    schema: str,
+) -> dict[str, Any]:
+    audits = _require_record_mapping(record, "audit_reports")
+    identity = audits.get(record_key)
+    if not isinstance(identity, Mapping):
+        raise CanonicalReviewError(f"canonical review {label} identity is missing")
+    if identity.get("schema") != schema:
+        raise CanonicalReviewError(f"canonical review {label} schema must be {schema}")
+    expected_hash = _require_record_sha256(identity, "report_sha256")
+    if not path.is_file():
+        raise CanonicalReviewError(f"canonical review {label} not found: {path}")
+    actual_hash = canonical_file_sha256(path)
+    if actual_hash != expected_hash:
+        raise CanonicalReviewError(f"canonical review {label} hash does not match the review record")
+    payload = _load_json_mapping(path, label=label)
+    if payload.get("schema") != schema:
+        raise CanonicalReviewError(f"canonical review {label} payload schema must be {schema}")
+    return payload
+
+
+def validate_canonical_review_build_binding(
+    *,
+    review_record_path: str | Path,
+    source_path: str | Path,
+    accepted_markdown_path: str | Path,
+    markdown_audit_path: str | Path,
+    asset_audit_path: str | Path,
+) -> str:
+    """Validate canonical evidence for one build and return the exact record hash."""
+
+    review_path = Path(review_record_path)
+    try:
+        review_bytes = review_path.read_bytes()
+    except FileNotFoundError as exc:
+        raise CanonicalReviewError(f"canonical review not found: {review_path}") from exc
+    try:
+        record = json.loads(review_bytes.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CanonicalReviewError(f"canonical review is not valid JSON: {review_path}") from exc
+    if not isinstance(record, dict):
+        raise CanonicalReviewError(f"canonical review must be a JSON object: {review_path}")
+    validate_canonical_review_record(record)
+    if record.get("status") != "accepted":
+        raise CanonicalReviewError("canonical review status must be accepted before build")
+
+    summary = _require_record_mapping(record, "summary")
+    if summary.get("unresolved_item_count") != 0:
+        raise CanonicalReviewError("canonical review contains unresolved items")
+    findings = record.get("findings")
+    if not isinstance(findings, list) or findings or summary.get("finding_count") != 0:
+        raise CanonicalReviewError("canonical review contains unresolved findings")
+
+    source = _require_record_mapping(record, "source")
+    if source.get("available") is not True:
+        raise CanonicalReviewError("canonical review exact source is not verified")
+    expected_source_hash = _require_record_sha256(source, "sha256")
+    supplied_source = Path(source_path)
+    if not supplied_source.is_file():
+        raise CanonicalReviewError(f"canonical review source not found: {supplied_source}")
+    actual_source_hash = canonical_file_sha256(supplied_source)
+    if actual_source_hash != expected_source_hash:
+        raise CanonicalReviewError("canonical review source hash does not match the review record")
+
+    coverage = _require_record_mapping(record, "source_coverage")
+    if coverage.get("status") != "complete":
+        raise CanonicalReviewError("canonical review source coverage is incomplete")
+    if coverage.get("uncovered_unit_count") != 0 or coverage.get("uncovered_units") != []:
+        raise CanonicalReviewError("canonical review contains uncovered source units")
+    if _require_record_sha256(coverage, "source_sha256") != actual_source_hash:
+        raise CanonicalReviewError("canonical review source coverage hash does not match the supplied source")
+    _require_record_sha256(coverage, "record_sha256")
+
+    markdown = _require_record_mapping(record, "markdown")
+    accepted_identity = markdown.get("accepted")
+    if not isinstance(accepted_identity, Mapping):
+        raise CanonicalReviewError("canonical review accepted Markdown identity is missing")
+    accepted_relative = _safe_relative_path(accepted_identity.get("path"))
+    if accepted_relative is None:
+        raise CanonicalReviewError("canonical review accepted Markdown path is unsafe")
+    expected_markdown_hash = _require_record_sha256(accepted_identity, "sha256")
+    accepted_markdown = Path(accepted_markdown_path)
+    if not accepted_markdown.is_file():
+        raise CanonicalReviewError(f"canonical review accepted Markdown not found: {accepted_markdown}")
+    actual_markdown_hash = canonical_file_sha256(accepted_markdown)
+    if actual_markdown_hash != expected_markdown_hash:
+        raise CanonicalReviewError("canonical review accepted Markdown hash does not match the build input")
+
+    markdown_audit = _validate_bound_audit(
+        record,
+        record_key="markdown_structure",
+        path=Path(markdown_audit_path),
+        label="Markdown audit",
+        schema=CANONICAL_MARKDOWN_AUDIT_SCHEMA,
+    )
+    audit_markdown = markdown_audit.get("markdown")
+    if not isinstance(audit_markdown, Mapping) or _normalize_sha256(audit_markdown.get("sha256")) != actual_markdown_hash:
+        raise CanonicalReviewError("canonical review Markdown audit hash does not match the build input")
+    audit_source = markdown_audit.get("source")
+    if not isinstance(audit_source, Mapping) or _normalize_sha256(audit_source.get("sha256")) != actual_source_hash:
+        raise CanonicalReviewError("canonical review Markdown audit source hash does not match the supplied source")
+
+    _validate_bound_audit(
+        record,
+        record_key="canonical_assets",
+        path=Path(asset_audit_path),
+        label="asset audit",
+        schema=CANONICAL_ASSET_AUDIT_SCHEMA,
+    )
+
+    table_review = _require_record_mapping(record, "table_review")
+    _require_record_sha256(table_review, "record_sha256")
+    decisions = table_review.get("decisions")
+    unresolved_items = table_review.get("unresolved_items")
+    if not isinstance(decisions, list):
+        raise CanonicalReviewError("canonical review table decisions must be a list")
+    if unresolved_items != []:
+        raise CanonicalReviewError("canonical review table review contains unresolved items")
+    for index, decision in enumerate(decisions, start=1):
+        if not isinstance(decision, Mapping):
+            raise CanonicalReviewError(f"canonical review table decision {index} is invalid")
+        if decision.get("action") not in TABLE_ACTIONS:
+            raise CanonicalReviewError(f"canonical review table decision {index} action is invalid")
+        if not str(decision.get("table_id") or "").strip():
+            raise CanonicalReviewError(f"canonical review table decision {index} id is missing")
+        if not str(decision.get("source_reference") or "").strip() or not str(decision.get("reason") or "").strip():
+            raise CanonicalReviewError(f"canonical review table decision {index} source evidence is missing")
+        _require_record_sha256(decision, "before_sha256")
+        _require_record_sha256(decision, "after_sha256")
+
+    selected_assets = record.get("selected_assets")
+    if not isinstance(selected_assets, list):
+        raise CanonicalReviewError("canonical review selected assets must be a list")
+    if summary.get("selected_asset_count") != len(selected_assets):
+        raise CanonicalReviewError("canonical review selected asset count is inconsistent")
+    seen_assets: set[str] = set()
+    accepted_parts = Path(accepted_relative).parts
+    resolved_markdown = accepted_markdown.resolve(strict=False)
+    if tuple(resolved_markdown.parts[-len(accepted_parts) :]) != accepted_parts:
+        raise CanonicalReviewError("canonical review accepted Markdown path does not match the build input")
+    asset_root = resolved_markdown
+    for _part in accepted_parts:
+        asset_root = asset_root.parent
+    for item in selected_assets:
+        if not isinstance(item, Mapping):
+            raise CanonicalReviewError("canonical review selected asset identity is invalid")
+        relative = _safe_relative_path(item.get("path"))
+        if relative is None or relative in seen_assets:
+            raise CanonicalReviewError("canonical review selected asset path is unsafe or duplicated")
+        seen_assets.add(relative)
+        expected_asset_hash = _require_record_sha256(item, "sha256")
+        asset_path = asset_root / Path(relative)
+        resolved_asset = asset_path.resolve(strict=False)
+        try:
+            resolved_asset.relative_to(asset_root)
+        except ValueError as exc:
+            raise CanonicalReviewError(f"canonical review selected asset escapes the build input: {relative}") from exc
+        if asset_path.is_symlink() or not asset_path.is_file():
+            raise CanonicalReviewError(f"canonical review selected asset not found: {relative}")
+        if canonical_file_sha256(asset_path) != expected_asset_hash:
+            raise CanonicalReviewError(f"canonical review selected asset hash does not match the build input: {relative}")
+
+    return hashlib.sha256(review_bytes).hexdigest()
+
+
 def finalize_canonical_review(
     *,
     source_path: str | Path | None,

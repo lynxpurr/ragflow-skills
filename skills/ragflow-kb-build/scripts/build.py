@@ -31,6 +31,7 @@ bootstrap_runtime()
 
 from ragflow_skill_runtime import (  # noqa: E402
     BuildError,
+    CanonicalReviewError,
     HandoffError,
     RAGFlowClient,
     ApolloQaError,
@@ -138,6 +139,7 @@ from ragflow_skill_runtime import (  # noqa: E402
     review_apollo_table_qa_judge_candidate,
     validate_apollo_table_qa_fixture,
     validate_grounded_qa,
+    validate_canonical_review_build_binding,
     verify_benchmark_split_freeze,
     verify_image_transport_capability,
     wait_for_document_states,
@@ -218,6 +220,34 @@ def _quality_gate_status(doc_manifest) -> str:
     gate = getattr(doc_manifest, "quality_gate", {}) or {}
     status = gate.get("status") if isinstance(gate, dict) else None
     return str(status or "UNKNOWN")
+
+
+def _canonical_review_build_hash(args: argparse.Namespace, docs: list[Any]) -> str | None:
+    companion_fields = {
+        "--canonical-source": args.canonical_source,
+        "--canonical-markdown-audit": args.canonical_markdown_audit,
+        "--canonical-asset-audit": args.canonical_asset_audit,
+    }
+    if not args.canonical_review:
+        supplied = [option for option, value in companion_fields.items() if value]
+        if supplied:
+            raise BuildError(f"{', '.join(supplied)} require --canonical-review")
+        return None
+    missing = [option for option, value in companion_fields.items() if not value]
+    if missing:
+        raise BuildError(f"--canonical-review requires {', '.join(missing)}")
+    if len(docs) != 1:
+        raise BuildError("--canonical-review requires exactly one accepted Markdown build input")
+    try:
+        return validate_canonical_review_build_binding(
+            review_record_path=args.canonical_review,
+            source_path=args.canonical_source,
+            accepted_markdown_path=docs[0].path,
+            markdown_audit_path=args.canonical_markdown_audit,
+            asset_audit_path=args.canonical_asset_audit,
+        )
+    except CanonicalReviewError as exc:
+        raise BuildError(str(exc)) from exc
 
 
 def _estimated_chunk_lengths_for_text(text: str, *, chunk_size: int, chunk_overlap: int) -> list[int]:
@@ -733,6 +763,7 @@ def _markdown_build_bindings(
     profile: ChunkProfile,
     docs: list[Any],
     dataset_update_payload: Mapping[str, Any],
+    canonical_review_sha256: str | None = None,
 ) -> dict[str, Any]:
     source_hashes = [
         {"source_key": _checkpoint_source_key(doc.path), "sha256": _sha256_file(Path(doc.path))}
@@ -744,21 +775,25 @@ def _markdown_build_bindings(
         create_payload=create_payload,
         source_hashes=[str(item["sha256"]) for item in source_hashes],
     )
-    plan_hash = _stable_digest(
-        {
-            "schema": "ragflow_markdown_build_plan_binding_v1",
-            "dataset_name": args.kb_name,
-            "construction_fingerprint": construction_fingerprint,
-            "source_hashes": source_hashes,
-            "dataset_update": dict(dataset_update_payload),
-        }
-    )
-    return {
+    plan_binding = {
+        "schema": "ragflow_markdown_build_plan_binding_v1",
+        "dataset_name": args.kb_name,
+        "construction_fingerprint": construction_fingerprint,
+        "source_hashes": source_hashes,
+        "dataset_update": dict(dataset_update_payload),
+    }
+    if canonical_review_sha256 is not None:
+        plan_binding["canonical_review_sha256"] = canonical_review_sha256
+    plan_hash = _stable_digest(plan_binding)
+    bindings = {
         "construction_fingerprint": construction_fingerprint,
         "plan_hash": plan_hash,
         "source_hashes": source_hashes,
         "create_payload": create_payload,
     }
+    if canonical_review_sha256 is not None:
+        bindings["canonical_review_sha256"] = canonical_review_sha256
+    return bindings
 
 
 def _image_ingestion_bindings(
@@ -1472,6 +1507,7 @@ def _run(args: argparse.Namespace) -> int:
             doc_manifest=doc_manifest,
             manifest_base_path=args.doc_manifest,
         )
+        canonical_review_sha256 = _canonical_review_build_hash(args, docs)
         metadata_summary = summarize_metadata_for_documents(args.metadata, [doc.path for doc in docs])
         if metadata_summary and not metadata_summary.get("ok", False):
             raise BuildError("metadata lint failed; run metadata lint for details")
@@ -1541,54 +1577,55 @@ def _run(args: argparse.Namespace) -> int:
                     )
             else:
                 kb_name_collision_review = review_kb_name_collision(args.kb_name)
-            _dump_json(
-                {
-                    "ok": True,
-                    "dry_run": True,
-                    "kb_name": args.kb_name,
-                    "profile": profile.to_manifest_dict(),
-                    "embedding_model": embedding_model,
-                    "embedding_model_check": embedding_model_check,
-                    "documents": [str(doc.path) for doc in docs],
-                    "metadata_summary": metadata_summary,
-                    "retrieval_hints_summary": summarize_retrieval_hints(retrieval_hints_payload),
-                    "build_payload_preview": make_build_payload_preview(
-                        kb_name=args.kb_name,
-                        profile=source_profile,
-                        retrieval_hints=retrieval_hints_payload,
-                        ragflow_ingest_plan=ragflow_ingest_plan,
-                    ),
-                    "handoff_consumption_status": handoff_consumption_status,
-                    "parameter_materialization_inventory": make_parameter_materialization_inventory(
-                        profile=source_profile,
-                        profile_suggestions=profile_suggestions_payload,
-                        retrieval_hints=retrieval_hints_payload,
-                        ragflow_ingest_plan=ragflow_ingest_plan,
-                        metadata=metadata_payload,
-                    ),
-                    "ingest_readiness": ingest_readiness,
-                    "build_readiness_metrics": _build_readiness_metrics(
-                        docs=docs,
-                        profile=profile,
-                        doc_manifest=doc_manifest,
-                        ingest_readiness=ingest_readiness,
-                    ),
-                    "kb_name_collision_review": kb_name_collision_review,
-                    "table_parent_chunk_preflight": table_parent_chunk_preflight,
-                    "batching": _batching_summary(
-                        requested_batch_size=args.batch_size,
-                        planned_document_count=len(docs),
-                        uploaded_document_count=0,
-                        parse_batch_count=0,
-                        parse_document_count=0,
-                    ),
-                    "post_build_recommendations": _post_build_recommendations(
-                        args,
-                        kb_manifest_path=args.output,
-                        retrieval_hints_path=retrieval_hints_path,
-                    ),
-                }
-            )
+            dry_run_payload = {
+                "ok": True,
+                "dry_run": True,
+                "kb_name": args.kb_name,
+                "profile": profile.to_manifest_dict(),
+                "embedding_model": embedding_model,
+                "embedding_model_check": embedding_model_check,
+                "documents": [str(doc.path) for doc in docs],
+                "metadata_summary": metadata_summary,
+                "retrieval_hints_summary": summarize_retrieval_hints(retrieval_hints_payload),
+                "build_payload_preview": make_build_payload_preview(
+                    kb_name=args.kb_name,
+                    profile=source_profile,
+                    retrieval_hints=retrieval_hints_payload,
+                    ragflow_ingest_plan=ragflow_ingest_plan,
+                ),
+                "handoff_consumption_status": handoff_consumption_status,
+                "parameter_materialization_inventory": make_parameter_materialization_inventory(
+                    profile=source_profile,
+                    profile_suggestions=profile_suggestions_payload,
+                    retrieval_hints=retrieval_hints_payload,
+                    ragflow_ingest_plan=ragflow_ingest_plan,
+                    metadata=metadata_payload,
+                ),
+                "ingest_readiness": ingest_readiness,
+                "build_readiness_metrics": _build_readiness_metrics(
+                    docs=docs,
+                    profile=profile,
+                    doc_manifest=doc_manifest,
+                    ingest_readiness=ingest_readiness,
+                ),
+                "kb_name_collision_review": kb_name_collision_review,
+                "table_parent_chunk_preflight": table_parent_chunk_preflight,
+                "batching": _batching_summary(
+                    requested_batch_size=args.batch_size,
+                    planned_document_count=len(docs),
+                    uploaded_document_count=0,
+                    parse_batch_count=0,
+                    parse_document_count=0,
+                ),
+                "post_build_recommendations": _post_build_recommendations(
+                    args,
+                    kb_manifest_path=args.output,
+                    retrieval_hints_path=retrieval_hints_path,
+                ),
+            }
+            if canonical_review_sha256 is not None:
+                dry_run_payload["canonical_review_sha256"] = canonical_review_sha256
+            _dump_json(dry_run_payload)
             return 0
 
         config = _load_config(args)
@@ -1615,6 +1652,7 @@ def _run(args: argparse.Namespace) -> int:
             profile=profile,
             docs=docs,
             dataset_update_payload=dataset_update_payload,
+            canonical_review_sha256=canonical_review_sha256,
         )
         update_failure_error: str | None = None
         if args.resume:
@@ -2157,6 +2195,8 @@ def _run(args: argparse.Namespace) -> int:
             expected_embedding_models=expected_embedding_models,
             build_payload_preview=build_payload_preview,
         )
+        if canonical_review_sha256 is not None:
+            payload["canonical_review_sha256"] = canonical_review_sha256
         if metadata_summary:
             payload["metadata_summary"] = metadata_summary
         payload["handoff_consumption_status"] = handoff_consumption_status
@@ -2195,6 +2235,11 @@ def _run(args: argparse.Namespace) -> int:
                 "runtime_metrics": runtime_metrics,
                 "batching": batching,
                 "checkpoint": payload["checkpoint"],
+                **(
+                    {"canonical_review_sha256": canonical_review_sha256}
+                    if canonical_review_sha256 is not None
+                    else {}
+                ),
                 "post_build_recommendations": _post_build_recommendations(
                     args,
                     kb_manifest_path=output,
@@ -5747,6 +5792,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--metadata", help="Optional ragflow_metadata_v1 file to summarize and lint before upload")
     parser.add_argument("--retrieval-hints", help="Optional retrieval_hints.json used by dry-run readiness review")
     parser.add_argument("--ingest-plan", help="Optional ragflow_ingest_plan.yaml/json used by build payload preview")
+    parser.add_argument(
+        "--canonical-review",
+        help="Optional accepted ragflow_canonical_review_v1 JSON; enables fail-closed canonical mode",
+    )
+    parser.add_argument("--canonical-source", help="Exact source file bound by --canonical-review")
+    parser.add_argument(
+        "--canonical-markdown-audit",
+        help="Markdown audit JSON bound by --canonical-review",
+    )
+    parser.add_argument(
+        "--canonical-asset-audit",
+        help="Canonical asset audit JSON bound by --canonical-review",
+    )
     parser.add_argument("--output", default="kb_manifest.json", help="Output kb_manifest.json path for non-dry-run builds")
     parser.add_argument("--config", help="Runtime config file")
     parser.add_argument("--base-url", help="RAGFlow base URL")
