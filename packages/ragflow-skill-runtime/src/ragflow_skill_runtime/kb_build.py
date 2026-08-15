@@ -51,6 +51,15 @@ MULTIMODAL_KB_MANIFEST_SCHEMA = "ragflow_multimodal_kb_manifest_v1"
 RETRIEVAL_HINTS_SCHEMA = "ragflow_retrieval_hints_v1"
 CHUNK_PROFILE_REPORT_SCHEMA = "ragflow_chunk_profile_report_v1"
 MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)]\(([^)]+)\)")
+MARKDOWN_REFERENCE_IMAGE_RE = re.compile(r"!\[(?P<alt>[^\]]*)]\[(?P<label>[^\]]*)]")
+MARKDOWN_REFERENCE_DEFINITION_RE = re.compile(
+    r"^\s*\[(?P<label>[^\]]+)]\s*:\s*(?:<(?P<angled>[^>]+)>|(?P<plain>\S+))",
+    re.MULTILINE,
+)
+HTML_IMAGE_RE = re.compile(
+    r"<img\b[^>]*?\bsrc\s*=\s*(?:\"(?P<double>[^\"]+)\"|'(?P<single>[^']+)'|(?P<bare>[^\s>]+))",
+    re.IGNORECASE,
+)
 IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".tif", ".tiff", ".webp"}
 TABLE_SUFFIXES = {".csv", ".html", ".htm", ".json", ".md", ".markdown", ".tsv", ".xlsx"}
 ASSET_UPLOAD_PLAN_IMAGE_CLASSES = (
@@ -1543,7 +1552,7 @@ def _iter_markdown_image_paths(path: Path) -> list[str]:
     if not path.is_file():
         return []
     text = path.read_text(encoding="utf-8", errors="replace")
-    return [_image_reference_path(match.group(2)) for match in MARKDOWN_IMAGE_RE.finditer(text)]
+    return _iter_markdown_image_targets(text)
 
 
 def _retrieval_hint_paths(payload: Mapping[str, Any] | None, key: str, fields: tuple[str, ...]) -> list[str]:
@@ -1981,6 +1990,33 @@ def _image_reference_path(raw: str) -> str:
     if " " in value and not value.startswith(("./", "../", "/")):
         value = value.split(" ", 1)[0]
     return value.split("#", 1)[0].split("?", 1)[0]
+
+
+def _iter_markdown_image_targets(text: str) -> list[str]:
+    definitions = {
+        match.group("label").strip().casefold(): match.group("angled") or match.group("plain") or ""
+        for match in MARKDOWN_REFERENCE_DEFINITION_RE.finditer(text)
+    }
+    targets: list[tuple[int, str]] = [
+        (match.start(), match.group(2))
+        for match in MARKDOWN_IMAGE_RE.finditer(text)
+    ]
+    for match in MARKDOWN_REFERENCE_IMAGE_RE.finditer(text):
+        label = (match.group("label") or match.group("alt")).strip().casefold()
+        if label in definitions:
+            targets.append((match.start(), definitions[label]))
+    for match in HTML_IMAGE_RE.finditer(text):
+        targets.append(
+            (
+                match.start(),
+                match.group("double") or match.group("single") or match.group("bare") or "",
+            )
+        )
+    return [
+        cleaned
+        for _offset, raw in sorted(targets)
+        if (cleaned := _image_reference_path(raw))
+    ]
 
 
 def _source_root_from_manifest(payload: Mapping[str, Any], *, manifest_path: Path) -> Path:
@@ -2555,10 +2591,7 @@ def create_kb_asset_upload_plan(
                     canonical_file_sha256(markdown_path) == accepted_identity.get("sha256")
                 )
             text = markdown_path.read_text(encoding="utf-8", errors="replace")
-            for match in MARKDOWN_IMAGE_RE.finditer(text):
-                raw_target = _image_reference_path(match.group(2))
-                if not raw_target:
-                    continue
+            for raw_target in _iter_markdown_image_targets(text):
                 if _is_remote_asset_reference(raw_target):
                     remote_image_count += 1
                     image_references.append(

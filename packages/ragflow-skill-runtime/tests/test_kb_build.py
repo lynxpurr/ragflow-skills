@@ -50,6 +50,82 @@ class FakeDocumentClient:
 
 
 class KbBuildTests(unittest.TestCase):
+    def test_canonical_asset_plan_supports_all_reviewed_markdown_image_styles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = Path(tmp) / "handoff"
+            image_dir = handoff / "documents" / "images"
+            image_dir.mkdir(parents=True)
+            markdown = handoff / "documents" / "sample.md"
+            markdown.write_text(
+                "# Sample\n\n"
+                "![inline](images/inline.png)\n"
+                "![reference][system]\n"
+                '<img src="images/html.png" alt="html">\n\n'
+                "[system]: images/reference.png\n",
+                encoding="utf-8",
+            )
+            image_names = ("inline.png", "reference.png", "html.png")
+            for name in image_names:
+                (image_dir / name).write_bytes(name.encode("utf-8"))
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [
+                            {"source_path": "sample.pdf", "markdown_path": "documents/sample.md"}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            selected_assets = [
+                {
+                    "path": f"documents/images/{name}",
+                    "sha256": hashlib.sha256((image_dir / name).read_bytes()).hexdigest(),
+                    "role": "diagram",
+                    "canonical_name": name,
+                    "source_reference": "page:1",
+                    "ingestion_intent": "visual_extract",
+                }
+                for name in image_names
+            ]
+            canonical_review = handoff / "ragflow_canonical_review.json"
+            canonical_review.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_canonical_review_v1",
+                        "status": "accepted",
+                        "ok": True,
+                        "markdown": {
+                            "candidate": {"sha256": "1" * 64},
+                            "accepted": {
+                                "path": "documents/sample.md",
+                                "sha256": hashlib.sha256(markdown.read_bytes()).hexdigest(),
+                            },
+                        },
+                        "selected_assets": selected_assets,
+                        "summary": {
+                            "selected_asset_count": len(selected_assets),
+                            "unresolved_item_count": 0,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            plan = create_kb_asset_upload_plan(
+                doc_manifest_path=manifest,
+                canonical_review_path=canonical_review,
+            )
+
+        self.assertEqual(plan["status"], "ready")
+        self.assertEqual(plan["summary"]["markdown_image_reference_count"], 3)
+        self.assertEqual(plan["summary"]["planned_visual_upload_file_count"], 3)
+        self.assertEqual(plan["summary"]["unmatched_canonical_asset_count"], 0)
+        self.assertEqual(plan["summary"]["residual_unreferenced_image_count"], 0)
+
     def test_canonical_asset_intents_control_visual_upload_and_context_readiness(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             handoff = Path(tmp) / "handoff"
