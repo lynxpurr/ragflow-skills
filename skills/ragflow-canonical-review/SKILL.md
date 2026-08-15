@@ -21,8 +21,9 @@ available, the intended canonical path, a positive ingestion allowlist when appl
 and any prior handoffs or benchmark evidence affected by a change.
 
 Outputs are a reviewed canonical document, source-coverage and table-decision inputs, JSON
-audit reports, one `ragflow_canonical_review_v1` record, and an explicit list of downstream
-artifacts that became pre-change evidence. This skill does not build or query a live KB.
+audit reports, optional reviewed asset identity/context input, one
+`ragflow_canonical_review_v1` record, and an explicit list of downstream artifacts that
+became pre-change evidence. This skill does not build or query a live KB.
 
 ## Canonical workflows
 
@@ -80,8 +81,8 @@ evidence, not automatic move or deletion instructions.
 ## Advanced triggers
 
 Open [Advanced workflows](references/advanced-workflows.md) for source-format adapters,
-conflict ledgers, complex tables, image semantics, asset movement or deletion, shared asset
-roots, source-unavailable review, or downstream benchmark invalidation. For private host
+conflict ledgers, table-equivalence/VLM advisory evidence, image semantics, asset movement
+or deletion, shared asset roots, source-unavailable review, or downstream benchmark invalidation. For private host
 setup and suite smoke guidance, use [Host agent setup](references/host-agent-setup.md).
 
 ## Security

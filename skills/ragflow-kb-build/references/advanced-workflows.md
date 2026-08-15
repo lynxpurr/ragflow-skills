@@ -18,6 +18,12 @@ selected assets before client creation. `asset-upload-plan` precedes readiness; 
 and image operations require separate explicit approval and deployment-supplied
 provider/model configuration.
 
+When the accepted record contains asset identity/context fields, pass it to
+`asset-upload-plan --canonical-review`. Only `ingestion_intent: visual_extract` enters the
+existing visual parse set. `context_bound` and `exclude` assets remain package-only;
+readiness blocks canonical-context claims until a separately verified transport contract
+exists.
+
 ## Append, refresh, parse, health, and diagnostics
 
 Trigger: an existing KB needs an append preview, read-only state refresh, parse review, or

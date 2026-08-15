@@ -188,7 +188,9 @@ COMMAND_GUIDANCE_GROUPS: dict[tuple[str, str], tuple[str, ...]] = {
         "ragflow-canonical-review finalize-review",
         "ragflow-canonical-review markdown-audit",
     ),
-    ("ragflow-canonical-review", "advanced"): (),
+    ("ragflow-canonical-review", "advanced"): (
+        "ragflow-canonical-review table-evidence",
+    ),
     ("ragflow-canonical-review", "internal_candidate"): (),
     ("ragflow-canonical-review", "deprecated_candidate"): (),
     ("ragflow-kb-build", "core"): (

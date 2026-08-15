@@ -13,7 +13,9 @@ from types import ModuleType
 from ragflow_skill_runtime.canonical_review import (
     CANONICAL_REVIEW_SCHEMA,
     finalize_canonical_review,
+    materialize_canonical_review_output,
     validate_canonical_review_build_binding,
+    validate_canonical_review_record,
 )
 
 
@@ -74,6 +76,7 @@ class CanonicalReviewFixture:
         self.markdown_audit = root / "markdown-audit.json"
         self.asset_audit = root / "asset-audit.json"
         self.decisions = root / "table-decisions.json"
+        self.asset_identities = root / "asset-identities.json"
 
         self.candidate.parent.mkdir(parents=True)
         self.reviewed.parent.mkdir(parents=True)
@@ -226,6 +229,48 @@ class CanonicalReviewFixture:
             asset_root=self.review_root,
         )
 
+    def write_asset_identities(
+        self,
+        *,
+        canonical_name: str = "verified-system-diagram.png",
+        context_sha256: str | None = None,
+        ingestion_intent: str = "context_bound",
+    ) -> None:
+        context_hash = context_sha256 or _sha_text("# Document")
+        self.asset_identities.write_text(
+            json.dumps(
+                {
+                    "assets": [
+                        {
+                            "path": "images/figure.png",
+                            "role": "diagram",
+                            "canonical_name": canonical_name,
+                            "source_reference": "page:1 figure:1",
+                            "context_selector": "line:1-1",
+                            "context_sha256": context_hash,
+                            "ingestion_intent": ingestion_intent,
+                        }
+                    ]
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def finalize_with_asset_identities(self) -> dict[str, object]:
+        return finalize_canonical_review(
+            source_path=self.source,
+            candidate_markdown_path=self.candidate,
+            reviewed_markdown_path=self.reviewed,
+            markdown_audit_path=self.markdown_audit,
+            asset_audit_path=self.asset_audit,
+            source_coverage_path=self.coverage,
+            table_decisions_path=self.decisions,
+            asset_identity_path=self.asset_identities,
+            asset_root=self.review_root,
+        )
+
 
 class CanonicalReviewRuntimeTests(unittest.TestCase):
     def test_finalized_record_is_valid_build_binding(self) -> None:
@@ -367,11 +412,81 @@ class CanonicalReviewRuntimeTests(unittest.TestCase):
         self.assertEqual(report["summary"]["retained_html_by_exception_count"], 1)
         self.assertNotIn("unreviewed_html_table", {item["code"] for item in report["findings"]})
 
+    def test_asset_identity_rewrites_only_new_accepted_output_and_remains_build_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = CanonicalReviewFixture(Path(tmp))
+            fixture.write_asset_identities()
+            reviewed_before = fixture.reviewed.read_bytes()
+            asset_before = fixture.asset.read_bytes()
+
+            record = fixture.finalize_with_asset_identities()
+            output = fixture.root / "accepted-output"
+            record_path = materialize_canonical_review_output(
+                record,
+                reviewed_markdown_path=fixture.reviewed,
+                asset_root=fixture.review_root,
+                output_root=output,
+            )
+            accepted_markdown = output / "document.md"
+            accepted_asset = output / "images" / "verified-system-diagram.png"
+            record_hash = validate_canonical_review_build_binding(
+                review_record_path=record_path,
+                source_path=fixture.source,
+                accepted_markdown_path=accepted_markdown,
+                markdown_audit_path=fixture.markdown_audit,
+                asset_audit_path=fixture.asset_audit,
+            )
+            accepted_text = accepted_markdown.read_text(encoding="utf-8")
+
+            self.assertEqual(record["status"], "accepted")
+            self.assertEqual(record["markdown"]["reviewed"]["sha256"], _sha_bytes(reviewed_before))
+            self.assertEqual(record["markdown"]["accepted"]["sha256"], _sha_file(accepted_markdown))
+            self.assertIn("images/verified-system-diagram.png", accepted_text)
+            self.assertNotIn("images/figure.png", accepted_text)
+            self.assertEqual(accepted_asset.read_bytes(), asset_before)
+            self.assertEqual(fixture.reviewed.read_bytes(), reviewed_before)
+            self.assertEqual(fixture.asset.read_bytes(), asset_before)
+            self.assertEqual(record["selected_assets"][0]["ingestion_intent"], "context_bound")
+            self.assertEqual(record_hash, _sha_file(record_path))
+
+    def test_asset_identity_rejects_unsafe_canonical_name_and_stale_context(self) -> None:
+        cases = (
+            ("../escaped.png", None, "unsafe_asset_canonical_name"),
+            ("safe-name.png", "f" * 64, "stale_asset_context_hash"),
+        )
+        for canonical_name, context_sha256, expected_code in cases:
+            with self.subTest(expected_code=expected_code), tempfile.TemporaryDirectory() as tmp:
+                fixture = CanonicalReviewFixture(Path(tmp))
+                fixture.write_asset_identities(
+                    canonical_name=canonical_name,
+                    context_sha256=context_sha256,
+                )
+
+                report = fixture.finalize_with_asset_identities()
+
+            self.assertEqual(report["status"], "blocked")
+            self.assertIn(expected_code, {item["code"] for item in report["findings"]})
+
+    def test_asset_identity_record_requires_complete_nonblank_semantic_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = CanonicalReviewFixture(Path(tmp))
+            fixture.write_asset_identities()
+            record = fixture.finalize_with_asset_identities()
+
+            record["selected_assets"][0]["source_reference"] = ""
+            with self.assertRaisesRegex(RuntimeError, "source reference is missing"):
+                validate_canonical_review_record(record)
+
+            del record["selected_assets"][0]["source_reference"]
+            with self.assertRaisesRegex(RuntimeError, "semantic identity is incomplete"):
+                validate_canonical_review_record(record)
+
 
 class CanonicalReviewCliTests(unittest.TestCase):
     def test_cli_materializes_accepted_outputs_without_changing_original_handoff(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             fixture = CanonicalReviewFixture(Path(tmp))
+            fixture.write_asset_identities()
             payload = json.loads(fixture.decisions.read_text(encoding="utf-8"))
             payload["decisions"][0]["reason"] = str(Path.home() / "private" / "review-note")
             fixture.decisions.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -398,6 +513,8 @@ class CanonicalReviewCliTests(unittest.TestCase):
                         str(fixture.coverage),
                         "--table-decisions",
                         str(fixture.decisions),
+                        "--asset-identities",
+                        str(fixture.asset_identities),
                         "--asset-root",
                         str(fixture.review_root),
                         "--output",
@@ -415,8 +532,11 @@ class CanonicalReviewCliTests(unittest.TestCase):
             self.assertEqual(json.loads(stdout.getvalue())["status"], "accepted")
             self.assertEqual(fixture.candidate.read_bytes(), candidate_before)
             self.assertEqual(fixture.manifest.read_bytes(), manifest_before)
-            self.assertEqual((output / "document.md").read_bytes(), fixture.reviewed.read_bytes())
-            self.assertEqual((output / "images" / "figure.png").read_bytes(), b"reviewed figure bytes")
+            self.assertIn(
+                "images/verified-system-diagram.png",
+                (output / "document.md").read_text(encoding="utf-8"),
+            )
+            self.assertEqual((output / "images" / "verified-system-diagram.png").read_bytes(), b"reviewed figure bytes")
             self.assertNotIn(str(Path.home()), json.dumps(record))
             self.assertGreater(sidecar["summary"]["redaction_count"], 0)
 

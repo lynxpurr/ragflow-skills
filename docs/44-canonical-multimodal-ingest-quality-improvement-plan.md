@@ -3,7 +3,7 @@ doc_type: plan
 topic: canonical-multimodal-ingest-quality
 status: proposed
 created: 2026-08-14
-updated: 2026-08-14
+updated: 2026-08-15
 canonical: true
 implementation_authority: false
 owner_spec: null
@@ -234,6 +234,27 @@ Only after P0-P3 and offline release gates pass:
 Repairing the earlier KB in place is outside this plan and requires a separate target and
 rollback review.
 
+### P5 - Bind semantic assets and representation evidence offline
+
+Keep `ragflow_canonical_review_v1` as the only canonical acceptance record and add optional,
+backward-compatible asset identity/context fields. Semantic names are portable basenames
+with the original extension and are applied only in a new accepted-output root; reviewed,
+candidate, and original-handoff bytes remain unchanged. The record binds both the reviewed
+Markdown audited against the source and the deterministically rewritten accepted Markdown.
+
+In canonical asset planning, only `visual_extract` enters the existing visual upload path.
+`context_bound` and `exclude` remain package-only. Old records without an explicit intent
+retain the prior `visual_extract` behavior. Because no verified curated image-text transport
+exists, readiness must block a canonical-context claim whenever context-bound assets are
+present.
+
+Add deterministic Markdown/HTML table matrix comparison that expands rowspan values,
+flattens multilevel headers, and compares dimensions, headers, cells, blanks, units, and
+footnotes. Add a separate no-LLM VLM request/review boundary that binds one exact crop and
+canonical table, requires advisory/generated provenance and merge evidence, rejects stale or
+private evidence, and never overwrites canonical Markdown. This is validation only, not an
+HTML converter, model backend, or second canonical truth.
+
 ## Task Checklist
 
 ### P0 - Workflow and documentation
@@ -261,21 +282,37 @@ rollback review.
 
 ### P3 - Offline evidence
 
-- [ ] Review all six tables against the exact source and record one decision per table.
-- [ ] Generate a new canonical handoff and verify zero unreviewed HTML residue.
-- [ ] Run existing handoff, asset-plan, image-readiness, and build-dry-run checks with no
+- [x] Review all six tables against the exact source and record one decision per table.
+- [x] Generate a new canonical handoff and verify zero unreviewed HTML residue.
+- [x] Run existing handoff, asset-plan, image-readiness, and build-dry-run checks with no
   live mutation.
-- [ ] Preserve the original run as pre-change evidence and retain sanitized metrics only in
+- [x] Preserve the original run as pre-change evidence and retain sanitized metrics only in
   public documentation.
 
 ### P4 - Approval-gated live evidence
 
-- [ ] Obtain explicit approval for a new retained correction KB and listed mutation types.
-- [ ] Build with the explicitly selected provider/model configuration and verify operations
+- [x] Obtain explicit approval for a new retained correction KB and listed mutation types.
+- [x] Build with the explicitly selected provider/model configuration and verify operations
   rather than provider enumeration.
-- [ ] Execute existing image ingestion with matching capability evidence and server read-back.
+- [x] Execute existing image ingestion with matching capability evidence and server read-back.
 - [ ] Validate table facts, image context, direct retrieval, and optional configured rerank.
-- [ ] Retain the earlier and correction KBs; perform no cleanup.
+- [x] Retain the earlier and correction KBs; perform no cleanup.
+
+### P5 - Offline semantic identity and representation evidence
+
+- [x] Extend the single canonical record with optional semantic asset names, roles, source
+  references, context selectors/hashes, and ingestion intents while retaining old-record
+  compatibility.
+- [x] Rewrite Markdown references and copy semantically named assets only under a new
+  accepted-output root, with reviewed and accepted Markdown hashes bound separately.
+- [x] Make canonical asset planning fail closed on stale/unmatched bindings, send only
+  `visual_extract` to visual upload, and block unsupported context-bound acceptance claims.
+- [x] Add deterministic Markdown/HTML cell-matrix equivalence with merge-normalization
+  evidence and blocking dimension/header/cell comparisons.
+- [x] Add a no-LLM advisory VLM request/review boundary with exact hashes, provenance,
+  merge-evidence validation, private-literal rejection, and no canonical overwrite path.
+- [x] Add focused runtime, CLI, schema, report-surface, sanitization, and inventory coverage.
+- [x] Complete the full repository and release validation chain and record the final evidence.
 
 ### Deferred only on evidence
 
@@ -286,24 +323,66 @@ rollback review.
 
 ## Current Development Progress
 
-P0, P1, and P2 are implemented and verified for the public offline surface. Canonical-review
-and KB-build host guidance now enforces the ordered review/new-handoff/readiness sequence;
-field-trial and closeout wording distinguishes conversion evidence from canonical or
-multimodal completion; and `ragflow_canonical_review_v1` is the single public acceptance
-record. The shared runtime and thin `finalize_review.py` CLI validate exact-byte hashes,
-source coverage, table decisions, selected assets, and accepted-output isolation. Focused
-runtime/CLI and schema/report/inventory tests cover the required success and stop cases.
-KB-build now accepts the review record plus its exact source and audit evidence on dry-run
-and live paths, rehashes the new handoff Markdown and selected assets before client
-creation, and binds only `canonical_review_sha256` into the live checkpoint and
-`kb_manifest.json`. Generic builds remain compatible when canonical options are absent.
+P0, P1, P2, P3, and the P5 implementation are verified for the focused public offline
+surface.
+Canonical-review and KB-build host guidance enforces the ordered
+review/new-handoff/readiness sequence; field-trial and closeout wording distinguishes
+conversion evidence from canonical or multimodal completion; and
+`ragflow_canonical_review_v1` is the single public acceptance record. The shared runtime
+and thin `finalize_review.py` CLI validate exact-byte hashes, source coverage, table
+decisions, selected assets, and accepted-output isolation. Focused runtime/CLI and
+schema/report/inventory tests cover the required success and stop cases. KB-build accepts
+the review record plus its exact source and audit evidence on dry-run and live paths,
+rehashes the new handoff Markdown and selected assets before client creation, and binds
+only `canonical_review_sha256` into the live checkpoint and `kb_manifest.json`. Generic
+builds remain compatible when canonical options are absent.
 
-P3 and P4 are not implemented. The representative six-table offline chain has not been
-replayed into a new canonical handoff, and no live correction has been attempted. P4 still
-requires a new, target-specific authorization that names the exact live text/image
-mutations; no earlier field-trial or repository-maintenance approval can be reused.
+The P3 representative offline replay reviewed all five source page units, converted all
+six source-backed tables to six valid Markdown tables, retained no HTML table exception,
+and produced an accepted record with zero findings or unresolved items. The accepted
+handoff contains the 13 positively selected image assets and no residual unreferenced
+assets. Handoff inspection found no BLOCKED quality or missing images; the asset plan
+reported zero missing assets; image readiness returned `ready` with zero issues; and the
+canonical build dry-run returned `ok: true` with the exact review-record hash. The thin
+passthrough handoff remains `ready_with_review` because it intentionally lacks regenerated
+rich and pipeline sidecars; those seven advisory findings did not bypass a blocker or
+weaken the canonical hash gate. No network client or live mutation was used.
+
+P4 has now had one explicitly authorized live correction attempt. The accepted review
+record, exact source, accepted Markdown, audit reports, and 13 selected asset hashes were
+revalidated before mutation; the collision probe was clear. One Markdown document parsed
+successfully with 9 chunks, and all 13 selected visual documents uploaded and parsed with
+server read-back. The image result remains `parsed_visual_only`; no curated image-text
+enhancement or rerank operation was enabled.
+
+The six table-fact questions passed in both direct and host-assisted retrieval (6/6 each),
+and all 9 questions returned non-empty evidence in each path. The image-context gate did
+not pass: the dimension-diagram target was not retrieved, the probe-system set matched
+2/3 target assets, and the performance-evaluation set matched 2/2. Therefore the P4
+validation item remains unchecked and this run must not be described as completed
+multimodal ingestion. The new correction KB and private evidence are retained; no cleanup
+or operation against the protected earlier KB occurred.
+
 Deferred automatic table conversion and curated image-text update work remain closed until
-their documented evidence triggers are met.
+their documented evidence triggers are met. Any further live mutation, image-text update,
+route change, activation, or cleanup requires new, target-specific authorization and is
+outside this completed one-time authority.
+
+P5 closes the evidence-triggered offline implementation gap without changing the P4 field
+trial result. Optional identity fields now bind semantic names, roles, source references,
+line-range context hashes, and `visual_extract`, `context_bound`, or `exclude` intent into
+the same acceptance record. Renamed assets and rewritten references exist only in a new
+accepted-output root, while build validation rechecks the accepted Markdown, the separately
+audited reviewed Markdown, every accepted asset, and any context selector/hash. Canonical
+asset planning remains backward compatible for old records, but only explicit
+`visual_extract` assets enter the visual upload set when new intents are present.
+
+The new table evidence command compares canonical Markdown with derived HTML by normalized
+cell matrices and exposes a separate advisory VLM request/review boundary. Both paths are
+offline, make zero script-owned model calls, and cannot convert or overwrite canonical
+Markdown. Context-bound image readiness intentionally remains blocked because no verified
+curated image-text transport has been implemented. No P5 code path accessed RAGFlow,
+MinerU, provider enumeration, credentials, retained KBs, or private field-trial artifacts.
 
 ## Validation Evidence / Residual Gated Work
 
@@ -316,6 +395,30 @@ The `ragflow_canonical_review_v1` acceptance schema is registered in the existin
 report, sanitization, and runtime-resilience inventories; no new report family is created
 for table normalization.
 
+The P5 surface brings the public command inventory to 111. Report-surface governance covers
+98 commands, with 0 needing redaction and 13 not applicable; runtime-resilience governance
+covers 22 commands, with 0 candidate, 0 deferred, and 89 not applicable. The new table
+equivalence and VLM request/review reports are registered in schema identity, generated
+Markdown safety, release packaging, installed-archive smoke, and consumer acceptance checks.
+
+Final P5 validation passed 906 runtime tests and 119 subtests. `git diff --check`, the
+72-document lifecycle gate, all 3 primary manifest schemas, 130 schema identities, release
+hygiene with 0 findings, and `build_release.py --check` passed. Four deterministic release
+archives were exported, then clean consumer acceptance and the `strict-vendor-env` platform
+smoke profile both returned `ok: true`. These are offline/release-path checks only; they did
+not call RAGFlow, MinerU, a provider, or a model.
+
+P3 reused those validated public surfaces against one private representative sample. The
+source, candidate handoff, and pre-change evidence remained byte-identical; accepted
+outputs were written to new locations. Sanitized results were: five of five source page
+units covered, six of six table decisions recorded as `converted_to_markdown`, six valid
+Markdown tables, zero HTML table residue, zero canonical findings, zero unresolved review
+items, 13 selected image assets, zero missing selected assets, image readiness `ready`
+with zero issues, and canonical build dry-run `ok: true`. The structural audit retained
+review-only warnings for existing heading/image-only chunks, two conservative
+cross-table chunk-boundary detections, empty image alt text, and the 11 unreferenced
+extraction assets that were deliberately preserved outside the accepted output.
+
 ### Live acceptance evidence
 
 | Dimension | Minimum evidence |
@@ -324,14 +427,48 @@ for table normalization.
 | Tables | Six table decisions; zero unreviewed HTML residue; Markdown tables structurally valid and source-faithful. |
 | Assets | Selected assets hash-bound; zero missing selected assets; asset plan agrees with handoff. |
 | Text | Accepted Markdown hash bound to handoff, checkpoint, and KB manifest; parse succeeds. |
-| Images | Existing image execute report shows upload/parse outcome and server read-back; no silent skip. |
+| Images | Existing image execute report shows upload/parse outcome and server read-back; no silent skip. `parsed_visual_only` is transport/parse evidence, not context-bound image acceptance. |
 | Models | User-selected embedding/rerank operations succeed; provider enumeration is not required. |
-| Retrieval | Table-fact and image-context queries return accepted evidence. |
+| Retrieval | Table-fact and image-context queries return accepted evidence with semantic asset/context identity, not filename-only hits. |
 | Retention | Earlier and correction KBs remain present; no cleanup call. |
+
+### P4 field-trial result
+
+The live correction was a partial evidence run, not a completion claim. Sanitized metrics
+were: one Markdown document parsed with 9 chunks; 13 of 13 selected images uploaded and
+parsed; 14 observed documents were `done`; 22 observed chunks; 9/9 direct and 9/9
+host-assisted retrievals returned usable evidence; and 6/6 table-fact checks passed in
+each retrieval mode. This validates the approved table-fact question set, but does not prove
+that server-derived HTML and canonical Markdown tables are cell-equivalent. Asset-file
+retrieval covered 4 of 6 target assets and only 1 of 3 target image groups completely; the
+semantic image-context gate is `0/3`. Sampled image chunks were VLM-style visual descriptions
+without the corresponding canonical headings or context, and uploaded basenames were not
+meaningful semantic names. The deployment reported one slow image parse warning, with no
+upload, parse, or state-readback failure. Rerank stayed disabled and provider enumeration was
+not called.
+
+The first image execution preflight stopped before mutation because the retained public
+asset plan had a redacted handoff root. A private raw plan regenerated from the same
+accepted handoff passed readiness and all 13 hash checks before the sole image mutation.
+This is retained as a workflow hygiene finding, not as a source or asset-content change.
+
+### P5 offline follow-up result
+
+The evidence-triggered runtime and guidance work is implemented without a live replay. The
+single acceptance record now carries optional semantic asset/context identity, accepted
+output uses deterministic semantic names, canonical asset planning honors intent, and table
+representations have deterministic matrix evidence plus an optional advisory VLM boundary.
+The P4 retrieval result is unchanged: filename/file recall, visual-semantic recall, and
+canonical-context recall remain separate, and `parsed_visual_only` still cannot satisfy the
+last gate.
+
+This offline implementation does not authorize a new KB mutation, image-text update, route
+change, provider/model call, or reuse of the exhausted P4 authority.
 
 ### Residual gated work
 
-- Live KB creation and image mutation require explicit target-specific authority.
+- Further live KB creation, image mutation, or correction requires new target-specific
+  authority; this run's one-time authority is exhausted.
 - A deployment without a verified curated image-text update contract may stop at
   `parsed_visual_only`; it must not claim enhanced image text.
 - Source-faithful review remains mandatory for merged headers, visual grouping, footnotes,

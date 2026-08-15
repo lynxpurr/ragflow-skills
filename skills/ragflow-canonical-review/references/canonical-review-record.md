@@ -4,6 +4,31 @@ Use `ragflow_canonical_review_v1` as the only public canonical acceptance record
 the exact source, extraction candidate, reviewed Markdown, source coverage, structure and
 asset audits, every candidate HTML table decision, and every selected local image.
 
+For context-aware accepted outputs, add one optional asset-identity input. When supplied,
+it must cover every selected asset exactly once:
+
+```json
+{
+  "assets": [
+    {
+      "path": "images/image-001.png",
+      "role": "diagram",
+      "canonical_name": "probe-system-overview.png",
+      "source_reference": "page:3 figure:1",
+      "context_selector": "line:18-24",
+      "context_sha256": "<accepted-context-sha256>",
+      "ingestion_intent": "context_bound"
+    }
+  ]
+}
+```
+
+Roles are `figure`, `diagram`, `chart`, `table_image`, `screenshot`, `photo`,
+`decorative`, or `other`. Intents are `visual_extract`, `context_bound`, or `exclude`;
+decorative assets must be excluded. Context selectors are one-based inclusive
+`line:START-END` ranges over the final accepted Markdown. Canonical names are portable
+ASCII basenames and retain the original extension.
+
 ## Review inputs
 
 The source-coverage and table-decision files are host review inputs, not additional public
@@ -54,6 +79,7 @@ python scripts/finalize_review.py \
   --asset-audit ./run/asset-audit.json \
   --source-coverage ./run/source-coverage.json \
   --table-decisions ./run/table-decisions.json \
+  --asset-identities ./run/asset-identities.json \
   --asset-root ./review \
   --output ./accepted-review \
   --redaction-report ./accepted-review/canonical-review.redaction.json \
@@ -62,9 +88,27 @@ python scripts/finalize_review.py \
 
 `--output` must be a new directory outside the audited asset root. An accepted review
 copies the reviewed Markdown and its selected, hash-matching assets into that directory
-and writes `ragflow_canonical_review.json`. A blocked or source-unverified review writes
+and writes `ragflow_canonical_review.json`. When asset identities are supplied, the new
+output alone receives semantic asset names and rewritten Markdown references; reviewed,
+candidate, and original-handoff bytes remain unchanged. Duplicate bindings, path
+traversal, name collisions, stale context hashes, and stale asset hashes block acceptance.
+A blocked or source-unverified review writes
 only the record. The extraction candidate and any original handoff stay byte-for-byte
 unchanged.
+
+## Table equivalence and optional VLM evidence
+
+Use `table_evidence.py --mode compare` to compare canonical Markdown with server-derived
+HTML by normalized header and cell matrices. The validator expands rowspan values,
+flattens multilevel headers, preserves blanks, values, units, and footnotes, and blocks
+differences. It validates representations; it is not an HTML converter.
+
+Use `--mode vlm-request` only with an exact page/table crop. The request records crop,
+Markdown, fragment, and matrix hashes with `llm_invoked=false`. An external result must
+use `ragflow_canonical_table_vlm_candidate_v1`, set `advisory=true` and `generated=true`,
+and retain provenance. `--mode vlm-review` blocks unknown/stale bindings, private
+literals, and matrix differences. VLM output never becomes a second production truth or
+overwrites canonical Markdown.
 
 ## Build binding
 

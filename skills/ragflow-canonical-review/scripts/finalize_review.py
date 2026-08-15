@@ -42,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--asset-audit", required=True, type=Path)
     parser.add_argument("--source-coverage", required=True, type=Path)
     parser.add_argument("--table-decisions", required=True, type=Path)
+    parser.add_argument(
+        "--asset-identities",
+        type=Path,
+        help="Optional reviewed asset identity/context JSON for semantic accepted-output names.",
+    )
     parser.add_argument("--asset-root", required=True, type=Path)
     parser.add_argument(
         "--output",
@@ -79,6 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             source_coverage_path=args.source_coverage,
             table_decisions_path=args.table_decisions,
             asset_root=args.asset_root,
+            asset_identity_path=args.asset_identities,
         )
         extra_json_files = {}
         if args.redaction_report:
@@ -100,6 +106,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     str(args.asset_audit),
                     str(args.source_coverage),
                     str(args.table_decisions),
+                    str(args.asset_identities) if args.asset_identities else None,
                     str(output),
                     str(redaction_path),
                 ],

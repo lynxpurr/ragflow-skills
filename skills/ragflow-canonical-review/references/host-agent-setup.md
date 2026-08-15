@@ -222,6 +222,12 @@ creation; generic non-canonical builds remain compatible. Conversion success,
 presence do not by themselves prove canonical acceptance or completed multimodal
 ingestion.
 
+When the accepted record carries asset identity/context fields, pass it to
+`asset-upload-plan --canonical-review`. Only `visual_extract` enters the existing visual
+parse path; `context_bound` and `exclude` remain package-only, and unsupported canonical
+context claims must stay blocked. Use canonical-review `table_evidence.py` for normalized
+Markdown/HTML equivalence or optional no-LLM VLM request/review evidence.
+
 When a user asks for retained-package comparison, keep it static and explicit:
 
 ```bash

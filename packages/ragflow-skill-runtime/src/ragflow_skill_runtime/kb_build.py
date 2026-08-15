@@ -8,13 +8,18 @@ import hashlib
 import json
 import math
 import mimetypes
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import time
 from typing import Any, Mapping
 import uuid
 import zipfile
 
+from .canonical_review import (
+    CANONICAL_REVIEW_SCHEMA,
+    canonical_file_sha256,
+    validate_canonical_review_record,
+)
 from .manifests import DocManifest, KbDocumentEntry, KbManifest, ManifestError, load_kb_manifest
 from .profiles import (
     ChunkProfile,
@@ -2199,6 +2204,7 @@ def _image_artifact_record(
     document_index: int | None = None,
     document: str | None = None,
     planned_for_visual_upload: bool = False,
+    planned_for_package: bool | None = None,
 ) -> dict[str, Any]:
     exists = resolved.is_file()
     inside_handoff = _is_relative_to(resolved, handoff_root)
@@ -2212,7 +2218,7 @@ def _image_artifact_record(
         "exists": exists,
         "inside_handoff": inside_handoff,
         "planned_for_visual_upload": planned_for_visual_upload,
-        "planned_for_package": planned_for_visual_upload,
+        "planned_for_package": planned_for_visual_upload if planned_for_package is None else planned_for_package,
     }
     if document_index is not None:
         record["document_index"] = document_index
@@ -2239,6 +2245,7 @@ def _add_image_artifact(
     document_index: int | None = None,
     document: str | None = None,
     planned_for_visual_upload: bool = False,
+    planned_for_package: bool | None = None,
 ) -> dict[str, Any]:
     key = _image_artifact_key(resolved)
     source_record = {"source": source, "raw_path": raw_path}
@@ -2248,7 +2255,8 @@ def _add_image_artifact(
     if existing is not None:
         existing.setdefault("sources", []).append(source_record)
         existing["planned_for_visual_upload"] = bool(existing.get("planned_for_visual_upload")) or planned_for_visual_upload
-        existing["planned_for_package"] = bool(existing.get("planned_for_package")) or planned_for_visual_upload
+        package = planned_for_visual_upload if planned_for_package is None else planned_for_package
+        existing["planned_for_package"] = bool(existing.get("planned_for_package")) or package
         return existing
     record = _image_artifact_record(
         asset_class=asset_class,
@@ -2259,6 +2267,7 @@ def _add_image_artifact(
         document_index=document_index,
         document=document,
         planned_for_visual_upload=planned_for_visual_upload,
+        planned_for_package=planned_for_package,
     )
     record["sources"] = [source_record]
     by_key[key] = record
@@ -2360,10 +2369,78 @@ def _scan_orphan_images(*, handoff_root: Path, referenced_paths: set[Path]) -> l
     return records
 
 
+def _canonical_selected_asset_path(item: Mapping[str, Any]) -> str | None:
+    raw_path = _clean_artifact_path(item.get("path"))
+    if raw_path is None:
+        return None
+    path = PurePosixPath(raw_path)
+    if path.is_absolute() or ".." in path.parts:
+        return None
+    canonical_name = item.get("canonical_name")
+    if canonical_name is None:
+        return path.as_posix()
+    name = str(canonical_name).strip()
+    if not name or PurePosixPath(name).name != name:
+        return None
+    return (path.parent / name).as_posix()
+
+
+def _load_canonical_asset_bindings(path: str | Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    review_path = Path(path)
+    payload = _read_json_mapping(review_path, label="canonical_review")
+    try:
+        validate_canonical_review_record(payload)
+    except RuntimeError as exc:
+        raise BuildError(str(exc)) from exc
+    if payload.get("schema") != CANONICAL_REVIEW_SCHEMA or payload.get("status") != "accepted":
+        raise BuildError("canonical asset planning requires an accepted ragflow_canonical_review_v1 record")
+    selected = payload.get("selected_assets")
+    if not isinstance(selected, list):
+        raise BuildError("canonical review selected_assets must be a list")
+    bindings: list[dict[str, Any]] = []
+    for index, raw in enumerate(selected, start=1):
+        if not isinstance(raw, Mapping):
+            raise BuildError(f"canonical review selected asset {index} is invalid")
+        output_path = _canonical_selected_asset_path(raw)
+        digest = str(raw.get("sha256") or "").strip().lower()
+        if output_path is None or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise BuildError(f"canonical review selected asset {index} path or hash is invalid")
+        binding = dict(raw)
+        binding["accepted_path"] = output_path
+        binding["effective_ingestion_intent"] = str(raw.get("ingestion_intent") or "visual_extract")
+        binding["identity_mode"] = "explicit" if raw.get("ingestion_intent") else "legacy_default"
+        bindings.append(binding)
+    return payload, bindings
+
+
+def _match_canonical_asset_binding(
+    *,
+    resolved: Path,
+    handoff_root: Path,
+    bindings: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, bool]:
+    if not resolved.is_file():
+        return None, False
+    relative = _relative_to_root(resolved, handoff_root).replace("\\", "/")
+    path_matches = [
+        item
+        for item in bindings
+        if relative == item["accepted_path"] or relative.endswith("/" + str(item["accepted_path"]))
+    ]
+    if len(path_matches) != 1:
+        basename = Path(relative).name
+        path_matches = [item for item in bindings if Path(str(item["accepted_path"])).name == basename]
+    if len(path_matches) != 1:
+        return None, False
+    binding = path_matches[0]
+    return binding, canonical_file_sha256(resolved) == binding.get("sha256")
+
+
 def create_kb_asset_upload_plan(
     *,
     doc_manifest_path: str | Path,
     include_sidecars: bool = True,
+    canonical_review_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Create a non-mutating upload package plan for Markdown and local image assets."""
 
@@ -2374,6 +2451,11 @@ def create_kb_asset_upload_plan(
     if not isinstance(raw_documents, list) or not raw_documents:
         raise BuildError("doc_manifest.documents must be a non-empty list")
     source_root = _source_root_from_manifest(manifest_payload, manifest_path=manifest_path)
+
+    canonical_review: dict[str, Any] | None = None
+    canonical_bindings: list[dict[str, Any]] = []
+    if canonical_review_path is not None:
+        canonical_review, canonical_bindings = _load_canonical_asset_bindings(canonical_review_path)
 
     issues: list[dict[str, str]] = []
     documents: list[dict[str, Any]] = []
@@ -2386,6 +2468,8 @@ def create_kb_asset_upload_plan(
     known_handoff_image_paths: set[Path] = set()
     remote_image_count = 0
     local_image_reference_count = 0
+    canonical_markdown_hash_matched = canonical_review is None
+    canonical_matched_asset_paths: set[str] = set()
 
     for index, item in enumerate(raw_documents, start=1):
         if not isinstance(item, Mapping):
@@ -2460,6 +2544,16 @@ def create_kb_asset_upload_plan(
             "manifest_image_asset_count": 0,
         }
         if markdown_exists:
+            accepted_identity = (
+                canonical_review.get("markdown", {}).get("accepted")
+                if isinstance(canonical_review, Mapping)
+                and isinstance(canonical_review.get("markdown"), Mapping)
+                else None
+            )
+            if isinstance(accepted_identity, Mapping):
+                canonical_markdown_hash_matched = canonical_markdown_hash_matched or (
+                    canonical_file_sha256(markdown_path) == accepted_identity.get("sha256")
+                )
             text = markdown_path.read_text(encoding="utf-8", errors="replace")
             for match in MARKDOWN_IMAGE_RE.finditer(text):
                 raw_target = _image_reference_path(match.group(2))
@@ -2485,7 +2579,44 @@ def create_kb_asset_upload_plan(
                 inside_handoff = _is_relative_to(resolved, handoff_root)
                 exists = resolved.is_file()
                 asset_class = "missing" if not exists else "outside_handoff" if not inside_handoff else "markdown_referenced"
-                planned_for_visual_upload = asset_class == "markdown_referenced"
+                canonical_binding: dict[str, Any] | None = None
+                canonical_hash_matches = False
+                if canonical_review is not None and asset_class == "markdown_referenced":
+                    canonical_binding, canonical_hash_matches = _match_canonical_asset_binding(
+                        resolved=resolved,
+                        handoff_root=handoff_root,
+                        bindings=canonical_bindings,
+                    )
+                    if canonical_binding is None:
+                        issues.append(
+                            _issue(
+                                severity="error",
+                                code="canonical_asset_binding_missing",
+                                message=f"Markdown image is not bound by the supplied canonical review: {raw_target}",
+                                recommendation="Regenerate the accepted handoff or use its exact matching canonical review record.",
+                            )
+                        )
+                    elif not canonical_hash_matches:
+                        issues.append(
+                            _issue(
+                                severity="error",
+                                code="canonical_asset_hash_mismatch",
+                                message=f"Markdown image no longer matches the supplied canonical review hash: {raw_target}",
+                                recommendation="Restore the accepted asset bytes or regenerate canonical acceptance.",
+                            )
+                        )
+                ingestion_intent = (
+                    str(canonical_binding.get("effective_ingestion_intent"))
+                    if canonical_binding is not None
+                    else "visual_extract"
+                )
+                canonical_ready = canonical_review is None or canonical_hash_matches
+                planned_for_visual_upload = (
+                    asset_class == "markdown_referenced"
+                    and canonical_ready
+                    and ingestion_intent == "visual_extract"
+                )
+                planned_for_package = asset_class == "markdown_referenced"
                 record = {
                     "source": "markdown_image_reference",
                     "asset_class": asset_class,
@@ -2498,8 +2629,24 @@ def create_kb_asset_upload_plan(
                     "inside_handoff": inside_handoff,
                     "remote": False,
                     "planned_for_visual_upload": planned_for_visual_upload,
-                    "planned_for_package": planned_for_visual_upload,
+                    "planned_for_package": planned_for_package,
                 }
+                if canonical_binding is not None:
+                    canonical_matched_asset_paths.add(str(canonical_binding["accepted_path"]))
+                    record["canonical_identity"] = {
+                        key: canonical_binding.get(key)
+                        for key in (
+                            "role",
+                            "canonical_name",
+                            "source_reference",
+                            "context_selector",
+                            "context_sha256",
+                            "ingestion_intent",
+                            "identity_mode",
+                        )
+                        if canonical_binding.get(key) is not None
+                    }
+                    record["ingestion_intent"] = ingestion_intent
                 image_references.append(record)
                 artifact = _add_image_artifact(
                     artifacts=discovered_image_artifacts,
@@ -2512,7 +2659,11 @@ def create_kb_asset_upload_plan(
                     document_index=index,
                     document=raw_markdown,
                     planned_for_visual_upload=planned_for_visual_upload,
+                    planned_for_package=planned_for_package,
                 )
+                if canonical_binding is not None:
+                    artifact["canonical_identity"] = record["canonical_identity"]
+                    artifact["ingestion_intent"] = ingestion_intent
                 if artifact.get("exists") and artifact.get("inside_handoff"):
                     known_handoff_image_paths.add(resolved)
         for raw_asset_path in _document_asset_paths(item):
@@ -2551,6 +2702,30 @@ def create_kb_asset_upload_plan(
             if artifact.get("exists") and artifact.get("inside_handoff"):
                 known_handoff_image_paths.add(resolved)
         documents.append(document_record)
+
+    if canonical_review is not None and not canonical_markdown_hash_matched:
+        issues.append(
+            _issue(
+                severity="error",
+                code="canonical_markdown_hash_mismatch",
+                message="No doc_manifest Markdown file matches the supplied canonical accepted Markdown hash.",
+                recommendation="Use the passthrough handoff created from the exact accepted output.",
+            )
+        )
+    unmatched_canonical_assets = sorted(
+        str(item["accepted_path"])
+        for item in canonical_bindings
+        if str(item["accepted_path"]) not in canonical_matched_asset_paths
+    )
+    if unmatched_canonical_assets:
+        issues.append(
+            _issue(
+                severity="error",
+                code="canonical_selected_asset_unmatched",
+                message="One or more canonical selected assets are not referenced by the supplied handoff Markdown.",
+                recommendation="Use the exact accepted output and matching doc_manifest.json for asset planning.",
+            )
+        )
 
     sidecar_image_assets: list[dict[str, Any]] = []
     for sidecar_name, raw_path, resolved, is_semantic_alias in _collect_sidecar_image_references(handoff_root=handoff_root):
@@ -2667,6 +2842,7 @@ def create_kb_asset_upload_plan(
         if item.get("asset_class") == "markdown_referenced"
         and item.get("exists") is True
         and item.get("inside_handoff") is True
+        and item.get("planned_for_visual_upload") is True
     ]
     planned_hashes = {item.get("sha256") for item in planned_visual_upload_files if item.get("sha256")}
     if planned_hashes and any(item.get("sha256") in planned_hashes for item in residual_images):
@@ -2698,7 +2874,9 @@ def create_kb_asset_upload_plan(
         for record in sidecars:
             _add_projected_file(projected_files, seen_projected, record)
 
-    for item in planned_visual_upload_files:
+    for item in discovered_image_artifacts:
+        if item.get("planned_for_package") is not True:
+            continue
         source_path = item.get("source_path")
         package_path = item.get("package_path")
         if not isinstance(source_path, str) or not source_path:
@@ -2726,6 +2904,17 @@ def create_kb_asset_upload_plan(
     error_count = sum(1 for item in issues if item["severity"] == "error")
     warning_count = sum(1 for item in issues if item["severity"] == "warning")
     status = "blocked" if error_count else "ready_with_review" if warning_count else "ready"
+    context_bound_count = sum(
+        1 for item in discovered_image_artifacts if item.get("ingestion_intent") == "context_bound"
+    )
+    excluded_count = sum(
+        1 for item in discovered_image_artifacts if item.get("ingestion_intent") == "exclude"
+    )
+    visual_extract_count = (
+        sum(1 for item in discovered_image_artifacts if item.get("ingestion_intent") == "visual_extract")
+        if canonical_review is not None
+        else len(planned_visual_upload_files)
+    )
     return {
         "schema": KB_ASSET_UPLOAD_PLAN_SCHEMA,
         "created_at": _now(),
@@ -2735,6 +2924,18 @@ def create_kb_asset_upload_plan(
         "live_upload_enabled": False,
         "llm_calls": 0,
         "ragflow_calls": 0,
+        "canonical_review": (
+            {
+                "schema": CANONICAL_REVIEW_SCHEMA,
+                "record_sha256": canonical_file_sha256(canonical_review_path),
+                "selected_asset_count": len(canonical_bindings),
+                "identity_mode": "explicit_intents"
+                if any(item.get("identity_mode") == "explicit" for item in canonical_bindings)
+                else "legacy_default",
+            }
+            if canonical_review_path is not None
+            else None
+        ),
         "status": status,
         "summary": {
             "document_count": len(documents),
@@ -2751,6 +2952,10 @@ def create_kb_asset_upload_plan(
             "discovered_image_artifact_count": len(discovered_image_artifacts),
             "planned_visual_upload_file_count": len(planned_visual_upload_files),
             "planned_image_file_count": len(planned_visual_upload_files),
+            "visual_extract_image_count": visual_extract_count,
+            "context_bound_image_count": context_bound_count,
+            "excluded_image_count": excluded_count,
+            "unmatched_canonical_asset_count": len(unmatched_canonical_assets),
             "missing_image_count": asset_class_counts["missing"],
             "missing_image_asset_count": asset_class_counts["missing"],
             "outside_handoff_image_count": asset_class_counts["outside_handoff"],
@@ -2777,12 +2982,15 @@ def create_kb_asset_upload_plan(
         "issues": issues,
         "upload_policy": {
             "current_live_upload_path": "markdown_only",
-            "default_visual_upload_class": "markdown_referenced",
+            "default_visual_upload_class": "canonical_visual_extract"
+            if canonical_review is not None
+            else "markdown_referenced",
             "planned_package_mode": "zip",
             "live_mutation_requires_existing_build_gate": True,
             "notes": [
                 "This report does not call RAGFlow.",
                 "Only markdown_referenced image assets enter the default visual upload plan.",
+                "When a canonical review is supplied, only visual_extract assets enter the visual upload plan; context_bound and excluded assets remain package-only.",
                 "Manifest-listed, sidecar-referenced, and residual images are discovered for review but excluded from the default visual upload set.",
                 "Semantic image aliases are advisory review references; they are not treated as missing local files.",
                 "Only handoff-local existing Markdown, planned image, and sidecar files are projected into the local package.",
@@ -2818,6 +3026,8 @@ def create_kb_asset_ingestion_readiness_report(
     missing_count = _as_int(summary.get("missing_image_asset_count")) or _as_int(summary.get("missing_image_count")) or 0
     outside_count = _as_int(summary.get("outside_handoff_image_count")) or 0
     residual_count = _as_int(summary.get("residual_unreferenced_image_count")) or _as_int(summary.get("orphan_image_count")) or 0
+    context_bound_count = _as_int(summary.get("context_bound_image_count")) or 0
+    excluded_count = _as_int(summary.get("excluded_image_count")) or 0
 
     if planned_count <= 0:
         issues.append(
@@ -2844,6 +3054,15 @@ def create_kb_asset_ingestion_readiness_report(
                 code="residual_visual_assets_require_review",
                 message=f"Asset plan has {residual_count} residual image asset(s) outside the default upload set.",
                 recommendation="Keep residual images excluded unless a user explicitly broadens the visual upload policy.",
+            )
+        )
+    if context_bound_count:
+        issues.append(
+            _issue(
+                severity="error",
+                code="context_bound_capability_missing",
+                message=f"Asset plan has {context_bound_count} context-bound image asset(s), but no verified curated image-context transport is available.",
+                recommendation="Keep these assets package-bound and do not claim canonical-context image acceptance until a separately approved capability contract exists.",
             )
         )
 
@@ -2903,6 +3122,8 @@ def create_kb_asset_ingestion_readiness_report(
             "missing_image_asset_count": missing_count,
             "outside_handoff_image_count": outside_count,
             "residual_unreferenced_image_count": residual_count,
+            "context_bound_image_count": context_bound_count,
+            "excluded_image_count": excluded_count,
             "issue_count": len(issues),
             "error_count": error_count,
             "warning_count": warning_count,
@@ -2922,6 +3143,11 @@ def create_kb_asset_ingestion_readiness_report(
                 "outside_handoff_image_count": outside_count,
             },
             "residual_asset_review": {"status": "REVIEW" if residual_count else "PASS", "count": residual_count},
+            "canonical_context_claim": {
+                "status": "BLOCKED" if context_bound_count else "NOT_REQUIRED",
+                "context_bound_image_count": context_bound_count,
+                "capability": "not_verified",
+            },
             "profile_evidence": {"status": "PASS" if profile_payload else "REVIEW", "source": profile_source},
         },
         "issues": issues,
@@ -2929,6 +3155,7 @@ def create_kb_asset_ingestion_readiness_report(
             "Review planned_visual_upload_files before any live image ingestion execution.",
             "Require explicit live execution flags and exact confirmation before uploading visual documents.",
             "Keep residual_unreferenced images excluded unless the user intentionally broadens the policy.",
+            "Do not treat visual parsing as canonical-context acceptance for context_bound assets.",
         ],
     }
 
@@ -2949,6 +3176,8 @@ def render_kb_asset_ingestion_readiness_markdown(report: Mapping[str, Any]) -> s
         f"- missing image assets: `{summary.get('missing_image_asset_count', 0)}`",
         f"- outside-handoff images: `{summary.get('outside_handoff_image_count', 0)}`",
         f"- residual images: `{summary.get('residual_unreferenced_image_count', 0)}`",
+        f"- context-bound images: `{summary.get('context_bound_image_count', 0)}`",
+        f"- excluded images: `{summary.get('excluded_image_count', 0)}`",
         f"- profile: `{profile.get('id', 'not_supplied')}`",
         "",
         "## Issues",
@@ -3253,6 +3482,9 @@ def render_kb_asset_upload_plan_markdown(report: Mapping[str, Any]) -> str:
         f"- semantic alias image references: `{summary.get('semantic_alias_reference_image_count', 0)}`",
         f"- residual_unreferenced images: `{summary.get('residual_unreferenced_image_count', summary.get('unreferenced_handoff_image_count', 0))}`",
         f"- planned visual upload files: `{summary.get('planned_visual_upload_file_count', summary.get('planned_image_file_count', 0))}`",
+        f"- visual_extract images: `{summary.get('visual_extract_image_count', 0)}`",
+        f"- context_bound images: `{summary.get('context_bound_image_count', 0)}`",
+        f"- excluded images: `{summary.get('excluded_image_count', 0)}`",
         f"- missing image assets: `{summary.get('missing_image_asset_count', summary.get('missing_image_count', 0))}`",
         f"- unreferenced handoff images: `{summary.get('unreferenced_handoff_image_count', summary.get('orphan_image_count', 0))}`",
         f"- sidecars: `{summary.get('sidecar_file_count', 0)}`",

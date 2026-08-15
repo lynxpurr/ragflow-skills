@@ -236,6 +236,7 @@ def run_release_check(dist_dir: Path = DIST_DIR) -> int:
         [sys.executable, str(dist_dir / "ragflow-canonical-review" / "scripts" / "audit_markdown_structure.py"), "--help"],
         [sys.executable, str(dist_dir / "ragflow-canonical-review" / "scripts" / "audit_canonical_assets.py"), "--help"],
         [sys.executable, str(dist_dir / "ragflow-canonical-review" / "scripts" / "finalize_review.py"), "--help"],
+        [sys.executable, str(dist_dir / "ragflow-canonical-review" / "scripts" / "table_evidence.py"), "--help"],
         [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "build.py"), "--help"],
         [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "build.py"), "inspect-handoff", "--help"],
         [sys.executable, str(dist_dir / "ragflow-kb-build" / "scripts" / "inspect_kb.py"), "--help"],

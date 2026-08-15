@@ -46,7 +46,7 @@ current CLI/archive path, collect sanitized field-trial records, and keep valida
 | Document conversion and handoff | Produce Markdown handoff directories with stable `doc_manifest.json`, quality reports, image preservation, split/package support, and backend readiness checks. | `ragflow-doc-to-md` supports passthrough, builtin conversion, MinerU Agent API, self-hosted MinerU FastAPI, MinerU v4 platform-compatible APIs, MinerU sync/local multipart, local CLI, generic remote paths, inspect, split, package, postprocess, backend probe, and warmup. | Closed for current converters; live MinerU v4 validation remains explicitly gated. |
 | KB build and governance | Build and validate KBs from handoffs while keeping mutation gated and reviewable. | `ragflow-kb-build` covers dry-run/live build gates, profile/metadata/tagset governance, benchmark lifecycle, grounded QA validation, evidence maps, optimization plans, cleanup readiness, topology advice, parse reports, and health reports. | Closed for planned public CLI behavior; future live mutation remains approval-gated. |
 | Query and orchestration | Support direct retrieval, routing, diagnostics, fusion/rewrite, host-assisted agentic flows, citation audit, and evaluation without default script-owned synthesis. | `ragflow-query` covers direct/auto/host-assisted ask, routing, route tests, assistant profiles, rewrite, session, fusion, diagnostics, rerank comparison, citation audit, answer evaluation, agentic planning, and request/review boundaries. | Closed for evidence-first CLI use; script-owned answers remain deferred. |
-| Runtime resilience and report safety | Make failures observable and sanitized without hidden retries or private leaks. | Current inventories cover 104 public command surfaces. Runtime resilience records 22 covered, 0 candidate, 0 deferred, and 82 not-applicable; report-surface governance records 95 covered, 0 needs-redaction, and 9 not-applicable. Redaction, generated-report safety, generated Markdown audit, endpoint reports, cache, metrics, rate-limit, circuit-breaker, partial-failure reports, and `ragflow-doc-to-md` runtime performance telemetry are covered for the current inventory. | Closed for current public surfaces; reopen only when new command/report surfaces appear. |
+| Runtime resilience and report safety | Make failures observable and sanitized without hidden retries or private leaks. | Current inventories cover 111 public command surfaces. Runtime resilience records 22 covered, 0 candidate, 0 deferred, and 89 not-applicable; report-surface governance records 98 covered, 0 needs-redaction, and 13 not-applicable. Redaction, generated-report safety, generated Markdown audit, endpoint reports, cache, metrics, rate-limit, circuit-breaker, partial-failure reports, and `ragflow-doc-to-md` runtime performance telemetry are covered for the current inventory. | Closed for current public surfaces; reopen only when new command/report surfaces appear. |
 | Release packaging and platform acceptance | Keep archives self-contained and prove installed-artifact behavior. | Release hygiene, manifest schema checks, schema identity, build checks, archive export, installed archive smoke, consumer acceptance, strict-vendor platform smoke, and optional runtime wheel smoke/export are available. | Closed for current release path; run periodically and before public changes. |
 | Post-CLI product adapters | Add service, remote conversion, provider, reranker, or web/API adapters only when one-shot CLI is insufficient or a concrete product contract exists. | `docs/13-post-cli-adapter-planning.md` and Phase 37 intake gates define the required evidence and fake-fixture path. | Deferred; observation must prove need before implementation. |
 | Optional LLM/RAGAS backend execution | Keep deterministic defaults and request/review boundaries before any script-owned model call. | Metadata, grounded-QA, agentic-answer, and answer-evaluator request/review boundaries exist. `docs/14-optional-llm-backend-planning.md` defines the future backend gate. | Deferred; no model calls should be enabled without explicit config and fake-provider gates. |
@@ -331,7 +331,7 @@ the 15 gated roadmap items are unchanged.
 
 ## Canonical Multimodal Claim Calibration
 
-Calibration date: 2026-08-14
+Calibration date: 2026-08-15
 
 Historical conversion, `PASS_WITH_REVIEW`, `ready_with_review`, HTML table fingerprint,
 local image, and dry-run evidence must not be read as exact-source canonical acceptance or
@@ -340,15 +340,50 @@ integrity, local asset presence, or pre-build readiness only. The representative
 complex-table observations did not produce an accepted canonical review record and did
 not execute the existing live image-ingestion workflow.
 
-The P0/P1 correction adds one public `ragflow_canonical_review_v1` record plus a local
+The P0-P3 correction adds one public `ragflow_canonical_review_v1` record plus a local
 `finalize-review` command. It hash-binds exact source bytes, candidate and accepted
 Markdown, source coverage, structural and asset audits, reviewed table actions, and
 selected images; accepted files are materialized under a new output root while the
-candidate and original handoff remain unchanged. Canonical review performs no network
-`PUT` and does not select a provider or model.
+candidate and original handoff remain unchanged. The P2 build gate revalidates those
+bindings before client creation. The P3 representative offline replay accepted all six
+reviewed table conversions with zero HTML residue, zero unresolved items, and 13 selected
+assets, then passed handoff inspection, asset planning, image readiness, and canonical
+build dry-run without live mutation. Canonical review performs no network `PUT` and does
+not select a provider or model.
 
-This correction does not implement the P2 KB-build boundary gate, the P3 representative
-sample offline replay, or P4 live correction. Generic non-canonical builds remain
-compatible. The earlier retained KB remains untouched. P4 still requires a new,
-target-specific authorization covering the exact live text/image mutations; no earlier
-field-trial or repository-maintenance approval can be reused for it.
+P4 then received a separate one-time authorization and produced a retained partial live
+field-trial result. The accepted record and all bound source, Markdown, audit, and selected
+asset hashes were revalidated before mutation. One Markdown document parsed successfully;
+13 selected visual documents uploaded and parsed with server read-back; direct and
+host-assisted retrieval both returned usable evidence for all 9 approved questions; and
+all 6 table-fact checks passed in both modes. The table result is retrieval evidence only;
+server-derived HTML was not independently proven cell-equivalent to canonical Markdown.
+Asset-file retrieval was observed for 4 of 6 target assets and 1 of 3 image groups was
+complete, but the semantic image-context gate was `0/3`: sampled image chunks were
+VLM-style visual descriptions without the corresponding canonical context, and uploaded
+basenames were not meaningful semantic names. The result is therefore `parsed_visual_only`,
+not completed multimodal ingestion. Rerank remained disabled, provider enumeration was not
+used, no cleanup was executed, and the protected earlier KB was not targeted.
+
+P5 implements that next quality slice offline while keeping `ragflow_canonical_review_v1` as
+the single acceptance record. Optional identity fields bind semantic asset names, roles,
+source references, line-range context hashes, and ingestion intents; only a new accepted-output
+root receives renamed assets and rewritten references. Build binding separately revalidates
+the source-audited reviewed Markdown and the rewritten accepted Markdown. Old records remain
+compatible, while new canonical asset plans send only `visual_extract` to the existing visual
+parse path. `context_bound` and `exclude` remain package-only, and readiness blocks a
+canonical-context claim because no verified curated image-text transport exists.
+
+P5 also adds deterministic Markdown/derived-HTML cell-matrix equivalence and a no-LLM VLM
+request/review boundary. The VLM path is advisory/generated evidence with exact hashes,
+provenance, merge relations, private-literal rejection, and no canonical overwrite path; it
+does not add a model backend or a general HTML converter. The current inventories cover
+111 commands: report surfaces are 98 covered, 0 needs-redaction, and 13 not-applicable;
+runtime resilience is 22 covered, 0 candidate, 0 deferred, and 89 not-applicable.
+
+Generic non-canonical builds remain compatible. P5 made no RAGFlow, MinerU, provider/model,
+credential, or private-evidence call and performed no mutation. The correction KB and private
+evidence remain retained, the P4 validation checklist remains open, and the semantic
+image-context result remains `0/3`. Any further live mutation, image-text update, route change,
+activation, or cleanup requires a new target-specific authorization; the one-time authority
+used for P4 cannot be reused.

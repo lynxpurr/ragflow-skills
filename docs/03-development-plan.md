@@ -3,7 +3,7 @@ doc_type: roadmap
 topic: current-development
 status: active
 created: 2026-07-02
-updated: 2026-08-14
+updated: 2026-08-15
 canonical: true
 implementation_authority: false
 owner_spec: null
@@ -101,8 +101,8 @@ Partially completed and still active:
     backend execution remain future adapters.
 - Phase 31 runtime resilience
   - Report redaction and generated-report safety are closed for the current inventory.
-  - Runtime helper coverage currently tracks 104 public command surfaces: 22 `covered`,
-    0 `candidate`, 0 `deferred`, and 82 `not_applicable`.
+  - Runtime helper coverage currently tracks 111 public command surfaces: 22 `covered`,
+    0 `candidate`, 0 `deferred`, and 89 `not_applicable`.
   - The bounded non-live checkpoint/resume and partial-failure candidate inventory plus
     the approved live mutation/query helper rollout are closed; any future resilience
     expansion is future adapter scope.
@@ -304,7 +304,7 @@ remain in their owning phases below.
 
 | Track | Existing open items | Current status | Completion rule |
 | --- | --- | --- | --- |
-| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory and approved live mutation/query coverage closed | Runtime inventory currently covers 104 public command surfaces: 22 `covered`, 0 `candidate`, 0 `deferred`, and 82 `not_applicable`. `ragflow-doc-to-md` runtime reports include offline performance telemetry for conversion, asset, postprocess, package, hints, and ingest-plan stages without adding live mutation. |
+| Runtime resilience closure | Phase 31 checkpoint/resume and partial-failure umbrellas | Non-live candidate inventory and approved live mutation/query coverage closed | Runtime inventory currently covers 111 public command surfaces: 22 `covered`, 0 `candidate`, 0 `deferred`, and 89 `not_applicable`. `ragflow-doc-to-md` runtime reports include offline performance telemetry for conversion, asset, postprocess, package, hints, and ingest-plan stages without adding live mutation. |
 | RAGFlux retirement observation | docs/20 multi-sample observation matrix | Complete as an offline explicit-run-root summary path | `tools/field_trial_metrics.py` now emits `ragflow_retirement_observation_matrix_v1` for scanned, long-document, paper, contract, complex-table, image-heavy, low-quality-OCR, and multi-document handoff evidence without scanning user directories or running live mutation; field-trial and retirement matrix schema identities are covered by the release gate. |
 | Document split packaging | Phase 16 optional manifest rewrite/package mode | Complete for current CLI scope | Split outputs can be resumed and optionally repackaged without breaking existing segment-directory ingestion. |
 | Query service and agentic adapters | Phase 3 `serve`, Phase 21/30 script-owned synthesis and reflection | Host-assisted agentic retrieval and agentic-answer request/review complete; local service and script-owned answer synthesis deferred | Implement script-owned synthesis only behind explicit local-service or LLM config, with deterministic offline fixtures and citation audit compatibility. |
@@ -1681,7 +1681,7 @@ Tasks:
 Status note: `tools/report_surface_inventory.py` now emits
 `ragflow_report_surface_inventory_v1`, dynamically enumerates public argparse command
 leaves, and overlays an explicit Phase 36 classification. The verified inventory currently
-names 104 public commands: 95 `covered`, 0 `needs_redaction`, and 9 `not_applicable`, with
+names 111 public commands: 98 `covered`, 0 `needs_redaction`, and 13 `not_applicable`, with
 no uncatalogued or stale classification findings. Generated-report redaction coverage is
 now closed across inventoried public command surfaces; `ragflow-doc-to-md`
 and `ragflow-query` report commands are currently classified as covered or not applicable.
@@ -2357,3 +2357,24 @@ This closeout does not authorize Phase 3 deprecation, Stage 8C, either L4 decisi
 script-owned LLM/backend work, post-CLI adapters, private bridges, or live operations.
 `NEW_MINIMAL_L3` remains `L3=NOT_COMPLETED_INPUTS_UNAVAILABLE`; the roadmap remains 586
 checked and 15 intentionally gated unchecked items.
+
+## 2026-08-15 Canonical Multimodal P5 Offline Checkpoint
+
+The P4 partial field trial opened one evidence-triggered offline maintenance slice. P5 keeps
+`ragflow_canonical_review_v1` as the sole acceptance record and adds optional semantic asset
+identity, deterministic accepted-output renaming/reference rewriting, intent-aware canonical
+asset planning, normalized Markdown/HTML table-matrix evidence, and a no-LLM advisory VLM
+request/review boundary. Old canonical records and generic non-canonical builds remain
+compatible. Context-bound readiness stays blocked because no verified curated image-text
+transport exists.
+
+The current inventory contains 111 public commands. Report-surface governance records
+98 covered, 0 needs-redaction, and 13 not-applicable; runtime-resilience governance records
+22 covered, 0 candidate, 0 deferred, and 89 not-applicable. This checkpoint adds no roadmap
+checkbox: the roadmap remains 586 of 601, with the same 15 product/private/LLM adapter items
+gated.
+
+P5 is offline only. It does not authorize or perform RAGFlow/MinerU access, provider/model
+calls, credential reads, KB mutation, reparse, route changes, activation, or cleanup. The P4
+semantic image-context result remains `0/3` and `parsed_visual_only`; a future live replay or
+image-text adapter still requires new target-specific authorization and a verified contract.

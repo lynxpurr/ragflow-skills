@@ -20,12 +20,12 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_report_surface_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 110)
+        self.assertEqual(report["summary"]["command_count"], 111)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
             {
-                "covered": 97,
+                "covered": 98,
                 "needs_redaction": 0,
                 "not_applicable": 13,
             },
@@ -236,6 +236,11 @@ class ReportSurfaceInventoryTests(unittest.TestCase):
         self.assertEqual(finalize_review["status"], "covered")
         self.assertIn("artifact_json", finalize_review["output_categories"])
         self.assertIn("redaction_sidecar", finalize_review["output_categories"])
+
+        table_evidence = by_command["ragflow-canonical-review table-evidence"]
+        self.assertEqual(table_evidence["status"], "covered")
+        self.assertIn("markdown_report", table_evidence["output_categories"])
+        self.assertIn("redaction_sidecar", table_evidence["output_categories"])
 
     def test_markdown_renderer_summarizes_inventory(self) -> None:
         report = run_report_surface_inventory()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import unittest
 from pathlib import Path
@@ -15,6 +16,7 @@ from ragflow_skill_runtime.kb_build import (
     PARAMETER_MATERIALIZATION_INVENTORY_SCHEMA,
     PARAMETER_READ_BACK_AUDIT_SCHEMA,
     MULTIMODAL_KB_MANIFEST_SCHEMA,
+    create_kb_asset_ingestion_readiness_report,
     create_kb_asset_upload_plan,
     discover_markdown_documents,
     extract_document_states,
@@ -48,6 +50,107 @@ class FakeDocumentClient:
 
 
 class KbBuildTests(unittest.TestCase):
+    def test_canonical_asset_intents_control_visual_upload_and_context_readiness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = Path(tmp) / "handoff"
+            image_dir = handoff / "documents" / "images"
+            image_dir.mkdir(parents=True)
+            markdown = handoff / "documents" / "sample.md"
+            markdown.write_text(
+                "# Sample\n\n"
+                "![visual](images/visual.png)\n"
+                "![context](images/context.png)\n"
+                "![decorative](images/decorative.png)\n",
+                encoding="utf-8",
+            )
+            for name in ("visual.png", "context.png", "decorative.png"):
+                (image_dir / name).write_bytes(name.encode("utf-8"))
+            manifest = handoff / "doc_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "0.1",
+                        "source_root": ".",
+                        "documents": [
+                            {"source_path": "sample.pdf", "markdown_path": "documents/sample.md"}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            selected_assets = []
+            intents = {
+                "visual.png": ("diagram", "visual_extract"),
+                "context.png": ("figure", "context_bound"),
+                "decorative.png": ("decorative", "exclude"),
+            }
+            for name, (role, intent) in intents.items():
+                path = image_dir / name
+                selected_assets.append(
+                    {
+                        "path": f"documents/images/{name}",
+                        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                        "role": role,
+                        "canonical_name": name,
+                        "source_reference": "page:1",
+                        "context_selector": "line:1-1",
+                        "context_sha256": hashlib.sha256(b"# Sample").hexdigest(),
+                        "ingestion_intent": intent,
+                    }
+                )
+            canonical_review = handoff / "ragflow_canonical_review.json"
+            canonical_review.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_canonical_review_v1",
+                        "status": "accepted",
+                        "ok": True,
+                        "markdown": {
+                            "candidate": {"sha256": "1" * 64},
+                            "accepted": {
+                                "path": "documents/sample.md",
+                                "sha256": hashlib.sha256(markdown.read_bytes()).hexdigest(),
+                            },
+                        },
+                        "selected_assets": selected_assets,
+                        "summary": {
+                            "selected_asset_count": 3,
+                            "unresolved_item_count": 0,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            plan = create_kb_asset_upload_plan(
+                doc_manifest_path=manifest,
+                canonical_review_path=canonical_review,
+            )
+            plan_path = handoff / "asset_upload_plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            readiness = create_kb_asset_ingestion_readiness_report(
+                asset_upload_plan_path=plan_path,
+            )
+
+        self.assertEqual(plan["summary"]["planned_visual_upload_file_count"], 1)
+        self.assertEqual(plan["summary"]["context_bound_image_count"], 1)
+        self.assertEqual(plan["summary"]["excluded_image_count"], 1)
+        self.assertEqual(
+            [item["source_path"] for item in plan["planned_visual_upload_files"]],
+            ["documents/images/visual.png"],
+        )
+        projected = {item["source_path"] for item in plan["projected_upload_files"]}
+        self.assertTrue(
+            {
+                "documents/images/visual.png",
+                "documents/images/context.png",
+                "documents/images/decorative.png",
+            }.issubset(projected)
+        )
+        self.assertEqual(readiness["status"], "blocked")
+        self.assertEqual(readiness["checks"]["canonical_context_claim"]["status"], "BLOCKED")
+        self.assertIn("context_bound_capability_missing", {item["code"] for item in readiness["issues"]})
+
     def test_discover_markdown_documents_requires_existing_files(self) -> None:
         manifest = DocManifest(
             version="0.1",

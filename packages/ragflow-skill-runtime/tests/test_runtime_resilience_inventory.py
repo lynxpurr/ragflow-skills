@@ -20,7 +20,7 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
 
         self.assertTrue(report["ok"], report["findings"])
         self.assertEqual(report["schema"], "ragflow_runtime_resilience_inventory_v1")
-        self.assertEqual(report["summary"]["command_count"], 110)
+        self.assertEqual(report["summary"]["command_count"], 111)
         self.assertEqual(report["findings"], [])
         self.assertEqual(
             report["summary"]["status_counts"],
@@ -28,7 +28,7 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
                 "candidate": 0,
                 "covered": 22,
                 "deferred": 0,
-                "not_applicable": 88,
+                "not_applicable": 89,
             },
         )
 
@@ -182,6 +182,10 @@ class RuntimeResilienceInventoryTests(unittest.TestCase):
         finalize_review = by_command["ragflow-canonical-review finalize-review"]
         self.assertEqual(finalize_review["status"], "not_applicable")
         self.assertEqual(finalize_review["features"], [])
+
+        table_evidence = by_command["ragflow-canonical-review table-evidence"]
+        self.assertEqual(table_evidence["status"], "not_applicable")
+        self.assertEqual(table_evidence["features"], [])
 
     def test_markdown_renderer_summarizes_runtime_inventory(self) -> None:
         report = run_runtime_resilience_inventory()

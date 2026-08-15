@@ -202,6 +202,7 @@ CANONICAL_REVIEW_NOT_APPLICABLE_COMMANDS = (
 )
 CANONICAL_REVIEW_COVERED_COMMANDS = (
     "ragflow-canonical-review finalize-review",
+    "ragflow-canonical-review table-evidence",
 )
 
 
@@ -345,6 +346,10 @@ def discover_public_commands(root: Path = ROOT) -> list[DiscoveredCommand]:
         "ragflow_canonical_finalize_public_cli",
         root / "skills/ragflow-canonical-review/scripts/finalize_review.py",
     )
+    canonical_table_evidence = _load_module(
+        "ragflow_canonical_table_evidence_public_cli",
+        root / "skills/ragflow-canonical-review/scripts/table_evidence.py",
+    )
 
     commands: list[DiscoveredCommand] = []
     _record_parsers(
@@ -374,6 +379,13 @@ def discover_public_commands(root: Path = ROOT) -> list[DiscoveredCommand]:
         script="skills/ragflow-canonical-review/scripts/finalize_review.py",
         prefix=("ragflow-canonical-review", "finalize-review"),
         parser=canonical_finalize.build_parser(),
+    )
+    _record_parsers(
+        commands=commands,
+        skill="ragflow-canonical-review",
+        script="skills/ragflow-canonical-review/scripts/table_evidence.py",
+        prefix=("ragflow-canonical-review", "table-evidence"),
+        parser=canonical_table_evidence.build_parser(),
     )
     for prefix, builder in (
         (("ragflow-doc-to-md", "inspect-source"), doc.build_inspect_source_parser),

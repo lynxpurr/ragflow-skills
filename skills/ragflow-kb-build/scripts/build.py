@@ -2286,6 +2286,7 @@ def _run_asset_upload_plan(args: argparse.Namespace) -> int:
         report = create_kb_asset_upload_plan(
             doc_manifest_path=args.doc_manifest,
             include_sidecars=not args.no_sidecars,
+            canonical_review_path=args.canonical_review,
         )
         if args.package_zip:
             report["package_zip"] = write_kb_asset_upload_zip(report, output_path=args.package_zip)
@@ -2305,7 +2306,7 @@ def _run_asset_upload_plan(args: argparse.Namespace) -> int:
             report, redaction_report = _sanitize_governance_report(
                 report,
                 args,
-                input_paths=[args.doc_manifest],
+                input_paths=[args.doc_manifest, args.canonical_review],
                 output_paths=[args.report_json, args.report_md, args.redaction_report, args.package_zip],
             )
             _write_json_file(args.redaction_report, redaction_report)
@@ -4885,6 +4886,10 @@ def build_inspect_handoff_parser() -> argparse.ArgumentParser:
 def build_asset_upload_plan_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Plan a non-live Markdown plus local image upload package")
     parser.add_argument("--doc-manifest", required=True, help="Path to doc_manifest.json")
+    parser.add_argument(
+        "--canonical-review",
+        help="Optional accepted ragflow_canonical_review_v1 record for intent-aware image planning",
+    )
     parser.add_argument("--report-json", help="Optional JSON upload plan path")
     parser.add_argument("--report-md", help="Optional Markdown upload plan path")
     parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")

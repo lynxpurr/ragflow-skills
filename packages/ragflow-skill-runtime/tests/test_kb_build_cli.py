@@ -2813,6 +2813,7 @@ class KbBuildCliTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (image_dir / "asset.png").write_bytes(b"image-bytes")
+            markdown_path = handoff / "documents" / "sample.md"
             doc_manifest = handoff / "doc_manifest.json"
             doc_manifest.write_text(
                 json.dumps(
@@ -2828,6 +2829,35 @@ class KbBuildCliTests(unittest.TestCase):
                 json.dumps({"schema": "ragflow_retrieval_hints_v1"}),
                 encoding="utf-8",
             )
+            canonical_review = handoff / "ragflow_canonical_review.json"
+            canonical_review.write_text(
+                json.dumps(
+                    {
+                        "schema": "ragflow_canonical_review_v1",
+                        "status": "accepted",
+                        "ok": True,
+                        "markdown": {
+                            "candidate": {"sha256": "1" * 64},
+                            "accepted": {
+                                "path": "documents/sample.md",
+                                "sha256": hashlib.sha256(markdown_path.read_bytes()).hexdigest(),
+                            },
+                        },
+                        "selected_assets": [
+                            {
+                                "path": "documents/images/asset.png",
+                                "sha256": hashlib.sha256((image_dir / "asset.png").read_bytes()).hexdigest(),
+                                "role": "diagram",
+                                "canonical_name": "asset.png",
+                                "source_reference": "page:1",
+                                "ingestion_intent": "visual_extract",
+                            }
+                        ],
+                        "summary": {"selected_asset_count": 1, "unresolved_item_count": 0},
+                    }
+                ),
+                encoding="utf-8",
+            )
             report_json = Path(tmp) / "asset_upload_plan.json"
             report_md = Path(tmp) / "asset_upload_plan.md"
             redaction_report = Path(tmp) / "asset_upload_plan.redaction.json"
@@ -2840,6 +2870,8 @@ class KbBuildCliTests(unittest.TestCase):
                     "asset-upload-plan",
                     "--doc-manifest",
                     str(doc_manifest),
+                    "--canonical-review",
+                    str(canonical_review),
                     "--report-json",
                     str(report_json),
                     "--report-md",
@@ -2865,6 +2897,8 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["schema"], "ragflow_kb_asset_upload_plan_v2")
         self.assertEqual(report_payload["summary"]["planned_image_file_count"], 1)
+        self.assertEqual(report_payload["summary"]["visual_extract_image_count"], 1)
+        self.assertEqual(report_payload["canonical_review"]["identity_mode"], "explicit_intents")
         self.assertEqual(report_payload["summary"]["markdown_image_reference_count"], 1)
         self.assertEqual(report_payload["summary"]["missing_image_asset_count"], 0)
         self.assertEqual(report_payload["summary"]["missing_image_count"], 0)

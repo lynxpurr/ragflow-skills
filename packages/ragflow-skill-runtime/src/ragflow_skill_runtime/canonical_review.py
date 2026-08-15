@@ -9,11 +9,12 @@ from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path, PurePosixPath
+import posixpath
 import re
 import shutil
 import tempfile
 from typing import Any, Mapping, Sequence
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 
 CANONICAL_REVIEW_SCHEMA = "ragflow_canonical_review_v1"
@@ -28,7 +29,24 @@ TABLE_ACTIONS = {
     "converted_to_markdown",
     "retained_html_by_exception",
 }
+ASSET_ROLES = {
+    "figure",
+    "diagram",
+    "chart",
+    "table_image",
+    "screenshot",
+    "photo",
+    "decorative",
+    "other",
+}
+ASSET_INGESTION_INTENTS = {
+    "visual_extract",
+    "context_bound",
+    "exclude",
+}
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_CANONICAL_ASSET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+_CONTEXT_LINE_SELECTOR_RE = re.compile(r"^line:(?P<start>[1-9][0-9]*)-(?P<end>[1-9][0-9]*)$")
 _FENCE_OPEN_RE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})")
 _FENCE_CLOSE_RE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})[ \t]*$")
 _MARKDOWN_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
@@ -227,10 +245,118 @@ def _safe_relative_path(value: Any) -> str | None:
     return path.as_posix()
 
 
+def _selected_asset_output_path(item: Mapping[str, Any]) -> str | None:
+    relative = _safe_relative_path(item.get("path"))
+    if relative is None:
+        return None
+    canonical_name = item.get("canonical_name")
+    if canonical_name is None:
+        return relative
+    name = str(canonical_name).strip()
+    if not _CANONICAL_ASSET_NAME_RE.fullmatch(name) or PurePosixPath(name).name != name:
+        return None
+    if Path(name).suffix.casefold() != Path(relative).suffix.casefold():
+        return None
+    return (PurePosixPath(relative).parent / name).as_posix()
+
+
 def _image_target(value: str) -> str:
     raw = value.strip().replace("\\ ", " ").replace("\\(", "(").replace("\\)", ")")
     titled = re.match(r"^(.*?)(?:\s+[\"'].*[\"'])$", raw)
     return (titled.group(1) if titled else raw).strip()
+
+
+def _resolved_asset_relative(
+    target: str,
+    *,
+    markdown: Path,
+    asset_root: Path,
+) -> str | None:
+    parsed = urlsplit(target)
+    if parsed.scheme.casefold() in {"data", "http", "https"} or target.startswith("//"):
+        return None
+    decoded = unquote(parsed.path).replace("\\", os.sep).replace("/", os.sep)
+    if not decoded or decoded.startswith("#"):
+        return None
+    resolved = (markdown.parent / decoded).resolve(strict=False)
+    try:
+        return resolved.relative_to(asset_root).as_posix()
+    except ValueError:
+        return None
+
+
+def _rewrite_target_value(raw: str, *, target: str, replacement: str) -> str:
+    parsed = urlsplit(target)
+    rewritten_target = urlunsplit(("", "", replacement, parsed.query, parsed.fragment))
+    offset = raw.find(target)
+    if offset < 0:
+        return raw
+    return raw[:offset] + rewritten_target + raw[offset + len(target) :]
+
+
+def _rewrite_markdown_asset_references(
+    text: str,
+    *,
+    reviewed_markdown: Path,
+    asset_root: Path,
+    selected_assets: Sequence[Mapping[str, Any]],
+) -> str:
+    rename_by_source: dict[str, str] = {}
+    markdown_relative = reviewed_markdown.relative_to(asset_root).as_posix()
+    markdown_parent = PurePosixPath(markdown_relative).parent.as_posix()
+    for item in selected_assets:
+        source = _safe_relative_path(item.get("path"))
+        target = _selected_asset_output_path(item)
+        if source is None or target is None or source == target:
+            continue
+        rename_by_source[source] = posixpath.relpath(target, start=markdown_parent or ".")
+    if not rename_by_source:
+        return text
+
+    replacements: list[tuple[int, int, str]] = []
+
+    def add_replacement(match: re.Match[str], group_names: Sequence[str]) -> None:
+        for group_name in group_names:
+            raw = match.group(group_name)
+            if raw is None:
+                continue
+            target = _image_target(raw)
+            source = _resolved_asset_relative(
+                target,
+                markdown=reviewed_markdown,
+                asset_root=asset_root,
+            )
+            replacement = rename_by_source.get(source or "")
+            if replacement is None:
+                return
+            start, end = match.span(group_name)
+            replacements.append(
+                (start, end, _rewrite_target_value(raw, target=target, replacement=replacement))
+            )
+            return
+
+    for match in _INLINE_IMAGE_RE.finditer(text):
+        add_replacement(match, ("angled", "plain"))
+    for match in _REFERENCE_DEF_RE.finditer(text):
+        add_replacement(match, ("angled", "plain"))
+    for match in _HTML_IMAGE_RE.finditer(text):
+        add_replacement(match, ("double", "single", "bare"))
+    rewritten = text
+    for start, end, replacement in sorted(replacements, reverse=True):
+        rewritten = rewritten[:start] + replacement + rewritten[end:]
+    return rewritten
+
+
+def _context_text(text: str, selector: str) -> str | None:
+    match = _CONTEXT_LINE_SELECTOR_RE.fullmatch(selector)
+    if match is None:
+        return None
+    start = int(match.group("start"))
+    end = int(match.group("end"))
+    lines = text.splitlines()
+    if end < start or end > len(lines):
+        return None
+    return "\n".join(lines[start - 1 : end])
 
 
 def _local_image_paths(text: str, *, markdown: Path, asset_root: Path) -> tuple[set[str], list[dict[str, Any]]]:
@@ -497,6 +623,135 @@ def _selected_asset_records(
     return records
 
 
+def _bind_selected_asset_identities(
+    selected_assets: list[dict[str, str]],
+    payload: Mapping[str, Any],
+    *,
+    reviewed_text: str,
+    reviewed_markdown: Path,
+    asset_root: Path,
+    findings: list[dict[str, Any]],
+) -> tuple[list[dict[str, str]], str]:
+    raw_assets = payload.get("assets")
+    if not isinstance(raw_assets, list):
+        findings.append(_finding("invalid_asset_identities", "asset identities must contain an assets list."))
+        raw_assets = []
+    selected_by_path = {item["path"]: dict(item) for item in selected_assets}
+    identity_paths: set[str] = set()
+    target_paths: dict[str, str] = {}
+
+    for index, raw in enumerate(raw_assets, start=1):
+        if not isinstance(raw, Mapping):
+            findings.append(_finding("invalid_asset_identity", f"Asset identity {index} must be an object."))
+            continue
+        relative = _safe_relative_path(raw.get("path"))
+        if relative is None:
+            findings.append(_finding("unsafe_asset_identity_path", f"Asset identity {index} has an unsafe path."))
+            continue
+        if relative in identity_paths:
+            findings.append(_finding("duplicate_asset_identity", "Selected asset identity is bound more than once.", path=relative))
+            continue
+        identity_paths.add(relative)
+        record = selected_by_path.get(relative)
+        if record is None:
+            findings.append(_finding("unknown_asset_identity", "Asset identity does not match a selected audited asset.", path=relative))
+            continue
+
+        role = str(raw.get("role") or "").strip()
+        canonical_name = str(raw.get("canonical_name") or "").strip()
+        source_reference = str(raw.get("source_reference") or "").strip()
+        context_selector = str(raw.get("context_selector") or "").strip()
+        context_sha256 = _normalize_sha256(raw.get("context_sha256"))
+        ingestion_intent = str(raw.get("ingestion_intent") or "").strip()
+        valid = True
+        if role not in ASSET_ROLES:
+            findings.append(_finding("invalid_asset_role", "Asset identity role is unsupported.", path=relative))
+            valid = False
+        if (
+            not _CANONICAL_ASSET_NAME_RE.fullmatch(canonical_name)
+            or PurePosixPath(canonical_name).name != canonical_name
+            or Path(canonical_name).suffix.casefold() != Path(relative).suffix.casefold()
+        ):
+            findings.append(
+                _finding(
+                    "unsafe_asset_canonical_name",
+                    "Asset canonical_name must be a portable basename with the original extension.",
+                    path=relative,
+                )
+            )
+            valid = False
+        if not source_reference:
+            findings.append(_finding("missing_asset_source_reference", "Asset identity needs a source reference.", path=relative))
+            valid = False
+        if ingestion_intent not in ASSET_INGESTION_INTENTS:
+            findings.append(_finding("invalid_asset_ingestion_intent", "Asset ingestion intent is unsupported.", path=relative))
+            valid = False
+        if role == "decorative" and ingestion_intent != "exclude":
+            findings.append(_finding("decorative_asset_must_be_excluded", "Decorative assets cannot enter visual or context-bound ingestion.", path=relative))
+            valid = False
+        if ingestion_intent == "context_bound" and (not context_selector or context_sha256 is None):
+            findings.append(_finding("missing_asset_context", "Context-bound assets need a selector and context SHA-256.", path=relative))
+            valid = False
+        if bool(context_selector) != bool(context_sha256):
+            findings.append(_finding("incomplete_asset_context", "Asset context selector and hash must be supplied together.", path=relative))
+            valid = False
+        if not valid:
+            continue
+        record.update(
+            {
+                "role": role,
+                "canonical_name": canonical_name,
+                "source_reference": source_reference,
+                "ingestion_intent": ingestion_intent,
+            }
+        )
+        if context_selector and context_sha256:
+            record["context_selector"] = context_selector
+            record["context_sha256"] = context_sha256
+
+        target = _selected_asset_output_path(record)
+        if target is None:
+            continue
+        target_key = target.casefold()
+        previous = target_paths.get(target_key)
+        if previous is not None and previous != relative:
+            findings.append(_finding("duplicate_asset_canonical_name", "Two selected assets resolve to the same accepted-output path.", path=target))
+        else:
+            target_paths[target_key] = relative
+        source_path = (asset_root / Path(relative)).resolve(strict=False)
+        target_path = (asset_root / Path(target)).resolve(strict=False)
+        if target_path != source_path and (target_path.exists() or target_path.is_symlink()):
+            findings.append(_finding("asset_output_collision", "Semantic asset name collides with an existing reviewed file.", path=target))
+
+    missing = sorted(set(selected_by_path) - identity_paths)
+    if missing:
+        findings.append(
+            _finding(
+                "missing_asset_identity",
+                "Every selected asset needs one identity when an asset identity file is supplied.",
+                missing_count=len(missing),
+            )
+        )
+    normalized = [selected_by_path[path] for path in sorted(selected_by_path)]
+    accepted_text = _rewrite_markdown_asset_references(
+        reviewed_text,
+        reviewed_markdown=reviewed_markdown,
+        asset_root=asset_root,
+        selected_assets=normalized,
+    )
+    for item in normalized:
+        selector = item.get("context_selector")
+        expected_hash = item.get("context_sha256")
+        if not selector or not expected_hash:
+            continue
+        selected_context = _context_text(accepted_text, selector)
+        if selected_context is None:
+            findings.append(_finding("invalid_asset_context_selector", "Asset context selector is outside the accepted Markdown.", path=item["path"]))
+        elif _fragment_sha256(selected_context) != expected_hash:
+            findings.append(_finding("stale_asset_context_hash", "Asset context hash does not match accepted Markdown.", path=item["path"]))
+    return normalized, accepted_text
+
+
 def validate_canonical_review_record(payload: Mapping[str, Any]) -> None:
     """Validate the stable shape and acceptance invariants of one review record."""
 
@@ -522,6 +777,59 @@ def validate_canonical_review_record(payload: Mapping[str, Any]) -> None:
         identity = markdown.get(label)
         if not isinstance(identity, Mapping) or _normalize_sha256(identity.get("sha256")) is None:
             raise CanonicalReviewError(f"canonical review {label} Markdown hash is invalid")
+    reviewed_identity = markdown.get("reviewed")
+    if reviewed_identity is not None and (
+        not isinstance(reviewed_identity, Mapping)
+        or _normalize_sha256(reviewed_identity.get("sha256")) is None
+    ):
+        raise CanonicalReviewError("canonical review reviewed Markdown hash is invalid")
+    selected_assets = payload.get("selected_assets")
+    if not isinstance(selected_assets, list):
+        raise CanonicalReviewError("canonical review selected assets must be a list")
+    if summary.get("selected_asset_count") != len(selected_assets):
+        raise CanonicalReviewError("canonical review selected asset count is inconsistent")
+    asset_identity_review = payload.get("asset_identity_review")
+    for index, item in enumerate(selected_assets, start=1):
+        if not isinstance(item, Mapping):
+            raise CanonicalReviewError(f"canonical review selected asset {index} is invalid")
+        if _safe_relative_path(item.get("path")) is None or _normalize_sha256(item.get("sha256")) is None:
+            raise CanonicalReviewError(f"canonical review selected asset {index} identity is invalid")
+        optional_fields = {
+            "role",
+            "canonical_name",
+            "source_reference",
+            "ingestion_intent",
+        }
+        present = {field for field in optional_fields if item.get(field) is not None}
+        if present and present != optional_fields:
+            raise CanonicalReviewError(f"canonical review selected asset {index} semantic identity is incomplete")
+        if status == "accepted" and asset_identity_review is not None and present != optional_fields:
+            raise CanonicalReviewError(f"canonical review selected asset {index} semantic identity is missing")
+        if present:
+            if item.get("role") not in ASSET_ROLES:
+                raise CanonicalReviewError(f"canonical review selected asset {index} role is invalid")
+            if item.get("ingestion_intent") not in ASSET_INGESTION_INTENTS:
+                raise CanonicalReviewError(f"canonical review selected asset {index} ingestion intent is invalid")
+            if _selected_asset_output_path(item) is None:
+                raise CanonicalReviewError(f"canonical review selected asset {index} canonical name is invalid")
+            if not isinstance(item.get("source_reference"), str) or not item["source_reference"].strip():
+                raise CanonicalReviewError(f"canonical review selected asset {index} source reference is missing")
+            if item.get("role") == "decorative" and item.get("ingestion_intent") != "exclude":
+                raise CanonicalReviewError(f"canonical review selected asset {index} decorative role must be excluded")
+        context_present = item.get("context_selector") is not None or item.get("context_sha256") is not None
+        if context_present and (
+            not str(item.get("context_selector") or "").strip()
+            or _normalize_sha256(item.get("context_sha256")) is None
+        ):
+            raise CanonicalReviewError(f"canonical review selected asset {index} context identity is incomplete")
+        if item.get("ingestion_intent") == "context_bound" and not context_present:
+            raise CanonicalReviewError(f"canonical review selected asset {index} context-bound identity is missing")
+    if asset_identity_review is not None and (
+        not isinstance(asset_identity_review, Mapping)
+        or _normalize_sha256(asset_identity_review.get("record_sha256")) is None
+        or asset_identity_review.get("asset_count") != len(selected_assets)
+    ):
+        raise CanonicalReviewError("canonical review asset identity record is invalid")
 
 
 def _require_record_mapping(payload: Mapping[str, Any], field: str) -> Mapping[str, Any]:
@@ -630,6 +938,7 @@ def validate_canonical_review_build_binding(
     actual_markdown_hash = canonical_file_sha256(accepted_markdown)
     if actual_markdown_hash != expected_markdown_hash:
         raise CanonicalReviewError("canonical review accepted Markdown hash does not match the build input")
+    accepted_text = _read_normalized_markdown(accepted_markdown)
 
     markdown_audit = _validate_bound_audit(
         record,
@@ -639,8 +948,14 @@ def validate_canonical_review_build_binding(
         schema=CANONICAL_MARKDOWN_AUDIT_SCHEMA,
     )
     audit_markdown = markdown_audit.get("markdown")
-    if not isinstance(audit_markdown, Mapping) or _normalize_sha256(audit_markdown.get("sha256")) != actual_markdown_hash:
-        raise CanonicalReviewError("canonical review Markdown audit hash does not match the build input")
+    reviewed_identity = markdown.get("reviewed")
+    expected_audit_markdown_hash = (
+        _require_record_sha256(reviewed_identity, "sha256")
+        if isinstance(reviewed_identity, Mapping)
+        else actual_markdown_hash
+    )
+    if not isinstance(audit_markdown, Mapping) or _normalize_sha256(audit_markdown.get("sha256")) != expected_audit_markdown_hash:
+        raise CanonicalReviewError("canonical review Markdown audit hash does not match the reviewed Markdown identity")
     audit_source = markdown_audit.get("source")
     if not isinstance(audit_source, Mapping) or _normalize_sha256(audit_source.get("sha256")) != actual_source_hash:
         raise CanonicalReviewError("canonical review Markdown audit source hash does not match the supplied source")
@@ -676,8 +991,6 @@ def validate_canonical_review_build_binding(
     selected_assets = record.get("selected_assets")
     if not isinstance(selected_assets, list):
         raise CanonicalReviewError("canonical review selected assets must be a list")
-    if summary.get("selected_asset_count") != len(selected_assets):
-        raise CanonicalReviewError("canonical review selected asset count is inconsistent")
     seen_assets: set[str] = set()
     accepted_parts = Path(accepted_relative).parts
     resolved_markdown = accepted_markdown.resolve(strict=False)
@@ -689,11 +1002,17 @@ def validate_canonical_review_build_binding(
     for item in selected_assets:
         if not isinstance(item, Mapping):
             raise CanonicalReviewError("canonical review selected asset identity is invalid")
-        relative = _safe_relative_path(item.get("path"))
-        if relative is None or relative in seen_assets:
+        relative = _selected_asset_output_path(item)
+        if relative is None or relative.casefold() in seen_assets:
             raise CanonicalReviewError("canonical review selected asset path is unsafe or duplicated")
-        seen_assets.add(relative)
+        seen_assets.add(relative.casefold())
         expected_asset_hash = _require_record_sha256(item, "sha256")
+        selector = str(item.get("context_selector") or "").strip()
+        context_hash = _normalize_sha256(item.get("context_sha256"))
+        if selector or context_hash:
+            selected_context = _context_text(accepted_text, selector)
+            if selected_context is None or _fragment_sha256(selected_context) != context_hash:
+                raise CanonicalReviewError(f"canonical review selected asset context does not match the build input: {relative}")
         asset_path = asset_root / Path(relative)
         resolved_asset = asset_path.resolve(strict=False)
         try:
@@ -718,6 +1037,7 @@ def finalize_canonical_review(
     source_coverage_path: str | Path,
     table_decisions_path: str | Path,
     asset_root: str | Path,
+    asset_identity_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Validate review evidence and return one canonical acceptance record."""
 
@@ -760,7 +1080,7 @@ def finalize_canonical_review(
             findings.append(_finding("source_not_available", "Exact source bytes are required for canonical acceptance."))
 
     candidate_hash = canonical_file_sha256(candidate)
-    accepted_hash = canonical_file_sha256(reviewed)
+    reviewed_hash = canonical_file_sha256(reviewed)
     coverage_record = _validate_source_coverage(
         coverage,
         source_sha256=source_hash,
@@ -776,12 +1096,12 @@ def finalize_canonical_review(
         if isinstance(audit_markdown, Mapping)
         else None
     )
-    if audit_markdown_hash != accepted_hash:
+    if audit_markdown_hash != reviewed_hash:
         findings.append(
             _finding(
                 "stale_markdown_audit",
                 "Markdown audit does not match the reviewed Markdown bytes.",
-                expected_sha256=accepted_hash,
+                expected_sha256=reviewed_hash,
                 actual_sha256=audit_markdown_hash,
             )
         )
@@ -821,6 +1141,23 @@ def finalize_canonical_review(
         asset_root=assets,
         findings=findings,
     )
+    asset_identity_record_sha256: str | None = None
+    if asset_identity_path is not None:
+        identity_file = Path(asset_identity_path)
+        asset_identities = _load_json_mapping(identity_file, label="asset identities")
+        asset_identity_record_sha256 = canonical_file_sha256(identity_file)
+        selected_assets, accepted_text = _bind_selected_asset_identities(
+            selected_assets,
+            asset_identities,
+            reviewed_text=accepted_text,
+            reviewed_markdown=reviewed,
+            asset_root=assets,
+            findings=findings,
+        )
+        accepted_bytes = accepted_text.encode("utf-8")
+    else:
+        accepted_bytes = reviewed.read_bytes()
+    accepted_hash = hashlib.sha256(accepted_bytes).hexdigest()
 
     source_missing = not source["available"]
     non_source_blockers = [item for item in findings if item["code"] != "source_not_available"]
@@ -878,6 +1215,12 @@ def finalize_canonical_review(
             "script_owned_llm_calls": 0,
         },
     }
+    if asset_identity_record_sha256 is not None:
+        record["markdown"]["reviewed"] = {"path": accepted_relative, "sha256": reviewed_hash}
+        record["asset_identity_review"] = {
+            "record_sha256": asset_identity_record_sha256,
+            "asset_count": len(selected_assets),
+        }
     validate_canonical_review_record(record)
     return record
 
@@ -921,21 +1264,36 @@ def materialize_canonical_review_output(
                 raise CanonicalReviewError("accepted Markdown output path is unsafe")
             markdown_output = temporary / Path(markdown_relative)
             markdown_output.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(reviewed, markdown_output)
+            reviewed_text = _read_normalized_markdown(reviewed)
+            accepted_text = _rewrite_markdown_asset_references(
+                reviewed_text,
+                reviewed_markdown=reviewed,
+                asset_root=assets,
+                selected_assets=[
+                    item
+                    for item in record.get("selected_assets", [])
+                    if isinstance(item, Mapping)
+                ],
+            )
+            if isinstance(record.get("markdown", {}).get("reviewed"), Mapping):
+                markdown_output.write_text(accepted_text, encoding="utf-8")
+            else:
+                shutil.copyfile(reviewed, markdown_output)
             if canonical_file_sha256(markdown_output) != markdown_identity.get("sha256"):
                 raise CanonicalReviewError("materialized accepted Markdown hash does not match review record")
             for item in record.get("selected_assets", []):
                 if not isinstance(item, Mapping):
                     raise CanonicalReviewError("selected asset record is invalid")
-                relative = _safe_relative_path(item.get("path"))
-                if relative is None:
+                source_relative = _safe_relative_path(item.get("path"))
+                output_relative = _selected_asset_output_path(item)
+                if source_relative is None or output_relative is None:
                     raise CanonicalReviewError("selected asset output path is unsafe")
-                source = assets / Path(relative)
-                destination = temporary / Path(relative)
+                source = assets / Path(source_relative)
+                destination = temporary / Path(output_relative)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source, destination)
                 if canonical_file_sha256(destination) != item.get("sha256"):
-                    raise CanonicalReviewError(f"materialized selected asset hash mismatch: {relative}")
+                    raise CanonicalReviewError(f"materialized selected asset hash mismatch: {output_relative}")
 
         record_path = temporary / "ragflow_canonical_review.json"
         record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

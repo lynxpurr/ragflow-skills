@@ -3,7 +3,7 @@ doc_type: plan
 topic: field-trial-observation
 status: active
 created: 2026-07-02
-updated: 2026-08-14
+updated: 2026-08-15
 canonical: true
 implementation_authority: false
 owner_spec: null
@@ -448,10 +448,13 @@ gated until this plan produces concrete evidence that one of them is needed.
 
 For canonical multimodal claims, interpret the historical records more narrowly: they
 demonstrate conversion, table-block integrity, local asset presence, handoff inspection,
-and selected text build/query paths only where explicitly listed. They do not demonstrate
-an accepted exact-source canonical review or completed live image ingestion. Canonical
-mode must use the non-skippable review/acceptance/new-handoff sequence, and each live text
-or image mutation still requires separate target-specific approval.
+and selected text build/query paths only where explicitly listed. The current P3 replay
+does demonstrate an accepted exact-source canonical review, while the separately authorized
+P4 run below demonstrates retained text and visual parsing but not completed multimodal
+ingestion. Canonical mode must use the non-skippable review/acceptance/new-handoff sequence,
+and each live text or image mutation still requires separate target-specific approval. The
+subsequent P5 checkpoint adds only offline semantic-identity, table-equivalence, and advisory
+VLM evidence contracts; it does not change the P4 acceptance result or authorize another run.
 
 The MinerU v4 platform backend is implemented and release-validated through fake-server
 tests, consumer acceptance, and strict-vendor platform smoke. A real MinerU v4 platform
@@ -512,3 +515,62 @@ Run-005 remains valid historical observation, but its L3 trigger is no longer a 
 task. FinanceBench observed evidence and the two-subset comparison remain unavailable;
 the corresponding evidence rows stay open, no replacement live run is implied, and L4
 remains unauthorized.
+
+### 2026-08-15 run-006: authorized canonical correction field trial
+
+Workflow:
+- `ragflow-canonical-review` accepted evidence -> `ragflow-kb-build` canonical build,
+  visual ingestion, parse/health reports -> `ragflow-query` direct and host-assisted
+  retrieval.
+
+Input and authority:
+- One P3 accepted canonical handoff with 13 selected image assets.
+- One target-specific, one-time live mutation authorization; no MinerU re-run and no
+  source reconversion.
+- Private deployment details, KB names, dataset/document IDs, paths, credentials,
+  approved question text, and raw chunks are excluded.
+
+Results:
+- All bound source, accepted Markdown, audit, and selected-asset hashes revalidated;
+  collision probe clear; no provider enumeration; rerank disabled.
+- One Markdown document parsed with 9 chunks; 13/13 selected visual documents uploaded
+  and parsed; 14 observed documents were `done` with 22 observed chunks.
+- Direct retrieval passed 9/9 and host-assisted retrieval passed 9/9 with usable evidence.
+- Table-fact checks passed 6/6 in both modes. This validates the approved question set, but
+  does not prove that server-derived HTML and canonical Markdown tables are cell-equivalent.
+- Asset-file retrieval was observed for 4/6 target assets and 1/3 image groups was complete;
+  the semantic image-context gate is `0/3`. The sampled image chunks used VLM-style visual
+  descriptions, did not carry the corresponding canonical headings or context, and the
+  uploaded basenames were not meaningful semantic names.
+- Image processing ended at `parsed_visual_only`; one slow image-parse warning was
+  recorded, with no upload, parse, or state-readback failure. No cleanup was executed and
+  the protected earlier KB was not targeted.
+
+Decision:
+- Retain the correction KB and private evidence, but keep the P4 image-context checklist
+  open. Treat the run as retained text plus visual parsing with `parsed_visual_only`, not
+  completed multimodal ingestion or context-bound image acceptance. Any further live
+  mutation, image-text update, route change, activation, or cleanup needs new target-specific
+  authorization.
+
+### 2026-08-15 P5 offline maintenance checkpoint
+
+This is an implementation checkpoint, not a field-trial run. The public offline surface now:
+
+- keeps `ragflow_canonical_review_v1` as the sole acceptance record while optionally binding
+  semantic asset names, roles, source references, line-range context hashes, and ingestion
+  intent;
+- materializes semantic names and rewritten references only under a new accepted-output root,
+  preserving reviewed, candidate, and original-handoff bytes;
+- sends only canonical `visual_extract` assets to the existing visual upload plan and blocks
+  canonical-context readiness for `context_bound` assets because no verified curated
+  image-text transport exists;
+- compares Markdown and derived HTML tables by deterministic normalized cell matrices, with
+  optional external VLM candidates restricted to no-LLM advisory request/review evidence.
+
+The current inventory is 111 public commands. Report-surface governance is 98 covered,
+0 needs-redaction, and 13 not-applicable; runtime-resilience governance is 22 covered,
+0 candidate, 0 deferred, and 89 not-applicable. This checkpoint made no network or model
+call, did not read deployment credentials or private field-trial artifacts, and did not
+create, update, parse, rename, delete, or clean up a KB. The retained P4 result remains
+`parsed_visual_only` with semantic image-context acceptance at `0/3`.

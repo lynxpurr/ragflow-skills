@@ -1092,6 +1092,12 @@ def _run_no_network_checks(
         "scripts",
         "finalize_review.py",
     )
+    canonical_table_evidence_script = _skill_path(
+        extract_dir,
+        "ragflow-canonical-review",
+        "scripts",
+        "table_evidence.py",
+    )
     canonical_markdown_help = _run_command(
         [python_executable, str(canonical_markdown_script), "--help"],
         cwd=work_root,
@@ -1124,6 +1130,17 @@ def _run_no_network_checks(
         "canonical-review finalize help",
         canonical_finalize_help,
         required_output="Finalize a hash-bound canonical review",
+    )
+    canonical_table_evidence_help = _run_command(
+        [python_executable, str(canonical_table_evidence_script), "--help"],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "canonical-review table evidence help",
+        canonical_table_evidence_help,
+        required_output="Compare canonical table matrices",
     )
 
     input_dir = _write_sample_input(work_root)
