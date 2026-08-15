@@ -3,7 +3,7 @@ doc_type: index
 topic: document-index
 status: active
 created: 2026-08-03
-updated: 2026-08-14
+updated: 2026-08-16
 canonical: true
 implementation_authority: false
 owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
@@ -21,7 +21,7 @@ operations, mutation, staging, commit, push, L3, Stage 8C, or L4.
 ## Current Roadmap
 
 - [Development roadmap](03-development-plan.md) - current priorities and gated backlog.
-- [Canonical multimodal ingest quality improvement plan](44-canonical-multimodal-ingest-quality-improvement-plan.md) - proposed cross-skill response to the retained field-trial canonical, table, and image ingestion gaps; no implementation or live authority.
+- [Canonical multimodal ingest quality improvement plan](44-canonical-multimodal-ingest-quality-improvement-plan.md) - public offline P0-P3/P5 implementation is verified; P4 image-context acceptance and evidence-triggered adapters remain gated, with no live authority.
 
 ## Controlling Governance Work
 

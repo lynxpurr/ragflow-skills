@@ -3,7 +3,7 @@ doc_type: plan
 topic: field-trial-observation
 status: active
 created: 2026-07-02
-updated: 2026-08-15
+updated: 2026-08-16
 canonical: true
 implementation_authority: false
 owner_spec: null
@@ -574,3 +574,51 @@ The current inventory is 111 public commands. Report-surface governance is 98 co
 call, did not read deployment credentials or private field-trial artifacts, and did not
 create, update, parse, rename, delete, or clean up a KB. The retained P4 result remains
 `parsed_visual_only` with semantic image-context acceptance at `0/3`.
+
+### 2026-08-15 run-007: no-network host-workflow observation replay
+
+Workflow:
+- Execute the released one-shot CLI workflow from the four `acf6f31` archives under an
+  isolated user/network namespace, without source-tree imports.
+- Run adaptive decision-only, formal passthrough, handoff inspection, asset planning, image
+  readiness, KB dry-run, citation audit, and deterministic answer evaluation. Evaluate the
+  canonical-review gate separately against the neutral fixture.
+
+Isolation and safety:
+- Root UID mapping was unavailable under the host's user-namespace hardening, so the approved
+  no-root-map network namespace fallback was used after confirming that only a down loopback
+  interface remained and that IPv4 and IPv6 routes were empty. No host security setting was
+  changed.
+- Network access, live-service calls, provider/reranker/model calls, mutations, cleanup, and
+  P4 authority reuse were all zero. No credential, endpoint, private identifier, source path,
+  raw chunk, or private run-root value is retained here.
+
+Results:
+- All 8 product CLI commands exited 0 with 0 retries and 0 failed steps; total product-command
+  elapsed time was 2241 ms. The report recorded 35 shell commands including setup, isolation,
+  inspection, and inventory work.
+- The release manifest and all 4 archive hashes matched `source_commit=acf6f31`; all four
+  vendored runtime copies had the same tree hash.
+- Asset planning found 3 Markdown image references resolving to 2 unique local image files,
+  with 0 missing files and 0 RAGFlow calls. KB build remained `dry_run=true` and did not write
+  `kb_manifest.json`.
+- Citation `[1]` was valid and the deterministic answer gate passed. Canonical review stopped
+  as `SKIPPED_GATED` because the neutral fixture intentionally supplied no independent source
+  or source-coverage map.
+- Independent metrics aggregation returned `ok: true`, 0 findings, and 0 triggered tracks.
+  The sample remained in the non-retirement `other` class, so broad-corpus and strict paired
+  live A/B evidence are still insufficient.
+
+Observations:
+- Adaptive `backend=auto` and semantic-alias messages were advisory only. The host had to
+  distinguish recommendations and warnings from the explicitly approved execution scope,
+  but no recommendation caused a provider, model, or mutation call.
+- The artifact inventory included an invalid self-size/self-hash entry. All other 63 entries
+  matched their paths, sizes, and hashes. The replay instructions already permit the inventory
+  itself to be listed without a self-hash, so this is a report-production observation rather
+  than a product failure.
+
+Decision:
+- Accept the replay as `PASS_WITH_OBSERVATION` and keep observing. It confirms one-shot CLI
+  sufficiency for this neutral no-network workflow, opens no adapter or LLM/backend trigger,
+  and does not change the retained P4 `parsed_visual_only` or image-context `0/3` result.

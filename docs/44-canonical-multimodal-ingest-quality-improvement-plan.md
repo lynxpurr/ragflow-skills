@@ -1,9 +1,9 @@
 ---
 doc_type: plan
 topic: canonical-multimodal-ingest-quality
-status: proposed
+status: gated
 created: 2026-08-14
-updated: 2026-08-15
+updated: 2026-08-16
 canonical: true
 implementation_authority: false
 owner_spec: null
@@ -13,11 +13,13 @@ related:
   - docs/03-development-plan.md
   - docs/15-field-trial-observation-plan.md
   - docs/16-system-closeout-report.md
+gate: fresh_target_specific_live_authority_or_satisfied_table_normalizer_or_curated_image_text_trigger
 ---
 
 # Canonical Multimodal Ingest Quality Improvement Plan
 
-Status: proposed; implementation and live mutation are not authorized by this document
+Status: public offline P0-P3/P5 implementation verified; P4 live image-context acceptance
+and evidence-triggered adapters remain gated. This document does not authorize live mutation.
 Date: 2026-08-14
 Scope: `ragflow-doc-to-md` -> `ragflow-canonical-review` -> `ragflow-kb-build` -> `ragflow-query`
 
@@ -384,6 +386,23 @@ Markdown. Context-bound image readiness intentionally remains blocked because no
 curated image-text transport has been implemented. No P5 code path accessed RAGFlow,
 MinerU, provider enumeration, credentials, retained KBs, or private field-trial artifacts.
 
+## Closeout / Retrospective
+
+The public offline batch is implementation-closed for P0-P3 and P5. Runtime, CLI, skill
+guidance, schema identity, report inventories, generated Markdown safety, release packaging,
+consumer acceptance, and strict-vendor smoke all cover the canonical acceptance, semantic
+asset, intent-aware planning, table-equivalence, and advisory VLM boundaries. The follow-up
+`acf6f31` regression fix recognizes inline Markdown, reference-style Markdown, and HTML image
+references in canonical asset planning without changing the record schema or generic build
+behavior.
+
+The retained P4 field trial remains partial evidence: table-fact retrieval passed, while
+semantic image-context acceptance remains `0/3` and image processing remains
+`parsed_visual_only`. The later no-network host-workflow replay confirmed that the current
+archives can complete the expected offline command sequence with a controlled canonical gate,
+but it did not add live, paired-A/B, or broad sample evidence. Automatic table normalization
+and curated image-text update support therefore remain closed behind their existing triggers.
+
 ## Validation Evidence / Residual Gated Work
 
 ### Offline evidence
@@ -401,12 +420,14 @@ covers 22 commands, with 0 candidate, 0 deferred, and 89 not applicable. The new
 equivalence and VLM request/review reports are registered in schema identity, generated
 Markdown safety, release packaging, installed-archive smoke, and consumer acceptance checks.
 
-Final P5 validation passed 906 runtime tests and 119 subtests. `git diff --check`, the
-72-document lifecycle gate, all 3 primary manifest schemas, 130 schema identities, release
-hygiene with 0 findings, and `build_release.py --check` passed. Four deterministic release
-archives were exported, then clean consumer acceptance and the `strict-vendor-env` platform
-smoke profile both returned `ok: true`. These are offline/release-path checks only; they did
-not call RAGFlow, MinerU, a provider, or a model.
+The initial P5 release gate at `b382286` passed 906 runtime tests and 119 subtests. The
+follow-up image-reference regression test brings the current `acf6f31` suite to 907 tests,
+all passing. Fresh closeout checks also passed `git diff --check`, the 72-document lifecycle
+gate with 0 findings, all 3 primary manifest schemas, 130 schema identities, release hygiene
+with 0 findings, and `build_release.py --check`. The four existing release archives are bound
+to `source_commit=acf6f31`; clean consumer acceptance passed 270/270 checks and the
+`strict-vendor-env` platform smoke passed 154/154. These are offline/release-path checks only;
+they did not call RAGFlow, MinerU, a provider, or a model.
 
 P3 reused those validated public surfaces against one private representative sample. The
 source, candidate handoff, and pre-change evidence remained byte-identical; accepted
