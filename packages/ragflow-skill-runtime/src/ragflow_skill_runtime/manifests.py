@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +15,7 @@ KB_MANIFEST_JSON_SCHEMA_ID = "https://github.com/lynxpurr/ragflow-skills/schemas
 FORMAL_HANDOFF_MANIFEST_JSON_SCHEMA_ID = (
     "https://github.com/lynxpurr/ragflow-skills/schemas/formal_handoff_manifest-v1.schema.json"
 )
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 DOC_MANIFEST_JSON_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -84,6 +86,10 @@ KB_MANIFEST_JSON_SCHEMA: dict[str, Any] = {
         "version": {"type": "string", "const": "0.1"},
         "created_at": {"type": ["string", "null"]},
         "ragflow_base_url": {"type": ["string", "null"]},
+        "canonical_review_sha256": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{64}$",
+        },
         "dataset": {
             "type": "object",
             "required": ["id", "name"],
@@ -498,6 +504,7 @@ class KbManifest:
     ragflow_base_url: str | None
     dataset: KbDataset
     documents: list[KbDocumentEntry]
+    canonical_review_sha256: str | None = None
     profile: dict[str, Any] = field(default_factory=dict)
     embedding_model_evidence: dict[str, Any] = field(default_factory=dict)
 
@@ -511,6 +518,12 @@ class KbManifest:
         if not isinstance(profile, dict):
             raise ManifestError("kb_manifest.profile must be an object when provided")
         embedding_model_evidence: dict[str, Any] = {}
+        canonical_review_sha256 = data.get("canonical_review_sha256")
+        if canonical_review_sha256 is not None and (
+            not isinstance(canonical_review_sha256, str)
+            or _SHA256_RE.fullmatch(canonical_review_sha256) is None
+        ):
+            raise ManifestError("kb_manifest.canonical_review_sha256 must be a lowercase SHA-256 when provided")
         raw_embedding_model = data.get("embedding_model")
         if isinstance(raw_embedding_model, dict):
             embedding_model_evidence = dict(raw_embedding_model)
@@ -525,6 +538,7 @@ class KbManifest:
             version=_require_str(data, "version"),
             created_at=data.get("created_at"),
             ragflow_base_url=data.get("ragflow_base_url"),
+            canonical_review_sha256=canonical_review_sha256,
             dataset=KbDataset.from_dict(data.get("dataset", {})),
             documents=[KbDocumentEntry.from_dict(item) for item in raw_documents],
             profile=profile,

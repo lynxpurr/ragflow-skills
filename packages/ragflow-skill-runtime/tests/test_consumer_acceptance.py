@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -16,8 +17,12 @@ if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
 from consumer_acceptance import (  # noqa: E402
+    SCHEMA,
     _github_env,
+    _installed_runtime_evidence,
     _minimal_env,
+    _release_evidence,
+    _runtime_tree_digest,
     _write_fake_mineru_cli,
     run_consumer_acceptance,
 )
@@ -25,6 +30,95 @@ from export_release_archives import export_release_archives  # noqa: E402
 
 
 class ConsumerAcceptanceTests(unittest.TestCase):
+    def test_release_evidence_recomputes_archive_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts_dir = Path(tmp)
+            artifacts: dict[str, Path] = {}
+            manifest_archives = []
+            for archive_name in (
+                "ragflow-doc-to-md.tar.gz",
+                "ragflow-canonical-review.tar.gz",
+                "ragflow-kb-build.tar.gz",
+                "ragflow-query.tar.gz",
+            ):
+                archive_path = artifacts_dir / archive_name
+                archive_path.write_bytes(archive_name.encode("utf-8"))
+                artifacts[archive_name] = archive_path
+                manifest_archives.append(
+                    {
+                        "name": archive_name.removesuffix(".tar.gz"),
+                        "archive": archive_name,
+                        "sha256": hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+                        "bytes": archive_path.stat().st_size,
+                    }
+                )
+            manifest_path = artifacts_dir / "release-manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "version": "0.1",
+                        "source_commit": "abc1234",
+                        "archives": manifest_archives,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            artifacts["release-manifest.json"] = manifest_path
+
+            before = _release_evidence(artifacts)
+            artifacts["ragflow-query.tar.gz"].write_bytes(b"tampered")
+            after = _release_evidence(artifacts)
+            manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_payload["archives"][-1] = dict(manifest_payload["archives"][0])
+            manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+            duplicate = _release_evidence(artifacts)
+
+        self.assertTrue(before["ok"], before)
+        self.assertTrue(all(item["hash_matches"] for item in before["archives"]))
+        self.assertTrue(all(item["size_matches"] for item in before["archives"]))
+        self.assertFalse(after["ok"])
+        self.assertIn("declared and actual SHA-256 do not match", after["error"])
+        self.assertIn("declared and actual byte size do not match", after["error"])
+        self.assertFalse(duplicate["ok"])
+        self.assertIn("archive inventory does not match required assets", duplicate["error"])
+
+    def test_runtime_tree_digest_binds_relative_paths_sizes_and_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_root = Path(tmp) / "ragflow_skill_runtime"
+            runtime_root.mkdir()
+            (runtime_root / "__init__.py").write_text('__version__ = "1.2.3"\n', encoding="utf-8")
+            (runtime_root / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+            before = _runtime_tree_digest(runtime_root)
+            (runtime_root / "module.py").write_text("VALUE = 2\n", encoding="utf-8")
+            after = _runtime_tree_digest(runtime_root)
+
+        self.assertEqual(before["file_count"], 2)
+        self.assertEqual(before["runtime_version"], "1.2.3")
+        self.assertNotEqual(before["sha256"], after["sha256"])
+
+    def test_installed_runtime_evidence_rejects_copy_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            extract_dir = Path(tmp)
+            for skill_name in (
+                "ragflow-doc-to-md",
+                "ragflow-canonical-review",
+                "ragflow-kb-build",
+                "ragflow-query",
+            ):
+                runtime_root = extract_dir / skill_name / "scripts" / "_vendor" / "ragflow_skill_runtime"
+                runtime_root.mkdir(parents=True)
+                (runtime_root / "__init__.py").write_text('__version__ = "1.2.3"\n', encoding="utf-8")
+            drifted = extract_dir / "ragflow-query" / "scripts" / "_vendor" / "ragflow_skill_runtime"
+            (drifted / "extra.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+            evidence = _installed_runtime_evidence(extract_dir)
+
+        self.assertFalse(evidence["ok"])
+        self.assertEqual(evidence["copy_count"], 4)
+        self.assertIsNone(evidence["sha256"])
+
     def test_fake_mineru_cli_executes_with_secret_shaped_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -116,10 +210,21 @@ class ConsumerAcceptanceTests(unittest.TestCase):
             self.assertTrue(report_md.exists(), payload)
 
         self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["schema"], SCHEMA)
         check_names = [check["name"] for check in payload["checks"]]
+        self.assertIn("release manifest evidence", check_names)
         self.assertIn("vendored runtime present", check_names)
+        self.assertIn("vendored runtime copies hash-match", check_names)
+        self.assertTrue(payload["release_evidence"]["ok"])
+        self.assertRegex(payload["release_evidence"]["manifest_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(payload["installed_runtime"]["algorithm"], "sha256-relative-path-size-bytes-v1")
+        self.assertEqual(payload["installed_runtime"]["runtime_version"], "0.1.0")
+        self.assertEqual(payload["installed_runtime"]["copy_count"], 4)
+        self.assertTrue(payload["installed_runtime"]["ok"])
+        self.assertRegex(payload["installed_runtime"]["sha256"], r"^[0-9a-f]{64}$")
         self.assertIn("canonical-review markdown audit help", check_names)
         self.assertIn("canonical-review asset audit help", check_names)
+        self.assertIn("canonical-review finalize help", check_names)
         self.assertIn("generated report redaction fixture", check_names)
         self.assertIn("doc-to-md passthrough", check_names)
         self.assertIn("quality_report produced", check_names)

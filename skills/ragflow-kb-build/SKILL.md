@@ -10,11 +10,20 @@ description: Inspect Markdown handoffs, dry-run and build one reviewed RAGFlow k
 Use this skill after a Markdown handoff exists. It owns handoff inspection, non-mutating
 readiness, one explicitly approved KB build, validation, health review, and exact cleanup.
 
+When the host selects canonical mode, do not consume the MinerU extraction handoff
+directly. Require structural and exact-source review, table decisions, positive asset
+audit, an accepted `ragflow_canonical_review_v1` record, and a new passthrough handoff
+before `inspect-handoff`, `asset-upload-plan`, image readiness, and build dry-run. Pass the
+accepted record and its exact source and audit files to the build-side canonical gate.
+
 ## Inputs and outputs
 
 Inputs are `doc_manifest.json` or reviewed Markdown, a KB name, a chunk profile, and a
 private RAGFlow config only when a live or read-only call is approved. Outputs include
 dry-run JSON, `kb_manifest.json`, validation and health reports, and cleanup previews.
+Canonical builds additionally require `--canonical-review`, `--canonical-source`,
+`--canonical-markdown-audit`, and `--canonical-asset-audit`; generic builds require none
+of these options.
 
 ## Canonical workflows
 
@@ -64,6 +73,14 @@ separate cleanup approval.
 ## Decision and stop rules
 
 - Inspect the handoff and dry-run before every build.
+- In canonical mode, stop when the accepted review record or new canonical handoff is
+  absent, blocked, source-unverified, stale, unresolved, or missing a selected asset.
+- Run `image-ingestion-readiness` after `asset-upload-plan`; run
+  `image-ingestion-execute` only after separate exact live authority. Canonical review
+  never performs network `PUT` operations.
+- For intent-aware canonical assets, pass the accepted record to
+  `asset-upload-plan --canonical-review`; only `visual_extract` enters visual parsing,
+  while unsupported `context_bound` claims remain blocked.
 - A dry-run does not produce a real `kb_manifest.json`. Run post-build consistency only
   after an authorized build; on interruption, resume from a reviewed checkpoint rather
   than duplicate dataset creation or upload.

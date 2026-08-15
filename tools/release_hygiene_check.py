@@ -125,6 +125,7 @@ CANONICAL_WORKFLOW_OWNERS = {
     "inspect and decide deterministically": "ragflow-doc-to-md",
     "review canonical source": "ragflow-canonical-review",
     "audit canonical boundaries": "ragflow-canonical-review",
+    "finalize canonical acceptance": "ragflow-canonical-review",
     "inspect a handoff": "ragflow-kb-build",
     "validate build readiness without mutation": "ragflow-kb-build",
     "build one reviewed kb": "ragflow-kb-build",
@@ -136,7 +137,7 @@ CANONICAL_WORKFLOW_OWNERS = {
 }
 CORE_EXAMPLE_BLOCK_COUNTS = {
     "ragflow-doc-to-md": 2,
-    "ragflow-canonical-review": 2,
+    "ragflow-canonical-review": 3,
     "ragflow-kb-build": 6,
     "ragflow-query": 2,
 }
@@ -184,9 +185,12 @@ COMMAND_GUIDANCE_GROUPS: dict[tuple[str, str], tuple[str, ...]] = {
     ("ragflow-doc-to-md", "deprecated_candidate"): (),
     ("ragflow-canonical-review", "core"): (
         "ragflow-canonical-review asset-audit",
+        "ragflow-canonical-review finalize-review",
         "ragflow-canonical-review markdown-audit",
     ),
-    ("ragflow-canonical-review", "advanced"): (),
+    ("ragflow-canonical-review", "advanced"): (
+        "ragflow-canonical-review table-evidence",
+    ),
     ("ragflow-canonical-review", "internal_candidate"): (),
     ("ragflow-canonical-review", "deprecated_candidate"): (),
     ("ragflow-kb-build", "core"): (
@@ -200,6 +204,7 @@ COMMAND_GUIDANCE_GROUPS: dict[tuple[str, str], tuple[str, ...]] = {
         "ragflow-kb-build activation-plan",
         "ragflow-kb-build append",
         "ragflow-kb-build benchmark delta",
+        "ragflow-kb-build benchmark freeze",
         "ragflow-kb-build benchmark gate",
         "ragflow-kb-build benchmark import",
         "ragflow-kb-build benchmark preflight",
@@ -207,10 +212,12 @@ COMMAND_GUIDANCE_GROUPS: dict[tuple[str, str], tuple[str, ...]] = {
         "ragflow-kb-build benchmark suggest",
         "ragflow-kb-build benchmark summarize",
         "ragflow-kb-build benchmark trend",
+        "ragflow-kb-build benchmark verify-freeze",
         "ragflow-kb-build consistency-check",
         "ragflow-kb-build diagnose",
         "ragflow-kb-build image-ingestion-execute",
         "ragflow-kb-build image-ingestion-readiness",
+        "ragflow-kb-build hints review",
         "ragflow-kb-build inspect-kb",
         "ragflow-kb-build metadata generate-template",
         "ragflow-kb-build metadata lint",
@@ -1042,7 +1049,7 @@ def validate_primary_guidance(*, root: Path = ROOT) -> tuple[list[Finding], dict
             Finding(
                 "skill_surface_workflow_contract",
                 "skills",
-                "canonical workflow names and owners do not match the approved twelve-family contract",
+                "canonical workflow names and owners do not match the approved thirteen-family contract",
             )
         )
 

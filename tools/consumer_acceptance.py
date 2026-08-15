@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import hashlib
 import io
@@ -32,6 +33,7 @@ REQUIRED_ASSETS = (
     "release-manifest.json",
 )
 COMMAND_MANIFEST_SCHEMA = "ragflow_consumer_command_manifest_v1"
+SCHEMA = "ragflow_consumer_acceptance_v1"
 
 RUNTIME_SRC = ROOT / "packages" / "ragflow-skill-runtime" / "src"
 if RUNTIME_SRC.exists() and str(RUNTIME_SRC) not in sys.path:
@@ -297,6 +299,150 @@ def _extract_skills(artifacts: Mapping[str, Path], extract_dir: Path) -> None:
             _safe_extract(artifacts[name], extract_dir)
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _runtime_version(init_path: Path) -> str | None:
+    try:
+        module = ast.parse(init_path.read_text(encoding="utf-8"), filename=str(init_path))
+    except (OSError, SyntaxError, UnicodeError):
+        return None
+    for node in module.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if isinstance(target, ast.Name) and target.id == "__version__":
+            value = node.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                return value.value
+    return None
+
+
+def _runtime_tree_digest(runtime_root: Path) -> dict[str, Any]:
+    files = sorted(
+        (path for path in runtime_root.rglob("*") if path.is_file()),
+        key=lambda path: path.relative_to(runtime_root).as_posix(),
+    )
+    digest = hashlib.sha256()
+    for path in files:
+        relative_path = path.relative_to(runtime_root).as_posix().encode("utf-8")
+        content = path.read_bytes()
+        digest.update(relative_path)
+        digest.update(b"\0")
+        digest.update(str(len(content)).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(content)
+    return {
+        "sha256": digest.hexdigest(),
+        "file_count": len(files),
+        "runtime_version": _runtime_version(runtime_root / "__init__.py"),
+    }
+
+
+def _installed_runtime_evidence(extract_dir: Path) -> dict[str, Any]:
+    copies: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for skill_name in (
+        "ragflow-doc-to-md",
+        "ragflow-canonical-review",
+        "ragflow-kb-build",
+        "ragflow-query",
+    ):
+        runtime_root = _skill_path(
+            extract_dir,
+            skill_name,
+            "scripts",
+            "_vendor",
+            "ragflow_skill_runtime",
+        )
+        try:
+            digest = _runtime_tree_digest(runtime_root)
+        except OSError as exc:
+            errors.append(f"{skill_name}: {exc}")
+            continue
+        copies.append({"skill": skill_name, **digest})
+
+    identities = {
+        (copy["sha256"], copy["file_count"], copy["runtime_version"])
+        for copy in copies
+    }
+    ok = len(copies) == 4 and len(identities) == 1 and all(
+        copy["file_count"] > 0 and copy["runtime_version"] for copy in copies
+    )
+    if not ok and not errors:
+        errors.append("vendored runtime copies do not have one identical non-empty versioned tree")
+    canonical = copies[0] if ok else {}
+    return {
+        "ok": ok,
+        "algorithm": "sha256-relative-path-size-bytes-v1",
+        "sha256": canonical.get("sha256"),
+        "file_count": canonical.get("file_count"),
+        "runtime_version": canonical.get("runtime_version"),
+        "copy_count": len(copies),
+        "copies": copies,
+        "errors": errors,
+    }
+
+
+def _release_evidence(artifacts: Mapping[str, Path]) -> dict[str, Any]:
+    manifest_path = artifacts["release-manifest.json"]
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "ok": False,
+            "manifest_sha256": _sha256_file(manifest_path),
+            "error": f"invalid release manifest: {exc}",
+        }
+    archives = []
+    archive_errors: list[str] = []
+    for item in manifest.get("archives", []):
+        if not isinstance(item, Mapping):
+            continue
+        archive_name = item.get("archive")
+        archive_path = artifacts.get(str(archive_name)) if isinstance(archive_name, str) else None
+        actual_sha256 = _sha256_file(archive_path) if archive_path is not None else None
+        actual_bytes = archive_path.stat().st_size if archive_path is not None else None
+        declared_sha256 = item.get("sha256")
+        hash_matches = actual_sha256 is not None and actual_sha256 == declared_sha256
+        if not hash_matches:
+            archive_errors.append(f"{archive_name}: declared and actual SHA-256 do not match")
+        size_matches = actual_bytes is not None and actual_bytes == item.get("bytes")
+        if not size_matches:
+            archive_errors.append(f"{archive_name}: declared and actual byte size do not match")
+        archives.append(
+            {
+                "name": item.get("name"),
+                "archive": archive_name,
+                "sha256": declared_sha256,
+                "actual_sha256": actual_sha256,
+                "hash_matches": hash_matches,
+                "bytes": item.get("bytes"),
+                "actual_bytes": actual_bytes,
+                "size_matches": size_matches,
+            }
+        )
+    expected_archives = {name for name in REQUIRED_ASSETS if name.endswith(".tar.gz")}
+    observed_archive_list = [str(item.get("archive")) for item in archives]
+    if len(observed_archive_list) != len(expected_archives) or set(observed_archive_list) != expected_archives:
+        archive_errors.append("release manifest archive inventory does not match required assets")
+    ok = manifest.get("ok") is True and not archive_errors
+    return {
+        "ok": ok,
+        "manifest_sha256": _sha256_file(manifest_path),
+        "source_commit": manifest.get("source_commit"),
+        "release_version": manifest.get("version"),
+        "archives": archives,
+        "errors": archive_errors,
+        "error": "" if ok else "; ".join(archive_errors) or "release manifest is not marked ok",
+    }
+
+
 def _write_sample_input(work_root: Path) -> Path:
     input_dir = work_root / "input-docs"
     input_dir.mkdir(parents=True, exist_ok=True)
@@ -443,11 +589,37 @@ def _write_reports(payload: dict[str, Any], reports_dir: Path) -> dict[str, str]
         f"- source: `{payload['source']['type']}`",
         f"- work_root: `{payload['work_root']}`",
         "",
+        "## Release Evidence",
+        "",
+        f"- source commit: `{payload['release_evidence'].get('source_commit')}`",
+        f"- release manifest sha256: `{payload['release_evidence'].get('manifest_sha256')}`",
+        f"- release version: `{payload['release_evidence'].get('release_version')}`",
+        "",
+        "| Archive | SHA-256 | Bytes |",
+        "| --- | --- | ---: |",
+    ]
+    for archive in payload["release_evidence"].get("archives", []):
+        lines.append(f"| {archive.get('archive')} | `{archive.get('sha256')}` | {archive.get('bytes')} |")
+    lines.extend(
+        [
+            "",
+            "## Installed Runtime",
+            "",
+            f"- ok: `{str(payload['installed_runtime']['ok']).lower()}`",
+            f"- algorithm: `{payload['installed_runtime']['algorithm']}`",
+            f"- sha256: `{payload['installed_runtime'].get('sha256')}`",
+            f"- runtime version: `{payload['installed_runtime'].get('runtime_version')}`",
+            f"- file count: `{payload['installed_runtime'].get('file_count')}`",
+            f"- matching copies: `{payload['installed_runtime'].get('copy_count')}`",
+            "",
+        ]
+    )
+    lines.extend([
         "## Checks",
         "",
         "| Check | OK | Detail |",
         "| --- | --- | --- |",
-    ]
+    ])
     for check in payload["checks"]:
         detail = check.get("error") or check.get("path") or ""
         lines.append(f"| {check['name']} | {str(check['ok']).lower()} | {detail} |")
@@ -914,6 +1086,18 @@ def _run_no_network_checks(
         "scripts",
         "audit_canonical_assets.py",
     )
+    canonical_finalize_script = _skill_path(
+        extract_dir,
+        "ragflow-canonical-review",
+        "scripts",
+        "finalize_review.py",
+    )
+    canonical_table_evidence_script = _skill_path(
+        extract_dir,
+        "ragflow-canonical-review",
+        "scripts",
+        "table_evidence.py",
+    )
     canonical_markdown_help = _run_command(
         [python_executable, str(canonical_markdown_script), "--help"],
         cwd=work_root,
@@ -935,6 +1119,28 @@ def _run_no_network_checks(
         "canonical-review asset audit help",
         canonical_asset_help,
         required_output="Read-only audit of canonical Markdown",
+    )
+    canonical_finalize_help = _run_command(
+        [python_executable, str(canonical_finalize_script), "--help"],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "canonical-review finalize help",
+        canonical_finalize_help,
+        required_output="Finalize a hash-bound canonical review",
+    )
+    canonical_table_evidence_help = _run_command(
+        [python_executable, str(canonical_table_evidence_script), "--help"],
+        cwd=work_root,
+        env=env,
+    )
+    _record_command_check(
+        checks,
+        "canonical-review table evidence help",
+        canonical_table_evidence_help,
+        required_output="Compare canonical table matrices",
     )
 
     input_dir = _write_sample_input(work_root)
@@ -6987,6 +7193,8 @@ def run_consumer_acceptance(
     artifacts = _validate_artifacts_dir(artifacts_dir)
     extract_dir = work_root / "unpacked"
     _extract_skills(artifacts, extract_dir)
+    release_evidence = _release_evidence(artifacts)
+    installed_runtime = _installed_runtime_evidence(extract_dir)
 
     command_env = _minimal_env()
     checks, produced = _run_no_network_checks(
@@ -6994,6 +7202,25 @@ def run_consumer_acceptance(
         work_root=work_root,
         python_executable=python_executable,
         env=command_env,
+    )
+    checks.insert(
+        0,
+        {
+            "name": "vendored runtime copies hash-match",
+            "ok": installed_runtime["ok"],
+            "sha256": installed_runtime.get("sha256"),
+            "runtime_version": installed_runtime.get("runtime_version"),
+            "error": "; ".join(installed_runtime["errors"]),
+        },
+    )
+    checks.insert(
+        0,
+        {
+            "name": "release manifest evidence",
+            "ok": release_evidence["ok"],
+            "sha256": release_evidence.get("manifest_sha256"),
+            "error": release_evidence.get("error", ""),
+        },
     )
     live_env_map = os.environ if env is None else env
     command_manifest_info: dict[str, Any] | None = None
@@ -7068,6 +7295,7 @@ def run_consumer_acceptance(
         produced.extend(live_build_produced)
 
     payload = {
+        "schema": SCHEMA,
         "ok": all(check["ok"] for check in checks),
         "source": dict(
             source
@@ -7078,6 +7306,8 @@ def run_consumer_acceptance(
             }
         ),
         "work_root": str(work_root),
+        "release_evidence": release_evidence,
+        "installed_runtime": installed_runtime,
         "checks": checks,
         "produced_artifacts": [str(path) for path in produced if path.exists()],
     }

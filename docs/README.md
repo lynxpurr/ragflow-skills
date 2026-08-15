@@ -3,7 +3,7 @@ doc_type: index
 topic: document-index
 status: active
 created: 2026-08-03
-updated: 2026-08-05
+updated: 2026-08-16
 canonical: true
 implementation_authority: false
 owner_spec: docs/specs/2026-08-02-document-lifecycle-and-spec-archive-design.md
@@ -21,10 +21,13 @@ operations, mutation, staging, commit, push, L3, Stage 8C, or L4.
 ## Current Roadmap
 
 - [Development roadmap](03-development-plan.md) - current priorities and gated backlog.
+- [Canonical multimodal ingest quality improvement plan](44-canonical-multimodal-ingest-quality-improvement-plan.md) - public offline P0-P3/P5 implementation is verified; P4 image-context acceptance and evidence-triggered adapters remain gated, with no live authority.
 
 ## Controlling Governance Work
 
 - [Document lifecycle spec](specs/2026-08-02-document-lifecycle-and-spec-archive-design.md) - active lifecycle policy; Gate 0 is closed.
+- [Generic runtime compatibility spec](specs/2026-08-13-generic-runtime-compatibility-design.md) - active canonical contract after verified RCKB-001 through RCKB-005 implementation; `implementation_authority=false`.
+- [Generic runtime compatibility implementation plan](plans/2026-08-13-generic-runtime-compatibility-implementation-plan.md) - implemented at source commit `57026c3` and release-verified for S0-S3 public offline work; repository version-control closure does not authorize live validation or publication.
 - [Wave 1 implementation plan](plans/2026-08-03-document-lifecycle-and-spec-archive-implementation-plan.md) - implemented; `implementation_authority=false`.
 - [Wave 2 successor plan](plans/2026-08-03-document-lifecycle-and-spec-archive-wave-2-implementation-plan.md) - Waves 2A-2C complete; Wave 2D gated; `implementation_authority=false`.
 - [Wave 3 successor plan](plans/2026-08-03-document-lifecycle-and-spec-archive-wave-3-implementation-plan.md) - Waves 3A-3B complete; `docs/16` and `docs/43` gated; `implementation_authority=false`.
@@ -39,7 +42,7 @@ operations, mutation, staging, commit, push, L3, Stage 8C, or L4.
 
 ## Active, Approved, And Gated Owners
 
-The registry records 13 active, approved, or gated owners at stable paths. Load an owner
+The registry records 15 active, approved, gated, or proposed owners at stable paths. Load an owner
 only when the current task names its topic. Unchecked evidence or adapter rows do not
 create live or implementation authority.
 

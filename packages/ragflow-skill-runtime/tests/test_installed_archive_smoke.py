@@ -47,6 +47,9 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
             self.assertTrue(
                 checks_by_skill["ragflow-canonical-review"]["canonical-review asset audit help"]["ok"]
             )
+            self.assertTrue(
+                checks_by_skill["ragflow-canonical-review"]["canonical-review finalize help"]["ok"]
+            )
             self.assertTrue(checks_by_skill["ragflow-kb-build"]["kb-build build help"]["ok"])
             self.assertTrue(checks_by_skill["ragflow-query"]["query bootstrap smoke"]["ok"])
             self.assertTrue(checks_by_skill["ragflow-query"]["query CLI help"]["ok"])

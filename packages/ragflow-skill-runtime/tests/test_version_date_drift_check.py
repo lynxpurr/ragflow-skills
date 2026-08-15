@@ -109,13 +109,21 @@ class VersionDateDriftCheckTests(unittest.TestCase):
         self.assertEqual(report["schema"], SCHEMA)
         self.assertEqual(report["expected"]["package_version"], "0.1.0")
         self.assertEqual(report["expected"]["release_version"], "0.1")
-        self.assertEqual(report["observed"]["release_manifest_version"], "")
-        self.assertEqual(report["observed"]["release_manifest_created_at"], "")
         self.assertEqual(report["summary"]["check_count"], 7)
         self.assertEqual(report["summary"]["finding_count"], 0)
         self.assertNotIn("applicable", checks["runtime_version_matches_package"])
+
+        manifest_path = ROOT / "release-artifacts" / "release-manifest.json"
+        manifest_present = manifest_path.exists() or manifest_path.is_symlink()
+        if manifest_present:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["observed"]["release_manifest_version"], manifest["version"])
+            self.assertEqual(report["observed"]["release_manifest_created_at"], manifest["created_at"])
+        else:
+            self.assertEqual(report["observed"]["release_manifest_version"], "")
+            self.assertEqual(report["observed"]["release_manifest_created_at"], "")
         for check_name in MANIFEST_CHECK_NAMES:
-            self.assertIs(checks[check_name].get("applicable"), False)
+            self.assertIs(checks[check_name].get("applicable"), manifest_present)
             self.assertTrue(checks[check_name]["ok"])
         self.assertTrue(MANIFEST_CHECK_NAMES.isdisjoint(_finding_names(report)))
 

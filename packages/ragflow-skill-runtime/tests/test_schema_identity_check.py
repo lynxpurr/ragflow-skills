@@ -43,6 +43,8 @@ class SchemaIdentityCheckTests(unittest.TestCase):
         self.assertIn("multimodal_benchmark", keys)
         self.assertIn("validation_query_suggestions", keys)
         self.assertIn("kb_artifact_consistency_report", keys)
+        self.assertIn("benchmark_split_freeze", keys)
+        self.assertIn("reviewed_retrieval_hints", keys)
         self.assertIn("kb_refresh_report", keys)
         self.assertIn("parameter_read_back_audit", keys)
         self.assertIn("parameter_contract_audit", keys)
@@ -62,6 +64,7 @@ class SchemaIdentityCheckTests(unittest.TestCase):
         self.assertIn("runtime_rollback_result", keys)
         self.assertIn("runtime_archive_inventory", keys)
         self.assertIn("runtime_contracts_check", keys)
+        self.assertIn("consumer_acceptance", keys)
         self.assertIn("public_hygiene_candidate_check", keys)
 
     def test_retirement_observation_matrix_coverage_matches_schema_literal(self) -> None:

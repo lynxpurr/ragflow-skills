@@ -22,6 +22,13 @@ Trigger: the candidate contains merged tables, screenshots, diagrams, image-supp
 procedures, or fragile chunk boundaries. Read
 [Table, image, and chunk patterns](table-image-chunk-patterns.md) before editing.
 
+For a server-derived HTML representation, run `table_evidence.py --mode compare`; require
+normalized cell-matrix equivalence before treating it as a derived retrieval representation.
+For an independent VLM cross-check, create a `--mode vlm-request` artifact from one exact
+source crop, then review an external advisory/generated candidate with `--mode vlm-review`.
+The script never calls a model, converts the canonical table, or lets a candidate overwrite
+source-reviewed Markdown.
+
 ## Canonical boundaries and asset changes
 
 Trigger: the task involves allowlists, control files, shared asset roots, duplicate hashes,

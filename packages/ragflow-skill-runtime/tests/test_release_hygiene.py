@@ -211,8 +211,8 @@ class ReleaseHygieneTests(unittest.TestCase):
         self.assertLessEqual(summary["nonblank_lines"]["SKILL.md"], 90)
         for skill_name in PUBLIC_SKILLS:
             self.assertLessEqual(summary["nonblank_lines"][f"skills/{skill_name}/SKILL.md"], 120)
-        self.assertEqual(summary["canonical_workflow_count"], 12)
-        self.assertEqual(summary["core_example_block_count"], 12)
+        self.assertEqual(summary["canonical_workflow_count"], 13)
+        self.assertEqual(summary["core_example_block_count"], 13)
         self.assertEqual(
             summary["workflow_example_counts"],
             {workflow: [1] for workflow in CANONICAL_WORKFLOW_OWNERS},
@@ -275,20 +275,20 @@ class ReleaseHygieneTests(unittest.TestCase):
         findings, summary = validate_command_guidance_classification()
 
         self.assertEqual(findings, [])
-        self.assertEqual(summary["discovered_command_count"], 106)
-        self.assertEqual(summary["classified_command_count"], 106)
+        self.assertEqual(summary["discovered_command_count"], 111)
+        self.assertEqual(summary["classified_command_count"], 111)
         self.assertEqual(
             summary["owner_counts"],
             {
                 "ragflow-doc-to-md": 12,
-                "ragflow-canonical-review": 2,
-                "ragflow-kb-build": 58,
+                "ragflow-canonical-review": 4,
+                "ragflow-kb-build": 61,
                 "ragflow-query": 34,
             },
         )
         self.assertEqual(
             summary["tier_counts"],
-            {"advanced": 87, "core": 12, "deprecated_candidate": 0, "internal_candidate": 7},
+            {"advanced": 91, "core": 13, "deprecated_candidate": 0, "internal_candidate": 7},
         )
 
     def test_release_shape_requires_advanced_workflow_indexes(self) -> None:

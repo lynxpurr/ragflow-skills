@@ -63,6 +63,7 @@ BENCHMARK_GATE_REPORT_SCHEMA = "ragflow_benchmark_gate_report_v1"
 BENCHMARK_TREND_REPORT_SCHEMA = "ragflow_benchmark_trend_report_v1"
 BENCHMARK_DELTA_REPORT_SCHEMA = "ragflow_benchmark_delta_report_v1"
 BENCHMARK_RETRIEVAL_SUGGESTION_REPORT_SCHEMA = "ragflow_benchmark_retrieval_suggestion_report_v1"
+BENCHMARK_SPLIT_FREEZE_SCHEMA = "ragflow_benchmark_split_freeze_v1"
 SUPPRESSION_REPORT_SCHEMA = "ragflow_suppression_report_v1"
 CHUNK_SNAPSHOT_REPORT_SCHEMA = "ragflow_chunk_snapshot_report_v1"
 _SUPPRESSION_STOPWORDS = STOPWORDS | {
@@ -133,6 +134,109 @@ _BENCHMARK_SELECTION_REPORT_FIELDS = {
 
 class BenchmarkGovernanceError(RuntimeError):
     """Raised when benchmark lifecycle inputs are invalid."""
+
+
+def create_benchmark_split_freeze(
+    *,
+    split_name: str,
+    role: str,
+    queries_path: str | Path,
+    qrels_path: str | Path,
+    participated_in_tuning: bool,
+    evaluator_independent: bool,
+    evaluator_id: str | None = None,
+    freeze_time: str | None = None,
+) -> dict[str, Any]:
+    """Freeze benchmark input bytes and provenance without modifying the inputs."""
+
+    if role not in {"development", "regression", "sealed_holdout"}:
+        raise BenchmarkGovernanceError("benchmark split role must be development, regression, or sealed_holdout")
+    if not split_name.strip():
+        raise BenchmarkGovernanceError("benchmark split freeze requires split_name")
+    if role == "sealed_holdout" and participated_in_tuning:
+        raise BenchmarkGovernanceError("sealed holdout cannot participate in tuning")
+    if role == "sealed_holdout" and not evaluator_independent:
+        raise BenchmarkGovernanceError("sealed holdout requires an independent evaluator")
+    query_hash = _sha256_file(Path(queries_path))
+    qrel_hash = _sha256_file(Path(qrels_path))
+    frozen_at = freeze_time or _now()
+    binding = {
+        "split_name": split_name.strip(),
+        "role": role,
+        "freeze_time": frozen_at,
+        "query_sha256": query_hash,
+        "qrel_sha256": qrel_hash,
+        "participated_in_tuning": bool(participated_in_tuning),
+        "evaluator_independent": bool(evaluator_independent),
+        "evaluator_id": evaluator_id,
+    }
+    return {
+        "ok": True,
+        "schema": BENCHMARK_SPLIT_FREEZE_SCHEMA,
+        **binding,
+        "binding_sha256": hashlib.sha256(
+            json.dumps(binding, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+        "safety": {"ragflow_calls": 0, "writes_inputs": False, "script_owned_llm_calls": 0},
+    }
+
+
+def verify_benchmark_split_freeze(
+    *,
+    freeze_path: str | Path,
+    queries_path: str | Path,
+    qrels_path: str | Path,
+) -> dict[str, Any]:
+    """Verify current benchmark bytes against an immutable split freeze artifact."""
+
+    freeze = _read_json(freeze_path)
+    if not isinstance(freeze, Mapping) or freeze.get("schema") != BENCHMARK_SPLIT_FREEZE_SCHEMA:
+        raise BenchmarkGovernanceError(f"benchmark split freeze schema must be {BENCHMARK_SPLIT_FREEZE_SCHEMA}")
+    split_name = freeze.get("split_name")
+    if not isinstance(split_name, str) or not split_name.strip():
+        raise BenchmarkGovernanceError("benchmark split freeze requires split_name")
+    role = freeze.get("role")
+    if role not in {"development", "regression", "sealed_holdout"}:
+        raise BenchmarkGovernanceError("benchmark split freeze role is invalid")
+    if not isinstance(freeze.get("participated_in_tuning"), bool):
+        raise BenchmarkGovernanceError("benchmark split freeze tuning participation must be boolean")
+    if not isinstance(freeze.get("evaluator_independent"), bool):
+        raise BenchmarkGovernanceError("benchmark split freeze evaluator independence must be boolean")
+    query_hash = _sha256_file(Path(queries_path))
+    qrel_hash = _sha256_file(Path(qrels_path))
+    if query_hash != freeze.get("query_sha256"):
+        raise BenchmarkGovernanceError("benchmark split query hash changed after freeze")
+    if qrel_hash != freeze.get("qrel_sha256"):
+        raise BenchmarkGovernanceError("benchmark split qrel hash changed after freeze")
+    if role == "sealed_holdout" and freeze.get("participated_in_tuning") is not False:
+        raise BenchmarkGovernanceError("sealed holdout freeze records tuning participation")
+    if role == "sealed_holdout" and freeze.get("evaluator_independent") is not True:
+        raise BenchmarkGovernanceError("sealed holdout freeze lacks independent evaluator evidence")
+    binding = {
+        key: freeze.get(key)
+        for key in (
+            "split_name",
+            "role",
+            "freeze_time",
+            "query_sha256",
+            "qrel_sha256",
+            "participated_in_tuning",
+            "evaluator_independent",
+            "evaluator_id",
+        )
+    }
+    expected_binding = hashlib.sha256(
+        json.dumps(binding, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if freeze.get("binding_sha256") != expected_binding:
+        raise BenchmarkGovernanceError("benchmark split freeze binding hash is invalid")
+    return {
+        "ok": True,
+        "schema": BENCHMARK_SPLIT_FREEZE_SCHEMA,
+        "verification": "verified_unchanged",
+        **binding,
+        "binding_sha256": expected_binding,
+    }
 
 
 @dataclass(frozen=True)

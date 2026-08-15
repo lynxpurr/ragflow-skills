@@ -20,6 +20,7 @@ MARKDOWN_REPORT_CATEGORIES = (
     "trace_markdown",
 )
 SANITIZED_MARKDOWN_VERIFIED_COMMANDS = (
+    "ragflow-canonical-review table-evidence",
     "ragflow-doc-to-md",
     "ragflow-doc-to-md adaptive",
     "ragflow-doc-to-md backend probe",
@@ -137,6 +138,10 @@ def _iter_markdown_candidates(inventory: dict[str, Any]) -> Iterable[dict[str, A
 
 
 def _evidence_for_command(command: str) -> list[str]:
+    if command.startswith("ragflow-canonical-review"):
+        return [
+            "packages/ragflow-skill-runtime/tests/test_canonical_table_equivalence.py",
+        ]
     if command.startswith("ragflow-doc-to-md"):
         return [
             "packages/ragflow-skill-runtime/tests/test_doc_convert_cli.py",

@@ -3,7 +3,7 @@ doc_type: plan
 topic: field-trial-observation
 status: active
 created: 2026-07-02
-updated: 2026-08-04
+updated: 2026-08-16
 canonical: true
 implementation_authority: false
 owner_spec: null
@@ -332,8 +332,9 @@ Artifacts:
 - Private artifact location retained outside public repo.
 
 Results:
-- Pass/fail: passed for the full representative PDF with the high-accuracy FastAPI
-  backend; no fallback was used.
+- Pass/fail: conversion and offline build preparation passed for the full representative
+  PDF with the high-accuracy FastAPI backend; no fallback was used. Canonical acceptance
+  and multimodal live ingestion were not part of this result.
 - Quality gate: `PASS_WITH_REVIEW`; review warnings are table-structure warnings for
   complex HTML tables, not missing assets or blocked conversion.
 - Handoff summary: one Markdown document, 6 HTML tables, 6 table artifacts, 24 image
@@ -341,14 +342,15 @@ Results:
   `ragflow_ingest_plan.yaml`.
 - Table safety: postprocess preserved all 6 HTML table fingerprints, inserted 6 table
   boundary markers through the dense profile, and inserted 0 markers inside table blocks.
+  This proves conversion integrity only; it does not prove exact-source table review.
 - Runtime summary: the conversion reused a persistent MinerU FastAPI service, selected a
   high-accuracy backend, completed one remote attempt successfully, and reported no
   resource failure, timeout, or degraded table-quality fallback.
 - Handoff inspection: `ingestion_readiness.status: ready_with_review`, rich and pipeline
   sidecars complete, 0 missing image assets, and quality table count aligned with table
-  artifact count.
+  artifact count. `ready_with_review` is pre-canonical readiness, not an acceptance status.
 - Dry-run: passed with the reviewed table-atomic parser profile.
-- Live mutation: not run.
+- Live mutation: not run; neither live text build nor image ingestion was demonstrated.
 
 Friction:
 - Complex-table warnings remain intentionally conservative. They should drive human review
@@ -358,13 +360,16 @@ Friction:
   separate mutation-gated design question.
 
 Gated trigger:
-- none for new product surface. The current CLI pipeline is sufficient for high-quality
-  table handoff generation and dry-run review.
+- The conversion path is sufficient to produce a review candidate and preserve table
+  structure for dry-run. It is not sufficient by itself for a canonical or multimodal
+  completion claim.
 
 Decision:
-- Treat `--table-quality high` plus `chunk-markers-dense` as the recommended formal path
-  for complex-table PDFs when a compatible MinerU FastAPI service is available. Keep live
-  RAGFlow KB creation gated by explicit user approval.
+- Treat `--table-quality high` plus `chunk-markers-dense` as a candidate-generation path
+  for complex-table PDFs when a compatible MinerU FastAPI service is available. Before a
+  canonical build, require exact-source coverage, one decision per HTML table, positive
+  asset audit, an accepted canonical review record, and a new passthrough handoff. Keep
+  every live RAGFlow text or image operation gated by separate explicit approval.
 
 ### 2026-07-05 run-004
 
@@ -403,9 +408,11 @@ Results:
 - Adaptive decision: recommended `table-atomic-zh-4096` and preserved the explicitly
   requested `pipeline` backend.
 - Pipeline: completed with `PASS_WITH_REVIEW`, 32 chunk markers, 6 HTML tables, no marker
-  inside table blocks, 21 image artifacts, and 15 Markdown image references.
+  inside table blocks, 21 image artifacts, and 15 Markdown image references. This is a
+  conversion result, not canonical acceptance or completed image ingestion.
 - Handoff inspection: `ingestion_readiness.status: ready_with_review`, rich and pipeline
-  sidecars complete, and missing image count zero.
+  sidecars complete, and missing image count zero. The status did not prove exact-source
+  review or execution of the live image-ingestion workflow.
 - Retired-consumer comparison: the old consumer could create a chunk snapshot, but its
   run summary showed requested 4096-token table-atomic profile settings were not fully
   applied by that old path. This proves structural consumption, not profile parity.
@@ -438,6 +445,16 @@ field-trial shows the current CLI pipeline is sufficient for the RAGFlux replace
 workflow when GPU capacity is available and credentials are current. The remaining
 post-CLI, private-bridge, provider, reranker, and optional LLM/backend work should stay
 gated until this plan produces concrete evidence that one of them is needed.
+
+For canonical multimodal claims, interpret the historical records more narrowly: they
+demonstrate conversion, table-block integrity, local asset presence, handoff inspection,
+and selected text build/query paths only where explicitly listed. The current P3 replay
+does demonstrate an accepted exact-source canonical review, while the separately authorized
+P4 run below demonstrates retained text and visual parsing but not completed multimodal
+ingestion. Canonical mode must use the non-skippable review/acceptance/new-handoff sequence,
+and each live text or image mutation still requires separate target-specific approval. The
+subsequent P5 checkpoint adds only offline semantic-identity, table-equivalence, and advisory
+VLM evidence contracts; it does not change the P4 acceptance result or authorize another run.
 
 The MinerU v4 platform backend is implemented and release-validated through fake-server
 tests, consumer acceptance, and strict-vendor platform smoke. A real MinerU v4 platform
@@ -498,3 +515,110 @@ Run-005 remains valid historical observation, but its L3 trigger is no longer a 
 task. FinanceBench observed evidence and the two-subset comparison remain unavailable;
 the corresponding evidence rows stay open, no replacement live run is implied, and L4
 remains unauthorized.
+
+### 2026-08-15 run-006: authorized canonical correction field trial
+
+Workflow:
+- `ragflow-canonical-review` accepted evidence -> `ragflow-kb-build` canonical build,
+  visual ingestion, parse/health reports -> `ragflow-query` direct and host-assisted
+  retrieval.
+
+Input and authority:
+- One P3 accepted canonical handoff with 13 selected image assets.
+- One target-specific, one-time live mutation authorization; no MinerU re-run and no
+  source reconversion.
+- Private deployment details, KB names, dataset/document IDs, paths, credentials,
+  approved question text, and raw chunks are excluded.
+
+Results:
+- All bound source, accepted Markdown, audit, and selected-asset hashes revalidated;
+  collision probe clear; no provider enumeration; rerank disabled.
+- One Markdown document parsed with 9 chunks; 13/13 selected visual documents uploaded
+  and parsed; 14 observed documents were `done` with 22 observed chunks.
+- Direct retrieval passed 9/9 and host-assisted retrieval passed 9/9 with usable evidence.
+- Table-fact checks passed 6/6 in both modes. This validates the approved question set, but
+  does not prove that server-derived HTML and canonical Markdown tables are cell-equivalent.
+- Asset-file retrieval was observed for 4/6 target assets and 1/3 image groups was complete;
+  the semantic image-context gate is `0/3`. The sampled image chunks used VLM-style visual
+  descriptions, did not carry the corresponding canonical headings or context, and the
+  uploaded basenames were not meaningful semantic names.
+- Image processing ended at `parsed_visual_only`; one slow image-parse warning was
+  recorded, with no upload, parse, or state-readback failure. No cleanup was executed and
+  the protected earlier KB was not targeted.
+
+Decision:
+- Retain the correction KB and private evidence, but keep the P4 image-context checklist
+  open. Treat the run as retained text plus visual parsing with `parsed_visual_only`, not
+  completed multimodal ingestion or context-bound image acceptance. Any further live
+  mutation, image-text update, route change, activation, or cleanup needs new target-specific
+  authorization.
+
+### 2026-08-15 P5 offline maintenance checkpoint
+
+This is an implementation checkpoint, not a field-trial run. The public offline surface now:
+
+- keeps `ragflow_canonical_review_v1` as the sole acceptance record while optionally binding
+  semantic asset names, roles, source references, line-range context hashes, and ingestion
+  intent;
+- materializes semantic names and rewritten references only under a new accepted-output root,
+  preserving reviewed, candidate, and original-handoff bytes;
+- sends only canonical `visual_extract` assets to the existing visual upload plan and blocks
+  canonical-context readiness for `context_bound` assets because no verified curated
+  image-text transport exists;
+- compares Markdown and derived HTML tables by deterministic normalized cell matrices, with
+  optional external VLM candidates restricted to no-LLM advisory request/review evidence.
+
+The current inventory is 111 public commands. Report-surface governance is 98 covered,
+0 needs-redaction, and 13 not-applicable; runtime-resilience governance is 22 covered,
+0 candidate, 0 deferred, and 89 not-applicable. This checkpoint made no network or model
+call, did not read deployment credentials or private field-trial artifacts, and did not
+create, update, parse, rename, delete, or clean up a KB. The retained P4 result remains
+`parsed_visual_only` with semantic image-context acceptance at `0/3`.
+
+### 2026-08-15 run-007: no-network host-workflow observation replay
+
+Workflow:
+- Execute the released one-shot CLI workflow from the four `acf6f31` archives under an
+  isolated user/network namespace, without source-tree imports.
+- Run adaptive decision-only, formal passthrough, handoff inspection, asset planning, image
+  readiness, KB dry-run, citation audit, and deterministic answer evaluation. Evaluate the
+  canonical-review gate separately against the neutral fixture.
+
+Isolation and safety:
+- Root UID mapping was unavailable under the host's user-namespace hardening, so the approved
+  no-root-map network namespace fallback was used after confirming that only a down loopback
+  interface remained and that IPv4 and IPv6 routes were empty. No host security setting was
+  changed.
+- Network access, live-service calls, provider/reranker/model calls, mutations, cleanup, and
+  P4 authority reuse were all zero. No credential, endpoint, private identifier, source path,
+  raw chunk, or private run-root value is retained here.
+
+Results:
+- All 8 product CLI commands exited 0 with 0 retries and 0 failed steps; total product-command
+  elapsed time was 2241 ms. The report recorded 35 shell commands including setup, isolation,
+  inspection, and inventory work.
+- The release manifest and all 4 archive hashes matched `source_commit=acf6f31`; all four
+  vendored runtime copies had the same tree hash.
+- Asset planning found 3 Markdown image references resolving to 2 unique local image files,
+  with 0 missing files and 0 RAGFlow calls. KB build remained `dry_run=true` and did not write
+  `kb_manifest.json`.
+- Citation `[1]` was valid and the deterministic answer gate passed. Canonical review stopped
+  as `SKIPPED_GATED` because the neutral fixture intentionally supplied no independent source
+  or source-coverage map.
+- Independent metrics aggregation returned `ok: true`, 0 findings, and 0 triggered tracks.
+  The sample remained in the non-retirement `other` class, so broad-corpus and strict paired
+  live A/B evidence are still insufficient.
+
+Observations:
+- Adaptive `backend=auto` and semantic-alias messages were advisory only. The host had to
+  distinguish recommendations and warnings from the explicitly approved execution scope,
+  but no recommendation caused a provider, model, or mutation call.
+- The artifact inventory included an invalid self-size/self-hash entry. All other 63 entries
+  matched their paths, sizes, and hashes. The replay instructions already permit the inventory
+  itself to be listed without a self-hash, so this is a report-production observation rather
+  than a product failure.
+
+Decision:
+- Accept the replay as `PASS_WITH_OBSERVATION` and keep observing. It confirms one-shot CLI
+  sufficiency for this neutral no-network workflow, opens no adapter or LLM/backend trigger,
+  and does not change the retained P4 `parsed_visual_only` or image-context `0/3` result.
