@@ -36,6 +36,21 @@ class QueryRewriteTests(unittest.TestCase):
         self.assertEqual(plan["summary"]["llm_calls"], 0)
         self.assertEqual(generated, ["runtime config 运行时 配置"])
 
+    def test_crosslingual_rewrite_maps_name_transliterations(self) -> None:
+        plan = build_query_rewrite_plan("勒迈特的大爆炸理论", mode="crosslingual")
+        queries = [item["query"] for item in plan["retrieval_queries"]]
+
+        self.assertEqual(plan["summary"]["llm_calls"], 0)
+        self.assertEqual(queries[0], "勒迈特的大爆炸理论")  # 原文保留
+        self.assertIn("Lemaître的大爆炸理论", queries)
+        self.assertIn("Lemaitre的大爆炸理论", queries)
+
+    def test_crosslingual_rewrite_ignores_unmapped_names(self) -> None:
+        plan = build_query_rewrite_plan("牛顿的力学", mode="crosslingual")
+
+        self.assertEqual(plan["summary"]["generated_query_count"], 0)
+        self.assertEqual([item["query"] for item in plan["retrieval_queries"]], ["牛顿的力学"])
+
     def test_multi_query_file_supports_strings_and_objects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "queries.json"

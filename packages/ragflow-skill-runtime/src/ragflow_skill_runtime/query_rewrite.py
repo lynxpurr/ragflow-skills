@@ -42,6 +42,13 @@ _TRANSLATION_STUB_TERMS = {
     "validation": ["验证"],
 }
 
+# 中→英人名音译映射（crosslingual 模式的确定性 seed map）。
+# 用于把中文音译的西文人名还原为英文原名，使中文 query 能命中英文文档。
+# 注意：这是有限 seed，不覆盖全部人名音译；规模化需 host-owned LLM 改写（类似 hyde 的 defer 路径）。
+_CROSSLINGUAL_NAME_MAP = {
+    "勒迈特": ["Lemaître", "Lemaitre"],
+}
+
 
 class QueryRewriteError(ValueError):
     """Raised when query rewrite input cannot be planned safely."""
@@ -106,6 +113,23 @@ def _translate_stub_queries(question: str) -> list[str]:
     return [f"{question} {' '.join(translated_terms)}"]
 
 
+def _crosslingual_rewrite_queries(question: str) -> list[str]:
+    """Generate variants that substitute known Chinese name transliterations with English originals."""
+    normalized = _normalize_query(question, field_name="question")
+    variants: list[str] = []
+    seen: set[str] = set()
+    for zh_name, en_variants in _CROSSLINGUAL_NAME_MAP.items():
+        if zh_name not in normalized:
+            continue
+        for en_name in en_variants:
+            rewritten = normalized.replace(zh_name, en_name)
+            key = rewritten.casefold()
+            if rewritten != normalized and key not in seen:
+                seen.add(key)
+                variants.append(rewritten)
+    return variants
+
+
 def _multi_query_item(item: Any, *, index: int) -> dict[str, Any]:
     if isinstance(item, str):
         query = _normalize_query(item, field_name=f"queries[{index}]")
@@ -160,8 +184,8 @@ def build_query_rewrite_plan(
 
     original_query = _normalize_query(question, field_name="question")
     normalized_mode = (mode or "none").strip().lower()
-    if normalized_mode not in {"none", "simple", "translate", "hyde"}:
-        raise QueryRewriteError("rewrite mode must be one of: none, simple, translate, hyde")
+    if normalized_mode not in {"none", "simple", "translate", "hyde", "crosslingual"}:
+        raise QueryRewriteError("rewrite mode must be one of: none, simple, translate, hyde, crosslingual")
     if normalized_mode == "hyde":
         if not llm_configured:
             raise QueryRewriteError(
@@ -190,6 +214,16 @@ def build_query_rewrite_plan(
                     "query": query,
                     "source": "rewrite",
                     "kind": "translated_stub",
+                }
+            )
+    elif normalized_mode == "crosslingual":
+        for index, query in enumerate(_crosslingual_rewrite_queries(original_query), start=1):
+            generated.append(
+                {
+                    "id": f"rewrite-crosslingual-{index}",
+                    "query": query,
+                    "source": "rewrite",
+                    "kind": "crosslingual",
                 }
             )
 
