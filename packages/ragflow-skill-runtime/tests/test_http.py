@@ -119,6 +119,46 @@ class HttpClientConfigTests(unittest.TestCase):
 
                 self.assertEqual(len(recorder.calls), 1)
 
+    def test_list_chunks_uses_document_chunks_resource(self) -> None:
+        client = RAGFlowClient(RagflowConfig(base_url="https://ragflow.example.test", api_key="test-key"))
+        recorder = RecordingHTTPClient({"code": 0, "data": {"chunks": []}})
+        client.http = recorder
+
+        response = client.list_chunks("ds-1", "doc-1")
+
+        self.assertEqual(response, {"code": 0, "data": {"chunks": []}})
+        self.assertEqual(len(recorder.calls), 1)
+        method, url, body, _kwargs = recorder.calls[0]
+        self.assertEqual(method, "GET")
+        self.assertEqual(url, "https://ragflow.example.test/api/v1/datasets/ds-1/documents/doc-1/chunks?page=1&page_size=100")
+        self.assertIsNone(body)
+
+    def test_update_chunk_uses_chunk_resource(self) -> None:
+        client = RAGFlowClient(RagflowConfig(base_url="https://ragflow.example.test", api_key="test-key"))
+        recorder = RecordingHTTPClient()
+        client.http = recorder
+
+        response = client.update_chunk("ds-1", "doc-1", "chunk-1", {"content": "curated text"})
+
+        self.assertEqual(response, {"code": 0})
+        self.assertEqual(len(recorder.calls), 1)
+        method, url, body, _kwargs = recorder.calls[0]
+        self.assertEqual(method, "PUT")
+        self.assertEqual(url, "https://ragflow.example.test/api/v1/datasets/ds-1/documents/doc-1/chunks/chunk-1")
+        self.assertEqual(body, {"content": "curated text"})
+
+    def test_update_chunk_rejects_nonzero_application_code(self) -> None:
+        for code in (100, "100"):
+            with self.subTest(code=code):
+                client = RAGFlowClient(
+                    RagflowConfig(base_url="https://ragflow.example.test", api_key="test-key")
+                )
+                recorder = RecordingHTTPClient({"code": code, "message": "chunk update rejected"})
+                client.http = recorder
+
+                with self.assertRaisesRegex(RuntimeError, "application code 100: chunk update rejected"):
+                    client.update_chunk("ds-1", "doc-1", "chunk-1", {"content": "curated text"})
+
 
 if __name__ == "__main__":
     unittest.main()

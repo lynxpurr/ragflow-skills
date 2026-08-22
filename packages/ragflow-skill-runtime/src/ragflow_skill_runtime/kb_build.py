@@ -3037,6 +3037,7 @@ def create_kb_asset_ingestion_readiness_report(
     *,
     asset_upload_plan_path: str | Path,
     profile_path: str | Path | None = None,
+    transport_capability: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create a non-mutating readiness report for future gated visual ingestion."""
 
@@ -3089,15 +3090,42 @@ def create_kb_asset_ingestion_readiness_report(
                 recommendation="Keep residual images excluded unless a user explicitly broadens the visual upload policy.",
             )
         )
-    if context_bound_count:
-        issues.append(
-            _issue(
-                severity="error",
-                code="context_bound_capability_missing",
-                message=f"Asset plan has {context_bound_count} context-bound image asset(s), but no verified curated image-context transport is available.",
-                recommendation="Keep these assets package-bound and do not claim canonical-context image acceptance until a separately approved capability contract exists.",
+    curated_gate: dict[str, Any] | None = None
+    curated_capability_error: str | None = None
+    if context_bound_count and transport_capability is not None:
+        try:
+            curated_gate = verify_image_transport_capability(
+                transport_capability,
+                operation="curated_image_update",
+                transport="json_put",
+                endpoint_class="document_detail",
             )
-        )
+        except BuildError as exc:
+            curated_capability_error = str(exc)
+    if context_bound_count:
+        if curated_gate is None:
+            detail = (
+                f" Supplied capability evidence was rejected: {curated_capability_error}."
+                if curated_capability_error
+                else ""
+            )
+            issues.append(
+                _issue(
+                    severity="error",
+                    code="context_bound_capability_missing",
+                    message=f"Asset plan has {context_bound_count} context-bound image asset(s), but no verified curated image-context transport is available.{detail}",
+                    recommendation="Keep these assets package-bound and do not claim canonical-context image acceptance until a separately approved capability contract exists.",
+                )
+            )
+        else:
+            issues.append(
+                _issue(
+                    severity="info",
+                    code="context_bound_capability_attested",
+                    message=f"Asset plan has {context_bound_count} context-bound image asset(s) covered by attested curated image-context transport evidence.",
+                    recommendation="Run ragflow-kb-build curated-image-update with explicit execute flags and exact confirmations to replace VLM chunk content.",
+                )
+            )
 
     profile_payload: dict[str, Any] | None = None
     profile_source = str(profile_path) if profile_path else None
@@ -3177,9 +3205,20 @@ def create_kb_asset_ingestion_readiness_report(
             },
             "residual_asset_review": {"status": "REVIEW" if residual_count else "PASS", "count": residual_count},
             "canonical_context_claim": {
-                "status": "BLOCKED" if context_bound_count else "NOT_REQUIRED",
+                "status": (
+                    "READY"
+                    if context_bound_count and curated_gate is not None
+                    else "BLOCKED"
+                    if context_bound_count
+                    else "NOT_REQUIRED"
+                ),
                 "context_bound_image_count": context_bound_count,
-                "capability": "not_verified",
+                "capability": "attested" if curated_gate is not None else "not_verified",
+                **(
+                    {"evidence_sha256": curated_gate.get("evidence_sha256")}
+                    if curated_gate is not None
+                    else {}
+                ),
             },
             "profile_evidence": {"status": "PASS" if profile_payload else "REVIEW", "source": profile_source},
         },
