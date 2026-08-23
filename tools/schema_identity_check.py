@@ -143,6 +143,22 @@ EXPECTED_IDENTITIES = (
         description="No-live readiness/execution report contract for gated visual document ingestion.",
     ),
     SchemaIdentity(
+        key="curated_image_update_plan",
+        group="kb_build",
+        identity="ragflow_curated_image_update_plan_v1",
+        source_patterns=("ragflow_curated_image_update_plan_v1", "CURATED_IMAGE_UPDATE_PLAN_SCHEMA"),
+        coverage_patterns=("ragflow_curated_image_update_plan_v1", "CURATED_IMAGE_UPDATE_PLAN_SCHEMA"),
+        description="Offline curated image-text update plan for context-bound image assets.",
+    ),
+    SchemaIdentity(
+        key="curated_image_update_report",
+        group="kb_build",
+        identity="ragflow_curated_image_update_report_v1",
+        source_patterns=("ragflow_curated_image_update_report_v1", "CURATED_IMAGE_UPDATE_REPORT_SCHEMA"),
+        coverage_patterns=("ragflow_curated_image_update_report_v1", "CURATED_IMAGE_UPDATE_REPORT_SCHEMA"),
+        description="Execution report for the gated curated image-text chunk replacement.",
+    ),
+    SchemaIdentity(
         key="kb_artifact_consistency_report",
         group="kb_build",
         identity="ragflow_kb_artifact_consistency_report_v1",

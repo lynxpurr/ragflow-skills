@@ -20,9 +20,19 @@ provider/model configuration.
 
 When the accepted record contains asset identity/context fields, pass it to
 `asset-upload-plan --canonical-review`. Only `ingestion_intent: visual_extract` enters the
-existing visual parse set. `context_bound` and `exclude` assets remain package-only;
-readiness blocks canonical-context claims until a separately verified transport contract
-exists.
+existing visual parse set. `exclude` assets remain package-only. `context_bound` assets
+remain package-only until `ragflow_transport_capability_v1` evidence attests
+`curated_image_update`/`json_put`/`document_detail`; readiness then reports the
+canonical-context claim as attested instead of blocked, and `curated-image-update`
+performs the gated upload, parse, and first-chunk content replacement with the
+hash-pinned context text (extra chunks are left untouched and reported).
+
+```bash
+python scripts/build.py curated-image-update --asset-upload-plan ./run/asset_upload_plan.json --canonical-review ./handoff/ragflow_canonical_review.json --accepted-markdown ./handoff/documents/sample.md --execute --dataset-id DATASET_ID --confirm-dataset-id DATASET_ID --confirm-planned-count 1 --transport-capability ./run/transport_capability.json --report-json ./run/curated_image_update.json --json
+```
+
+Run it only with exact confirmations and separate live approval; without attesting
+evidence the command refuses before any client is created.
 
 ## Append, refresh, parse, health, and diagnostics
 

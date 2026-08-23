@@ -125,6 +125,23 @@ class RAGFlowClient:
 
         return self.get(f"/datasets/{dataset_id}/documents?page={page}&page_size={page_size}")
 
+    def list_chunks(self, dataset_id: str, document_id: str, *, page: int = 1, page_size: int = 100) -> Any:
+        """List chunks of one document in a dataset."""
+
+        return self.get(
+            f"/datasets/{dataset_id}/documents/{document_id}/chunks?page={page}&page_size={page_size}"
+        )
+
+    def update_chunk(self, dataset_id: str, document_id: str, chunk_id: str, updates: Mapping[str, Any]) -> Any:
+        """Replace the content of one chunk in a document."""
+
+        response = self.put(f"/datasets/{dataset_id}/documents/{document_id}/chunks/{chunk_id}", updates)
+        if isinstance(response, Mapping) and response.get("code") not in (None, 0, "0"):
+            code = response.get("code")
+            message = response.get("message") or response.get("msg") or "unknown error"
+            raise HTTPError(f"RAGFlow chunk update failed with application code {code}: {message}")
+        return response
+
     def iter_document_pages(self, dataset_id: str, *, page_size: int = 200, max_pages: int = 100):
         """Yield paginated document-list responses for a dataset."""
 

@@ -12204,5 +12204,377 @@ class KbBuildCliTests(unittest.TestCase):
         self.assertIn("Observed State", report_text)
 
 
+class FakeCuratedImageUpdateClient(FakeVisualIngestionClient):
+    instances: list["FakeCuratedImageUpdateClient"] = []
+    persist_updates = True
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.chunk_updates: list[tuple[str, str, str, dict[str, object]]] = []
+        self.chunks: dict[str, list[dict[str, object]]] = {}
+        FakeCuratedImageUpdateClient.instances.append(self)
+
+    def list_chunks(self, dataset_id, document_id, *, page=1, page_size=100):
+        chunks = self.chunks.setdefault(
+            str(document_id),
+            [{"id": f"{document_id}-chunk-1", "content": "vlm generated text"}],
+        )
+        return {"code": 0, "data": {"chunks": [dict(chunk) for chunk in chunks], "total": len(chunks)}}
+
+    def update_chunk(self, dataset_id, document_id, chunk_id, updates):
+        self.chunk_updates.append((str(dataset_id), str(document_id), str(chunk_id), dict(updates)))
+        if FakeCuratedImageUpdateClient.persist_updates:
+            for chunk in self.chunks.get(str(document_id), []):
+                if chunk.get("id") == chunk_id:
+                    chunk["content"] = updates.get("content")
+        return {"code": 0}
+
+
+class FakeMultiChunkCuratedClient(FakeCuratedImageUpdateClient):
+    instances: list["FakeMultiChunkCuratedClient"] = []
+
+    def __init__(self, config):
+        super().__init__(config)
+        FakeMultiChunkCuratedClient.instances.append(self)
+
+    def list_chunks(self, dataset_id, document_id, *, page=1, page_size=100):
+        chunks = self.chunks.setdefault(
+            str(document_id),
+            [
+                {"id": f"{document_id}-chunk-1", "content": "vlm generated text"},
+                {"id": f"{document_id}-chunk-2", "content": "vlm extra text"},
+            ],
+        )
+        return {"code": 0, "data": {"chunks": [dict(chunk) for chunk in chunks], "total": len(chunks)}}
+
+
+def _curated_transport_capability(*, with_curated: bool = True) -> dict[str, object]:
+    capability = _transport_capability()
+    if with_curated:
+        capability["operations"].append(
+            {
+                "operation": "curated_image_update",
+                "transport": "json_put",
+                "endpoint_class": "document_detail",
+                "supported": True,
+            }
+        )
+    return capability
+
+
+def _write_curated_cli_fixture(root: Path, *, intent: str = "context_bound") -> tuple[Path, Path, Path]:
+    from ragflow_skill_runtime.kb_build import create_kb_asset_upload_plan
+
+    image_dir = root / "documents" / "images"
+    image_dir.mkdir(parents=True)
+    markdown = root / "documents" / "sample.md"
+    markdown.write_text(
+        "# Sample\n\n![context](images/context.png)\nSome surrounding text.\n",
+        encoding="utf-8",
+    )
+    (image_dir / "context.png").write_bytes(b"context-image-bytes")
+    manifest = root / "doc_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": "0.1",
+                "source_root": ".",
+                "documents": [{"source_path": "sample.pdf", "markdown_path": "documents/sample.md"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    selected: dict[str, object] = {
+        "path": "documents/images/context.png",
+        "sha256": hashlib.sha256(b"context-image-bytes").hexdigest(),
+        "role": "figure",
+        "canonical_name": "context.png",
+        "source_reference": "page:1",
+        "ingestion_intent": intent,
+    }
+    if intent == "context_bound":
+        selected["context_selector"] = "line:4-4"
+        selected["context_sha256"] = hashlib.sha256(b"Some surrounding text.").hexdigest()
+    review = root / "ragflow_canonical_review.json"
+    review.write_text(
+        json.dumps(
+            {
+                "schema": "ragflow_canonical_review_v1",
+                "status": "accepted",
+                "ok": True,
+                "markdown": {
+                    "candidate": {"sha256": "1" * 64},
+                    "accepted": {
+                        "path": "documents/sample.md",
+                        "sha256": hashlib.sha256(markdown.read_bytes()).hexdigest(),
+                    },
+                },
+                "selected_assets": [selected],
+                "summary": {"selected_asset_count": 1, "unresolved_item_count": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    plan = create_kb_asset_upload_plan(doc_manifest_path=manifest, canonical_review_path=review)
+    plan["transport_capability"] = _curated_transport_capability()
+    plan_path = root / "asset_upload_plan.json"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    return plan_path, review, markdown
+
+
+def _curated_cli_args(plan: Path, review: Path, markdown: Path, output: Path, *, count: int = 1) -> list[str]:
+    return [
+        "curated-image-update",
+        "--execute",
+        "--asset-upload-plan",
+        str(plan),
+        "--canonical-review",
+        str(review),
+        "--accepted-markdown",
+        str(markdown),
+        "--dataset-id",
+        "ds-curated",
+        "--confirm-dataset-id",
+        "ds-curated",
+        "--confirm-planned-count",
+        str(count),
+        "--base-url",
+        "https://ragflow.example.test",
+        "--api-key",
+        "fake-key",
+        "--report-json",
+        str(output),
+        "--json",
+    ]
+
+
+class CuratedImageUpdateCliTests(unittest.TestCase):
+    def test_curated_image_update_requires_execute_flag(self) -> None:
+        module = load_build_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan, review, markdown = _write_curated_cli_fixture(root)
+            output = root / "curated.json"
+            args = _curated_cli_args(plan, review, markdown, output)
+            args.remove("--execute")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(args)
+
+        self.assertEqual(code, 2, stdout.getvalue())
+        self.assertIn("--execute", json.loads(stdout.getvalue())["error"])
+        self.assertFalse(output.exists())
+
+    def test_curated_image_update_requires_exact_confirmations(self) -> None:
+        module = load_build_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan, review, markdown = _write_curated_cli_fixture(root)
+            output = root / "curated.json"
+            args = _curated_cli_args(plan, review, markdown, output)
+            args[args.index("--confirm-dataset-id") + 1] = "wrong-dataset"
+            args[args.index("--confirm-planned-count") + 1] = "7"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(args)
+
+        self.assertEqual(code, 2, stdout.getvalue())
+        error = json.loads(stdout.getvalue())["error"]
+        self.assertIn("--confirm-dataset-id", error)
+        self.assertIn("--confirm-planned-count", error)
+        self.assertFalse(output.exists())
+
+    def test_curated_image_update_requires_curated_capability_before_mutation(self) -> None:
+        module = load_build_module()
+        FakeCuratedImageUpdateClient.instances = []
+        module.RAGFlowClient = FakeCuratedImageUpdateClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan, review, markdown = _write_curated_cli_fixture(root)
+            plan_payload = json.loads(plan.read_text(encoding="utf-8"))
+            plan_payload["transport_capability"] = _curated_transport_capability(with_curated=False)
+            plan.write_text(json.dumps(plan_payload), encoding="utf-8")
+            output = root / "curated.json"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(_curated_cli_args(plan, review, markdown, output))
+
+        self.assertEqual(code, 2, stdout.getvalue())
+        self.assertIn("curated_image_update", stdout.getvalue())
+        self.assertEqual(FakeCuratedImageUpdateClient.instances, [])
+        self.assertFalse(output.exists())
+
+    def test_curated_image_update_rejects_asset_hash_drift_before_client_creation(self) -> None:
+        module = load_build_module()
+        FakeCuratedImageUpdateClient.instances = []
+        module.RAGFlowClient = FakeCuratedImageUpdateClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan, review, markdown = _write_curated_cli_fixture(root)
+            (root / "documents" / "images" / "context.png").write_bytes(b"drifted-bytes")
+            output = root / "curated.json"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(_curated_cli_args(plan, review, markdown, output))
+
+        self.assertEqual(code, 2, stdout.getvalue())
+        self.assertIn("SHA-256 does not match", stdout.getvalue())
+        self.assertEqual(FakeCuratedImageUpdateClient.instances, [])
+        self.assertFalse(output.exists())
+
+    def test_curated_image_update_replaces_vlm_chunk_end_to_end(self) -> None:
+        module = load_build_module()
+        FakeCuratedImageUpdateClient.instances = []
+        FakeCuratedImageUpdateClient.persist_updates = True
+        module.RAGFlowClient = FakeCuratedImageUpdateClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan, review, markdown = _write_curated_cli_fixture(root)
+            output = root / "curated.json"
+            report_md = root / "curated.md"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        *_curated_cli_args(plan, review, markdown, output),
+                        "--report-md",
+                        str(report_md),
+                    ]
+                )
+            report = json.loads(output.read_text(encoding="utf-8"))
+            report_md_exists = report_md.exists()
+
+        expected_text = "Sample\n\nSome surrounding text."
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(report["schema"], "ragflow_curated_image_update_report_v1")
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["status"], "completed")
+        self.assertEqual(report["summary"]["updated_asset_count"], 1)
+        asset = report["assets"][0]
+        self.assertEqual(asset["status"], "updated")
+        self.assertEqual(asset["updated_chunk_id"], "visual-1-chunk-1")
+        self.assertEqual(
+            asset["previous_chunk_content_sha256"],
+            hashlib.sha256(b"vlm generated text").hexdigest(),
+        )
+        self.assertEqual(asset["curated_text_sha256"], hashlib.sha256(expected_text.encode("utf-8")).hexdigest())
+        client = FakeCuratedImageUpdateClient.instances[0]
+        self.assertEqual(len(client.chunk_updates), 1)
+        _dataset_id, _document_id, _chunk_id, updates = client.chunk_updates[0]
+        self.assertEqual(updates, {"content": expected_text})
+        self.assertTrue(report_md_exists)
+
+    def test_curated_image_update_warns_on_extra_chunks(self) -> None:
+        module = load_build_module()
+        FakeMultiChunkCuratedClient.instances = []
+        FakeMultiChunkCuratedClient.persist_updates = True
+        module.RAGFlowClient = FakeMultiChunkCuratedClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan, review, markdown = _write_curated_cli_fixture(root)
+            output = root / "curated.json"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(_curated_cli_args(plan, review, markdown, output))
+            report = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        asset = report["assets"][0]
+        self.assertEqual(asset["status"], "updated")
+        warning_codes = {warning["code"] for warning in asset["warnings"]}
+        self.assertIn("extra_chunks_left_untouched", warning_codes)
+        client = FakeMultiChunkCuratedClient.instances[0]
+        self.assertEqual(len(client.chunk_updates), 1)
+        self.assertEqual(client.chunk_updates[0][2], "visual-1-chunk-1")
+
+    def test_curated_image_update_fails_on_read_back_mismatch(self) -> None:
+        module = load_build_module()
+        FakeCuratedImageUpdateClient.instances = []
+        FakeCuratedImageUpdateClient.persist_updates = False
+        module.RAGFlowClient = FakeCuratedImageUpdateClient
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                plan, review, markdown = _write_curated_cli_fixture(root)
+                output = root / "curated.json"
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    code = module.main([*_curated_cli_args(plan, review, markdown, output), "--poll-interval", "0.01"])
+                report = json.loads(output.read_text(encoding="utf-8"))
+        finally:
+            FakeCuratedImageUpdateClient.persist_updates = True
+
+        self.assertEqual(code, 1, stdout.getvalue())
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["status"], "partial_failure")
+        asset = report["assets"][0]
+        self.assertEqual(asset["status"], "failed")
+        self.assertIn("read-back", asset["error"])
+
+    def test_curated_image_update_without_context_bound_assets_exits_cleanly(self) -> None:
+        module = load_build_module()
+        FakeCuratedImageUpdateClient.instances = []
+        module.RAGFlowClient = FakeCuratedImageUpdateClient
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan, review, markdown = _write_curated_cli_fixture(root, intent="visual_extract")
+            output = root / "curated.json"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = module.main(_curated_cli_args(plan, review, markdown, output, count=0))
+            report = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["summary"]["planned_update_count"], 0)
+        self.assertEqual(FakeCuratedImageUpdateClient.instances, [])
+
+    def test_curated_image_update_resume_skips_completed_updates(self) -> None:
+        checkpoint = None
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan, review, markdown = _write_curated_cli_fixture(root)
+            checkpoint = root / "curated.checkpoint.json"
+            first_output = root / "curated-first.json"
+            module = load_build_module()
+            FakeCuratedImageUpdateClient.instances = []
+            FakeCuratedImageUpdateClient.persist_updates = True
+            module.RAGFlowClient = FakeCuratedImageUpdateClient
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                first_code = module.main(
+                    [
+                        *_curated_cli_args(plan, review, markdown, first_output),
+                        "--checkpoint",
+                        str(checkpoint),
+                    ]
+                )
+            self.assertEqual(first_code, 0, stdout.getvalue())
+            self.assertEqual(len(FakeCuratedImageUpdateClient.instances[0].uploads), 1)
+
+            second_output = root / "curated-second.json"
+            module = load_build_module()
+            FakeCuratedImageUpdateClient.instances = []
+            module.RAGFlowClient = FakeCuratedImageUpdateClient
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                second_code = module.main(
+                    [
+                        *_curated_cli_args(plan, review, markdown, second_output),
+                        "--checkpoint",
+                        str(checkpoint),
+                        "--resume",
+                    ]
+                )
+            report = json.loads(second_output.read_text(encoding="utf-8"))
+
+        self.assertEqual(second_code, 0, stdout.getvalue())
+        asset = report["assets"][0]
+        self.assertEqual(asset["status"], "updated")
+        self.assertTrue(asset["checkpoint_resumed"])
+        self.assertEqual(FakeCuratedImageUpdateClient.instances[0].uploads, [])
+        self.assertEqual(FakeCuratedImageUpdateClient.instances[0].chunk_updates, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -224,8 +224,13 @@ ingestion.
 
 When the accepted record carries asset identity/context fields, pass it to
 `asset-upload-plan --canonical-review`. Only `visual_extract` enters the existing visual
-parse path; `context_bound` and `exclude` remain package-only, and unsupported canonical
-context claims must stay blocked. Use canonical-review `table_evidence.py` for normalized
+parse path; `exclude` assets remain package-only. `context_bound` assets also remain
+package-only unless `ragflow_transport_capability_v1` evidence attests
+`curated_image_update`/`json_put`/`document_detail`; with that evidence,
+`image-ingestion-readiness --transport-capability` marks the canonical-context claim
+attested, and `curated-image-update` uploads, parses, and replaces the VLM-generated
+chunk content with the hash-pinned context text under explicit execute gates. Without
+such evidence, unsupported canonical context claims must stay blocked. Use canonical-review `table_evidence.py` for normalized
 Markdown/HTML equivalence or optional no-LLM VLM request/review evidence.
 
 When a user asks for retained-package comparison, keep it static and explicit:

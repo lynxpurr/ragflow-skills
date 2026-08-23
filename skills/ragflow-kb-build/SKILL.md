@@ -79,8 +79,11 @@ separate cleanup approval.
   `image-ingestion-execute` only after separate exact live authority. Canonical review
   never performs network `PUT` operations.
 - For intent-aware canonical assets, pass the accepted record to
-  `asset-upload-plan --canonical-review`; only `visual_extract` enters visual parsing,
-  while unsupported `context_bound` claims remain blocked.
+  `asset-upload-plan --canonical-review`; only `visual_extract` enters visual parsing.
+  `context_bound` assets stay package-only unless attested curated image-text
+  transport evidence exists; then `curated-image-update` replaces their VLM chunk
+  content with hash-pinned context text under explicit execute gates, and unsupported
+  claims remain blocked.
 - A dry-run does not produce a real `kb_manifest.json`. Run post-build consistency only
   after an authorized build; on interruption, resume from a reviewed checkpoint rather
   than duplicate dataset creation or upload.

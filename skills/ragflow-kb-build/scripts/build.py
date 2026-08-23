@@ -47,6 +47,11 @@ from ragflow_skill_runtime import (  # noqa: E402
     create_kb_asset_ingestion_readiness_report,
     create_kb_artifact_consistency_report,
     create_kb_asset_upload_plan,
+    build_curated_image_update_plan,
+    chunk_content_sha256,
+    create_curated_image_update_report,
+    render_curated_image_update_report_markdown,
+    verify_curated_image_transport_capability,
     dataset_create_response_diagnostics,
     dataset_construction_fingerprint,
     create_parameter_read_back_audit,
@@ -2320,9 +2325,18 @@ def _run_asset_upload_plan(args: argparse.Namespace) -> int:
 
 def _run_image_ingestion_readiness(args: argparse.Namespace) -> int:
     try:
+        transport_capability = None
+        if args.transport_capability:
+            transport_capability = _read_json_file(args.transport_capability, label="transport capability")
+        else:
+            plan_payload = _read_json_file(args.asset_upload_plan, label="asset upload plan")
+            embedded = plan_payload.get("transport_capability") if isinstance(plan_payload, Mapping) else None
+            if isinstance(embedded, Mapping):
+                transport_capability = dict(embedded)
         report = create_kb_asset_ingestion_readiness_report(
             asset_upload_plan_path=args.asset_upload_plan,
             profile_path=args.profile,
+            transport_capability=transport_capability,
         )
         if args.redaction_report:
             report, redaction_report = _sanitize_governance_report(
@@ -3044,6 +3058,444 @@ def _run_image_ingestion_execute(args: argparse.Namespace) -> int:
         _write_json_file(args.report_json, report)
         _dump_json(report)
         return 0 if ok else 1
+    except (BuildError, ConfigError, OSError, RuntimeError, ProfileError) as exc:
+        return _error(str(exc), json_output=args.json)
+
+
+def _extract_document_chunk_records(response: Any) -> list[dict[str, Any]]:
+    if isinstance(response, Mapping):
+        data = response.get("data")
+        if isinstance(data, Mapping):
+            chunks = data.get("chunks")
+            if isinstance(chunks, list):
+                return [dict(item) for item in chunks if isinstance(item, Mapping)]
+        if isinstance(data, list):
+            return [dict(item) for item in data if isinstance(item, Mapping)]
+    return []
+
+
+def _chunk_record_id(chunk: Mapping[str, Any]) -> str | None:
+    for key in ("id", "chunk_id"):
+        value = chunk.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _curated_asset_result(
+    asset: Mapping[str, Any],
+    *,
+    status: str,
+    document_id: str | None = None,
+    observed_chunk_ids: list[str] | None = None,
+    updated_chunk_id: str | None = None,
+    previous_chunk_content_sha256: str | None = None,
+    warnings: list[dict[str, Any]] | None = None,
+    error: str | None = None,
+    checkpoint_resumed: bool = False,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "source_path": asset.get("source_path"),
+        "sha256": asset.get("sha256"),
+        "canonical_name": asset.get("canonical_name"),
+        "context_selector": asset.get("context_selector"),
+        "context_sha256": asset.get("context_sha256"),
+        "curated_text_sha256": asset.get("curated_text_sha256"),
+        "document_id": document_id,
+        "observed_chunk_ids": list(observed_chunk_ids or []),
+        "updated_chunk_id": updated_chunk_id,
+        "previous_chunk_content_sha256": previous_chunk_content_sha256,
+        "status": status,
+        "warnings": list(warnings or []),
+    }
+    if error:
+        result["error"] = error
+    if checkpoint_resumed:
+        result["checkpoint_resumed"] = True
+    return result
+
+
+def _run_curated_image_update(args: argparse.Namespace) -> int:
+    try:
+        _validate_optional_batch_size(args.batch_size, label="curated image update")
+        if not args.execute:
+            return _error(
+                "curated-image-update requires --execute after reviewing image-ingestion-readiness",
+                json_output=args.json,
+            )
+        if args.resume and not args.checkpoint:
+            raise BuildError("curated-image-update --resume requires --checkpoint")
+        if args.force_reupload_confirmed and not args.resume:
+            raise BuildError("curated-image-update --force-reupload-confirmed requires --resume")
+
+        asset_plan = _read_json_file(args.asset_upload_plan, label="asset_upload_plan")
+        if not isinstance(asset_plan, Mapping):
+            raise BuildError("asset_upload_plan must be a JSON object")
+        if asset_plan.get("schema") != KB_ASSET_UPLOAD_PLAN_SCHEMA:
+            raise BuildError(f"asset upload plan schema must be {KB_ASSET_UPLOAD_PLAN_SCHEMA}")
+
+        update_plan = build_curated_image_update_plan(
+            asset_plan_path=args.asset_upload_plan,
+            canonical_review_path=args.canonical_review,
+            accepted_markdown_path=args.accepted_markdown,
+        )
+        planned_assets = [dict(item) for item in update_plan.get("assets") or []]
+        planned_count = len(planned_assets)
+        confirmation_errors: list[str] = []
+        if args.confirm_dataset_id != args.dataset_id:
+            confirmation_errors.append("--confirm-dataset-id must exactly match --dataset-id")
+        if args.confirm_planned_count != planned_count:
+            confirmation_errors.append(
+                f"--confirm-planned-count must equal the context-bound asset count ({planned_count})"
+            )
+        if confirmation_errors:
+            return _error("; ".join(confirmation_errors), json_output=args.json)
+        if planned_count <= 0:
+            report = create_curated_image_update_report(
+                plan=update_plan,
+                dataset_id=args.dataset_id,
+                asset_results=[],
+            )
+            _write_json_file(args.report_json, report)
+            _write_text_file(args.report_md, render_curated_image_update_report_markdown(report))
+            _dump_json(report)
+            return 0
+
+        resolved_assets: list[dict[str, Any]] = []
+        for asset in planned_assets:
+            resolved_path = _resolve_asset_source_path(
+                source_path=str(asset["source_path"]),
+                asset_plan_path=args.asset_upload_plan,
+                asset_plan=asset_plan,
+            )
+            if not resolved_path.exists() or not resolved_path.is_file():
+                raise BuildError(f"context-bound asset not found: {asset['source_path']}")
+            actual_sha256 = _sha256_file(resolved_path)
+            planned_sha256 = asset.get("sha256")
+            if planned_sha256 is not None and planned_sha256 != actual_sha256:
+                raise BuildError(f"context-bound asset SHA-256 does not match current file: {asset['source_path']}")
+            resolved_assets.append({**asset, "sha256": actual_sha256, "resolved_path": resolved_path})
+
+        config = _load_config(args)
+        transport_capability = _load_transport_capability(args.transport_capability, asset_plan)
+        transport_gates = [
+            verify_image_transport_capability(
+                transport_capability,
+                operation="visual_document_upload",
+                transport="multipart_post",
+                endpoint_class="dataset_documents",
+            ),
+            verify_image_transport_capability(
+                transport_capability,
+                operation="visual_document_parse",
+                transport="json_post",
+                endpoint_class="dataset_chunks",
+            ),
+            verify_curated_image_transport_capability(transport_capability),
+        ]
+        client = RAGFlowClient(config)
+        bindings = _image_ingestion_bindings(args=args, asset_plan=asset_plan, resolved_assets=resolved_assets)
+        bindings["curated_update_plan_sha256"] = _stable_digest(
+            {"schema": update_plan.get("schema"), "assets": update_plan.get("assets") or []}
+        )
+        checkpoint_created_at: str | None = None
+        checkpoint_records: dict[str, dict[str, Any]] = {}
+        confirmed_uploads: dict[str, dict[str, Any]] = {}
+        checkpoint_skipped_upload_count = 0
+        checkpoint_new_upload_count = 0
+        if args.resume:
+            checkpoint_payload = _read_ingestion_checkpoint(args.checkpoint, operation="curated_image_update")
+            checkpoint_created_at = str(checkpoint_payload.get("created_at") or "") or None
+            if _checkpoint_dataset_id(checkpoint_payload) != args.dataset_id:
+                raise BuildError("ingestion checkpoint dataset.id does not match --dataset-id")
+            _validate_ingestion_checkpoint_bindings(checkpoint_payload, expected=bindings)
+            confirmed_uploads = _checkpoint_uploaded_map(checkpoint_payload)
+
+        def _write_checkpoint() -> None:
+            _write_ingestion_checkpoint(
+                args.checkpoint,
+                operation="curated_image_update",
+                dataset_id=args.dataset_id,
+                dataset_name=None,
+                records=checkpoint_records,
+                created_at=checkpoint_created_at,
+                bindings=bindings,
+            )
+
+        asset_results: list[dict[str, Any]] = []
+        worklist: list[dict[str, Any]] = []
+        for asset in resolved_assets:
+            source_key = _checkpoint_source_key(asset["resolved_path"])
+            confirmed = confirmed_uploads.get(source_key) if not args.force_reupload_confirmed else None
+            if confirmed and str(confirmed.get("curated_update_status") or "") == "success":
+                record = dict(confirmed)
+                record["checkpoint_resumed"] = True
+                checkpoint_records[source_key] = record
+                checkpoint_skipped_upload_count += 1
+                asset_results.append(
+                    _curated_asset_result(
+                        asset,
+                        status="updated",
+                        document_id=record.get("document_id"),
+                        observed_chunk_ids=list(record.get("observed_chunk_ids") or []),
+                        updated_chunk_id=record.get("updated_chunk_id"),
+                        previous_chunk_content_sha256=record.get("previous_chunk_content_sha256"),
+                        warnings=list(record.get("warnings") or []),
+                        checkpoint_resumed=True,
+                    )
+                )
+                continue
+            if confirmed:
+                record = {
+                    **confirmed,
+                    "kind": "visual",
+                    "source_key": source_key,
+                    "source_path": str(asset["source_path"]),
+                    "name": Path(str(asset["source_path"])).name,
+                    "sha256": asset.get("sha256"),
+                    "mime_type": asset.get("mime_type"),
+                    "upload_status": "uploaded",
+                    "checkpoint_resumed": True,
+                }
+                checkpoint_records[source_key] = record
+                checkpoint_skipped_upload_count += 1
+                worklist.append(
+                    {
+                        "asset": asset,
+                        "record": record,
+                        "document_id": str(confirmed["document_id"]),
+                        "needs_parse": str(confirmed.get("parse_wait_status") or "") != "success",
+                    }
+                )
+                continue
+            try:
+                upload_response = client.upload_document(args.dataset_id, asset["resolved_path"])
+                document_id = extract_uploaded_document_id(upload_response)
+                record = {
+                    "kind": "visual",
+                    "source_key": source_key,
+                    "source_path": str(asset["source_path"]),
+                    "name": Path(str(asset["source_path"])).name,
+                    "sha256": asset.get("sha256"),
+                    "mime_type": asset.get("mime_type"),
+                    "document_id": document_id,
+                    "upload_status": "uploaded",
+                    "parse_trigger_status": "pending",
+                    "parse_wait_status": "pending",
+                }
+                checkpoint_records[source_key] = record
+                checkpoint_new_upload_count += 1
+                worklist.append({"asset": asset, "record": record, "document_id": document_id, "needs_parse": True})
+                _write_checkpoint()
+            except Exception as exc:  # pragma: no cover - exercised through CLI fake-client behavior
+                record = {
+                    "kind": "visual",
+                    "source_key": source_key,
+                    "source_path": str(asset["source_path"]),
+                    "name": Path(str(asset["source_path"])).name,
+                    "sha256": asset.get("sha256"),
+                    "mime_type": asset.get("mime_type"),
+                    "document_id": None,
+                    "upload_status": "upload_failed",
+                    "error": str(exc),
+                }
+                checkpoint_records[source_key] = record
+                asset_results.append(_curated_asset_result(asset, status="failed", error=f"upload failed: {exc}"))
+                _write_checkpoint()
+
+        parse_items = [item for item in worklist if item["needs_parse"]]
+        parse_failed_document_ids: set[str] = set()
+        for batch in _batch_records([item["record"] for item in parse_items], args.batch_size):
+            parse_batch = list(batch.get("uploaded_document_ids") or [])
+            if not parse_batch:
+                continue
+            try:
+                client.trigger_parse(args.dataset_id, parse_batch)
+                for item in parse_items:
+                    if item["document_id"] in parse_batch:
+                        item["record"]["parse_trigger_status"] = "success"
+            except Exception as exc:  # pragma: no cover - exercised through CLI fake-client behavior
+                parse_failed_document_ids.update(parse_batch)
+                for item in parse_items:
+                    if item["document_id"] in parse_batch:
+                        item["record"]["parse_trigger_status"] = "failed"
+                        asset_results.append(
+                            _curated_asset_result(
+                                item["asset"],
+                                status="failed",
+                                document_id=item["document_id"],
+                                error=f"parse trigger failed: {exc}",
+                            )
+                        )
+                _write_checkpoint()
+                break
+            _write_checkpoint()
+
+        for item in parse_items:
+            if (
+                item["document_id"] not in parse_failed_document_ids
+                and item["record"].get("parse_trigger_status") != "success"
+            ):
+                asset_results.append(
+                    _curated_asset_result(
+                        item["asset"],
+                        status="failed",
+                        document_id=item["document_id"],
+                        error="parse trigger skipped after an earlier batch failure",
+                    )
+                )
+
+        poll_candidates = [
+            item
+            for item in worklist
+            if item["document_id"]
+            and item["document_id"] not in parse_failed_document_ids
+            and (not item["needs_parse"] or item["record"].get("parse_trigger_status") == "success")
+        ]
+        observed_states: dict[str, dict[str, Any]] = {}
+        wait_error: str | None = None
+        if poll_candidates:
+            try:
+                observed_states, _list_response, _poll_count = _poll_uploaded_visual_states(
+                    client,
+                    dataset_id=args.dataset_id,
+                    document_ids=[str(item["document_id"]) for item in poll_candidates],
+                    timeout=float(args.parse_timeout),
+                    poll_interval=float(args.poll_interval),
+                )
+            except Exception as exc:  # pragma: no cover - exercised through CLI fake-client behavior
+                wait_error = str(exc)
+        if wait_error:
+            for item in poll_candidates:
+                asset_results.append(
+                    _curated_asset_result(
+                        item["asset"],
+                        status="failed",
+                        document_id=str(item["document_id"]),
+                        error=f"parse wait failed: {wait_error}",
+                    )
+                )
+            poll_candidates = []
+
+        for item in poll_candidates:
+            asset = item["asset"]
+            document_id = str(item["document_id"])
+            state = observed_states.get(document_id)
+            label = _state_label_for_uploaded_visual(state)
+            if label != "parsed":
+                item["record"]["parse_wait_status"] = label
+                asset_results.append(
+                    _curated_asset_result(
+                        asset,
+                        status="failed",
+                        document_id=document_id,
+                        error=f"document parse state is {label}",
+                    )
+                )
+                _write_checkpoint()
+                continue
+            item["record"]["parse_wait_status"] = "success"
+            try:
+                chunks = _extract_document_chunk_records(client.list_chunks(args.dataset_id, document_id))
+                observed_chunk_ids = [
+                    chunk_id for chunk_id in (_chunk_record_id(chunk) for chunk in chunks) if chunk_id
+                ]
+                if not chunks:
+                    raise BuildError("parsed document has no chunks to update")
+                first_chunk = chunks[0]
+                chunk_id = _chunk_record_id(first_chunk)
+                if not chunk_id:
+                    raise BuildError("first parsed chunk has no chunk id")
+                previous_sha256 = chunk_content_sha256(str(first_chunk.get("content") or ""))
+                warnings: list[dict[str, Any]] = []
+                if len(chunks) > 1:
+                    warnings.append(
+                        {
+                            "code": "extra_chunks_left_untouched",
+                            "message": f"document has {len(chunks)} chunks; only the first chunk was replaced",
+                            "untouched_chunk_ids": observed_chunk_ids[1:],
+                        }
+                    )
+                client.update_chunk(
+                    args.dataset_id,
+                    document_id,
+                    chunk_id,
+                    {"content": str(asset["curated_text"])},
+                )
+                readback = None
+                for attempt in range(10):
+                    readback_chunks = _extract_document_chunk_records(client.list_chunks(args.dataset_id, document_id))
+                    readback = next(
+                        (chunk for chunk in readback_chunks if _chunk_record_id(chunk) == chunk_id),
+                        None,
+                    )
+                    if readback is not None and str(readback.get("content") or "") == str(asset["curated_text"]):
+                        break
+                    if attempt < 9:
+                        time.sleep(max(0.0, float(args.poll_interval)))
+                if readback is None or str(readback.get("content") or "") != str(asset["curated_text"]):
+                    raise BuildError("chunk content read-back does not match curated text")
+                item["record"]["curated_update_status"] = "success"
+                item["record"]["updated_chunk_id"] = chunk_id
+                item["record"]["previous_chunk_content_sha256"] = previous_sha256
+                item["record"]["observed_chunk_ids"] = observed_chunk_ids
+                item["record"]["warnings"] = warnings
+                asset_results.append(
+                    _curated_asset_result(
+                        asset,
+                        status="updated",
+                        document_id=document_id,
+                        observed_chunk_ids=observed_chunk_ids,
+                        updated_chunk_id=chunk_id,
+                        previous_chunk_content_sha256=previous_sha256,
+                        warnings=warnings,
+                    )
+                )
+            except Exception as exc:  # pragma: no cover - exercised through CLI fake-client behavior
+                item["record"]["curated_update_status"] = "failed"
+                asset_results.append(
+                    _curated_asset_result(asset, status="failed", document_id=document_id, error=str(exc))
+                )
+            _write_checkpoint()
+
+        report = create_curated_image_update_report(
+            plan=update_plan,
+            dataset_id=args.dataset_id,
+            asset_results=asset_results,
+            transport_gates={
+                "schema": "ragflow_transport_capability_bundle_v1",
+                "gates": transport_gates,
+                "capability_evidence_sha256": transport_gates[0].get("evidence_sha256"),
+            },
+            checkpoint=_checkpoint_report(
+                checkpoint_path=args.checkpoint,
+                resume=args.resume,
+                force_reupload_confirmed=args.force_reupload_confirmed,
+                skipped_upload_count=checkpoint_skipped_upload_count,
+                new_upload_count=checkpoint_new_upload_count,
+                total_confirmed_upload_count=len(checkpoint_records),
+                bindings=bindings,
+            ),
+        )
+        if args.redaction_report:
+            report, redaction_report = _sanitize_governance_report(
+                report,
+                args,
+                input_paths=[
+                    args.asset_upload_plan,
+                    args.canonical_review,
+                    args.accepted_markdown,
+                    args.config,
+                    args.checkpoint,
+                ],
+                output_paths=[args.report_json, args.report_md, args.redaction_report],
+                extra_secret_literals=[args.api_key] if args.api_key else None,
+            )
+            _write_json_file(args.redaction_report, redaction_report)
+        _write_json_file(args.report_json, report)
+        _write_text_file(args.report_md, render_curated_image_update_report_markdown(report))
+        _dump_json(report)
+        return 0 if report["ok"] else 1
     except (BuildError, ConfigError, OSError, RuntimeError, ProfileError) as exc:
         return _error(str(exc), json_output=args.json)
 
@@ -4903,6 +5355,10 @@ def build_image_ingestion_readiness_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Review image ingestion readiness without contacting RAGFlow")
     parser.add_argument("--asset-upload-plan", required=True, help="ragflow_kb_asset_upload_plan_v2 JSON")
     parser.add_argument("--profile", help="Optional build profile JSON/YAML for parser evidence")
+    parser.add_argument(
+        "--transport-capability",
+        help="Optional ragflow_transport_capability_v1 evidence; attests curated image-context transport for context-bound assets",
+    )
     parser.add_argument("--report-json", "--output", dest="report_json", default="image_ingestion_readiness.json")
     parser.add_argument("--report-md", help="Optional image ingestion readiness Markdown path")
     parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
@@ -4946,6 +5402,41 @@ def build_image_ingestion_execute_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, help="Maximum uploaded visual document IDs per parse trigger")
     parser.add_argument("--checkpoint", help="Checkpoint path for resumable visual-document ingestion")
     parser.add_argument("--resume", action="store_true", help="Resume visual-document ingestion from an existing checkpoint")
+    parser.add_argument(
+        "--force-reupload-confirmed",
+        action="store_true",
+        help="With --resume, re-upload documents already confirmed in the checkpoint",
+    )
+    parser.add_argument("--json", action="store_true", help="Emit JSON errors")
+    return parser
+
+
+def build_curated_image_update_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Replace VLM chunk content with curated text for context-bound images in an existing RAGFlow dataset"
+    )
+    parser.add_argument("--execute", action="store_true", help="Allow live curated image-text update after readiness review")
+    parser.add_argument("--asset-upload-plan", required=True, help="ragflow_kb_asset_upload_plan_v2 JSON")
+    parser.add_argument("--canonical-review", required=True, help="Accepted ragflow_canonical_review_v1 record")
+    parser.add_argument("--accepted-markdown", required=True, help="Accepted Markdown pinned by the canonical review")
+    parser.add_argument(
+        "--transport-capability",
+        help="Read-only ragflow_transport_capability_v1 evidence; may be embedded in the asset plan",
+    )
+    parser.add_argument("--dataset-id", required=True, help="Existing RAGFlow dataset ID to mutate")
+    parser.add_argument("--confirm-dataset-id", required=True, help="Must exactly match --dataset-id")
+    parser.add_argument("--confirm-planned-count", required=True, type=int, help="Must equal the context-bound asset count")
+    parser.add_argument("--config", help="Runtime config file")
+    parser.add_argument("--base-url", help="RAGFlow base URL")
+    parser.add_argument("--api-key", help="RAGFlow API key")
+    parser.add_argument("--report-json", "--output", dest="report_json", default="curated_image_update.json")
+    parser.add_argument("--report-md", help="Optional curated image-text update Markdown path")
+    parser.add_argument("--redaction-report", help="Optional JSON redaction sidecar output path")
+    parser.add_argument("--parse-timeout", type=float, default=300.0, help="Maximum seconds to wait for parsed or failed visual states")
+    parser.add_argument("--poll-interval", type=float, default=2.0, help="Seconds between document-list polls")
+    parser.add_argument("--batch-size", type=int, help="Maximum uploaded document IDs per parse trigger")
+    parser.add_argument("--checkpoint", help="Checkpoint path for resumable curated image-text update")
+    parser.add_argument("--resume", action="store_true", help="Resume curated image-text update from an existing checkpoint")
     parser.add_argument(
         "--force-reupload-confirmed",
         action="store_true",
@@ -5858,6 +6349,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_consistency_check(build_consistency_check_parser().parse_args(command_args))
         if command == "image-ingestion-execute":
             return _run_image_ingestion_execute(build_image_ingestion_execute_parser().parse_args(command_args))
+        if command == "curated-image-update":
+            return _run_curated_image_update(build_curated_image_update_parser().parse_args(command_args))
         if command == "model-providers":
             model_provider_args = build_model_providers_parser().parse_args(command_args)
             return model_provider_args.func(model_provider_args)

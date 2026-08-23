@@ -27,6 +27,7 @@ operations, mutation, staging, commit, push, L3, Stage 8C, or L4.
 
 - [Document lifecycle spec](specs/2026-08-02-document-lifecycle-and-spec-archive-design.md) - active lifecycle policy; Gate 0 is closed.
 - [Generic runtime compatibility spec](specs/2026-08-13-generic-runtime-compatibility-design.md) - active canonical contract after verified RCKB-001 through RCKB-005 implementation; `implementation_authority=false`.
+- [Curated image-text update design](specs/2026-08-22-curated-image-text-update-design.md) - active canonical contract for the context-bound image chunk adapter; fail-closed offline implementation, live use still needs target-specific evidence and authorization; `implementation_authority=false`.
 - [Generic runtime compatibility implementation plan](plans/2026-08-13-generic-runtime-compatibility-implementation-plan.md) - implemented at source commit `57026c3` and release-verified for S0-S3 public offline work; repository version-control closure does not authorize live validation or publication.
 - [Wave 1 implementation plan](plans/2026-08-03-document-lifecycle-and-spec-archive-implementation-plan.md) - implemented; `implementation_authority=false`.
 - [Wave 2 successor plan](plans/2026-08-03-document-lifecycle-and-spec-archive-wave-2-implementation-plan.md) - Waves 2A-2C complete; Wave 2D gated; `implementation_authority=false`.
