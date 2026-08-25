@@ -449,9 +449,40 @@ class CanonicalReviewRuntimeTests(unittest.TestCase):
             self.assertEqual(record["selected_assets"][0]["ingestion_intent"], "context_bound")
             self.assertEqual(record_hash, _sha_file(record_path))
 
+    def test_asset_identity_accepts_meaningful_unicode_canonical_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = CanonicalReviewFixture(Path(tmp))
+            unicode_name = "图33-2-混合型FAI示意图-33-2A.png"
+            fixture.write_asset_identities(canonical_name=unicode_name)
+            asset_before = fixture.asset.read_bytes()
+
+            record = fixture.finalize_with_asset_identities()
+            output = fixture.root / "accepted-output"
+            materialize_canonical_review_output(
+                record,
+                reviewed_markdown_path=fixture.reviewed,
+                asset_root=fixture.review_root,
+                output_root=output,
+            )
+            accepted_markdown = output / "document.md"
+            accepted_asset = output / "images" / unicode_name
+            accepted_text = accepted_markdown.read_text(encoding="utf-8")
+
+            self.assertEqual(record["status"], "accepted")
+            self.assertEqual(record["selected_assets"][0]["canonical_name"], unicode_name)
+            self.assertIn(f"images/{unicode_name}", accepted_text)
+            self.assertNotIn("images/figure.png", accepted_text)
+            self.assertEqual(accepted_asset.read_bytes(), asset_before)
+
     def test_asset_identity_rejects_unsafe_canonical_name_and_stale_context(self) -> None:
         cases = (
             ("../escaped.png", None, "unsafe_asset_canonical_name"),
+            ("sub/dir.png", None, "unsafe_asset_canonical_name"),
+            ("sub\\dir.png", None, "unsafe_asset_canonical_name"),
+            ("has space.png", None, "unsafe_asset_canonical_name"),
+            (".leading-dot.png", None, "unsafe_asset_canonical_name"),
+            ('quoted"name.png', None, "unsafe_asset_canonical_name"),
+            ("con.png", None, "unsafe_asset_canonical_name"),
             ("safe-name.png", "f" * 64, "stale_asset_context_hash"),
         )
         for canonical_name, context_sha256, expected_code in cases:

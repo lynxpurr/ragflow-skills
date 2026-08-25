@@ -45,7 +45,39 @@ ASSET_INGESTION_INTENTS = {
     "exclude",
 }
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-_CANONICAL_ASSET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+_CANONICAL_ASSET_NAME_MAX_LENGTH = 128
+_CANONICAL_ASSET_NAME_FORBIDDEN_RE = re.compile(r'[\\/"<>:|?*#\s]|[\x00-\x1f\x7f]')
+_WINDOWS_RESERVED_STEMS = {
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    *(f"com{index}" for index in range(1, 10)),
+    *(f"lpt{index}" for index in range(1, 10)),
+}
+
+
+def _is_safe_canonical_asset_name(name: str) -> bool:
+    """A canonical asset name is a portable basename that keeps meaningful wording.
+
+    Any Unicode script is allowed (for example Chinese figure captions); the name
+    must stay a single path segment that is safe on common filesystems and inside
+    Markdown image targets.
+    """
+
+    if not name or len(name) > _CANONICAL_ASSET_NAME_MAX_LENGTH:
+        return False
+    if name != name.strip("."):
+        return False
+    if _CANONICAL_ASSET_NAME_FORBIDDEN_RE.search(name):
+        return False
+    if PurePosixPath(name).name != name:
+        return False
+    if name.split(".", 1)[0].casefold() in _WINDOWS_RESERVED_STEMS:
+        return False
+    return True
+
+
 _CONTEXT_LINE_SELECTOR_RE = re.compile(r"^line:(?P<start>[1-9][0-9]*)-(?P<end>[1-9][0-9]*)$")
 _FENCE_OPEN_RE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})")
 _FENCE_CLOSE_RE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})[ \t]*$")
@@ -253,7 +285,7 @@ def _selected_asset_output_path(item: Mapping[str, Any]) -> str | None:
     if canonical_name is None:
         return relative
     name = str(canonical_name).strip()
-    if not _CANONICAL_ASSET_NAME_RE.fullmatch(name) or PurePosixPath(name).name != name:
+    if not _is_safe_canonical_asset_name(name):
         return None
     if Path(name).suffix.casefold() != Path(relative).suffix.casefold():
         return None
@@ -668,8 +700,7 @@ def _bind_selected_asset_identities(
             findings.append(_finding("invalid_asset_role", "Asset identity role is unsupported.", path=relative))
             valid = False
         if (
-            not _CANONICAL_ASSET_NAME_RE.fullmatch(canonical_name)
-            or PurePosixPath(canonical_name).name != canonical_name
+            not _is_safe_canonical_asset_name(canonical_name)
             or Path(canonical_name).suffix.casefold() != Path(relative).suffix.casefold()
         ):
             findings.append(
@@ -1276,7 +1307,7 @@ def materialize_canonical_review_output(
                 ],
             )
             if isinstance(record.get("markdown", {}).get("reviewed"), Mapping):
-                markdown_output.write_text(accepted_text, encoding="utf-8")
+                markdown_output.write_text(accepted_text, encoding="utf-8", newline="")
             else:
                 shutil.copyfile(reviewed, markdown_output)
             if canonical_file_sha256(markdown_output) != markdown_identity.get("sha256"):

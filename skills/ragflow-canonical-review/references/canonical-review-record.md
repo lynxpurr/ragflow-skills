@@ -27,7 +27,9 @@ Roles are `figure`, `diagram`, `chart`, `table_image`, `screenshot`, `photo`,
 `decorative`, or `other`. Intents are `visual_extract`, `context_bound`, or `exclude`;
 decorative assets must be excluded. Context selectors are one-based inclusive
 `line:START-END` ranges over the final accepted Markdown. Canonical names are portable
-ASCII basenames and retain the original extension.
+basenames that retain the original extension; any Unicode script is allowed (for example
+Chinese figure captions), but path separators, whitespace, and characters unsafe on
+common filesystems (`\ / " < > : | ? * #` or control characters) are rejected.
 
 ## Review inputs
 
